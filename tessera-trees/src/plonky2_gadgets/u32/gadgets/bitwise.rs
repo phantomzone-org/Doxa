@@ -1,7 +1,5 @@
 use plonky2::{
-	field::extension::Extendable,
-	hash::hash_types::RichField,
-	iop::target::Target,
+	field::extension::Extendable, hash::hash_types::RichField, iop::target::Target,
 	plonk::circuit_builder::CircuitBuilder,
 };
 
@@ -109,14 +107,15 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Bitwise<F, D
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	use crate::plonky2_gadgets::u32::gadgets::*;
 	use anyhow::Result;
 	use plonky2::{
 		field::{goldilocks_field::GoldilocksField, types::Field},
 		iop::witness::{PartialWitness, WitnessWrite},
 		plonk::{circuit_data::CircuitConfig, config::PoseidonGoldilocksConfig},
 	};
+
+	use super::*;
+	use crate::plonky2_gadgets::u32::gadgets::*;
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;

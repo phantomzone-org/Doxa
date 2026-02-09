@@ -33,9 +33,8 @@ impl BatchCommitmentProofTargets {
 	/// * `builder` - The circuit builder
 	/// * `depth` - The Merkle tree depth
 	/// * `batch_size` - Number of leaves in the batch (must be power of two)
-	/// * `commit` - If `Some`, all proof data is private and committed
-	///   via the provided [`DataCommitment`]; if `None`, proof data is
-	///   exposed directly as public inputs.
+	/// * `commit` - If `Some`, all proof data is private and committed via the provided
+	///   [`DataCommitment`]; if `None`, proof data is exposed directly as public inputs.
 	///
 	/// # Public Inputs
 	///
@@ -265,9 +264,7 @@ mod test {
 	pub type C = PoseidonGoldilocksConfig;
 	pub type F = GoldilocksField;
 
-	fn run_batch_insert_test(
-		commit: Option<&dyn DataCommitment<F, D>>,
-	) -> Result<()> {
+	fn run_batch_insert_test(commit: Option<&dyn DataCommitment<F, D>>) -> Result<()> {
 		const DEPTH: usize = 32;
 		const BATCH_SIZE: usize = 4096;
 

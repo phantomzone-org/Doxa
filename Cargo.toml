@@ -1,6 +1,11 @@
 [workspace]
-members = ["tessera-trees"]
-resolver = "3"
+members = ["tessera-server", "tessera-trees"]
+resolver = "2"
 
 [workspace.dependencies]
 tessera-trees = {path = "tessera-trees"}
+anyhow = "1.0.101"
+rand_chacha = "0.10.0"
+rand = "0.10.0"
+serde = "1.0.228"
+serde_json = "1.0.149"

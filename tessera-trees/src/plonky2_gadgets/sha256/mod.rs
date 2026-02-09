@@ -17,15 +17,13 @@ pub mod constants;
 
 pub use circuit::*;
 pub use constants::*;
-
 use plonky2::{
-	field::extension::Extendable,
-	hash::hash_types::RichField,
+	field::extension::Extendable, hash::hash_types::RichField,
 	plonk::circuit_builder::CircuitBuilder,
 };
 
 use crate::plonky2_gadgets::u32::{
-	add_and_lookup_table, add_u8_range_check_lookup_table, add_xor_lookup_table, U32Target,
+	U32Target, add_and_lookup_table, add_u8_range_check_lookup_table, add_xor_lookup_table,
 };
 
 /// Bundles the three lookup-table indices needed by SHA256 sub-operations.

@@ -3,4 +3,7 @@ src = "src"
 out = "out"
 libs = ["lib"]
 
+# Allow tests to read proof/calldata JSON from the groth-artifacts directory
+fs_permissions = [{ access = "read", path = "../tessera-trees/examples/tmp/groth-artifacts" }]
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

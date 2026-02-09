@@ -10,11 +10,10 @@ use plonky2::{
 	util::serialization::{Buffer, IoResult, Read, Write},
 };
 
+use super::{Sha256Luts, Sha256Target};
 use crate::plonky2_gadgets::u32::{
 	CircuitBuilderU32, CircuitBuilderU32Arithmetic, CircuitBuilderU32Sha256, U32Target,
 };
-
-use super::{Sha256Luts, Sha256Target};
 
 /// Extension trait: full SHA-256 hash on [`CircuitBuilder`].
 pub trait CircuitBuilderSha256<F: RichField + Extendable<D>, const D: usize> {
@@ -64,11 +63,7 @@ pub trait CircuitBuilderSha256<F: RichField + Extendable<D>, const D: usize> {
 	///
 	/// **Range checking:** all 16 input words **must** be range-checked
 	/// (soundness requirement).  Output words are range-checked.
-	fn sha256_single_block(
-		&mut self,
-		input: [U32Target; 16],
-		luts: &Sha256Luts,
-	) -> Sha256Target;
+	fn sha256_single_block(&mut self, input: [U32Target; 16], luts: &Sha256Luts) -> Sha256Target;
 
 	/// Hashes multiple 512-bit blocks with the standard IV, chaining
 	/// state across blocks.
@@ -77,11 +72,7 @@ pub trait CircuitBuilderSha256<F: RichField + Extendable<D>, const D: usize> {
 	///
 	/// **Range checking:** all input words **must** be range-checked
 	/// (soundness requirement).  Output words are range-checked.
-	fn sha256(
-		&mut self,
-		blocks: &[[U32Target; 16]],
-		luts: &Sha256Luts,
-	) -> Sha256Target;
+	fn sha256(&mut self, blocks: &[[U32Target; 16]], luts: &Sha256Luts) -> Sha256Target;
 
 	/// Hashes a slice of field element targets using SHA-256.
 	///
@@ -94,11 +85,7 @@ pub trait CircuitBuilderSha256<F: RichField + Extendable<D>, const D: usize> {
 	///
 	/// **Range checking:** all intermediate u32 targets from field
 	/// decomposition are range-checked. Output words are range-checked.
-	fn sha256_hash_field_elements(
-		&mut self,
-		input: &[Target],
-		luts: &Sha256Luts,
-	) -> Sha256Target;
+	fn sha256_hash_field_elements(&mut self, input: &[Target], luts: &Sha256Luts) -> Sha256Target;
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
@@ -139,8 +126,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 
 			// T1 = h + Σ₁(e) + Ch(e,f,g) + K[t] + W[t]
 			let sigma1_e = self.big_sigma1_u32(e, luts.xor_lut, luts.range_lut);
-			let ch_efg =
-				self.ch_u32(e, f, g, luts.xor_lut, luts.and_lut, luts.range_lut);
+			let ch_efg = self.ch_u32(e, f, g, luts.xor_lut, luts.and_lut, luts.range_lut);
 
 			let t1 = self.wrapping_add_u32(h, sigma1_e, luts.range_lut);
 			let t1 = self.wrapping_add_u32(t1, ch_efg, luts.range_lut);
@@ -149,8 +135,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 
 			// T2 = Σ₀(a) + Maj(a,b,c)
 			let sigma0_a = self.big_sigma0_u32(a, luts.xor_lut, luts.range_lut);
-			let maj_abc =
-				self.maj_u32(a, b, c, luts.xor_lut, luts.and_lut, luts.range_lut);
+			let maj_abc = self.maj_u32(a, b, c, luts.xor_lut, luts.and_lut, luts.range_lut);
 			let t2 = self.wrapping_add_u32(sigma0_a, maj_abc, luts.range_lut);
 
 			// Update working variables
@@ -177,27 +162,17 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 		let compressed = self.sha256_compression(state, &w, luts);
 
 		// Final addition: H[i] = H[i] + compressed[i]
-		core::array::from_fn(|i| {
-			self.wrapping_add_u32(state[i], compressed[i], luts.range_lut)
-		})
+		core::array::from_fn(|i| self.wrapping_add_u32(state[i], compressed[i], luts.range_lut))
 	}
 
-	fn sha256_single_block(
-		&mut self,
-		input: [U32Target; 16],
-		luts: &Sha256Luts,
-	) -> Sha256Target {
+	fn sha256_single_block(&mut self, input: [U32Target; 16], luts: &Sha256Luts) -> Sha256Target {
 		let init: Sha256Target =
 			core::array::from_fn(|i| self.constant_u32(super::constants::H[i]));
 
 		self.sha256_block_with_state(init, input, luts)
 	}
 
-	fn sha256(
-		&mut self,
-		blocks: &[[U32Target; 16]],
-		luts: &Sha256Luts,
-	) -> Sha256Target {
+	fn sha256(&mut self, blocks: &[[U32Target; 16]], luts: &Sha256Luts) -> Sha256Target {
 		assert!(!blocks.is_empty(), "sha256 requires at least one block");
 
 		let init: Sha256Target =
@@ -211,11 +186,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 		state
 	}
 
-	fn sha256_hash_field_elements(
-		&mut self,
-		input: &[Target],
-		luts: &Sha256Luts,
-	) -> Sha256Target {
+	fn sha256_hash_field_elements(&mut self, input: &[Target], luts: &Sha256Luts) -> Sha256Target {
 		let n = input.len();
 		let msg_words = 2 * n;
 
@@ -354,25 +325,22 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn serialize(
-		&self,
-		dst: &mut Vec<u8>,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<()> {
+	fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
 		dst.write_target(self.input)?;
 		dst.write_target(self.lo)?;
 		dst.write_target(self.hi)?;
 		Ok(())
 	}
 
-	fn deserialize(
-		src: &mut Buffer,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<Self> {
+	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
 		let input = src.read_target()?;
 		let lo = src.read_target()?;
 		let hi = src.read_target()?;
-		Ok(Self { input, lo, hi })
+		Ok(Self {
+			input,
+			lo,
+			hi,
+		})
 	}
 }
 
@@ -414,21 +382,14 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn serialize(
-		&self,
-		dst: &mut Vec<u8>,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<()> {
+	fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
 		dst.write_target(self.diff)?;
 		dst.write_target(self.hi_is_max)?;
 		dst.write_target(self.diff_inv)?;
 		Ok(())
 	}
 
-	fn deserialize(
-		src: &mut Buffer,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<Self> {
+	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
 		let diff = src.read_target()?;
 		let hi_is_max = src.read_target()?;
 		let diff_inv = src.read_target()?;
@@ -462,14 +423,15 @@ pub fn sha256_field_elements_native<F: RichField>(input: &[F]) -> [u32; 8] {
 mod tests {
 	use std::time::Instant;
 
-use super::*;
-	use crate::plonky2_gadgets::u32::CircuitBuilderU32;
 	use anyhow::Result;
 	use plonky2::{
 		field::{goldilocks_field::GoldilocksField, types::Field},
 		iop::witness::{PartialWitness, WitnessWrite},
 		plonk::{circuit_data::CircuitConfig, config::PoseidonGoldilocksConfig},
 	};
+
+	use super::*;
+	use crate::plonky2_gadgets::u32::CircuitBuilderU32;
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;
@@ -509,8 +471,8 @@ use super::*;
 		let proof = data.prove(pw)?;
 
 		let expected: [u32; 8] = [
-			0xe3b0c442, 0x98fc1c14, 0x9afbf4c8, 0x996fb924,
-			0x27ae41e4, 0x649b934c, 0xa495991b, 0x7852b855,
+			0xe3b0c442, 0x98fc1c14, 0x9afbf4c8, 0x996fb924, 0x27ae41e4, 0x649b934c, 0xa495991b,
+			0x7852b855,
 		];
 
 		for (i, &exp) in expected.iter().enumerate() {
@@ -547,8 +509,8 @@ use super::*;
 		let proof = data.prove(pw)?;
 
 		let expected: [u32; 8] = [
-			0xba7816bf, 0x8f01cfea, 0x414140de, 0x5dae2223,
-			0xb00361a3, 0x96177a9c, 0xb410ff61, 0xf20015ad,
+			0xba7816bf, 0x8f01cfea, 0x414140de, 0x5dae2223, 0xb00361a3, 0x96177a9c, 0xb410ff61,
+			0xf20015ad,
 		];
 
 		for (i, &exp) in expected.iter().enumerate() {
@@ -606,8 +568,8 @@ use super::*;
 		let proof = data.prove(pw)?;
 
 		let expected: [u32; 8] = [
-			0x248d6a61, 0xd20638b8, 0xe5c02693, 0x0c3e6039,
-			0xa33ce459, 0x64ff2167, 0xf6ecedd4, 0x19db06c1,
+			0x248d6a61, 0xd20638b8, 0xe5c02693, 0x0c3e6039, 0xa33ce459, 0x64ff2167, 0xf6ecedd4,
+			0x19db06c1,
 		];
 
 		for (i, &exp) in expected.iter().enumerate() {
@@ -629,8 +591,7 @@ use super::*;
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let luts = Sha256Luts::new(&mut builder);
 
-		let input: [U32Target; 16] =
-			core::array::from_fn(|_| builder.add_virtual_u32_target());
+		let input: [U32Target; 16] = core::array::from_fn(|_| builder.add_virtual_u32_target());
 
 		// Range-check witness inputs (caller responsibility)
 		for &word in &input {
@@ -647,9 +608,7 @@ use super::*;
 
 		// Set witness: padded "abc" message
 		let mut pw = PartialWitness::new();
-		let words: [u32; 16] = [
-			0x61626380, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x18,
-		];
+		let words: [u32; 16] = [0x61626380, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x18];
 		for (i, &w) in words.iter().enumerate() {
 			pw.set_target(input[i].0, F::from_canonical_u64(w as u64))?;
 		}
@@ -658,15 +617,12 @@ use super::*;
 
 		// Same expected output as test_sha256_abc
 		let expected: [u32; 8] = [
-			0xba7816bf, 0x8f01cfea, 0x414140de, 0x5dae2223,
-			0xb00361a3, 0x96177a9c, 0xb410ff61, 0xf20015ad,
+			0xba7816bf, 0x8f01cfea, 0x414140de, 0x5dae2223, 0xb00361a3, 0x96177a9c, 0xb410ff61,
+			0xf20015ad,
 		];
 
 		for (i, &exp) in expected.iter().enumerate() {
-			assert_eq!(
-				proof.public_inputs[i],
-				F::from_canonical_u64(exp as u64),
-			);
+			assert_eq!(proof.public_inputs[i], F::from_canonical_u64(exp as u64),);
 		}
 
 		data.verify(proof)?;
@@ -700,8 +656,7 @@ use super::*;
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let luts = Sha256Luts::new(&mut builder);
 
-		let input: [U32Target; 16] =
-			core::array::from_fn(|i| builder.constant_u32(words[i]));
+		let input: [U32Target; 16] = core::array::from_fn(|i| builder.constant_u32(words[i]));
 
 		let hash = builder.sha256_single_block(input, &luts);
 		for i in 0..8 {
@@ -734,10 +689,7 @@ use super::*;
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let luts = Sha256Luts::new(&mut builder);
 
-		let targets: Vec<Target> = values
-			.iter()
-			.map(|&v| builder.constant(v))
-			.collect();
+		let targets: Vec<Target> = values.iter().map(|&v| builder.constant(v)).collect();
 
 		let hash = builder.sha256_hash_field_elements(&targets, &luts);
 		for i in 0..8 {
@@ -762,16 +714,14 @@ use super::*;
 	/// Hash field elements with witness inputs, cross-validate against native helper.
 	#[test]
 	fn test_sha256_field_elements_witness() -> Result<()> {
-
 		let mut values: Vec<F> = Vec::new();
 
-		for _ in 0..1{
+		for _ in 0..1 {
 			values.push(F::from_canonical_u64(0xDEADBEEF_CAFEBABE));
 			values.push(F::from_canonical_u64(42));
 			values.push(F::ZERO);
 			values.push(F::NEG_ONE); // p - 1 (max Goldilocks value)
 		}
-
 
 		let expected = sha256_field_elements_native(&values);
 
@@ -837,10 +787,7 @@ use super::*;
 		let proof = data.prove(PartialWitness::new())?;
 
 		for (i, &exp) in expected.iter().enumerate() {
-			assert_eq!(
-				proof.public_inputs[i],
-				F::from_canonical_u64(exp as u64),
-			);
+			assert_eq!(proof.public_inputs[i], F::from_canonical_u64(exp as u64),);
 		}
 
 		data.verify(proof)?;

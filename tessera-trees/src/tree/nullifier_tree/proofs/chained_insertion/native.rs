@@ -33,7 +33,10 @@ use plonky2::{
 	hash::hash_types::RichField,
 };
 
-use crate::tree::{NullifierInsertProof, hasher::{CommitmentPreimage, DataCommitment, MerkleHash, ToHashOut}};
+use crate::tree::{
+	NullifierInsertProof,
+	hasher::{CommitmentPreimage, DataCommitment, MerkleHash, ToHashOut},
+};
 
 /// A chained insertion proof that proves multiple sequential insertions.
 ///
@@ -184,7 +187,8 @@ impl<H: MerkleHash> NullifierChainedInsertProof<H> {
 
 /// Preimage layout: `old_root || new_root || value[0] || ... || value[n-1]`
 ///
-/// Matches the circuit's [`ChainedInsertProofTargets::new`](crate::tree::ChainedInsertProofTargets::new).
+/// Matches the circuit's
+/// [`ChainedInsertProofTargets::new`](crate::tree::ChainedInsertProofTargets::new).
 impl<F: Field, H: MerkleHash> CommitmentPreimage<F> for NullifierChainedInsertProof<H>
 where
 	H::Digest: ToHashOut<F>,

@@ -300,10 +300,7 @@ impl BN128Wrapper {
 			&path.join(VERIFIER_DATA_PATH),
 			&self.circuit_data_bn128.verifier_only,
 		)?;
-		store(
-			&path.join(PROOF_WITH_PI),
-			&self.proof_with_pis_bn128,
-		)?;
+		store(&path.join(PROOF_WITH_PI), &self.proof_with_pis_bn128)?;
 		Ok(())
 	}
 

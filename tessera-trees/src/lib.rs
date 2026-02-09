@@ -5,8 +5,8 @@
 
 extern crate alloc;
 pub mod groth;
-pub mod tree;
 pub mod plonky2_gadgets;
+pub mod tree;
 
 use plonky2::{
 	field::goldilocks_field::GoldilocksField,

@@ -23,12 +23,7 @@ pub trait CircuitBuilderU32Arithmetic<F: RichField + Extendable<D>, const D: usi
 	/// **Range checking:** assumes both inputs are already range-checked
 	/// as u32 (the overflow-bit constraint relies on `a + b < 2^33`).
 	/// The output is explicitly range-checked via byte decomposition.
-	fn wrapping_add_u32(
-		&mut self,
-		a: U32Target,
-		b: U32Target,
-		range_lut: usize,
-	) -> U32Target;
+	fn wrapping_add_u32(&mut self, a: U32Target, b: U32Target, range_lut: usize) -> U32Target;
 
 	/// Asserts `result = lhs + rhs mod 2^32` using the CRT trick on 16-bit limbs.
 	///
@@ -50,23 +45,13 @@ pub trait CircuitBuilderU32Arithmetic<F: RichField + Extendable<D>, const D: usi
 	///
 	/// - `acc   * (acc   + 2^32) == 0`  ⟹  `acc ∈ {0, -2^32}`
 	/// - `acc16 * (acc16 + 2^16) == 0`  ⟹  `acc16 ∈ {0, -2^16}`
-	fn assert_add_u32_limbs(
-		&mut self,
-		result: [Target; 2],
-		lhs: [Target; 2],
-		rhs: [Target; 2],
-	);
+	fn assert_add_u32_limbs(&mut self, result: [Target; 2], lhs: [Target; 2], rhs: [Target; 2]);
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Arithmetic<F, D>
 	for CircuitBuilder<F, D>
 {
-	fn wrapping_add_u32(
-		&mut self,
-		a: U32Target,
-		b: U32Target,
-		range_lut: usize,
-	) -> U32Target {
+	fn wrapping_add_u32(&mut self, a: U32Target, b: U32Target, range_lut: usize) -> U32Target {
 		let result = U32Target(self.add_virtual_target());
 		let overflow = self.add_virtual_target();
 
@@ -95,12 +80,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Arithmetic<F
 		result
 	}
 
-	fn assert_add_u32_limbs(
-		&mut self,
-		result: [Target; 2],
-		lhs: [Target; 2],
-		rhs: [Target; 2],
-	) {
+	fn assert_add_u32_limbs(&mut self, result: [Target; 2], lhs: [Target; 2], rhs: [Target; 2]) {
 		// acc = result_full - lhs_full - rhs_full
 		//     = (result[0] + result[1]*2^16) - (lhs[0] + lhs[1]*2^16) - (rhs[0] + rhs[1]*2^16)
 		let c216 = F::from_canonical_u64(1u64 << 16);
@@ -171,11 +151,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn serialize(
-		&self,
-		dst: &mut Vec<u8>,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<()> {
+	fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
 		dst.write_target(self.a)?;
 		dst.write_target(self.b)?;
 		dst.write_target(self.result)?;
@@ -183,10 +159,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn deserialize(
-		src: &mut Buffer,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<Self> {
+	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
 		let a = src.read_target()?;
 		let b = src.read_target()?;
 		let result = src.read_target()?;
@@ -202,14 +175,15 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	use crate::plonky2_gadgets::u32::gadgets::*;
 	use anyhow::Result;
 	use plonky2::{
 		field::{goldilocks_field::GoldilocksField, types::Field},
 		iop::witness::{PartialWitness, WitnessWrite},
 		plonk::{circuit_data::CircuitConfig, config::PoseidonGoldilocksConfig},
 	};
+
+	use super::*;
+	use crate::plonky2_gadgets::u32::gadgets::*;
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;
@@ -239,10 +213,7 @@ mod tests {
 
 		let proof = data.prove(pw)?;
 
-		assert_eq!(
-			proof.public_inputs[0],
-			F::from_canonical_u32(300),
-		);
+		assert_eq!(proof.public_inputs[0], F::from_canonical_u32(300),);
 
 		data.verify(proof)?;
 		Ok(())
@@ -423,7 +394,10 @@ mod tests {
 		pw.set_target(c.0, F::from_canonical_u64(expected as u64))?;
 
 		let proof = data.prove(pw)?;
-		assert_eq!(proof.public_inputs[0], F::from_canonical_u64(expected as u64));
+		assert_eq!(
+			proof.public_inputs[0],
+			F::from_canonical_u64(expected as u64)
+		);
 		data.verify(proof)?;
 		Ok(())
 	}

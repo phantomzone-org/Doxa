@@ -1,13 +1,9 @@
 use plonky2::{
-	field::extension::Extendable,
-	hash::hash_types::RichField,
-	iop::target::Target,
+	field::extension::Extendable, hash::hash_types::RichField, iop::target::Target,
 	plonk::circuit_builder::CircuitBuilder,
 };
 
-use super::{
-	CircuitBuilderU32, CircuitBuilderU32Bitwise, CircuitBuilderU32Rotation, U32Target,
-};
+use super::{CircuitBuilderU32, CircuitBuilderU32Bitwise, CircuitBuilderU32Rotation, U32Target};
 
 /// Extension trait: SHA256 compound operations on [`U32Target`].
 pub trait CircuitBuilderU32Sha256<F: RichField + Extendable<D>, const D: usize> {
@@ -51,45 +47,25 @@ pub trait CircuitBuilderU32Sha256<F: RichField + Extendable<D>, const D: usize> 
 	///
 	/// **Range checking:** assumes `a` is already range-checked as u32.
 	/// The output is implicitly a valid u32 (produced by `xor_u32`).
-	fn big_sigma0_u32(
-		&mut self,
-		a: U32Target,
-		xor_lut: usize,
-		range_lut: usize,
-	) -> U32Target;
+	fn big_sigma0_u32(&mut self, a: U32Target, xor_lut: usize, range_lut: usize) -> U32Target;
 
 	/// `Σ₁(e) = ROTR(e,6) ⊕ ROTR(e,11) ⊕ ROTR(e,25)`
 	///
 	/// **Range checking:** assumes `e` is already range-checked as u32.
 	/// The output is implicitly a valid u32 (produced by `xor_u32`).
-	fn big_sigma1_u32(
-		&mut self,
-		e: U32Target,
-		xor_lut: usize,
-		range_lut: usize,
-	) -> U32Target;
+	fn big_sigma1_u32(&mut self, e: U32Target, xor_lut: usize, range_lut: usize) -> U32Target;
 
 	/// `σ₀(x) = ROTR(x,7) ⊕ ROTR(x,18) ⊕ SHR(x,3)`
 	///
 	/// **Range checking:** assumes `x` is already range-checked as u32.
 	/// The output is implicitly a valid u32 (produced by `xor_u32`).
-	fn small_sigma0_u32(
-		&mut self,
-		x: U32Target,
-		xor_lut: usize,
-		range_lut: usize,
-	) -> U32Target;
+	fn small_sigma0_u32(&mut self, x: U32Target, xor_lut: usize, range_lut: usize) -> U32Target;
 
 	/// `σ₁(x) = ROTR(x,17) ⊕ ROTR(x,19) ⊕ SHR(x,10)`
 	///
 	/// **Range checking:** assumes `x` is already range-checked as u32.
 	/// The output is implicitly a valid u32 (produced by `xor_u32`).
-	fn small_sigma1_u32(
-		&mut self,
-		x: U32Target,
-		xor_lut: usize,
-		range_lut: usize,
-	) -> U32Target;
+	fn small_sigma1_u32(&mut self, x: U32Target, xor_lut: usize, range_lut: usize) -> U32Target;
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Sha256<F, D>
@@ -166,12 +142,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Sha256<F, D>
 		U32Target(result)
 	}
 
-	fn big_sigma0_u32(
-		&mut self,
-		a: U32Target,
-		xor_lut: usize,
-		range_lut: usize,
-	) -> U32Target {
+	fn big_sigma0_u32(&mut self, a: U32Target, xor_lut: usize, range_lut: usize) -> U32Target {
 		let r2 = self.rotr_u32(a, 2, range_lut);
 		let r13 = self.rotr_u32(a, 13, range_lut);
 		let r22 = self.rotr_u32(a, 22, range_lut);
@@ -179,12 +150,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Sha256<F, D>
 		self.xor_u32(t, r22, xor_lut, range_lut)
 	}
 
-	fn big_sigma1_u32(
-		&mut self,
-		e: U32Target,
-		xor_lut: usize,
-		range_lut: usize,
-	) -> U32Target {
+	fn big_sigma1_u32(&mut self, e: U32Target, xor_lut: usize, range_lut: usize) -> U32Target {
 		let r6 = self.rotr_u32(e, 6, range_lut);
 		let r11 = self.rotr_u32(e, 11, range_lut);
 		let r25 = self.rotr_u32(e, 25, range_lut);
@@ -192,12 +158,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Sha256<F, D>
 		self.xor_u32(t, r25, xor_lut, range_lut)
 	}
 
-	fn small_sigma0_u32(
-		&mut self,
-		x: U32Target,
-		xor_lut: usize,
-		range_lut: usize,
-	) -> U32Target {
+	fn small_sigma0_u32(&mut self, x: U32Target, xor_lut: usize, range_lut: usize) -> U32Target {
 		let r7 = self.rotr_u32(x, 7, range_lut);
 		let r18 = self.rotr_u32(x, 18, range_lut);
 		let s3 = self.shr_u32(x, 3, range_lut);
@@ -205,12 +166,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Sha256<F, D>
 		self.xor_u32(t, s3, xor_lut, range_lut)
 	}
 
-	fn small_sigma1_u32(
-		&mut self,
-		x: U32Target,
-		xor_lut: usize,
-		range_lut: usize,
-	) -> U32Target {
+	fn small_sigma1_u32(&mut self, x: U32Target, xor_lut: usize, range_lut: usize) -> U32Target {
 		let r17 = self.rotr_u32(x, 17, range_lut);
 		let r19 = self.rotr_u32(x, 19, range_lut);
 		let s10 = self.shr_u32(x, 10, range_lut);
@@ -221,14 +177,15 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Sha256<F, D>
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	use crate::plonky2_gadgets::u32::gadgets::*;
 	use anyhow::Result;
 	use plonky2::{
 		field::{goldilocks_field::GoldilocksField, types::Field},
 		iop::witness::{PartialWitness, WitnessWrite},
 		plonk::{circuit_data::CircuitConfig, config::PoseidonGoldilocksConfig},
 	};
+
+	use super::*;
+	use crate::plonky2_gadgets::u32::gadgets::*;
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;
@@ -330,8 +287,7 @@ mod tests {
 		let data = builder.build::<C>();
 
 		let a_val: u32 = 0x6A09E667; // SHA256 H0
-		let expected: u32 =
-			a_val.rotate_right(2) ^ a_val.rotate_right(13) ^ a_val.rotate_right(22);
+		let expected: u32 = a_val.rotate_right(2) ^ a_val.rotate_right(13) ^ a_val.rotate_right(22);
 
 		let mut pw = PartialWitness::new();
 		pw.set_target(a.0, F::from_canonical_u64(a_val as u64))?;
@@ -362,8 +318,7 @@ mod tests {
 		let data = builder.build::<C>();
 
 		let e_val: u32 = 0x510E527F; // SHA256 H4
-		let expected: u32 =
-			e_val.rotate_right(6) ^ e_val.rotate_right(11) ^ e_val.rotate_right(25);
+		let expected: u32 = e_val.rotate_right(6) ^ e_val.rotate_right(11) ^ e_val.rotate_right(25);
 
 		let mut pw = PartialWitness::new();
 		pw.set_target(e.0, F::from_canonical_u64(e_val as u64))?;
@@ -394,8 +349,7 @@ mod tests {
 		let data = builder.build::<C>();
 
 		let x_val: u32 = 0xDEADBEEF;
-		let expected: u32 =
-			x_val.rotate_right(7) ^ x_val.rotate_right(18) ^ (x_val >> 3);
+		let expected: u32 = x_val.rotate_right(7) ^ x_val.rotate_right(18) ^ (x_val >> 3);
 
 		let mut pw = PartialWitness::new();
 		pw.set_target(x.0, F::from_canonical_u64(x_val as u64))?;
@@ -426,8 +380,7 @@ mod tests {
 		let data = builder.build::<C>();
 
 		let x_val: u32 = 0xDEADBEEF;
-		let expected: u32 =
-			x_val.rotate_right(17) ^ x_val.rotate_right(19) ^ (x_val >> 10);
+		let expected: u32 = x_val.rotate_right(17) ^ x_val.rotate_right(19) ^ (x_val >> 10);
 
 		let mut pw = PartialWitness::new();
 		pw.set_target(x.0, F::from_canonical_u64(x_val as u64))?;

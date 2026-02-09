@@ -8,8 +8,8 @@
 //! Bitwise operations decompose u32 values into 4 bytes and use
 //! lookup tables to compute the operation per byte pair:
 //!
-//! - **Range check table** (256 entries): identity map `[0,255] -> [0,255]`
-//!   constrains a target to be a valid byte.
+//! - **Range check table** (256 entries): identity map `[0,255] -> [0,255]` constrains a target to
+//!   be a valid byte.
 //! - **XOR table** (65536 entries): maps `(a << 8 | b) -> (a ^ b)`
 //! - **AND table** (65536 entries): maps `(a << 8 | b) -> (a & b)`
 //!
@@ -38,13 +38,10 @@ pub mod bitwise;
 pub mod rotation;
 pub mod sha256;
 
-pub use arithmetic::*;
-pub use bitwise::*;
-pub use rotation::*;
-pub use sha256::*;
-
 use std::sync::Arc;
 
+pub use arithmetic::*;
+pub use bitwise::*;
 use plonky2::{
 	field::extension::Extendable,
 	hash::hash_types::RichField,
@@ -56,6 +53,8 @@ use plonky2::{
 	plonk::{circuit_builder::CircuitBuilder, circuit_data::CommonCircuitData},
 	util::serialization::{Buffer, IoResult, Read, Write},
 };
+pub use rotation::*;
+pub use sha256::*;
 
 /// A target representing a `u32` value in a Plonky2 circuit.
 ///
@@ -145,11 +144,7 @@ pub trait CircuitBuilderU32<F: RichField + Extendable<D>, const D: usize> {
 	///
 	/// **Range checking:** each limb is decomposed into 2 bytes
 	/// (4 byte-range lookups total), proving the value fits in 32 bits.
-	fn decompose_u32_to_u16_limbs(
-		&mut self,
-		value: U32Target,
-		range_lut: usize,
-	) -> [Target; 2];
+	fn decompose_u32_to_u16_limbs(&mut self, value: U32Target, range_lut: usize) -> [Target; 2];
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32<F, D>
@@ -186,11 +181,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32<F, D>
 		bytes
 	}
 
-	fn decompose_u32_to_u16_limbs(
-		&mut self,
-		value: U32Target,
-		range_lut: usize,
-	) -> [Target; 2] {
+	fn decompose_u32_to_u16_limbs(&mut self, value: U32Target, range_lut: usize) -> [Target; 2] {
 		let limbs: [Target; 2] = core::array::from_fn(|_| self.add_virtual_target());
 
 		self.add_simple_generator(U16LimbDecompositionGenerator {
@@ -201,7 +192,10 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32<F, D>
 		// Range check each limb: decompose into 2 bytes each
 		for &limb in &limbs {
 			let bytes: [Target; 2] = core::array::from_fn(|_| self.add_virtual_target());
-			self.add_simple_generator(LimbByteDecompositionGenerator { input: limb, bytes });
+			self.add_simple_generator(LimbByteDecompositionGenerator {
+				input: limb,
+				bytes,
+			});
 
 			for &byte in &bytes {
 				let _range_checked = self.add_lookup_from_index(byte, range_lut);
@@ -255,11 +249,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn serialize(
-		&self,
-		dst: &mut Vec<u8>,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<()> {
+	fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
 		dst.write_target(self.input)?;
 		for &byte in &self.bytes {
 			dst.write_target(byte)?;
@@ -267,10 +257,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn deserialize(
-		src: &mut Buffer,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<Self> {
+	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
 		let input = src.read_target()?;
 		let bytes = [
 			src.read_target()?,
@@ -278,7 +265,10 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 			src.read_target()?,
 			src.read_target()?,
 		];
-		Ok(Self { input, bytes })
+		Ok(Self {
+			input,
+			bytes,
+		})
 	}
 }
 
@@ -311,11 +301,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn serialize(
-		&self,
-		dst: &mut Vec<u8>,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<()> {
+	fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
 		dst.write_target(self.input)?;
 		for &limb in &self.limbs {
 			dst.write_target(limb)?;
@@ -323,25 +309,26 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn deserialize(
-		src: &mut Buffer,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<Self> {
+	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
 		let input = src.read_target()?;
 		let limbs = [src.read_target()?, src.read_target()?];
-		Ok(Self { input, limbs })
+		Ok(Self {
+			input,
+			limbs,
+		})
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use anyhow::Result;
 	use plonky2::{
 		field::{goldilocks_field::GoldilocksField, types::Field},
 		iop::witness::{PartialWitness, WitnessWrite},
 		plonk::{circuit_data::CircuitConfig, config::PoseidonGoldilocksConfig},
 	};
+
+	use super::*;
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;
@@ -436,11 +423,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn serialize(
-		&self,
-		dst: &mut Vec<u8>,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<()> {
+	fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
 		dst.write_target(self.input)?;
 		for &byte in &self.bytes {
 			dst.write_target(byte)?;
@@ -448,12 +431,12 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn deserialize(
-		src: &mut Buffer,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<Self> {
+	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
 		let input = src.read_target()?;
 		let bytes = [src.read_target()?, src.read_target()?];
-		Ok(Self { input, bytes })
+		Ok(Self {
+			input,
+			bytes,
+		})
 	}
 }

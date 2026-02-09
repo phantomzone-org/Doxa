@@ -54,7 +54,11 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Rotation<F, 
 		// Split: product = hi * 2^32 + lo
 		let lo = self.add_virtual_target();
 		let hi = self.add_virtual_target();
-		self.add_simple_generator(SplitLowHighGenerator { product, lo, hi });
+		self.add_simple_generator(SplitLowHighGenerator {
+			product,
+			lo,
+			hi,
+		});
 
 		// Range check both halves as u32
 		self.decompose_u32_to_bytes(U32Target(lo), range_lut);
@@ -79,7 +83,11 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Rotation<F, 
 
 		let lo = self.add_virtual_target();
 		let hi = self.add_virtual_target();
-		self.add_simple_generator(SplitLowHighGenerator { product, lo, hi });
+		self.add_simple_generator(SplitLowHighGenerator {
+			product,
+			lo,
+			hi,
+		});
 
 		self.decompose_u32_to_bytes(U32Target(lo), range_lut);
 		self.decompose_u32_to_bytes(U32Target(hi), range_lut);
@@ -107,9 +115,7 @@ struct SplitLowHighGenerator {
 	hi: Target,
 }
 
-impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
-	for SplitLowHighGenerator
-{
+impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D> for SplitLowHighGenerator {
 	fn id(&self) -> String {
 		"SplitLowHighGenerator".to_string()
 	}
@@ -129,38 +135,36 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 		Ok(())
 	}
 
-	fn serialize(
-		&self,
-		dst: &mut Vec<u8>,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<()> {
+	fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
 		dst.write_target(self.product)?;
 		dst.write_target(self.lo)?;
 		dst.write_target(self.hi)?;
 		Ok(())
 	}
 
-	fn deserialize(
-		src: &mut Buffer,
-		_common_data: &CommonCircuitData<F, D>,
-	) -> IoResult<Self> {
+	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
 		let product = src.read_target()?;
 		let lo = src.read_target()?;
 		let hi = src.read_target()?;
-		Ok(Self { product, lo, hi })
+		Ok(Self {
+			product,
+			lo,
+			hi,
+		})
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	use crate::plonky2_gadgets::u32::gadgets::*;
 	use anyhow::Result;
 	use plonky2::{
 		field::{goldilocks_field::GoldilocksField, types::Field},
 		iop::witness::{PartialWitness, WitnessWrite},
 		plonk::{circuit_data::CircuitConfig, config::PoseidonGoldilocksConfig},
 	};
+
+	use super::*;
+	use crate::plonky2_gadgets::u32::gadgets::*;
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;

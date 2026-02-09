@@ -44,7 +44,7 @@ impl<H: MerkleHash> Node<H> {
 }
 
 #[cfg(test)]
-use rand::RngCore;
+use rand::Rng;
 
 use crate::tree::hasher::MerkleHash;
 #[cfg(test)]
@@ -57,7 +57,7 @@ where
 {
 	/// Creates a random node for testing purposes.
 	/// Uses index 0 and TAIL as next_value, with a random value.
-	pub fn new_random<R: RngCore + ?Sized>(rng: &mut R) -> Self {
+	pub fn new_random<R: Rng + ?Sized>(rng: &mut R) -> Self {
 		let value = H::Digest::new_random(rng);
 		Self::new(value, 0, H::TAIL)
 	}

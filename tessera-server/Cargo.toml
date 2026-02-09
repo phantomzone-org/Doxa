@@ -1,0 +1,9 @@
+[package]
+name = "tessera-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tessera-trees = {workspace = true}
+anyhow = {workspace = true}
+serde = {workspace = true}

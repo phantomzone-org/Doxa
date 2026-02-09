@@ -63,9 +63,8 @@ impl ChainedInsertProofTargets {
 	/// * `builder` - The circuit builder
 	/// * `depth` - The Merkle tree depth
 	/// * `batch_size` - The number of insertions in the chain
-	/// * `commit` - If `Some`, all proof data is private and committed
-	///   via the provided [`DataCommitment`]; if `None`, proof data is
-	///   exposed directly as public inputs.
+	/// * `commit` - If `Some`, all proof data is private and committed via the provided
+	///   [`DataCommitment`]; if `None`, proof data is exposed directly as public inputs.
 	///
 	/// # Public Inputs
 	///
@@ -109,7 +108,10 @@ impl ChainedInsertProofTargets {
 			commitment.commit_public_inputs(builder, preimage);
 		}
 
-		Self { insertions, depth }
+		Self {
+			insertions,
+			depth,
+		}
 	}
 
 	/// Returns the number of insertions this circuit handles.

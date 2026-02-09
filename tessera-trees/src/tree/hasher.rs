@@ -15,10 +15,13 @@ use plonky2::{
 	iop::target::{BoolTarget, Target},
 	plonk::{circuit_builder::CircuitBuilder, config::Hasher},
 };
-use rand::RngCore;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 
-use crate::F;
-use crate::plonky2_gadgets::sha256::{CircuitBuilderSha256, Sha256Luts, sha256_field_elements_native};
+use crate::{
+	F,
+	plonky2_gadgets::sha256::{CircuitBuilderSha256, Sha256Luts, sha256_field_elements_native},
+};
 
 pub trait MerkleHash: Copy + Clone + Debug {
 	type Digest: Clone + Copy + Eq + Ord + Display + Debug;
@@ -68,11 +71,10 @@ pub trait MerkleHash: Copy + Clone + Debug {
 /// replaces the raw public inputs with a short, fixed-size digest:
 ///
 /// 1. All proof data targets are allocated as **private** witnesses.
-/// 2. [`commit_public_inputs`](DataCommitment::commit_public_inputs)
-///    hashes those targets and registers only the digest as public
-///    inputs.
-/// 3. The verifier (on-chain or off-chain) checks the digest against
-///    the claimed data to confirm binding.
+/// 2. [`commit_public_inputs`](DataCommitment::commit_public_inputs) hashes those targets and
+///    registers only the digest as public inputs.
+/// 3. The verifier (on-chain or off-chain) checks the digest against the claimed data to confirm
+///    binding.
 ///
 /// # Implementations
 ///
@@ -133,11 +135,7 @@ pub trait DataCommitment<F: RichField + Extendable<D>, const D: usize> {
 	/// The number and interpretation of the registered public inputs
 	/// is implementation-defined (e.g. 4 field elements for Poseidon,
 	/// 8 `u32` words for SHA-256).
-	fn commit_public_inputs(
-		&self,
-		builder: &mut CircuitBuilder<F, D>,
-		preimage: Vec<Target>,
-	);
+	fn commit_public_inputs(&self, builder: &mut CircuitBuilder<F, D>, preimage: Vec<Target>);
 
 	/// Computes the commitment digest natively (outside the circuit).
 	///
@@ -163,11 +161,7 @@ pub trait DataCommitment<F: RichField + Extendable<D>, const D: usize> {
 pub struct PoseidonCommitment;
 
 impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for PoseidonCommitment {
-	fn commit_public_inputs(
-		&self,
-		builder: &mut CircuitBuilder<F, D>,
-		preimage: Vec<Target>,
-	) {
+	fn commit_public_inputs(&self, builder: &mut CircuitBuilder<F, D>, preimage: Vec<Target>) {
 		let commitment = builder.hash_n_to_hash_no_pad::<PoseidonHash>(preimage);
 		builder.register_public_inputs(&commitment.elements);
 	}
@@ -209,11 +203,7 @@ impl Sha256Commitment {
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Sha256Commitment {
-	fn commit_public_inputs(
-		&self,
-		builder: &mut CircuitBuilder<F, D>,
-		preimage: Vec<Target>,
-	) {
+	fn commit_public_inputs(&self, builder: &mut CircuitBuilder<F, D>, preimage: Vec<Target>) {
 		let hash = builder.sha256_hash_field_elements(&preimage, &self.luts);
 		for word in &hash {
 			builder.register_public_input(word.0);
@@ -270,7 +260,7 @@ pub trait ToHashOut<F: Field> {
 
 pub(crate) const HASH_SIZE: usize = 4;
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Hash(pub [F; HASH_SIZE]);
 
 impl Hash {
@@ -317,7 +307,7 @@ pub(crate) trait NewFromU64 {
 }
 
 pub trait NewRandom {
-	fn new_random<R: RngCore + ?Sized>(rng: &mut R) -> Self;
+	fn new_random<R: Rng + ?Sized>(rng: &mut R) -> Self;
 }
 
 #[cfg(test)]
@@ -330,7 +320,7 @@ impl NewFromU64 for Hash {
 }
 
 impl NewRandom for Hash {
-	fn new_random<R: RngCore + ?Sized>(rng: &mut R) -> Self {
+	fn new_random<R: Rng + ?Sized>(rng: &mut R) -> Self {
 		Self([
 			F::from_canonical_u64(rng.next_u64()),
 			F::from_canonical_u64(rng.next_u64()),

@@ -175,7 +175,8 @@ impl<H: MerkleHash> BatchCommitmentProof<H> {
 
 /// Preimage layout: `root_old || root_new || leaves[0] || ... || leaves[n-1]`
 ///
-/// Matches the circuit's [`BatchCommitmentProofTargets::new`](crate::tree::BatchCommitmentProofTargets::new).
+/// Matches the circuit's
+/// [`BatchCommitmentProofTargets::new`](crate::tree::BatchCommitmentProofTargets::new).
 impl<F: Field, H: MerkleHash> CommitmentPreimage<F> for BatchCommitmentProof<H>
 where
 	H::Digest: ToHashOut<F>,
