@@ -1,0 +1,23 @@
+*/target
+*/examples/tmp
+*.pprof
+/target
+Cargo.lock
+
+#submodule
+tessera-solidity/lib/forge-std
+
+# Compiler files
+tessera-solidity/cache/
+tessera-solidity/out/
+
+# Ignores development broadcast logs
+!/broadcast
+tessera-solidity/broadcast/*/31337/
+tessera-solidity/broadcast/**/dry-run/
+
+# Docs
+tessera-solidity/docs/
+
+# Dotenv file
+tessera-solidity/.env

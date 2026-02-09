@@ -1,0 +1,6 @@
+[workspace]
+members = ["tessera-trees"]
+resolver = "3"
+
+[workspace.dependencies]
+tessera-trees = {path = "tessera-trees"}

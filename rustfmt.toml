@@ -1,0 +1,39 @@
+# rustfmt.toml
+edition = "2021"
+
+# Use stable formatting only
+unstable_features = false
+
+# Keep things readable and diff-friendly
+max_width = 100
+hard_tabs = true
+tab_spaces = 4
+
+# Imports
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+
+# Function formatting
+fn_params_layout = "Tall"
+
+# Structs & enums
+struct_lit_single_line = false
+enum_discrim_align_threshold = 20
+
+# Match & control flow
+match_arm_leading_pipes = "Never"
+match_block_trailing_comma = true
+
+# Comments & docs
+wrap_comments = true
+comment_width = 100
+normalize_comments = true
+normalize_doc_attributes = true
+
+# Trailing commas make diffs nicer
+trailing_comma = "Vertical"
+
+# Misc
+use_try_shorthand = true
+use_field_init_shorthand = true
+reorder_impl_items = true
