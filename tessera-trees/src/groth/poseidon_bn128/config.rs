@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::fr::{Fr, FrRepr};
 
 /// Configuration using Poseidon BN128 over the Goldilocks field.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Serialize)]
 pub struct PoseidonBN128GoldilocksConfig;
 
 impl GenericConfig<2> for PoseidonBN128GoldilocksConfig {

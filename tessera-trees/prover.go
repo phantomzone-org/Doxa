@@ -38,7 +38,22 @@ func checkErr(err error, msg ...string) {
 	}
 }
 
+func infof(format string, args ...any) {
+	fmt.Printf(format, args...)
+}
+
+func debugEnabled() bool {
+	return os.Getenv("TESSERA_DEBUG") == "1"
+}
+
+func debugf(format string, args ...any) {
+	if debugEnabled() {
+		fmt.Printf(format, args...)
+	}
+}
+
 func R1csCircuit(proofWithPis variables.ProofWithPublicInputs, verifierOnlyCircuitData variables.VerifierOnlyCircuitData, commonCircuitData types.CommonCircuitData, outputsPath string) constraint.ConstraintSystem {
+	infof("building r1cs (output: %s)\n", outputsPath)
 	circuit := verifier.ExampleVerifierCircuit{
 		Proof:                   proofWithPis.Proof,
 		PublicInputs:            proofWithPis.PublicInputs,
@@ -57,11 +72,11 @@ func R1csCircuit(proofWithPis variables.ProofWithPublicInputs, verifierOnlyCircu
 
 	p.Stop()
 	p.Top()
-	println("r1cs.GetNbCoefficients(): ", r1cs.GetNbCoefficients())
-	println("r1cs.GetNbConstraints(): ", r1cs.GetNbConstraints())
-	println("r1cs.GetNbSecretVariables(): ", r1cs.GetNbSecretVariables())
-	println("r1cs.GetNbPublicVariables(): ", r1cs.GetNbPublicVariables())
-	println("r1cs.GetNbInternalVariables(): ", r1cs.GetNbInternalVariables())
+	debugf("r1cs.GetNbCoefficients(): %d\n", r1cs.GetNbCoefficients())
+	debugf("r1cs.GetNbConstraints(): %d\n", r1cs.GetNbConstraints())
+	debugf("r1cs.GetNbSecretVariables(): %d\n", r1cs.GetNbSecretVariables())
+	debugf("r1cs.GetNbPublicVariables(): %d\n", r1cs.GetNbPublicVariables())
+	debugf("r1cs.GetNbInternalVariables(): %d\n", r1cs.GetNbInternalVariables())
 
 	// store r1cs into a file
 	fR1CS, err := os.Create(filepath.Join(outputsPath, "r1cs"))
@@ -77,7 +92,7 @@ func TrustedSetup(r1cs constraint.ConstraintSystem, outputsPath string) (groth16
 	var vk groth16.VerifyingKey
 	var err error
 
-	fmt.Println("Running circuit setup", time.Now())
+	infof("running groth16 trusted setup (output: %s)\n", outputsPath)
 	pk, vk, err = groth16.Setup(r1cs)
 	checkErr(err)
 
@@ -101,6 +116,7 @@ func TrustedSetup(r1cs constraint.ConstraintSystem, outputsPath string) (groth16
 	checkErr(err)
 	fSolidity.Close()
 
+	infof("trusted setup complete (pk/vk/r1cs/verifier written)\n")
 	return pk, vk
 }
 
@@ -136,20 +152,20 @@ func Groth16Proof(r1cs constraint.ConstraintSystem, pk groth16.ProvingKey, vk gr
 		CommonCircuitData:       commonCircuitData,
 	}
 
-	fmt.Println("Generating witness", time.Now())
+	infof("generating groth16 witness\n")
 	start := time.Now()
 	witness, err := frontend.NewWitness(&assignment, ecc.BN254.ScalarField())
 	if err != nil {
 		return nil, nil, err
 	}
 
-	fmt.Println("Creating proof", time.Now())
+	infof("creating groth16 proof\n")
 	start = time.Now()
 	proof, err := groth16.Prove(r1cs, pk, witness, backend.WithProverHashToFieldFunction(sha3.NewLegacyKeccak256()))
 	if err != nil {
 		return nil, nil, err
 	}
-	fmt.Println("[DBG] proof gen", time.Since(start).Milliseconds())
+	debugf("[DBG] proof gen %dms\n", time.Since(start).Milliseconds())
 
 	witnessPublic, err := witness.Public()
 	if err != nil {
@@ -162,6 +178,7 @@ func Groth16Proof(r1cs constraint.ConstraintSystem, pk groth16.ProvingKey, vk gr
 func Groth16ProofStore(r1cs constraint.ConstraintSystem, pk groth16.ProvingKey, vk groth16.VerifyingKey, proofWithPis variables.ProofWithPublicInputs, verifierOnlyCircuitData variables.VerifierOnlyCircuitData, commonCircuitData types.CommonCircuitData, outputsPath string, solidityCheck bool) {
 	var err error
 
+	infof("generating groth16 proof (output: %s)\n", outputsPath)
 	assignment := verifier.ExampleVerifierCircuit{
 		Proof:                   proofWithPis.Proof,
 		PublicInputs:            proofWithPis.PublicInputs,
@@ -169,7 +186,7 @@ func Groth16ProofStore(r1cs constraint.ConstraintSystem, pk groth16.ProvingKey, 
 		CommonCircuitData:       commonCircuitData,
 	}
 
-	fmt.Println("Generating witness", time.Now())
+	infof("generating witness\n")
 	start := time.Now()
 	witness, err := frontend.NewWitness(&assignment, ecc.BN254.ScalarField())
 	checkErr(err)
@@ -189,13 +206,13 @@ func Groth16ProofStore(r1cs constraint.ConstraintSystem, pk groth16.ProvingKey, 
 	checkErr(err)
 	witnessPublic.WriteTo(fWitnessPublic)
 	fWitnessPublic.Close()
-	fmt.Println("[DBG] witness gen", time.Since(start).Milliseconds())
+	debugf("[DBG] witness gen %dms\n", time.Since(start).Milliseconds())
 
-	fmt.Println("Creating proof", time.Now())
+	infof("creating proof\n")
 	start = time.Now()
 	proof, err := groth16.Prove(r1cs, pk, witness, backend.WithProverHashToFieldFunction(sha3.NewLegacyKeccak256()))
 	checkErr(err)
-	fmt.Println("[DBG] proof gen", time.Since(start).Milliseconds())
+	debugf("[DBG] proof gen %dms\n", time.Since(start).Milliseconds())
 	fProof, err := os.Create(filepath.Join(outputsPath, "proof.proof"))
 	checkErr(err)
 	proof.WriteTo(fProof)
@@ -205,7 +222,7 @@ func Groth16ProofStore(r1cs constraint.ConstraintSystem, pk groth16.ProvingKey, 
 		panic("vk is nil")
 	}
 
-	fmt.Println("Verifying proof", time.Now())
+	infof("verifying proof\n")
 	err = groth16.Verify(proof, vk, witnessPublic, backend.WithVerifierHashToFieldFunction(sha3.NewLegacyKeccak256()))
 	checkErr(err)
 
@@ -226,14 +243,14 @@ func Groth16ProofStore(r1cs constraint.ConstraintSystem, pk groth16.ProvingKey, 
 		input = append(input, new(big.Int))
 		e.BigInt(input[i])
 	}
-	fmt.Println("[solidity] inputs", input)
+	debugf("[solidity] inputs %v\n", input)
 
 	// solidity contract inputs
 	var proofSol [8]*big.Int
 	for i := 0; i < 8; i++ {
 		proofSol[i] = new(big.Int).SetBytes(proofBytes[fpSize*i : fpSize*(i+1)])
 	}
-	fmt.Println("[solidity] proof", proof)
+	debugf("[solidity] proof %v\n", proof)
 
 	// prepare commitments
 	commitmentsBI := new(big.Int).SetBytes(proofBytes[fpSize*8 : fpSize*8+4])
@@ -246,18 +263,18 @@ func Groth16ProofStore(r1cs constraint.ConstraintSystem, pk groth16.ProvingKey, 
 	for i := 0; i < 2*commitmentCount; i++ {
 		commitments = append(commitments, new(big.Int).SetBytes(proofBytes[fpSize*8+4+i*fpSize:fpSize*8+4+(i+1)*fpSize]))
 	}
-	fmt.Println("[solidity] commitments", commitments)
+	debugf("[solidity] commitments %v\n", commitments)
 
 	// commitmentPok
 	commitmentPok[0] = new(big.Int).SetBytes(proofBytes[fpSize*8+4+2*commitmentCount*fpSize : fpSize*8+4+2*commitmentCount*fpSize+fpSize])
 	commitmentPok[1] = new(big.Int).SetBytes(proofBytes[fpSize*8+4+2*commitmentCount*fpSize+fpSize : fpSize*8+4+2*commitmentCount*fpSize+2*fpSize])
-	fmt.Println("[solidity] commitmentPok", commitmentPok)
+	debugf("[solidity] commitmentPok %v\n", commitmentPok)
 
 	// check that the proof can be verified in the Solidity smart contract
 	// through gnark-solidity-checker
 	if solidityCheck {
 		if _vk, ok := vk.(solidity.VerifyingKey); ok {
-			fmt.Println("VERIFY solidity")
+			infof("verifying proof in solidity checker\n")
 			SolidityVerification(_vk, proof, witnessPublic, outputsPath, []solidity.ExportOption{solidity.WithHashToFieldFunction(sha3.NewLegacyKeccak256())})
 		}
 	}
@@ -286,7 +303,7 @@ func SolidityVerification(vk solidity.VerifyingKey,
 	// generate assets
 	// gnark-solidity-checker generate --dir tmpdir --solidity contract_g16.sol
 	cmd := exec.Command("gnark-solidity-checker", "generate", "--dir", outputsPath+"/solidity", "--solidity", "gnark_verifier.sol")
-	fmt.Println("running ", cmd.String())
+	debugf("running %s\n", cmd.String())
 	out, err := cmd.CombinedOutput()
 	checkErr(err, string(out))
 
@@ -325,7 +342,7 @@ func SolidityVerification(vk solidity.VerifyingKey,
 	// verify proof
 	// gnark-solidity-checker verify --dir tmdir --groth16 --nb-public-inputs 1 --proof 1234 --public-inputs dead
 	cmd = exec.Command("gnark-solidity-checker", checkerOpts...)
-	fmt.Println("running ", cmd.String())
+	debugf("running %s\n", cmd.String())
 	out, err = cmd.CombinedOutput()
 	checkErr(err, string(out))
 
@@ -393,7 +410,7 @@ func FormatSolidityJSON(proofRawBytes []byte, witnessPublicBytes []byte) (string
 		return "", fmt.Errorf("cannot decode commitmentCount: BE=%d LE=%d remaining=%d",
 			countBE, countLE, remaining)
 	}
-	fmt.Println("(go) [FormatSolidityJSON] commitmentCount =", commitmentCount)
+	debugf("(go) [FormatSolidityJSON] commitmentCount = %d\n", commitmentCount)
 
 	offset := 8*fpSize + 4
 

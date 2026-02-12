@@ -7,7 +7,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! let luts = Sha256Luts::new(&mut builder);
+//! let luts = Sha256Luts::new(&mut builder, 8);
 //! let input: [U32Target; 16] = ...;
 //! let hash = builder.sha256_single_block(input, &luts);
 //! ```
@@ -17,41 +17,12 @@ pub mod constants;
 
 pub use circuit::*;
 pub use constants::*;
-use plonky2::{
-	field::extension::Extendable, hash::hash_types::RichField,
-	plonk::circuit_builder::CircuitBuilder,
-};
 
-use crate::plonky2_gadgets::u32::{
-	U32Target, add_and_lookup_table, add_u8_range_check_lookup_table, add_xor_lookup_table,
-};
+use crate::plonky2_gadgets::u32::{BitwiseLuts, U32Target};
 
-/// Bundles the three lookup-table indices needed by SHA256 sub-operations.
-///
-/// Created once per circuit via [`Sha256Luts::new`].  Passed by reference
-/// to all SHA256 circuit-building methods.
-#[derive(Clone, Copy, Debug)]
-pub struct Sha256Luts {
-	pub range_lut: usize,
-	pub xor_lut: usize,
-	pub and_lut: usize,
-}
-
-impl Sha256Luts {
-	/// Registers all three lookup tables required by SHA256 and returns
-	/// their bundled indices.
-	///
-	/// Call this exactly once per circuit.
-	pub fn new<F: RichField + Extendable<D>, const D: usize>(
-		builder: &mut CircuitBuilder<F, D>,
-	) -> Self {
-		Self {
-			range_lut: add_u8_range_check_lookup_table(builder),
-			xor_lut: add_xor_lookup_table(builder),
-			and_lut: add_and_lookup_table(builder),
-		}
-	}
-}
+/// Type alias: SHA-256 lookup tables are [`BitwiseLuts`] parameterized
+/// by chunk bit-width.
+pub type Sha256Luts = BitwiseLuts;
 
 /// The 8-word output of a SHA-256 hash.
 ///

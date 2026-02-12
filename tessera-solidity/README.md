@@ -1,80 +1,71 @@
-# tessera-solidity
+# pending-deposit (tessera-solidity)
 
-On-chain zk-rollup batch finalizer for the Tessera protocol. The
-`DepositsRollupBridge` contract accepts batches of deposit data, verifies
-Groth16 proofs of Merkle-tree state transitions, and advances the committed
-state root.
+On-chain zk-rollup deposit bridge for the Tessera protocol. The
+`DepositsRollupBridge` contract accepts permissionless deposits from users,
+records them on-chain, and allows a sequencer to finalize batches via
+`finalizeBatch()` with a Groth16 proof that anchors the off-chain Merkle
+root update.
 
 ## Architecture
 
 ```
                          Off-chain (Rust)                          On-chain (Solidity)
- ┌──────────────────────────────────────────────┐   ┌──────────────────────────────────────┐
- │                                              │   │                                      │
- │  PendingDeposit ──Poseidon──▶ leaf (Hash)    │   │         submitBatch(...)              │
- │            │                       │         │   │    ┌─────────────────────────┐        │
- │            │            CommitmentTree.insert │   │    │  Pending pool           │        │
- │            │              ▼                   │   │    │  (deposits + leaves     │        │
- │         root_old ──▶ root_new                │   │    │   + roots + sha256)     │        │
- │            │              │                   │   │    └────────────┬────────────┘        │
- │            ▼              ▼                   │   │                 │                     │
- │    SHA-256(root_old ‖ root_new ‖ leaves)     │   │         finalizeBatch(...)            │
- │            │                                  │   │                 │                     │
- │            ▼                                  │   │    Groth16 proof verification         │
- │    plonky2 circuit (proves SHA-256 preimage) │   │    via Verifier128 contract           │
- │            │                                  │   │                 │                     │
- │            ▼                                  │   │    ┌────────────▼────────────┐        │
- │    BN128 wrapper ──▶ Groth16 proof           │───│──▶ │  Validated pool          │        │
- │                                              │   │    │  stateRoot updated       │        │
- │    Artifacts: proof_solidity.json            │   │    │  batchNumber incremented  │        │
- │              bridge_calldata.json            │   │    └─────────────────────────┘        │
- └──────────────────────────────────────────────┘   └──────────────────────────────────────┘
+ ┌───────────────────────────────────────────────┐   ┌───────────────────────────────────────┐
+ │                                               │   │                                       │
+ │  Poll DepositPending events                   │   │   deposit(noteCommitment,value,recip) │
+ │    -> accumulate commitments (128)            │   │     -> DepositPending event           │
+ │                                               │   │     -> stored as Pending              │
+ │  CommitmentTree.insert_batch(commitments)     │   │                                       │
+ │    -> root_old -> root_new                    │   │   finalizeBatch(newRoot, startIdx,    │
+ │                                               │   │                 proof)                │
+ │  SHA-256(root_old || root_new || commitments) │   │     -> reads commitments from storage │
+ │    -> circuit public inputs                   │   │     -> SHA-256 commitment (matches    │
+ │                                               │   │        circuit)                       │
+ │  plonky2 -> BN128 -> Groth16 proof            │   │     -> Groth16 verification           │
+ │                                               │   │     -> deposits marked Validated      │
+ │                                               │   │     -> merkleRoot advanced            │
+ └───────────────────────────────────────────────┘   └───────────────────────────────────────┘
 ```
 
-## Two-Phase Batch Lifecycle
+## Single-Step Batch Finalization
 
-Each batch progresses through a two-phase lifecycle:
+Users call `deposit()` directly on the contract. The sequencer watches for
+`DepositPending` events, accumulates 128 commitments off-chain, builds a
+Merkle tree proof, generates a Groth16 proof, and finalizes the batch in a
+single `finalizeBatch()` call.
 
-| Phase | Function | Status | Description |
-|-------|----------|--------|-------------|
-| 1 | `submitBatch` | `Pending` | Operator submits deposit data, pre-hashed leaves, and proposed new root. Contract computes SHA-256 commitment and stores everything. |
-| 2 | `finalizeBatch` | `Validated` | Operator provides a Groth16 proof. Contract derives public inputs from the stored SHA-256 commitment, verifies the proof on-chain, and advances the state root. |
-
-A pending batch can also be **cancelled** via `cancelPendingBatch` (e.g. if it
-becomes stale after another batch is finalized first).
+| Step | Actor | Description |
+|------|-------|-------------|
+| 1 | User | Calls `deposit(noteCommitment, value, recipient)`. Contract computes `commitment = sha256(DOMAIN_SEP \|\| noteCommitment \|\| value \|\| recipient)` with MSB clearing, stores the deposit as `Pending`, and emits `DepositPending`. |
+| 2 | Sequencer | Polls `DepositPending` events, accumulates 128 commitments, inserts into Merkle tree, generates Groth16 proof. |
+| 3 | Sequencer | Calls `finalizeBatch(newRoot, depositStartIndex, proof)`. Contract reads commitments from storage, computes SHA-256 circuit commitment, verifies the Groth16 proof, marks deposits as `Validated`, and advances `merkleRoot`. |
 
 ## Cryptographic Pipeline
 
-The system chains three hash functions, each serving a distinct role:
+### Commitment Encoding
+
+Each deposit's commitment is computed as:
 
 ```
-  Poseidon (off-chain)        SHA-256 (circuit + on-chain)      keccak256 (on-chain only)
-  ─────────────────────       ──────────────────────────────     ─────────────────────────
-  deposit → leaf hash         commit = SHA-256(                  domainCommit = keccak256(
-  (Merkle tree internal         root_old ‖ root_new ‖              chainid,
-   hash function)                leaf_0 ‖ … ‖ leaf_127             address(this),
-                               )                                    PROTOCOL_VERSION,
-  Not available as EVM        Binds circuit public inputs           sha256Commit
-  precompile → leaves         to the state transition.            )
-  must be pre-computed        Verifiable on-chain via the         Storage key. Prevents
-  off-chain and passed        SHA-256 precompile (0x02).          cross-chain / cross-
-  to submitBatch.                                                  contract replay.
+sha256(DOMAIN_SEP || noteCommitment || value || recipient)
 ```
 
-### Why three hashes?
+where `DOMAIN_SEP = sha256("tessera.pending-deposit.v1")`.
 
-- **Poseidon** is efficient inside arithmetic circuits (plonky2) but has no EVM
-  precompile. The contract cannot derive leaves from deposits on-chain, so
-  `submitBatch` accepts both raw deposits (for data availability) and
-  pre-hashed leaves (for the SHA-256 commitment).
+The MSB of each 64-bit chunk is cleared so every chunk fits in the Goldilocks
+field (< 2^63 < p). This is an injective mapping on the 252-bit truncated
+digest, providing 126-bit collision security.
 
-- **SHA-256** is both circuit-friendly (via a plonky2 gadget) and available as
-  an EVM precompile. It binds the Groth16 public inputs to the state
-  transition: `SHA-256(root_old || root_new || leaves)`. The 256-bit digest is
-  split into 8 big-endian uint32 words for the verifier.
+### SHA-256 Circuit Commitment
 
-- **keccak256** provides domain separation for the storage key. It is cheap
-  on-chain and wraps the SHA-256 commitment with chain-specific context.
+The plonky2 circuit commits its public data via SHA-256:
+
+```
+SHA256(merkleRoot_old || merkleRoot_new || commitment_0 || ... || commitment_127)
+```
+
+The resulting 256-bit digest is split into 8 big-endian uint32 words, which
+become the Groth16 public inputs.
 
 ## Data Encoding
 
@@ -94,11 +85,6 @@ bytes[16..24] = f[2] big-endian uint64
 bytes[24..32] = f[3] big-endian uint64
 ```
 
-### Leaves
-
-Each leaf is a Poseidon hash of a deposit (4 field elements = 32 bytes).
-The `leaves` parameter to `submitBatch` is `BATCH_SIZE * 4 * 8 = 4096 bytes`.
-
 ### Groth16 Public Inputs
 
 The SHA-256 digest is split into 8 big-endian uint32 words, each
@@ -115,9 +101,8 @@ inputs[7] = sha256_digest & 0xFFFFFFFF             // least-significant
 
 | Function | Access | Description |
 |----------|--------|-------------|
-| `submitBatch(bytes32 newRoot, Deposit[] deposits, bytes leaves)` | operator | Submit a batch. Returns the domain-separated `commit` key. |
-| `finalizeBatch(bytes32 commit, Proof proof)` | operator | Verify Groth16 proof and advance state. |
-| `cancelPendingBatch(bytes32 commit)` | operator | Delete a pending batch. |
+| `deposit(bytes32 noteCommitment, uint256 value, address recipient)` | permissionless | Record a pending deposit. Returns `depositId`. |
+| `finalizeBatch(bytes32 newRoot, uint256 depositStartIndex, Proof proof)` | operator | Verify Groth16 proof and advance Merkle root. |
 
 ### Admin Functions
 
@@ -130,32 +115,20 @@ inputs[7] = sha256_digest & 0xFFFFFFFF             // least-significant
 
 | Function | Description |
 |----------|-------------|
-| `getBatch(bytes32 commit)` | Read batch metadata (roots, status, deposits count). |
-| `getBatchDeposit(bytes32 commit, uint256 index)` | Read a single deposit from a batch. |
+| `getDeposit(uint256 depositId)` | Read a deposit record by ID. |
+| `computeCommitment(bytes32 noteCommitment, uint256 value, address recipient)` | Compute the deposit commitment hash. |
 | `sha256ToPublicInputs(bytes32 hash)` | Split SHA-256 digest into 8 uint32 public inputs. |
-| `computeSha256Commitment(bytes32 oldRoot, bytes32 newRoot, bytes leaves)` | Compute the circuit-matching SHA-256 commitment. |
-| `computeDomainCommitment(bytes32 sha256Commit)` | Compute the domain-separated storage key. |
 
 ### Types
 
 ```solidity
+enum DepositStatus { Pending, Validated }
+
 struct Deposit {
-    bytes32 noteCommitment;  // Hash = [F;4] packed as 4x8-byte big-endian
-    uint64  addr0;           // address[0] as Goldilocks element
-    uint64  addr1;           // address[1]
-    uint64  addr2;           // address[2]
-    uint64  amount;          // amount as Goldilocks element
-}
-
-enum BatchStatus { None, Pending, Validated }
-
-struct Batch {
-    bytes32     oldRoot;
-    bytes32     newRoot;
-    bytes32     sha256Commit;
-    uint64      blockNumber;
-    BatchStatus status;
-    Deposit[]   deposits;
+    bytes32       commitment;  // sha256(DOMAIN_SEP || noteCommitment || value || recipient) w/ MSB clearing
+    uint256       value;       // deposit value
+    address       recipient;   // recipient address
+    DepositStatus status;
 }
 
 struct Proof {
@@ -165,23 +138,25 @@ struct Proof {
 }
 ```
 
-### Constants
+### State Variables
 
-| Name | Value | Description |
-|------|-------|-------------|
-| `BATCH_SIZE` | 128 | Deposits per batch |
-| `HASH_SIZE` | 4 | Goldilocks elements per hash |
-| `FIELD_ELEMENT_BYTES` | 8 | Bytes per Goldilocks element |
-| `LEAVES_BYTE_LEN` | 4096 | Expected `leaves` byte length (128 * 4 * 8) |
-| `PROTOCOL_VERSION` | 1 | Domain separation version tag |
+| Name | Type | Description |
+|------|------|-------------|
+| `verifier` | `IGroth16Verifier` (immutable) | gnark-generated Groth16 verifier contract |
+| `batchSize` | `uint256` (immutable) | Deposits per batch (e.g., 128) |
+| `operator` | `address` | Centralized sequencer operator |
+| `merkleRoot` | `bytes32` | Current committed Merkle root |
+| `nextDepositId` | `uint256` | Monotonic deposit counter |
+| `paused` | `bool` | Emergency pause switch |
+| `deposits` | `mapping(uint256 => Deposit)` | Deposit records by ID |
+| `DOMAIN_SEP` | `bytes32` (constant) | `sha256("tessera.pending-deposit.v1")` |
 
 ### Events
 
 | Event | When |
 |-------|------|
-| `BatchSubmitted(commit, sha256Commit, oldRoot, newRoot, deposits, leaves)` | Batch enters pending pool |
-| `BatchFinalized(commit, oldRoot, newRoot, batchNumber)` | Batch validated, state advanced |
-| `BatchCancelled(commit)` | Pending batch deleted |
+| `DepositPending(depositId, commitment, value, recipient)` | User deposits |
+| `BatchValidated(batchId, newRoot)` | Batch finalized, Merkle root advanced |
 | `OperatorChanged(oldOp, newOp)` | Operator role transferred |
 | `PausedChanged(isPaused)` | Pause state toggled |
 
@@ -191,56 +166,56 @@ struct Proof {
 |-------|---------|
 | `NotOperator()` | Caller is not the operator |
 | `PausedErr()` | Contract is paused |
-| `InvalidDepositsLength()` | `deposits.length != 128` |
-| `InvalidLeavesLength()` | `leaves.length != 4096` |
-| `BatchAlreadyExists(commit)` | Commit key already in use |
-| `BatchNotPending(commit)` | Batch is not in Pending state |
-| `StaleRoot(current, expected)` | Batch's `oldRoot` does not match current `stateRoot` |
 | `InvalidProof()` | Groth16 verification failed |
+| `InsufficientDeposits()` | Not enough pending deposits for a batch |
+| `DepositNotPending(depositId)` | Deposit is not in Pending state |
 
 ## Source Files
 
 ```
 tessera-solidity/
 ├── src/
-│   ├── DepositsRollupBridge.sol   # Main contract
-│   └── Verifier128.sol            # gnark-generated Groth16 verifier (batch_size=128)
+│   └── pending-deposit/
+│       ├── DepositsRollupBridge.sol   # Main contract
+│       └── Verifier.sol               # gnark-generated Groth16 verifier (batch_size=128)
 ├── test/
-│   ├── DepositsRollupBridge.t.sol            # 40 unit tests (mock verifiers)
-│   └── DepositsRollupBridgeIntegration.t.sol # End-to-end test (real verifier + Rust artifacts)
+│   └── pending-deposit/
+│       ├── DepositsRollupBridge.t.sol            # 34 unit tests (mock verifiers)
+│       └── DepositsRollupBridgeIntegration.t.sol # End-to-end test (real verifier + Rust artifacts)
+├── script/
+│   └── pending-deposit/
+│       └── Deploy.s.sol               # Deployment script for Verifier + Bridge
 └── foundry.toml
 ```
 
 ## Testing
 
-### Unit Tests (40 tests)
+### Unit Tests (34 tests)
 
 Use three mock verifiers (accept, reject, check-inputs) to test all contract
 logic in isolation:
 
 | Section | Tests | Description |
 |---------|-------|-------------|
-| Constructor / State | 2 | Initial state, constants |
-| submitBatch | 9 | Happy path, events, access control, input validation, duplicate prevention |
-| finalizeBatch | 7 | Happy path, events, access control, stale root, invalid proof, public input derivation |
-| cancelPendingBatch | 4 | Happy path, access control, not-pending, already-validated |
-| Domain separation | 1 | Different chain ID produces different commit |
+| Constructor / State | 2 | Initial state, domain separator constant |
+| deposit | 5 | Happy path, events, multiple deposits, permissionless access, paused revert |
+| computeCommitment | 3 | Determinism, different inputs, MSB clearing verification |
+| finalizeBatch | 6 | Happy path, events, access control, insufficient deposits, not pending, invalid proof |
 | sha256ToPublicInputs | 3 | Zero, all-ones, known SHA-256 vector |
+| Public input derivation | 1 | End-to-end SHA-256 commitment matching with MockVerifierCheckInputs |
 | Atomicity | 1 | State unchanged on failed finalization |
-| Multi-batch | 1 | Chained submit-finalize-submit-finalize |
-| Stale batch | 1 | Cancel stale batch after another is finalized |
-| Admin | 8 | setOperator, setPaused, transfer chain, pause/unpause flow |
-| View helpers | 1 | computeSha256Commitment |
+| Multi-batch | 2 | Sequential batch IDs, chained finalize flow |
+| Admin | 6 | setOperator, setPaused, transfer chain, pause/unpause flow, events |
+| View helpers | 3 | getDeposit before and after finalization, pause/unpause cycle |
 
 ```bash
 forge test --match-contract DepositsRollupBridgeTest -vv
 ```
 
-### Integration Test (1 test)
+### Integration Test
 
-Loads real Groth16 proof artifacts generated by the Rust `groth16_wrapper`
-example and executes a full `submitBatch` -> `finalizeBatch` cycle against the
-real `Verifier128` contract.
+Loads real Groth16 proof artifacts generated by the Rust proof pipeline
+and executes a full deposit -> finalize cycle against the real `Verifier` contract.
 
 ```bash
 forge test --match-contract Integration -vv
@@ -252,50 +227,22 @@ forge test --match-contract Integration -vv
 cd tessera-solidity && forge test
 ```
 
-## End-to-End Pipeline
-
-The full pipeline from deposit generation to on-chain verification:
-
-### 1. Generate Proof Artifacts (Rust)
+## Deployment
 
 ```bash
-cd tessera-trees
-cargo run --example groth16_wrapper --release
-```
+# 1. Start anvil
+anvil
 
-This produces two JSON files in `examples/tmp/groth-artifacts/`:
+# 2. Compute genesis root
+export TESSERA_GENESIS_ROOT=$(cargo run -p tessera-server --example genesis_root --release)
 
-- **`proof_solidity.json`** -- Groth16 proof formatted for the Solidity
-  verifier: `{ proof: uint256[8], commitments: uint256[2], commitmentPok: uint256[2] }`
-
-- **`bridge_calldata.json`** -- State transition data for the bridge contract:
-  `{ oldRoot, newRoot, leaves, deposits[] }`
-
-The Rust example performs the following steps:
-
-1. Generate 128 random deposits (`noteCommitment`, `address[3]`, `amount`)
-2. Hash each deposit via Poseidon to derive its Merkle leaf
-3. Insert all leaves into a depth-32 `CommitmentTree`
-4. Build a plonky2 circuit proving the batch insertion with SHA-256 commitment
-5. Prove the circuit (native Goldilocks field)
-6. Wrap the proof into a BN128-friendly format
-7. Generate a Groth16 proof via gnark (Go FFI)
-8. Export proof and bridge calldata as JSON
-
-### 2. Run On-Chain Verification (Solidity)
-
-```bash
+# 3. Deploy
 cd tessera-solidity
-forge test --match-contract Integration -vv
+forge script script/pending-deposit/Deploy.s.sol \
+  --rpc-url http://localhost:8545 \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  --broadcast
 ```
-
-The integration test:
-
-1. Loads `proof_solidity.json` and `bridge_calldata.json`
-2. Deploys `Verifier128` and `DepositsRollupBridge` with the genesis root
-3. Calls `submitBatch` with the new root, deposits, and leaves
-4. Calls `finalizeBatch` with the Groth16 proof
-5. Asserts that `stateRoot` advanced and the batch is `Validated`
 
 ## Prerequisites
 

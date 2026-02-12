@@ -5,13 +5,16 @@
 //!
 //! # Architecture
 //!
-//! Bitwise operations decompose u32 values into 4 bytes and use
-//! lookup tables to compute the operation per byte pair:
+//! Bitwise operations decompose u32 values into chunks of configurable
+//! bit-width (`chunk_bits` ∈ {1, 2, 4, 8}) and use lookup tables to
+//! compute the operation per chunk pair:
 //!
-//! - **Range check table** (256 entries): identity map `[0,255] -> [0,255]` constrains a target to
-//!   be a valid byte.
-//! - **XOR table** (65536 entries): maps `(a << 8 | b) -> (a ^ b)`
-//! - **AND table** (65536 entries): maps `(a << 8 | b) -> (a & b)`
+//! - **Range check table** (`2^chunk_bits` entries): identity map constrains a target to be a valid
+//!   chunk.
+//! - **XOR table** (`2^(2*chunk_bits)` entries): maps `(a << chunk_bits | b) -> (a ^ b)`
+//! - **AND table** (`2^(2*chunk_bits)` entries): maps `(a << chunk_bits | b) -> (a & b)`
+//!
+//! Use [`BitwiseLuts`] to bundle these tables with a chosen `chunk_bits`.
 //!
 //! # Range checking
 //!
@@ -68,43 +71,146 @@ pub struct U32Target(pub Target);
 // Lookup table constructors
 // ---------------------------------------------------------------------------
 
-/// Registers a byte-range-check lookup table (identity map `[0, 255] -> [0, 255]`).
+/// Registers a range-check lookup table for `chunk_bits`-wide chunks.
 ///
-/// A lookup against this table constrains the input target to `[0, 255]`.
-/// Call once per circuit; reuse the returned index for all range checks.
+/// Identity map `[0, 2^chunk_bits - 1] -> [0, 2^chunk_bits - 1]`.
+/// A lookup against this table constrains a target to `[0, 2^chunk_bits)`.
+///
+/// `chunk_bits` must be one of `{1, 2, 4, 8}`.
+pub fn add_chunk_range_check_lookup_table<F: RichField + Extendable<D>, const D: usize>(
+	builder: &mut CircuitBuilder<F, D>,
+	chunk_bits: usize,
+) -> usize {
+	assert!(
+		matches!(chunk_bits, 1 | 2 | 4 | 8),
+		"chunk_bits must be 1, 2, 4, or 8"
+	);
+	let max = (1u16 << chunk_bits) - 1;
+	let table: Vec<(u16, u16)> = (0u16..=max).map(|i| (i, i)).collect();
+	builder.add_lookup_table_from_pairs(Arc::new(table))
+}
+
+/// Registers a XOR lookup table for `chunk_bits`-wide chunk pairs.
+///
+/// Maps every packed pair `(a << chunk_bits | b)` to `a ^ b`
+/// (`2^(2*chunk_bits)` entries).
+///
+/// `chunk_bits` must be one of `{1, 2, 4, 8}`.
+pub fn add_chunk_xor_lookup_table<F: RichField + Extendable<D>, const D: usize>(
+	builder: &mut CircuitBuilder<F, D>,
+	chunk_bits: usize,
+) -> usize {
+	assert!(
+		matches!(chunk_bits, 1 | 2 | 4 | 8),
+		"chunk_bits must be 1, 2, 4, or 8"
+	);
+	let max = (1u16 << chunk_bits) - 1;
+	let table: Vec<(u16, u16)> = (0u16..=max)
+		.flat_map(|a| (0u16..=max).map(move |b| ((a << chunk_bits) | b, a ^ b)))
+		.collect();
+	builder.add_lookup_table_from_pairs(Arc::new(table))
+}
+
+/// Registers an AND lookup table for `chunk_bits`-wide chunk pairs.
+///
+/// Maps every packed pair `(a << chunk_bits | b)` to `a & b`
+/// (`2^(2*chunk_bits)` entries).
+///
+/// `chunk_bits` must be one of `{1, 2, 4, 8}`.
+pub fn add_chunk_and_lookup_table<F: RichField + Extendable<D>, const D: usize>(
+	builder: &mut CircuitBuilder<F, D>,
+	chunk_bits: usize,
+) -> usize {
+	assert!(
+		matches!(chunk_bits, 1 | 2 | 4 | 8),
+		"chunk_bits must be 1, 2, 4, or 8"
+	);
+	let max = (1u16 << chunk_bits) - 1;
+	let table: Vec<(u16, u16)> = (0u16..=max)
+		.flat_map(|a| (0u16..=max).map(move |b| ((a << chunk_bits) | b, a & b)))
+		.collect();
+	builder.add_lookup_table_from_pairs(Arc::new(table))
+}
+
+/// Convenience alias: 8-bit byte range-check table (256 entries).
 pub fn add_u8_range_check_lookup_table<F: RichField + Extendable<D>, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 ) -> usize {
-	let table: Vec<(u16, u16)> = (0u16..=255).map(|i| (i, i)).collect();
-	builder.add_lookup_table_from_pairs(Arc::new(table))
+	add_chunk_range_check_lookup_table(builder, 8)
 }
 
-/// Registers a XOR lookup table for byte pairs.
-///
-/// Maps every packed byte pair `(a << 8 | b)` to `a ^ b`
-/// (65 536 entries, covering the full `u16` input range).
-/// Call once per circuit; reuse the returned index for all XOR operations.
+/// Convenience alias: 8-bit XOR table (65 536 entries).
 pub fn add_xor_lookup_table<F: RichField + Extendable<D>, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 ) -> usize {
-	let table: Vec<(u16, u16)> = (0u16..=255)
-		.flat_map(|a| (0u16..=255).map(move |b| ((a << 8) | b, a ^ b)))
-		.collect();
-	builder.add_lookup_table_from_pairs(Arc::new(table))
+	add_chunk_xor_lookup_table(builder, 8)
 }
 
-/// Registers an AND lookup table for byte pairs.
-///
-/// Maps every packed byte pair `(a << 8 | b)` to `a & b`
-/// (65 536 entries, covering the full `u16` input range).
-/// Call once per circuit; reuse the returned index for all AND operations.
+/// Convenience alias: 8-bit AND table (65 536 entries).
 pub fn add_and_lookup_table<F: RichField + Extendable<D>, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 ) -> usize {
-	let table: Vec<(u16, u16)> = (0u16..=255)
-		.flat_map(|a| (0u16..=255).map(move |b| ((a << 8) | b, a & b)))
-		.collect();
-	builder.add_lookup_table_from_pairs(Arc::new(table))
+	add_chunk_and_lookup_table(builder, 8)
+}
+
+// ---------------------------------------------------------------------------
+// BitwiseLuts — bundled lookup-table indices for parameterized chunk width
+// ---------------------------------------------------------------------------
+
+/// Bundles the lookup-table indices needed by bitwise U32 operations,
+/// parameterized by the chunk bit-width.
+///
+/// The `chunk_bits` field controls how u32 values are decomposed for
+/// XOR / AND lookups:
+///
+/// | `chunk_bits` | range LUT | XOR/AND LUT | chunks per u32 |
+/// |:---:|---:|---:|---:|
+/// | 1 | 2 | 4 | 32 |
+/// | 2 | 4 | 16 | 16 |
+/// | 4 | 16 | 256 | 8 |
+/// | 8 | 256 | 65 536 | 4 |
+///
+/// Rotation, shift, and wrapping-add operations always use the 8-bit
+/// `byte_range_lut`, regardless of `chunk_bits`.
+#[derive(Clone, Copy, Debug)]
+pub struct BitwiseLuts {
+	/// Number of bits per chunk (1, 2, 4, or 8).
+	pub chunk_bits: usize,
+	/// Range-check table for chunks of `chunk_bits` bits.
+	pub chunk_range_lut: usize,
+	/// XOR table for `chunk_bits`-wide chunk pairs.
+	pub xor_lut: usize,
+	/// AND table for `chunk_bits`-wide chunk pairs.
+	pub and_lut: usize,
+	/// 8-bit byte range-check table (always registered; used by
+	/// rotation, shift, and wrapping-add).
+	pub byte_range_lut: usize,
+}
+
+impl BitwiseLuts {
+	/// Registers all lookup tables and returns their bundled indices.
+	///
+	/// `chunk_bits` must be one of `{1, 2, 4, 8}`.
+	/// When `chunk_bits == 8`, `chunk_range_lut` and `byte_range_lut`
+	/// share the same table (no duplication).
+	pub fn new<F: RichField + Extendable<D>, const D: usize>(
+		builder: &mut CircuitBuilder<F, D>,
+		chunk_bits: usize,
+	) -> Self {
+		let byte_range_lut = add_u8_range_check_lookup_table(builder);
+		let chunk_range_lut = if chunk_bits == 8 {
+			byte_range_lut
+		} else {
+			add_chunk_range_check_lookup_table(builder, chunk_bits)
+		};
+		Self {
+			chunk_bits,
+			chunk_range_lut,
+			xor_lut: add_chunk_xor_lookup_table(builder, chunk_bits),
+			and_lut: add_chunk_and_lookup_table(builder, chunk_bits),
+			byte_range_lut,
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +251,19 @@ pub trait CircuitBuilderU32<F: RichField + Extendable<D>, const D: usize> {
 	/// **Range checking:** each limb is decomposed into 2 bytes
 	/// (4 byte-range lookups total), proving the value fits in 32 bits.
 	fn decompose_u32_to_u16_limbs(&mut self, value: U32Target, range_lut: usize) -> [Target; 2];
+
+	/// Decomposes a [`U32Target`] into `32 / chunk_bits` little-endian chunks.
+	///
+	/// Each chunk is range-checked via `chunk_range_lut` and the
+	/// Horner recomposition constraint proves the value fits in 32 bits.
+	///
+	/// `chunk_bits` must be one of `{1, 2, 4, 8}`.
+	fn decompose_u32_to_chunks(
+		&mut self,
+		value: U32Target,
+		chunk_range_lut: usize,
+		chunk_bits: usize,
+	) -> Vec<Target>;
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32<F, D>
@@ -212,6 +331,40 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32<F, D>
 
 		limbs
 	}
+
+	fn decompose_u32_to_chunks(
+		&mut self,
+		value: U32Target,
+		chunk_range_lut: usize,
+		chunk_bits: usize,
+	) -> Vec<Target> {
+		assert!(
+			matches!(chunk_bits, 1 | 2 | 4 | 8),
+			"chunk_bits must be 1, 2, 4, or 8"
+		);
+		let num_chunks = 32 / chunk_bits;
+		let chunks: Vec<Target> = (0..num_chunks).map(|_| self.add_virtual_target()).collect();
+
+		self.add_simple_generator(ChunkDecompositionGenerator {
+			input: value.0,
+			chunks: chunks.clone(),
+			chunk_bits,
+		});
+
+		for &chunk in &chunks {
+			let _range_checked = self.add_lookup_from_index(chunk, chunk_range_lut);
+		}
+
+		// Horner recomposition: c[n-1]*base^(n-1) + ... + c[1]*base + c[0] == value
+		let c_base = F::from_canonical_u64(1u64 << chunk_bits);
+		let mut sum = chunks[num_chunks - 1];
+		for i in (0..num_chunks - 1).rev() {
+			sum = self.mul_const_add(c_base, sum, chunks[i]);
+		}
+		self.connect(sum, value.0);
+
+		chunks
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -219,8 +372,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32<F, D>
 // ---------------------------------------------------------------------------
 
 /// Witness generator that decomposes a `u32` field element into 4 LE bytes.
-#[derive(Debug, Clone)]
-struct ByteDecompositionGenerator {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ByteDecompositionGenerator {
 	input: Target,
 	bytes: [Target; 4],
 }
@@ -272,9 +425,68 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 	}
 }
 
+/// Witness generator that decomposes a `u32` field element into LE chunks
+/// of `chunk_bits` bits each.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ChunkDecompositionGenerator {
+	input: Target,
+	chunks: Vec<Target>,
+	chunk_bits: usize,
+}
+
+impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
+	for ChunkDecompositionGenerator
+{
+	fn id(&self) -> String {
+		"ChunkDecompositionGenerator".to_string()
+	}
+
+	fn dependencies(&self) -> Vec<Target> {
+		vec![self.input]
+	}
+
+	fn run_once(
+		&self,
+		witness: &PartitionWitness<F>,
+		out_buffer: &mut GeneratedValues<F>,
+	) -> anyhow::Result<()> {
+		let value = witness.get_target(self.input).to_canonical_u64();
+		let mask = (1u64 << self.chunk_bits) - 1;
+		for (i, &chunk) in self.chunks.iter().enumerate() {
+			let chunk_val = (value >> (self.chunk_bits * i)) & mask;
+			out_buffer.set_target(chunk, F::from_canonical_u64(chunk_val))?;
+		}
+		Ok(())
+	}
+
+	fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
+		dst.write_target(self.input)?;
+		dst.write_usize(self.chunk_bits)?;
+		for &chunk in &self.chunks {
+			dst.write_target(chunk)?;
+		}
+		Ok(())
+	}
+
+	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
+		let input = src.read_target()?;
+		let chunk_bits = src.read_usize()?;
+		let num_chunks = 32 / chunk_bits;
+		let mut chunks = Vec::with_capacity(num_chunks);
+		for _ in 0..num_chunks {
+			chunks.push(src.read_target()?);
+		}
+		Ok(Self {
+			input,
+			chunks,
+			chunk_bits,
+		})
+	}
+}
+
 /// Witness generator that decomposes a `u32` field element into 2 LE 16-bit limbs.
-#[derive(Debug, Clone)]
-struct U16LimbDecompositionGenerator {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct U16LimbDecompositionGenerator {
 	input: Target,
 	limbs: [Target; 2],
 }
@@ -395,8 +607,8 @@ mod tests {
 }
 
 /// Witness generator that decomposes a 16-bit limb into 2 LE bytes.
-#[derive(Debug, Clone)]
-struct LimbByteDecompositionGenerator {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LimbByteDecompositionGenerator {
 	input: Target,
 	bytes: [Target; 2],
 }

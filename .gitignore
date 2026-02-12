@@ -1,5 +1,7 @@
 */target
 */examples/tmp
+# Generated artifacts (any module)
+**/artifacts/
 *.pprof
 /target
 Cargo.lock

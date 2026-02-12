@@ -5,5 +5,26 @@ edition = "2021"
 
 [dependencies]
 tessera-trees = {workspace = true}
+rand = {workspace = true}
+plonky2 = {workspace = true}
 anyhow = {workspace = true}
 serde = {workspace = true}
+serde_json = {workspace = true}
+sha2 = {workspace = true}
+sha3 = {workspace = true}
+hex = {workspace = true}
+digest = {workspace = true}
+tokio = {workspace = true}
+alloy = {workspace = true}
+tracing = {workspace = true}
+rand_chacha = {workspace = true}
+
+[dependencies.tracing-subscriber]
+workspace = true
+
+[dependencies.dotenvy]
+workspace = true
+
+[[bin]]
+name = "sequencer"
+path = "src/bin/sequencer.rs"

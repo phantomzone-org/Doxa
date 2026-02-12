@@ -1,2 +1,11 @@
 # Custom Dictionary Words
+finalizer
+injective
+inplace
+keccak
 MODEXP
+mstore
+noncanonical
+Pedersen
+Plonky
+Rollup

@@ -100,12 +100,12 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 		w.reserve(48);
 
 		for t in 16..64 {
-			let s1 = self.small_sigma1_u32(w[t - 2], luts.xor_lut, luts.range_lut);
-			let s0 = self.small_sigma0_u32(w[t - 15], luts.xor_lut, luts.range_lut);
+			let s1 = self.small_sigma1_u32(w[t - 2], luts);
+			let s0 = self.small_sigma0_u32(w[t - 15], luts);
 
-			let tmp = self.wrapping_add_u32(s1, w[t - 7], luts.range_lut);
-			let tmp = self.wrapping_add_u32(tmp, s0, luts.range_lut);
-			let wt = self.wrapping_add_u32(tmp, w[t - 16], luts.range_lut);
+			let tmp = self.wrapping_add_u32(s1, w[t - 7], luts.byte_range_lut);
+			let tmp = self.wrapping_add_u32(tmp, s0, luts.byte_range_lut);
+			let wt = self.wrapping_add_u32(tmp, w[t - 16], luts.byte_range_lut);
 
 			w.push(wt);
 		}
@@ -125,28 +125,28 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 			let k_t = self.constant_u32(super::constants::K[t]);
 
 			// T1 = h + Σ₁(e) + Ch(e,f,g) + K[t] + W[t]
-			let sigma1_e = self.big_sigma1_u32(e, luts.xor_lut, luts.range_lut);
-			let ch_efg = self.ch_u32(e, f, g, luts.xor_lut, luts.and_lut, luts.range_lut);
+			let sigma1_e = self.big_sigma1_u32(e, luts);
+			let ch_efg = self.ch_u32(e, f, g, luts);
 
-			let t1 = self.wrapping_add_u32(h, sigma1_e, luts.range_lut);
-			let t1 = self.wrapping_add_u32(t1, ch_efg, luts.range_lut);
-			let t1 = self.wrapping_add_u32(t1, k_t, luts.range_lut);
-			let t1 = self.wrapping_add_u32(t1, w[t], luts.range_lut);
+			let t1 = self.wrapping_add_u32(h, sigma1_e, luts.byte_range_lut);
+			let t1 = self.wrapping_add_u32(t1, ch_efg, luts.byte_range_lut);
+			let t1 = self.wrapping_add_u32(t1, k_t, luts.byte_range_lut);
+			let t1 = self.wrapping_add_u32(t1, w[t], luts.byte_range_lut);
 
 			// T2 = Σ₀(a) + Maj(a,b,c)
-			let sigma0_a = self.big_sigma0_u32(a, luts.xor_lut, luts.range_lut);
-			let maj_abc = self.maj_u32(a, b, c, luts.xor_lut, luts.and_lut, luts.range_lut);
-			let t2 = self.wrapping_add_u32(sigma0_a, maj_abc, luts.range_lut);
+			let sigma0_a = self.big_sigma0_u32(a, luts);
+			let maj_abc = self.maj_u32(a, b, c, luts);
+			let t2 = self.wrapping_add_u32(sigma0_a, maj_abc, luts.byte_range_lut);
 
 			// Update working variables
 			h = g;
 			g = f;
 			f = e;
-			e = self.wrapping_add_u32(d, t1, luts.range_lut);
+			e = self.wrapping_add_u32(d, t1, luts.byte_range_lut);
 			d = c;
 			c = b;
 			b = a;
-			a = self.wrapping_add_u32(t1, t2, luts.range_lut);
+			a = self.wrapping_add_u32(t1, t2, luts.byte_range_lut);
 		}
 
 		[a, b, c, d, e, f, g, h]
@@ -162,7 +162,9 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 		let compressed = self.sha256_compression(state, &w, luts);
 
 		// Final addition: H[i] = H[i] + compressed[i]
-		core::array::from_fn(|i| self.wrapping_add_u32(state[i], compressed[i], luts.range_lut))
+		core::array::from_fn(|i| {
+			self.wrapping_add_u32(state[i], compressed[i], luts.byte_range_lut)
+		})
 	}
 
 	fn sha256_single_block(&mut self, input: [U32Target; 16], luts: &Sha256Luts) -> Sha256Target {
@@ -199,7 +201,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 
 		// Decompose each field element into [hi, lo] (big-endian word order)
 		for (i, &elem) in input.iter().enumerate() {
-			let [hi, lo] = decompose_field_to_u32_pair(self, elem, luts.range_lut);
+			let [hi, lo] = decompose_field_to_u32_pair(self, elem, luts.byte_range_lut);
 			words[2 * i] = hi;
 			words[2 * i + 1] = lo;
 		}
@@ -296,8 +298,8 @@ fn decompose_field_to_u32_pair<F: RichField + Extendable<D>, const D: usize>(
 }
 
 /// Witness generator that splits a field element into high and low u32 halves.
-#[derive(Debug, Clone)]
-struct FieldDecompositionGenerator {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FieldDecompositionGenerator {
 	input: Target,
 	lo: Target,
 	hi: Target,
@@ -348,8 +350,8 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 ///
 /// Given `diff`, produces `hi_is_max = (diff == 0) ? 1 : 0` and
 /// `diff_inv = (diff != 0) ? diff⁻¹ : 0`.
-#[derive(Debug, Clone)]
-struct CanonicalCheckGenerator {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CanonicalCheckGenerator {
 	diff: Target,
 	hi_is_max: Target,
 	diff_inv: Target,
@@ -453,7 +455,7 @@ mod tests {
 	fn test_sha256_empty_string() -> Result<()> {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		// Padded empty message: 0x80000000 followed by 15 zeros
 		// (bit length = 0, so last two words are also zero)
@@ -492,7 +494,7 @@ mod tests {
 	fn test_sha256_abc() -> Result<()> {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		let mut input = [builder.constant_u32(0); 16];
 		input[0] = builder.constant_u32(0x61626380); // "abc" + 0x80
@@ -531,7 +533,7 @@ mod tests {
 	fn test_sha256_two_blocks() -> Result<()> {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		// Block 1: 56 bytes of message + padding bit
 		let block1: [U32Target; 16] = [
@@ -589,13 +591,13 @@ mod tests {
 	fn test_sha256_with_witness_inputs() -> Result<()> {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		let input: [U32Target; 16] = core::array::from_fn(|_| builder.add_virtual_u32_target());
 
 		// Range-check witness inputs (caller responsibility)
 		for &word in &input {
-			builder.decompose_u32_to_bytes(word, luts.range_lut);
+			builder.decompose_u32_to_bytes(word, luts.byte_range_lut);
 		}
 
 		let hash = builder.sha256_single_block(input, &luts);
@@ -654,7 +656,7 @@ mod tests {
 
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		let input: [U32Target; 16] = core::array::from_fn(|i| builder.constant_u32(words[i]));
 
@@ -687,7 +689,7 @@ mod tests {
 
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		let targets: Vec<Target> = values.iter().map(|&v| builder.constant(v)).collect();
 
@@ -727,7 +729,7 @@ mod tests {
 
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		let targets: Vec<Target> = (0..values.len())
 			.map(|_| builder.add_virtual_target())
@@ -775,7 +777,7 @@ mod tests {
 
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		let target = builder.constant(values[0]);
 		let hash = builder.sha256_hash_field_elements(&[target], &luts);
@@ -799,7 +801,7 @@ mod tests {
 	fn test_sha256_abc_wrong_output() {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		let mut input = [builder.constant_u32(0); 16];
 		input[0] = builder.constant_u32(0x61626380); // "abc" + 0x80
@@ -842,7 +844,7 @@ mod tests {
 
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let luts = Sha256Luts::new(&mut builder);
+		let luts = Sha256Luts::new(&mut builder, 8);
 
 		let input = builder.add_virtual_target();
 		let hash = builder.sha256_hash_field_elements(&[input], &luts);

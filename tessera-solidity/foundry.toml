@@ -1,9 +1,14 @@
 [profile.default]
-src = "src"
+src = "src/pending-deposit"
+test = "test/pending-deposit"
+script = "script/pending-deposit"
 out = "out"
 libs = ["lib"]
 
 # Allow tests to read proof/calldata JSON from the groth-artifacts directory
-fs_permissions = [{ access = "read", path = "../tessera-trees/examples/tmp/groth-artifacts" }]
+fs_permissions = [
+  { access = "read", path = "../tessera-server/artifacts/pending-deposit/groth-artifacts" },
+  { access = "read", path = "src/pending-deposit" }
+]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

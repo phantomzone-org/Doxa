@@ -108,8 +108,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Rotation<F, 
 /// Witness generator that splits a field element at the `2^32` boundary.
 ///
 /// Given `product`, computes `lo = product mod 2^32` and `hi = product / 2^32`.
-#[derive(Debug, Clone)]
-struct SplitLowHighGenerator {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SplitLowHighGenerator {
 	product: Target,
 	lo: Target,
 	hi: Target,

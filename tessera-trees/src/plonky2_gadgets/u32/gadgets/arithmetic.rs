@@ -119,8 +119,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32Arithmetic<F
 ///
 /// Given two u32 field elements, computes `result = (a + b) % 2^32`
 /// and `overflow = (a + b) >> 32`.
-#[derive(Debug, Clone)]
-struct U32WrappingAddGenerator {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct U32WrappingAddGenerator {
 	a: Target,
 	b: Target,
 	result: Target,

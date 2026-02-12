@@ -93,7 +93,7 @@ pub trait MerkleHash: Copy + Clone + Debug {
 /// let targets = ProofTargets::new(&mut builder, depth, batch, Some(&PoseidonCommitment));
 ///
 /// // SHA-256 commitment (registers lookup tables first):
-/// let sha256 = Sha256Commitment::new(&mut builder);
+/// let sha256 = Sha256Commitment::new(&mut builder, 8);
 /// let targets = ProofTargets::new(&mut builder, depth, batch, Some(&sha256));
 ///
 /// // No commitment — raw public inputs:
@@ -193,11 +193,14 @@ pub struct Sha256Commitment {
 impl Sha256Commitment {
 	/// Registers the SHA-256 lookup tables and returns a ready-to-use
 	/// commitment object.  Call once per circuit builder.
+	///
+	/// `chunk_bits` controls the bitwise-LUT granularity (1, 2, 4, or 8).
 	pub fn new<F: RichField + Extendable<D>, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
+		chunk_bits: usize,
 	) -> Self {
 		Self {
-			luts: Sha256Luts::new(builder),
+			luts: Sha256Luts::new(builder, chunk_bits),
 		}
 	}
 }
@@ -276,6 +279,22 @@ impl Hash {
 		HashOut {
 			elements: self.0,
 		}
+	}
+
+	/// Converts a 32-byte digest into a [`Hash`].
+	///
+	/// Splits the digest into 4 big-endian u64 chunks and clears the
+	/// MSB of each (mask `0x7FFF_FFFF_FFFF_FFFF`).  This guarantees
+	/// every chunk is below 2^63 < GOLDILOCKS_PRIME, making the
+	/// mapping injective on the 252-bit truncated digest (126-bit
+	/// collision security under the birthday bound).
+	pub fn from_32bytes_digest(digest: [u8; 32]) -> Self {
+		let mut elems = [F::ZERO; HASH_SIZE];
+		for i in 0..HASH_SIZE {
+			let chunk = u64::from_be_bytes(digest[i * 8..(i + 1) * 8].try_into().unwrap());
+			elems[i] = F::from_canonical_u64(chunk & 0x7FFFFFFFFFFFFFFF);
+		}
+		Self::new(elems)
 	}
 }
 
