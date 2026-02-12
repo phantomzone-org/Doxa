@@ -22,7 +22,7 @@
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::Result;
-use tessera_server::{sample_batch_tree_proof, PendingDeposit};
+use tessera_server::{sample_batch_commitment_tree_proof, Deposit};
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	tree::{hasher::Hash, BatchCommitmentProof},
@@ -49,8 +49,8 @@ fn main() -> Result<()> {
 		CircuitDataNative,
 		ProofNative,
 		BatchCommitmentProof<Hash>,
-		Vec<PendingDeposit>,
-	) = sample_batch_tree_proof([0u8; 32])?;
+		Vec<Deposit>,
+	) = sample_batch_commitment_tree_proof([0u8; 32])?;
 	let bn128_wrapper: BN128Wrapper = BN128Wrapper::new(circuit_data, proof_with_pis)?;
 
 	// If plonky2 groth16-friendly proof infos do not exist yet, generate them
@@ -81,8 +81,8 @@ fn main() -> Result<()> {
 		CircuitDataNative,
 		ProofNative,
 		BatchCommitmentProof<Hash>,
-		Vec<PendingDeposit>,
-	) = sample_batch_tree_proof([1u8; 32])?;
+		Vec<Deposit>,
+	) = sample_batch_commitment_tree_proof([1u8; 32])?;
 
 	// Wraps the proof into a BN128 proof ()
 	println!("calling bn128 wrapper");

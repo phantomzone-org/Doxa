@@ -1,15 +1,16 @@
+use anyhow::{anyhow, Result};
 use digest::{Digest, Output};
 use serde::{Deserialize, Serialize};
 use tessera_trees::tree::hasher::Hash;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingDeposit {
+pub struct Deposit {
 	note_commitment: [u8; 32],
 	address: [u8; 20],
 	amount: u64,
 }
 
-impl PendingDeposit {
+impl Deposit {
 	pub fn new(note_commitment: [u8; 32], address: [u8; 20], amount: u64) -> Self {
 		Self {
 			note_commitment,
@@ -89,7 +90,7 @@ mod tests {
 	/// (before MSB clearing the raw sha256 matches this test's `leaf`).
 	#[test]
 	fn test_hash_sha256_known_vector() {
-		let deposit: PendingDeposit = PendingDeposit::new(
+		let deposit: Deposit = Deposit::new(
 			[1u8; 32], // 32 bytes of 1
 			[1u8; 20], // 20 bytes of 1
 			1,
@@ -105,4 +106,44 @@ mod tests {
 				.unwrap();
 		assert_eq!(leaf.as_slice(), expected.as_slice());
 	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DepositsBatch {
+	pub deposits: Vec<Deposit>,
+	batch_size: usize,
+}
+
+impl DepositsBatch {
+	pub fn new(batch_size: usize) -> Self {
+		Self {
+			deposits: Vec::with_capacity(batch_size),
+			batch_size,
+		}
+	}
+
+	pub fn add_deposit(&mut self, deposit: Deposit) -> Result<()> {
+		if self.deposits.len() >= self.batch_size {
+			return Err(anyhow!("Batch is full"));
+		}
+		self.deposits.push(deposit);
+		Ok(())
+	}
+
+	/// Compute leaf hashes using SHA-256 (for native leaf hashing mode).
+	pub fn leaves<H: Digest>(&self) -> Vec<Output<H>> {
+		self.deposits.iter().map(|d| d.hash::<H>()).collect()
+	}
+
+	pub fn leaves_as_field_hashes<H: Digest>(&self) -> Vec<Hash> {
+		self.deposits
+			.iter()
+			.map(|d| d.as_field_hash::<H>().into())
+			.collect()
+	}
+}
+
+pub struct DepositBatchReady {
+	pub batch: DepositsBatch,
+	pub new_root: Hash,
 }

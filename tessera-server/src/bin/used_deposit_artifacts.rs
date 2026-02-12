@@ -1,22 +1,20 @@
-//! Generate Groth16 artifacts for the PendingDeposit tree.
+//! Generate Groth16 artifacts for the UsedDeposit tree.
 //!
-//! Outputs (in artifacts/pending-deposit/):
+//! Outputs (in artifacts/used-deposit/):
 //!   - plonky2-proof/    (plonky2 circuit data for R1CS)
 //!   - groth-artifacts/  (Groth16 proving/verifying keys)
 //!   - proof_solidity.json
 //!   - bridge_calldata.json
 //!
 //! Usage:
-//!   cargo run --bin pending_deposit_artifacts --release
+//!   cargo run --bin used_deposit_artifacts --release
 
 use std::{fs, path::PathBuf, time::Instant};
 
-use anyhow::Result;
-use tessera_server::{sample_batch_commitment_tree_proof, Deposit};
+use anyhow::{ensure, Result};
+use tessera_server::{Deposit, sample_batch_nullifier_tree_proof};
 use tessera_trees::{
-	groth::{BN128Wrapper, Groth16Wrapper},
-	tree::{hasher::Hash, BatchCommitmentProof},
-	CircuitDataNative, ProofBN128, ProofNative,
+	CircuitDataNative, ProofBN128, ProofNative, groth::{BN128Wrapper, Groth16Wrapper}, tree::{NullifierChainedInsertProof, hasher::Hash}
 };
 
 fn debug_enabled() -> bool {
@@ -34,14 +32,14 @@ fn debug_log(msg: &str) {
 fn main() -> Result<()> {
 	let tmp_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 		.join("artifacts")
-		.join("pending-deposit");
+		.join("used-deposit");
 
 	fs::create_dir_all(&tmp_dir)?;
 
 	let input_path: PathBuf = tmp_dir.join("plonky2-proof");
 	let output_path: PathBuf = tmp_dir.join("groth-artifacts");
 
-	println!("pending-deposit artifacts: {}", tmp_dir.display());
+	println!("used-deposit artifacts: {}", tmp_dir.display());
 	println!("plonky2 data: {}", input_path.display());
 	println!("groth16 artifacts: {}", output_path.display());
 
@@ -49,9 +47,9 @@ fn main() -> Result<()> {
 	let (circuit_data, proof_with_pis, _, _): (
 		CircuitDataNative,
 		ProofNative,
-		BatchCommitmentProof<Hash>,
+		NullifierChainedInsertProof<Hash>,
 		Vec<Deposit>,
-	) = sample_batch_commitment_tree_proof([0u8; 32])?;
+	) = sample_batch_nullifier_tree_proof([0u8; 32])?;
 	let bn128_wrapper: BN128Wrapper = BN128Wrapper::new(circuit_data, proof_with_pis)?;
 
 	if !BN128Wrapper::has_full_artifacts(&input_path) {
@@ -75,9 +73,13 @@ fn main() -> Result<()> {
 	let (_, proof_with_pis, batch_proof, deposits): (
 		CircuitDataNative,
 		ProofNative,
-		BatchCommitmentProof<Hash>,
+		NullifierChainedInsertProof<Hash>,
 		Vec<Deposit>,
-	) = sample_batch_commitment_tree_proof([1u8; 32])?;
+	) = sample_batch_nullifier_tree_proof([1u8; 32])?;
+	ensure!(
+		!batch_proof.is_empty(),
+		"cannot generate used-deposit artifacts for an empty insertion batch"
+	);
 
 	println!("wrapping proof to bn128");
 	let start = Instant::now();
@@ -110,11 +112,11 @@ fn main() -> Result<()> {
 		format!("0x{}", hex::encode(bytes))
 	};
 
-	let old_root_hex = hash_to_hex(&batch_proof.root_old);
-	let new_root_hex = hash_to_hex(&batch_proof.root_new);
+	let old_root_hex = hash_to_hex(&batch_proof.initial_root().unwrap());
+	let new_root_hex = hash_to_hex(&batch_proof.final_root().unwrap());
 
-	let mut leaves_bytes: Vec<u8> = Vec::with_capacity(batch_proof.leaves.len() * 32);
-	for leaf in &batch_proof.leaves {
+	let mut leaves_bytes: Vec<u8> = Vec::with_capacity(batch_proof.len() * 32);
+	for leaf in &batch_proof.inserted_values() {
 		for i in 0..4 {
 			leaves_bytes.extend_from_slice(&leaf.0[i].0.to_be_bytes());
 		}

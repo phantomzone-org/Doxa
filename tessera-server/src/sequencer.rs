@@ -5,7 +5,7 @@ use alloy::{
 	primitives::U256,
 	providers::{Provider, ProviderBuilder},
 	rpc::types::Filter,
-	signers::{Signer, local::PrivateKeySigner},
+	signers::{local::PrivateKeySigner, Signer},
 	sol_types::SolEvent,
 };
 use tokio::sync::mpsc;
@@ -76,12 +76,15 @@ impl Sequencer {
 			.await?
 			.try_into()
 			.unwrap_or(0u64);
-		let batch_size: u64 = bridge.batchSize().call().await?.try_into().unwrap_or(128u64);
+		let batch_size: u64 = bridge
+			.batchSize()
+			.call()
+			.await?
+			.try_into()
+			.unwrap_or(128u64);
 		info!(
 			?on_chain_root,
-			next_deposit_id,
-			batch_size,
-			"synced on-chain state"
+			next_deposit_id, batch_size, "synced on-chain state"
 		);
 
 		// ── Recover state from finalized batches ──
@@ -357,7 +360,7 @@ impl Sequencer {
 			let deposit_id: u64 = decoded.inner.depositId.try_into().unwrap_or(0);
 
 			if deposit_id >= finalized_deposits {
-				continue;  // skip unfinalized deposits, don't short-circuit
+				continue; // skip unfinalized deposits, don't short-circuit
 			}
 
 			let commitment = contract::bytes32_to_hash(&decoded.inner.commitment);

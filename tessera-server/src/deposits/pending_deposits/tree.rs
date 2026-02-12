@@ -4,9 +4,7 @@ use tessera_trees::tree::{
 	hasher::Hash, BatchCommitmentProof, CommitmentInsertProof, CommitmentTree,
 };
 
-use crate::pending_deposits::{PendingDeposit, PendingDepositsBatch};
-
-const DEPTH: usize = 32;
+use crate::{deposits::pending_deposits::PENDING_DEPOSIT_TREE_DEPTH, Deposit, DepositsBatch};
 
 pub struct PendingDepositTree<H: Digest> {
 	pub(crate) tree: CommitmentTree<Hash>,
@@ -16,24 +14,18 @@ pub struct PendingDepositTree<H: Digest> {
 impl<H: Digest> PendingDepositTree<H> {
 	pub fn new() -> Self {
 		Self {
-			tree: CommitmentTree::new(DEPTH),
+			tree: CommitmentTree::new(PENDING_DEPOSIT_TREE_DEPTH),
 			_phantom: core::marker::PhantomData,
 		}
 	}
 
-	pub fn insert(
-		&mut self,
-		pending_deposit: &PendingDeposit,
-	) -> Result<CommitmentInsertProof<Hash>> {
-		self.tree.insert(pending_deposit.as_field_hash::<H>())
+	pub fn insert(&mut self, deposit: &Deposit) -> Result<CommitmentInsertProof<Hash>> {
+		self.tree.insert(deposit.as_field_hash::<H>())
 	}
 
-	pub fn insert_batch(
-		&mut self,
-		pending_deposits: &PendingDepositsBatch,
-	) -> Result<BatchCommitmentProof<Hash>> {
+	pub fn insert_batch(&mut self, deposit: &DepositsBatch) -> Result<BatchCommitmentProof<Hash>> {
 		self.tree
-			.insert_batch(pending_deposits.leaves_as_field_hashes::<H>())
+			.insert_batch(deposit.leaves_as_field_hashes::<H>())
 	}
 
 	/// Insert a batch of pre-computed commitment hashes directly.

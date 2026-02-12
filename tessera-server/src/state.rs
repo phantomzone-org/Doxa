@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof};
 
-use crate::pending_deposits::PendingDepositTree;
+use crate::deposits::PendingDepositTree;
 
 const BATCH_SIZE: usize = 128;
 
@@ -66,7 +66,10 @@ impl SequencerState {
 		let start_id = self.next_batch_start_id;
 		self.next_batch_start_id += batch.len() as u64;
 		let proof = self.tree.insert_commitments(batch)?;
-		anyhow::ensure!(proof.verify(), "merkle batch proof verification failed after seal");
+		anyhow::ensure!(
+			proof.verify(),
+			"merkle batch proof verification failed after seal"
+		);
 		Ok((start_id, proof))
 	}
 }
