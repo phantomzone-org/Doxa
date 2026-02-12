@@ -17,9 +17,12 @@ use plonky2::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tessera_trees::{
-	CircuitDataNative, ConfigNative, D, F, ProofNative, tree::{
-		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets, NullifierChainedInsertProof, NullifierInsertProofTargets, hasher::{Hash, Sha256Commitment}
-	}
+	tree::{
+		hasher::{Hash, Sha256Commitment},
+		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
+		NullifierChainedInsertProof, NullifierInsertProofTargets,
+	},
+	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
 
 /// Generate a sample batch commitment insertion proof for testing.
@@ -119,7 +122,6 @@ pub fn sample_batch_commitment_tree_proof(
 	Ok((circuit_data, proof, batch_proof, batch.deposits))
 }
 
-
 /// Generate a sample batch nullifier insertion proof for testing.
 ///
 /// Creates 128 random deposits, hashes each via SHA-256 to derive Merkle
@@ -173,12 +175,8 @@ pub fn sample_batch_nullifier_tree_proof(
 
 	print!("Alloc Targets: ");
 	let now: Instant = Instant::now();
-	let targets: ChainedInsertProofTargets = ChainedInsertProofTargets::new::<F, D>(
-		&mut builder,
-		DEPTH,
-		BATCH_SIZE,
-		Some(&sha256_com),
-	);
+	let targets: ChainedInsertProofTargets =
+		ChainedInsertProofTargets::new::<F, D>(&mut builder, DEPTH, BATCH_SIZE, Some(&sha256_com));
 	println!("{:?}", now.elapsed());
 
 	print!("Connect: ");

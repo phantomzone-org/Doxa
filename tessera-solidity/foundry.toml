@@ -8,6 +8,7 @@ libs = ["lib"]
 # Allow tests to read proof/calldata JSON from the groth-artifacts directory
 fs_permissions = [
   { access = "read", path = "../tessera-server/artifacts/pending-deposit/groth-artifacts" },
+  { access = "read", path = "../tessera-server/artifacts/used-deposit/groth-artifacts" },
   { access = "read", path = "src/pending-deposit" }
 ]
 

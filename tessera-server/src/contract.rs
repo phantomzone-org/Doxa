@@ -5,30 +5,59 @@ use tessera_trees::{tree::hasher::Hash, F};
 sol! {
 	#[sol(rpc)]
 	interface IDepositsRollupBridge {
+		enum DepositStatus { Available, Withdrawn, Consumed }
+
 		struct Proof {
 			uint256[8] proof;
 			uint256[2] commitments;
 			uint256[2] commitmentPok;
 		}
 
-		function merkleRoot() external view returns (bytes32);
-		function nextDepositId() external view returns (uint256);
-		function batchSize() external view returns (uint256);
+		struct Deposit {
+			bytes32 commitment;
+			uint256 value;
+			address depositor;
+			address recipient;
+			DepositStatus status;
+		}
 
-		function finalizeBatch(
-			bytes32 newRoot,
-			uint256 depositStartIndex,
+			function consumedRoot() external view returns (bytes32);
+			function consumeBatchSize() external view returns (uint256);
+			function nextDepositId() external view returns (uint256);
+			function getDeposit(uint256 depositId) external view returns (Deposit memory);
+			function consumeRequested(bytes32 commitment) external view returns (bool);
+
+		function requestConsume(bytes32 commitment) external;
+		function finalizeConsumeBatch(
+			bytes32 newConsumedRoot,
+			bytes32[] calldata commitments,
 			Proof calldata proof
 		) external;
 
-		event DepositPending(
+		event DepositAvailable(
 			uint256 indexed depositId,
 			bytes32 commitment,
+			address depositor,
 			uint256 value,
 			address recipient
 		);
 
-		event BatchValidated(uint256 indexed batchId, bytes32 newRoot);
+		event ConsumeRequested(
+			bytes32 indexed commitment,
+			uint256 indexed depositId,
+			address indexed requester
+		);
+
+		event ConsumeBatchFinalized(
+			uint256 batchSize,
+			bytes32 oldRoot,
+			bytes32 newRoot
+		);
+
+		event DepositConsumed(
+			uint256 indexed depositId,
+			bytes32 indexed commitment
+		);
 	}
 }
 

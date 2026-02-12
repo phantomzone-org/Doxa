@@ -1,159 +1,215 @@
-# Local Development Workflow
+# Local End-to-End Test (New Consume-Batch Flow)
 
-End-to-end guide for running the Tessera sequencer against a local Anvil node.
+This guide tests the updated bridge + sequencer flow locally:
 
-This guide assumes three terminals:
+1. trusted source records deposits (`recordDeposit`)
+2. consume requests are submitted by commitment (`requestConsume`)
+3. sequencer batches requests (size = `consumeBatchSize`)
+4. sequencer generates proof and calls `finalizeConsumeBatch`
+
+Use **4 terminals**.
+
+## Fast Path (Recommended)
+
+From repo root:
+
+```bash
+source scripts/local_env.sh
+```
+
+Then:
+
 - Terminal A: `anvil`
-- Terminal B: sequencer
-- Terminal C: posting deposits with `cast send`
+- Terminal B: `scripts/local_deploy.sh` (exports/updates bridge address)
+- Terminal C: `scripts/local_run_sequencer.sh`
+- Terminal D: `scripts/local_seed.sh 256 128`
+
+This replaces most manual export/copy-paste steps.
 
 ## Prerequisites
 
-- [Foundry](https://book.getfoundry.sh/getting-started/installation) (`anvil`, `forge`, `cast`)
-- Rust toolchain (`cargo`)
-- Groth16 artifacts (see step 2 below)
+- `anvil`, `forge`, `cast`
+- Rust toolchain
+- used-deposit artifacts already generated:
+  - `tessera-server/artifacts/used-deposit/plonky2-proof`
+  - `tessera-server/artifacts/used-deposit/groth-artifacts`
 
-## 1. Start Anvil
+---
+
+## Terminal A: Start Chain
 
 ```bash
 anvil
 ```
 
-Anvil prints 10 pre-funded accounts. The default operator key used throughout this guide is **account 0**:
+Default anvil keys used below:
 
-| Field       | Value                                                              |
-|-------------|--------------------------------------------------------------------|
-| Address     | `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`                      |
-| Private key | `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` |
+- operator (account 0):
+  - address: `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`
+  - key: `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`
+- trusted source (account 1):
+  - address: `0x70997970C51812dc3A010C7d01b50e0d17dc79C8`
+  - key: `0x59c6995e998f97a5a0044966f0945384c6d9e86dae88f6a6a8e10f5c1a4f7a5d`
 
-## 2. Generate Groth16 Artifacts (one-time)
+---
 
-The prover needs plonky2 circuit data and Groth16 proving/verifying keys. Generate them once:
+## Terminal B: Deploy Bridge + Verifier
 
-```bash
-cargo run -p tessera-server --bin pending_deposit_artifacts --release
-```
-
-This creates:
-- `tessera-server/artifacts/pending-deposit/plonky2-proof/` — plonky2 circuit data for the R1CS compiler
-- `tessera-server/artifacts/pending-deposit/groth-artifacts/` — Groth16 proving key, verifying key, and R1CS
-
-Re-run only if the circuit shape changes (depth, batch size, or commitment scheme).
-
-## 3. Deploy Contracts
-
-Compute the genesis root (empty Poseidon Merkle tree) and deploy `Verifier` + `DepositsRollupBridge`:
+From repo root:
 
 ```bash
-cd /path/to/Tessera
-export TESSERA_GENESIS_ROOT=$(cargo run -p tessera-server --example genesis_root --release)
+export TESSERA_TRUSTED_SOURCE=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+export TESSERA_CONSUMED_GENERIS_ROOT=0x1ef897f4a5c3f5c07cddaf7dec41197f2259296bb1bb56264ca73c3e1b998bf9
+export TESSERA_CONSUME_BATCH_SIZE=128
 
-(cd tessera-solidity && forge script script/pending-deposit/Deploy.s.sol \
+cd tessera-solidity
+forge script script/pending-deposit/Deploy.s.sol \
   --rpc-url http://localhost:8545 \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
-  --broadcast)
+  --broadcast
 ```
 
-The script logs the deployed addresses:
-
-```
-Verifier deployed at: 0x5FbDB2315678afecb367f032d93F642f64180aa3
-Bridge deployed at:   0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
-```
-
-Verify the on-chain state:
+Copy the printed bridge address and set it as:
 
 ```bash
-cast call 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512 "merkleRoot()(bytes32)" --rpc-url http://localhost:8545
-cast call 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512 "nextDepositId()(uint256)" --rpc-url http://localhost:8545
-cast call 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512 "operator()(address)" --rpc-url http://localhost:8545
+export BRIDGE=<DEPLOYED_BRIDGE_ADDRESS>
 ```
 
-## 4. Start the Sequencer
+---
 
-In Terminal B, from the repo root, use the bridge address from the deploy output:
+## Terminal C: Run Sequencer
+
+From `tessera-server` directory:
 
 ```bash
-cd /path/to/Tessera
-TESSERA_RPC_URL=http://localhost:8545 \
-TESSERA_OPERATOR_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
-TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512 \
-TESSERA_CHAIN_ID=31337 \
-TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH=./tessera-server/artifacts/pending-deposit \
-cargo run -p tessera-server --bin sequencer --release
+cd tessera-server
+export TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=<DEPLOYED_BRIDGE_ADDRESS>
+cargo run --bin sequencer --release
 ```
 
-The sequencer initializes the prover (~2-3 min on first run) then logs:
+Notes:
 
-```
-INFO tessera_server::prover: prover initialized
-INFO sequencer: sequencer running
-```
+- `src/bin/sequencer.rs` loads `tessera-server/.env` automatically.
+- Ensure `.env` points to used-deposit artifacts:
+  - `TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH=./artifacts/used-deposit`
 
-## 5. Submit Deposits
+---
 
-In Terminal C, export the variables in the same shell where you run `cast send`:
+## Terminal D: Create Deposits + Requests
+
+Set helpers:
 
 ```bash
-export BRIDGE=0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
 export RPC=http://localhost:8545
-export KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-
-echo "BRIDGE=$BRIDGE"
-echo "RPC=$RPC"
-echo "KEY=${KEY:+set}"
+export BRIDGE=<DEPLOYED_BRIDGE_ADDRESS>
+export TRUSTED_KEY=0x59c6995e998f97a5a0044966f0945384c6d9e86dae88f6a6a8e10f5c1a4f7a5d
+export DEPOSITOR=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
+export RECIPIENT=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
 ```
 
-Deposits are submitted directly on-chain via the `deposit()` function. Each deposit has a 32-byte note commitment, a uint256 value, and a recipient address:
-
-```bash
-cast send "$BRIDGE" \
-  "deposit(bytes32,uint256,address)" \
-  0x0000000000000000000000000000000000000000000000000000000000000001 \
-  1000000 \
-  0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 \
-  --rpc-url "$RPC" --private-key "$KEY"
-```
-
-To fill a batch, send 128 deposits. Example loop:
+Submit 128 deposits and request consume for each:
 
 ```bash
 for i in $(seq 1 128); do
-  NC=$(printf "0x%064x" $i)
+  NOTE=$(printf "0x%064x" "$i")
+  VALUE=$i
+
+  # 1) recordDeposit from trusted source
   cast send "$BRIDGE" \
-    "deposit(bytes32,uint256,address)" \
-    "$NC" $i 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 \
-    --rpc-url "$RPC" --private-key "$KEY"
+    "recordDeposit(bytes32,uint256,address,address)" \
+    "$NOTE" "$VALUE" "$DEPOSITOR" "$RECIPIENT" \
+    --rpc-url "$RPC" --private-key "$TRUSTED_KEY" >/dev/null
+
+  # 2) compute commitment (must match contract hashing)
+  COMMITMENT=$(cast call "$BRIDGE" \
+    "computeCommitment(bytes32,uint256,address)(bytes32)" \
+    "$NOTE" "$VALUE" "$RECIPIENT" \
+    --rpc-url "$RPC")
+
+  # 3) request consume by leaf value
+  cast send "$BRIDGE" \
+    "requestConsume(bytes32)" \
+    "$COMMITMENT" \
+    --rpc-url "$RPC" --private-key "$TRUSTED_KEY" >/dev/null
 done
 ```
 
-After the 128th deposit, the sequencer automatically:
+Alternative:
 
-1. Detects the `DepositPending` events via polling
-2. Seals the batch and inserts commitments into the Merkle tree
-3. Sends the batch to the prover thread
-4. Generates a Groth16 proof (plonky2 -> BN128 -> Groth16)
-5. Calls `finalizeBatch(newRoot, depositStartIndex, proof)` on-chain
-6. On-chain `merkleRoot` is updated and deposits are marked `Validated`
+```bash
+scripts/local_seed.sh 256 128
+```
 
-## Contracts
+## Stress Tests
 
-| Contract               | Description                                                    |
-|------------------------|----------------------------------------------------------------|
-| `Verifier.sol`         | Auto-generated Groth16 verifier (BN254 pairing check)         |
-| `DepositsRollupBridge.sol` | Permissionless deposits + single-step batch finalization   |
+From repo root:
 
-### Deploy.s.sol
+```bash
+source scripts/local_env.sh
+```
 
-Forge deployment script. Reads `TESSERA_GENESIS_ROOT` from the environment and deploys both contracts with `batchSize = 128`. The deployer (`msg.sender`) is set as the initial operator.
+### Recovery on sequencer restart
 
-## Troubleshooting
+This scenario simulates:
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Connection refused (os error 111)` | No Ethereum node running | Start `anvil` first |
-| `error: invalid value '' for '[TO]'` (or function signature shown as `[TO]`) | `BRIDGE` is empty in the current shell | Run `echo "$BRIDGE"` and `export BRIDGE=...` in the same terminal before `cast send` |
-| `Verifier mismatch: update src/pending-deposit/Verifier.sol ...` | `tessera-solidity/src/pending-deposit/Verifier.sol` does not match generated artifacts | Re-run step 2 and copy `tessera-server/artifacts/pending-deposit/groth-artifacts/Verifier.sol` into `tessera-solidity/src/pending-deposit/Verifier.sol` |
-| `prover thread exiting` right after init | Sequencer exited before prover finished initializing (e.g. RPC error) | Fix the RPC error; the prover will stay alive once the sequencer loop is running |
-| `genesis root mismatch` | Bridge deployed with wrong genesis root | Re-deploy with the correct `TESSERA_GENESIS_ROOT` |
-| `InvalidProof()` on `finalizeBatch` | Stale Groth16 artifacts (circuit changed) | Delete `tessera-server/artifacts/pending-deposit/` and re-run step 2 |
+1. deposits + partial consume requests
+2. sequencer shutdown before batch can finalize
+3. more requests while sequencer is down
+4. sequencer restart and recovery/finalization
+
+Run:
+
+```bash
+scripts/local_stress_recovery.sh
+```
+
+If successful, it prints `Recovery test passed.` and shows the sequencer log path.
+
+### Inspect deposit statuses
+
+Example: inspect first 20 deposits:
+
+```bash
+scripts/local_status.sh 0 20
+```
+
+### Submit extra consume requests against existing deposits
+
+Example: request consume for note indices `129..256` in random order:
+
+```bash
+scripts/local_request.sh 129 128 random
+```
+
+Expected result:
+
+- Sequencer logs should show a batch proving/finalization cycle.
+- Contract root should advance:
+
+```bash
+cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC"
+```
+
+Optional status check:
+
+```bash
+cast call "$BRIDGE" "getDeposit(uint256)((bytes32,uint256,address,address,uint8))" 0 --rpc-url "$RPC"
+```
+
+`status` enum values:
+
+- `0 = Available`
+- `1 = Withdrawn`
+- `2 = Consumed`
+
+---
+
+## If Something Fails
+
+- `InvalidProof()`:
+  - Verifier/artifacts mismatch. Confirm `src/pending-deposit/Verifier.sol` matches:
+    - `tessera-server/artifacts/used-deposit/groth-artifacts/Verifier.sol`
+- No sequencer batching:
+  - check contract `consumeBatchSize` and number of submitted requests.
+- Root mismatch on startup:
+  - sequencer local replay did not match chain history; redeploy/reset local chain for clean test.

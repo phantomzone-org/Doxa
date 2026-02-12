@@ -19,6 +19,8 @@ async fn main() -> Result<()> {
 
 	// Start sequencer (spawns prover internally, polls on-chain events).
 	let mut sequencer = Sequencer::new(config);
+	// println!("genesis_consumed_root: {:?}",
+	// contract::hash_to_bytes32(&SequencerState::genesis_consumed_root()));
 	sequencer.run().await?;
 
 	Ok(())

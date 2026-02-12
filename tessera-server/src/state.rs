@@ -1,75 +1,128 @@
+use std::collections::{BTreeMap, HashSet};
+
 use anyhow::Result;
-use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof};
+use tessera_trees::tree::hasher::Hash;
 
-use crate::deposits::PendingDepositTree;
+use crate::deposits::UsedDepositTree;
 
-const BATCH_SIZE: usize = 128;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EventOrderKey {
+	pub block_number: u64,
+	pub transaction_index: u64,
+	pub log_index: u64,
+}
 
-/// Sequencer in-memory state: Merkle tree + commitment accumulator.
+#[derive(Debug, Clone)]
+pub struct PendingConsumeRequest {
+	pub order_key: EventOrderKey,
+	pub commitment: [u8; 32],
+	pub deposit_id: u64,
+}
+
+/// Sequencer in-memory state for consume-request processing.
 pub struct SequencerState {
-	/// The current Merkle tree (depth 32), mirrors on-chain `merkleRoot`.
-	pub tree: PendingDepositTree<sha2::Sha256>,
-	/// Currently accumulating commitments (grows from 0 to `BATCH_SIZE`).
-	pub commitments: Vec<Hash>,
-	/// Number of finalized batches.
-	pub batch_count: u64,
-	/// Deposit ID for the start of the next batch.
-	pub next_batch_start_id: u64,
+	/// Local used/nullifier tree mirror.
+	pub used_tree: UsedDepositTree<sha2::Sha256>,
+	/// Pending consume requests keyed by canonical chain order.
+	pub pending_requests: BTreeMap<EventOrderKey, PendingConsumeRequest>,
+	/// Fast duplicate guard for pending requests.
+	pub pending_commitments: HashSet<[u8; 32]>,
 }
 
 impl SequencerState {
 	pub fn new() -> Self {
 		Self {
-			tree: PendingDepositTree::<sha2::Sha256>::new(),
-			commitments: Vec::with_capacity(BATCH_SIZE),
-			batch_count: 0,
-			next_batch_start_id: 0,
+			used_tree: UsedDepositTree::<sha2::Sha256>::new(),
+			pending_requests: BTreeMap::new(),
+			pending_commitments: HashSet::new(),
 		}
 	}
 
-	/// Return the genesis root (empty tree root) as a `Hash`.
-	///
-	/// This is the root of a depth-32 Merkle tree with all-zero leaves,
-	/// computed via the Poseidon hash chain. The on-chain contract must be
-	/// deployed with this value as `_genesisRoot`.
-	pub fn genesis_root() -> Hash {
-		let tree = PendingDepositTree::<sha2::Sha256>::new();
+	/// Return the consumed-tree genesis root (empty indexed tree root).
+	pub fn genesis_consumed_root() -> Hash {
+		let tree = UsedDepositTree::<sha2::Sha256>::new();
 		tree.tree.get_root()
 	}
 
-	/// Add a commitment (from an on-chain DepositPending event) to the
-	/// current batch.
-	///
-	/// Returns `true` if the batch is now full (`BATCH_SIZE` commitments).
-	pub fn add_commitment(&mut self, commitment: Hash) -> bool {
-		self.commitments.push(commitment);
-		self.commitments.len() >= BATCH_SIZE
+	/// Return current local consumed root.
+	pub fn current_consumed_root(&self) -> Hash {
+		self.used_tree.tree.get_root()
 	}
 
-	/// Returns `true` if the accumulator has enough commitments to seal a batch.
-	pub fn batch_is_ready(&self) -> bool {
-		self.commitments.len() >= BATCH_SIZE
-	}
-
-	/// Seal the current batch: drain exactly `BATCH_SIZE` commitments from
-	/// the accumulator, insert them into the Merkle tree, and return the
-	/// start index + commitment proof. Remaining commitments stay in the
-	/// accumulator for the next batch.
-	pub fn seal_batch(&mut self) -> Result<(u64, BatchCommitmentProof<Hash>)> {
-		anyhow::ensure!(
-			self.commitments.len() >= BATCH_SIZE,
-			"seal_batch called with only {} commitments (need {})",
-			self.commitments.len(),
-			BATCH_SIZE,
-		);
-		let batch: Vec<Hash> = self.commitments.drain(..BATCH_SIZE).collect();
-		let start_id = self.next_batch_start_id;
-		self.next_batch_start_id += batch.len() as u64;
-		let proof = self.tree.insert_commitments(batch)?;
+	/// Replay one consumed commitment into the local used tree.
+	pub fn replay_consumed_commitment(&mut self, commitment: Hash) -> Result<()> {
+		let proof = self.used_tree.insert_commitments(vec![commitment])?;
 		anyhow::ensure!(
 			proof.verify(),
-			"merkle batch proof verification failed after seal"
+			"used-tree proof verification failed during replay"
 		);
-		Ok((start_id, proof))
+		Ok(())
+	}
+
+	/// Add a pending consume request by canonical chain order.
+	///
+	/// Returns true when we have at least `batch_size` pending requests.
+	pub fn add_consume_request(
+		&mut self,
+		order_key: EventOrderKey,
+		commitment: [u8; 32],
+		deposit_id: u64,
+		batch_size: usize,
+	) -> bool {
+		if self.pending_commitments.contains(&commitment) {
+			return self.pending_requests.len() >= batch_size;
+		}
+
+		self.pending_commitments.insert(commitment);
+		self.pending_requests.insert(
+			order_key,
+			PendingConsumeRequest {
+				order_key,
+				commitment,
+				deposit_id,
+			},
+		);
+		self.pending_requests.len() >= batch_size
+	}
+
+	pub fn remove_pending_by_commitment(&mut self, commitment: &[u8; 32]) {
+		if !self.pending_commitments.remove(commitment) {
+			return;
+		}
+		if let Some(key) = self
+			.pending_requests
+			.iter()
+			.find_map(|(k, v)| (v.commitment == *commitment).then_some(*k))
+		{
+			self.pending_requests.remove(&key);
+		}
+	}
+
+	pub fn pop_next_batch(&mut self, batch_size: usize) -> Option<Vec<PendingConsumeRequest>> {
+		if self.pending_requests.len() < batch_size {
+			return None;
+		}
+
+		let keys: Vec<EventOrderKey> = self
+			.pending_requests
+			.keys()
+			.take(batch_size)
+			.copied()
+			.collect();
+		let mut out = Vec::with_capacity(batch_size);
+		for key in keys {
+			if let Some(req) = self.pending_requests.remove(&key) {
+				self.pending_commitments.remove(&req.commitment);
+				out.push(req);
+			}
+		}
+		Some(out)
+	}
+
+	pub fn reinsert_batch(&mut self, batch: Vec<PendingConsumeRequest>) {
+		for req in batch {
+			self.pending_commitments.insert(req.commitment);
+			self.pending_requests.insert(req.order_key, req);
+		}
 	}
 }

@@ -12,9 +12,11 @@
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::{ensure, Result};
-use tessera_server::{Deposit, sample_batch_nullifier_tree_proof};
+use tessera_server::{sample_batch_nullifier_tree_proof, Deposit};
 use tessera_trees::{
-	CircuitDataNative, ProofBN128, ProofNative, groth::{BN128Wrapper, Groth16Wrapper}, tree::{NullifierChainedInsertProof, hasher::Hash}
+	groth::{BN128Wrapper, Groth16Wrapper},
+	tree::{hasher::Hash, NullifierChainedInsertProof},
+	CircuitDataNative, ProofBN128, ProofNative,
 };
 
 fn debug_enabled() -> bool {

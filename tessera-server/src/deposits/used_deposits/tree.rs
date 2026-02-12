@@ -1,7 +1,7 @@
 use anyhow::{ensure, Result};
 use sha2::Digest;
 use tessera_trees::tree::{
-	NullifierChainedInsertProof, NullifierInsertProof, NullifierTree, hasher::Hash
+	hasher::Hash, NullifierChainedInsertProof, NullifierInsertProof, NullifierTree,
 };
 
 use crate::{deposits::used_deposits::USED_DEPOSIT_TREE_DEPTH, Deposit, DepositsBatch};
@@ -35,7 +35,8 @@ impl<H: Digest> UsedDepositTree<H> {
 		let mut proofs = Vec::with_capacity(deposit.deposits.len());
 
 		for deposit in &deposit.deposits {
-			let proof: NullifierInsertProof<Hash> = self.tree.insert(deposit.as_field_hash::<H>())?;
+			let proof: NullifierInsertProof<Hash> =
+				self.tree.insert(deposit.as_field_hash::<H>())?;
 			proofs.push(proof);
 		}
 

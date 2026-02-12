@@ -13,13 +13,8 @@ interface IGroth16Verifier {
 }
 
 /// @title  DepositsRollupBridge
-/// @notice Batched deposit validation protocol for on-chain deposit recording
-///         with off-chain Merkle root anchoring via zero-knowledge proofs.
-///
-///         Users call `deposit()` to record a pending deposit on-chain.
-///         The sequencer watches `DepositPending` events, aggregates deposits
-///         into a Merkle tree off-chain, and finalizes batches via `finalizeBatch()`
-///         with a Groth16 proof.
+/// @notice Deposit bridge for trusted-source ingestion with lifecycle:
+///         Available -> Withdrawn / Consumed.
 ///
 /// @dev    Commitment encoding
 ///         Each deposit's commitment is computed as:
@@ -28,23 +23,23 @@ interface IGroth16Verifier {
 ///         Goldilocks field (< 2^63 < p). This is an injective mapping on the
 ///         252-bit truncated digest, providing 126-bit collision security.
 ///
-/// @dev    SHA-256 circuit commitment
-///         The plonky2 circuit commits its public data via SHA-256:
-///           SHA256(merkleRoot_old ‖ merkleRoot_new ‖ commitment_0 ‖ … ‖ commitment_{N−1})
-///         where each commitment is 32 bytes. The resulting 256-bit digest is split
-///         into 8 big-endian uint32 words, which become the Groth16 public inputs.
+/// @dev    Consume proof commitment
+///         The circuit public commitment is:
+///           SHA256(consumedRoot_old ‖ consumedRoot_new ‖ deposit_commitment)
+///         then split into 8 big-endian uint32 words as verifier public inputs.
 contract DepositsRollupBridge {
     // ----------------------------------------------------------------
     // Types
     // ----------------------------------------------------------------
 
     /// @dev Deposit lifecycle status.
-    enum DepositStatus { Pending, Validated }
+    enum DepositStatus { Available, Withdrawn, Consumed }
 
     /// @dev On-chain deposit record.
     struct Deposit {
         bytes32       commitment;  // sha256(DOMAIN_SEP ‖ noteCommitment ‖ value ‖ recipient) w/ MSB clearing
         uint256       value;       // deposit value
+        address       depositor;   // original user account (authorized withdrawer)
         address       recipient;   // recipient address
         DepositStatus status;
     }
@@ -70,14 +65,17 @@ contract DepositsRollupBridge {
     /// @notice Address of the gnark-generated Groth16 verifier contract.
     IGroth16Verifier public immutable verifier;
 
-    /// @notice Number of deposits per batch.
-    uint256 public immutable batchSize;
-
     /// @notice Centralized operator (sequencer).
     address public operator;
 
-    /// @notice Current committed Merkle root.
-    bytes32 public merkleRoot;
+    /// @notice Trusted source allowed to record deposits.
+    address public trustedSource;
+
+    /// @notice Current consumed/nullifier tree root.
+    bytes32 public consumedRoot;
+
+    /// @notice Number of consume requests per finalized batch.
+    uint256 public immutable consumeBatchSize;
 
     /// @notice Monotonic deposit counter (next available ID).
     uint256 public nextDepositId;
@@ -85,36 +83,57 @@ contract DepositsRollupBridge {
     /// @notice Emergency pause switch.
     bool public paused;
 
-    /// @notice The deposit start index expected for the next batch finalization.
-    uint256 public nextBatchStartIndex;
-
     /// @notice Deposit records indexed by deposit ID.
     mapping(uint256 => Deposit) public deposits;
+
+    /// @notice Tracks whether a note commitment has ever been used.
+    mapping(bytes32 => bool) public noteCommitmentUsed;
+
+    /// @notice Lookup from deposit commitment to deposit ID.
+    mapping(bytes32 => uint256) public commitmentToDepositId;
+
+    /// @notice Tracks whether a commitment has been recorded.
+    mapping(bytes32 => bool) public commitmentExists;
+
+    /// @notice Tracks whether a commitment currently has a pending consume request.
+    mapping(bytes32 => bool) public consumeRequested;
 
     // ----------------------------------------------------------------
     // Events
     // ----------------------------------------------------------------
 
     event OperatorChanged(address indexed oldOp, address indexed newOp);
+    event TrustedSourceChanged(address indexed oldSource, address indexed newSource);
     event PausedChanged(bool isPaused);
-    event DepositPending(
+    event DepositAvailable(
         uint256 indexed depositId,
         bytes32 commitment,
+        address depositor,
         uint256 value,
         address recipient
     );
-    event BatchValidated(uint256 indexed batchId, bytes32 newRoot);
+    event ConsumeRequested(bytes32 indexed commitment, uint256 indexed depositId, address indexed requester);
+    event DepositWithdrawn(uint256 indexed depositId, address indexed depositor);
+    event ConsumeBatchFinalized(uint256 batchSize, bytes32 oldRoot, bytes32 newRoot);
+    event DepositConsumed(uint256 indexed depositId, bytes32 indexed commitment);
 
     // ----------------------------------------------------------------
     // Errors
     // ----------------------------------------------------------------
 
     error NotOperator();
+    error NotTrustedSource();
     error PausedErr();
     error InvalidProof();
-    error InsufficientDeposits();
-    error DepositNotPending(uint256 depositId);
-    error InvalidDepositStartIndex();
+    error DepositNotFound(uint256 depositId);
+    error CommitmentNotFound(bytes32 commitment);
+    error CommitmentNotRequested(bytes32 commitment);
+    error ConsumeAlreadyRequested(bytes32 commitment);
+    error InvalidDepositState(uint256 depositId);
+    error NotDepositor(uint256 depositId);
+    error DuplicateNoteCommitment(bytes32 noteCommitment);
+    error InvalidBatchSize();
+    error InvalidConsumeBatchLength(uint256 got, uint256 expected);
     error ZeroAddress();
 
     // ----------------------------------------------------------------
@@ -124,13 +143,17 @@ contract DepositsRollupBridge {
     constructor(
         address _verifier,
         address _operator,
-        bytes32 _genesisRoot,
-        uint256 _batchSize
+        address _trustedSource,
+        bytes32 _consumedRoot,
+        uint256 _consumeBatchSize
     ) {
+        if (_operator == address(0) || _trustedSource == address(0)) revert ZeroAddress();
+        if (_consumeBatchSize == 0) revert InvalidBatchSize();
         verifier = IGroth16Verifier(_verifier);
         operator = _operator;
-        merkleRoot = _genesisRoot;
-        batchSize = _batchSize;
+        trustedSource = _trustedSource;
+        consumedRoot = _consumedRoot;
+        consumeBatchSize = _consumeBatchSize;
     }
 
     modifier onlyOperator() {
@@ -143,11 +166,23 @@ contract DepositsRollupBridge {
         _;
     }
 
+    modifier onlyTrustedSource() {
+        if (msg.sender != trustedSource) revert NotTrustedSource();
+        _;
+    }
+
     /// @notice Transfer the operator role to a new address.
     function setOperator(address newOperator) external onlyOperator {
         if (newOperator == address(0)) revert ZeroAddress();
         emit OperatorChanged(operator, newOperator);
         operator = newOperator;
+    }
+
+    /// @notice Update the trusted source contract.
+    function setTrustedSource(address newTrustedSource) external onlyOperator {
+        if (newTrustedSource == address(0)) revert ZeroAddress();
+        emit TrustedSourceChanged(trustedSource, newTrustedSource);
+        trustedSource = newTrustedSource;
     }
 
     /// @notice Toggle the pause switch.
@@ -157,84 +192,130 @@ contract DepositsRollupBridge {
     }
 
     // ----------------------------------------------------------------
-    // Deposit submission (permissionless)
+    // Deposit ingest (trusted source)
     // ----------------------------------------------------------------
 
-    /// @notice Record a pending deposit.
+    /// @notice Record an available deposit from the trusted source.
     ///
     /// @param noteCommitment  User-provided privacy note commitment.
     /// @param value           Deposit value.
+    /// @param depositor       Original user account that can withdraw.
     /// @param recipient       Recipient address.
     /// @return depositId      Assigned deposit ID.
-    function deposit(
+    function recordDeposit(
         bytes32 noteCommitment,
         uint256 value,
+        address depositor,
         address recipient
     )
         external
+        onlyTrustedSource
         whenNotPaused
         returns (uint256 depositId)
     {
+        if (depositor == address(0)) revert ZeroAddress();
+        if (noteCommitmentUsed[noteCommitment]) revert DuplicateNoteCommitment(noteCommitment);
+        noteCommitmentUsed[noteCommitment] = true;
         bytes32 commitment = computeCommitment(noteCommitment, value, recipient);
 
         depositId = nextDepositId++;
         deposits[depositId] = Deposit({
             commitment: commitment,
             value: value,
+            depositor: depositor,
             recipient: recipient,
-            status: DepositStatus.Pending
+            status: DepositStatus.Available
         });
+        commitmentToDepositId[commitment] = depositId;
+        commitmentExists[commitment] = true;
 
-        emit DepositPending(depositId, commitment, value, recipient);
+        emit DepositAvailable(depositId, commitment, depositor, value, recipient);
     }
 
     // ----------------------------------------------------------------
-    // Batch finalization
+    // State transitions
     // ----------------------------------------------------------------
 
-    /// @notice Finalize a batch of pending deposits by verifying a Groth16 proof.
+    /// @notice Withdraw an available deposit back to the original depositor.
+    function withdraw(uint256 depositId)
+        external
+        whenNotPaused
+    {
+        Deposit storage d = deposits[depositId];
+        if (depositId >= nextDepositId) revert DepositNotFound(depositId);
+        if (d.status != DepositStatus.Available) revert InvalidDepositState(depositId);
+        if (msg.sender != d.depositor) revert NotDepositor(depositId);
+
+        d.status = DepositStatus.Withdrawn;
+        emit DepositWithdrawn(depositId, d.depositor);
+    }
+
+    /// @notice Request consumption by commitment (leaf value).
     ///
-    /// @param newRoot            Proposed next Merkle root.
-    /// @param depositStartIndex  First deposit ID in the batch.
-    /// @param proof              Groth16 proof with Pedersen commitments.
-    function finalizeBatch(
-        bytes32 newRoot,
-        uint256 depositStartIndex,
+    /// @dev Requests are set-based and can arrive in any order.
+    function requestConsume(bytes32 commitment)
+        external
+        whenNotPaused
+    {
+        if (!commitmentExists[commitment]) revert CommitmentNotFound(commitment);
+        if (consumeRequested[commitment]) revert ConsumeAlreadyRequested(commitment);
+
+        uint256 depositId = commitmentToDepositId[commitment];
+        Deposit storage d = deposits[depositId];
+        if (d.status != DepositStatus.Available) revert InvalidDepositState(depositId);
+
+        consumeRequested[commitment] = true;
+        emit ConsumeRequested(commitment, depositId, msg.sender);
+    }
+
+    /// @notice Finalize a consume batch after verifying the consume proof.
+    ///
+    /// @param newConsumedRoot   Proposed consumed tree root after insertion.
+    /// @param commitments       Commitments consumed in this batch (ordered as in proof).
+    /// @param proof             Groth16 proof with Pedersen commitments.
+    function finalizeConsumeBatch(
+        bytes32 newConsumedRoot,
+        bytes32[] calldata commitments,
         Proof calldata proof
     )
         external
         onlyOperator
         whenNotPaused
     {
-        uint256 _batchSize = batchSize;
+        uint256 batchLen = commitments.length;
+        if (batchLen != consumeBatchSize) revert InvalidConsumeBatchLength(batchLen, consumeBatchSize);
 
-        // 1. Enforce sequential finalization order.
-        if (depositStartIndex != nextBatchStartIndex) revert InvalidDepositStartIndex();
+        bytes32 oldConsumedRoot = consumedRoot;
+        uint256[] memory depositIds = new uint256[](batchLen);
 
-        uint256 end = depositStartIndex + _batchSize;
+        // Validate request set membership and status; clear requests to also reject duplicates.
+        for (uint256 i = 0; i < batchLen; i++) {
+            bytes32 c = commitments[i];
+            if (!commitmentExists[c]) revert CommitmentNotFound(c);
+            if (!consumeRequested[c]) revert CommitmentNotRequested(c);
+            consumeRequested[c] = false;
 
-        // 2. Ensure enough deposits exist.
-        if (end > nextDepositId) revert InsufficientDeposits();
+            uint256 depositId = commitmentToDepositId[c];
+            Deposit storage d = deposits[depositId];
+            if (d.status != DepositStatus.Available) revert InvalidDepositState(depositId);
+            depositIds[i] = depositId;
+        }
 
-        // 3. Collect commitments and verify all are Pending.
-        bytes memory commitmentBytes = new bytes(_batchSize * 32);
-        for (uint256 i = 0; i < _batchSize; i++) {
-            uint256 id = depositStartIndex + i;
-            Deposit storage d = deposits[id];
-            if (d.status != DepositStatus.Pending) revert DepositNotPending(id);
-            bytes32 c = d.commitment;
+        bytes memory commitmentBytes = new bytes(batchLen * 32);
+        for (uint256 i = 0; i < batchLen; i++) {
+            bytes32 c = commitments[i];
             assembly {
                 mstore(add(add(commitmentBytes, 32), mul(i, 32)), c)
             }
         }
 
-        // 4. Compute SHA-256 commitment matching the circuit.
-        bytes32 sha256Commit = sha256(abi.encodePacked(merkleRoot, newRoot, commitmentBytes));
+        // Compute SHA-256 commitment expected by the consume circuit.
+        bytes32 sha256Commit = sha256(abi.encodePacked(oldConsumedRoot, newConsumedRoot, commitmentBytes));
 
-        // 5. Derive public inputs.
+        // Derive public inputs.
         uint256[8] memory pubInputs = sha256ToPublicInputs(sha256Commit);
 
-        // 6. Verify the Groth16 proof.
+        // Verify the Groth16 proof.
         try verifier.verifyProof(
             proof.proof,
             proof.commitments,
@@ -246,17 +327,15 @@ contract DepositsRollupBridge {
             revert InvalidProof();
         }
 
-        // 7. Mark deposits as Validated.
-        for (uint256 i = 0; i < _batchSize; i++) {
-            deposits[depositStartIndex + i].status = DepositStatus.Validated;
+        for (uint256 i = 0; i < batchLen; i++) {
+            uint256 depositId = depositIds[i];
+            bytes32 c = commitments[i];
+            deposits[depositId].status = DepositStatus.Consumed;
+            emit DepositConsumed(depositId, c);
         }
 
-        // 8. Advance state.
-        uint256 batchId = nextBatchStartIndex / _batchSize;
-        nextBatchStartIndex += _batchSize;
-        merkleRoot = newRoot;
-
-        emit BatchValidated(batchId, newRoot);
+        consumedRoot = newConsumedRoot;
+        emit ConsumeBatchFinalized(batchLen, oldConsumedRoot, newConsumedRoot);
     }
 
     // ----------------------------------------------------------------
