@@ -1,12 +1,15 @@
 use std::time::Duration;
 
 use alloy::{
+	primitives::B256,
 	network::EthereumWallet,
 	providers::{Provider, ProviderBuilder},
 	rpc::types::{Filter, Log},
 	signers::{local::PrivateKeySigner, Signer},
 	sol_types::SolEvent,
 };
+use axum::{extract::State, routing::post, Json, Router};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -25,12 +28,50 @@ struct InFlightBatch {
 	requests: Vec<PendingConsumeRequest>,
 }
 
-/// The main sequencer: watches consume requests, batches by chain order, proves and finalizes.
+#[derive(Clone)]
+struct ApiState {
+	tx: mpsc::Sender<[u8; 32]>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConsumeRequestBody {
+	note_commitment: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ConsumeRequestResponse {
+	accepted: bool,
+}
+
+async fn consume_request_handler(
+	State(state): State<ApiState>,
+	Json(body): Json<ConsumeRequestBody>,
+) -> Result<Json<ConsumeRequestResponse>, axum::http::StatusCode> {
+	let note = parse_note_hex(&body.note_commitment)
+		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+	state
+		.tx
+		.send(note)
+		.await
+		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
+	Ok(Json(ConsumeRequestResponse {
+		accepted: true,
+	}))
+}
+
+fn parse_note_hex(s: &str) -> anyhow::Result<[u8; 32]> {
+	let b = s.parse::<B256>()?;
+	Ok(b.into())
+}
+
+/// The main sequencer: watches note availability, batches by chain order, proves and finalizes.
 pub struct Sequencer {
 	config: SequencerConfig,
 	pub state: SequencerState,
 	prove_tx: Option<mpsc::Sender<ProveRequest>>,
 	result_rx: Option<mpsc::Receiver<ProveOutcome>>,
+	consume_rx: Option<mpsc::Receiver<[u8; 32]>>,
+	api_order_counter: u64,
 }
 
 impl Sequencer {
@@ -40,6 +81,8 @@ impl Sequencer {
 			state: SequencerState::new(),
 			prove_tx: None,
 			result_rx: None,
+			consume_rx: None,
+			api_order_counter: 0,
 		}
 	}
 
@@ -63,15 +106,9 @@ impl Sequencer {
 			.await?
 			.try_into()
 			.unwrap_or(0usize);
-		let next_deposit_id: u64 = bridge
-			.nextDepositId()
-			.call()
-			.await?
-			.try_into()
-			.unwrap_or(0u64);
 		info!(
 			?on_chain_consumed_root,
-			consume_batch_size, next_deposit_id, "synced on-chain consume state"
+			consume_batch_size, "synced on-chain consume state"
 		);
 		anyhow::ensure!(
 			consume_batch_size > 0,
@@ -80,7 +117,8 @@ impl Sequencer {
 
 		self.recover_consumed_state(&provider, &on_chain_consumed_root)
 			.await?;
-		self.recover_pending_requests(&provider).await?;
+		self.recover_pending_requests(&provider, consume_batch_size)
+			.await?;
 		info!(
 			local_root = ?contract::hash_to_bytes32(&self.state.current_consumed_root()),
 			pending_requests = self.state.pending_requests.len(),
@@ -103,7 +141,32 @@ impl Sequencer {
 		self.prove_tx = Some(prove_tx);
 		self.result_rx = Some(result_rx);
 
-		let mut last_block: u64 = provider.get_block_number().await.unwrap_or(0);
+		let (consume_tx, consume_rx) = mpsc::channel::<[u8; 32]>(1024);
+		self.consume_rx = Some(consume_rx);
+		let api_addr: std::net::SocketAddr = self
+			.config
+			.api_bind_addr
+			.parse()
+			.map_err(|e| anyhow::anyhow!("invalid TESSERA_SEQUENCER_API_ADDR: {e}"))?;
+		let app = Router::new()
+			.route("/consume-request", post(consume_request_handler))
+			.with_state(ApiState {
+				tx: consume_tx,
+			});
+		tokio::spawn(async move {
+			let listener = match tokio::net::TcpListener::bind(api_addr).await {
+				Ok(l) => l,
+				Err(e) => {
+					error!("failed to bind sequencer API listener: {e}");
+					return;
+				},
+			};
+			info!(addr = %api_addr, "sequencer consume-request API listening");
+			if let Err(e) = axum::serve(listener, app).await {
+				error!("sequencer API server stopped: {e}");
+			}
+		});
+
 		let poll_interval = Duration::from_secs(self.config.poll_interval_secs);
 		let mut interval = tokio::time::interval(poll_interval);
 		let mut in_flight: Option<InFlightBatch> = None;
@@ -113,62 +176,36 @@ impl Sequencer {
 		loop {
 			tokio::select! {
 				_ = interval.tick() => {
-					let current_block = match provider.get_block_number().await {
-						Ok(b) => b,
-						Err(e) => {
-							error!("failed to get block number: {e}");
-							continue;
-						}
-					};
-
-					if current_block <= last_block {
-						continue;
-					}
-
-					let filter = Filter::new()
-						.address(self.config.bridge_address)
-						.event_signature(IDepositsRollupBridge::ConsumeRequested::SIGNATURE_HASH)
-						.from_block(last_block + 1)
-						.to_block(current_block);
-
-					let mut logs = match provider.get_logs(&filter).await {
-						Ok(l) => l,
-						Err(e) => {
-							error!("failed to fetch consume-request logs: {e}");
-							continue;
-						}
-					};
-					logs.sort_by_key(log_order_key);
-
-					last_block = current_block;
-
-					for log in logs {
-						let decoded = match log.log_decode::<IDepositsRollupBridge::ConsumeRequested>() {
-							Ok(d) => d.inner,
-							Err(e) => {
-								error!("failed to decode ConsumeRequested log: {e}");
-								continue;
-							}
-						};
-
-						let key = log_order_key(&log);
-						let deposit_id: u64 = decoded.depositId.try_into().unwrap_or(0);
-						let commitment_bytes: [u8; 32] = decoded.commitment.into();
-						self.state.add_consume_request(
-							EventOrderKey {
-								block_number: key.0,
-								transaction_index: key.1,
-								log_index: key.2,
-							},
-							commitment_bytes,
-							deposit_id,
-							consume_batch_size,
-						);
-					}
-
 					if in_flight.is_none()
 						&& self.state.pending_requests.len() >= consume_batch_size
 					{
+						if let Err(e) = self.start_next_batch(&provider, consume_batch_size, &mut in_flight).await {
+							error!("failed to start consume batch: {e}");
+							break;
+						}
+					}
+				}
+
+				Some(note) = async {
+					if let Some(rx) = &mut self.consume_rx {
+						rx.recv().await
+					} else {
+						None
+					}
+				} => {
+					if !self.is_note_available(&provider, &note).await {
+						warn!(note = ?note, "consume request rejected: note not Available");
+						continue;
+					}
+					let order_key = EventOrderKey {
+						block_number: 0,
+						transaction_index: 0,
+						log_index: self.api_order_counter,
+					};
+					self.api_order_counter = self.api_order_counter.saturating_add(1);
+					self.state.add_consume_request(order_key, note, consume_batch_size);
+
+					if in_flight.is_none() && self.state.pending_requests.len() >= consume_batch_size {
 						if let Err(e) = self.start_next_batch(&provider, consume_batch_size, &mut in_flight).await {
 							error!("failed to start consume batch: {e}");
 							break;
@@ -206,6 +243,21 @@ impl Sequencer {
 		Ok(())
 	}
 
+	async fn is_note_available<P: Provider + Clone>(&self, provider: &P, note: &[u8; 32]) -> bool {
+		let bridge = IDepositsRollupBridge::IDepositsRollupBridgeInstance::new(
+			self.config.bridge_address,
+			provider,
+		);
+		let note = alloy::primitives::FixedBytes::<32>::from(*note);
+		match bridge.getDepositStatus(note).call().await {
+			Ok(status) => matches!(status, IDepositsRollupBridge::DepositStatus::Available),
+			Err(e) => {
+				warn!("failed to fetch note status: {e}");
+				false
+			},
+		}
+	}
+
 	async fn start_next_batch<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
@@ -232,7 +284,7 @@ impl Sequencer {
 			.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(*b)))
 			.collect();
 
-		let batch_proof = self.state.used_tree.insert_commitments(commitments_hash)?;
+		let batch_proof = self.state.consumed_tree.insert_commitments(commitments_hash)?;
 		anyhow::ensure!(
 			batch_proof.verify(),
 			"native consume batch proof verification failed"
@@ -333,22 +385,11 @@ impl Sequencer {
 		);
 
 		for req in batch {
-			let c = alloy::primitives::FixedBytes::<32>::from(req.commitment);
-			let requested = bridge.consumeRequested(c).call().await?;
-			anyhow::ensure!(
-				requested,
-				"preflight failed: commitment no longer requested"
-			);
-
-			let deposit = bridge
-				.getDeposit(alloy::primitives::U256::from(req.deposit_id))
-				.call()
-				.await?;
-			let status = deposit.status;
+			let note = alloy::primitives::FixedBytes::<32>::from(req.commitment);
+			let status = bridge.getDepositStatus(note).call().await?;
 			anyhow::ensure!(
 				matches!(status, IDepositsRollupBridge::DepositStatus::Available),
-				"preflight failed: deposit {} not Available",
-				req.deposit_id
+				"preflight failed: note not Available"
 			);
 		}
 
@@ -378,8 +419,8 @@ impl Sequencer {
 
 		for log in consumed_logs {
 			let decoded = log.log_decode::<IDepositsRollupBridge::DepositConsumed>()?;
-			let commitment = contract::bytes32_to_hash(&decoded.inner.commitment);
-			self.state.replay_consumed_commitment(commitment)?;
+			let note = contract::bytes32_to_hash(&decoded.inner.noteCommitment);
+			self.state.replay_consumed_commitment(note)?;
 		}
 
 		let local_root = contract::hash_to_bytes32(&self.state.current_consumed_root());
@@ -392,45 +433,11 @@ impl Sequencer {
 
 	async fn recover_pending_requests<P: Provider + Clone>(
 		&mut self,
-		provider: &P,
+		_provider: &P,
+		_batch_size: usize,
 	) -> anyhow::Result<()> {
-		let requested_filter = Filter::new()
-			.address(self.config.bridge_address)
-			.event_signature(IDepositsRollupBridge::ConsumeRequested::SIGNATURE_HASH)
-			.from_block(0);
-		let consumed_filter = Filter::new()
-			.address(self.config.bridge_address)
-			.event_signature(IDepositsRollupBridge::DepositConsumed::SIGNATURE_HASH)
-			.from_block(0);
-
-		let mut requested_logs = provider.get_logs(&requested_filter).await?;
-		let mut consumed_logs = provider.get_logs(&consumed_filter).await?;
-		requested_logs.sort_by_key(log_order_key);
-		consumed_logs.sort_by_key(log_order_key);
-
-		for log in requested_logs {
-			let decoded = log.log_decode::<IDepositsRollupBridge::ConsumeRequested>()?;
-			let key = log_order_key(&log);
-			let deposit_id: u64 = decoded.inner.depositId.try_into().unwrap_or(0);
-			let commitment: [u8; 32] = decoded.inner.commitment.into();
-			self.state.add_consume_request(
-				EventOrderKey {
-					block_number: key.0,
-					transaction_index: key.1,
-					log_index: key.2,
-				},
-				commitment,
-				deposit_id,
-				usize::MAX,
-			);
-		}
-
-		for log in consumed_logs {
-			let decoded = log.log_decode::<IDepositsRollupBridge::DepositConsumed>()?;
-			let commitment: [u8; 32] = decoded.inner.commitment.into();
-			self.state.remove_pending_by_commitment(&commitment);
-		}
-
+		// Direct API mode: pending queue is fed externally and not reconstructed from
+		// availability events.
 		Ok(())
 	}
 }

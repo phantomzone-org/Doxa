@@ -19,6 +19,8 @@ pub struct SequencerConfig {
 	pub groth16_artifacts_path: PathBuf,
 	/// Polling interval in seconds for on-chain events (default: 12).
 	pub poll_interval_secs: u64,
+	/// HTTP bind address for direct consume requests API (default: 127.0.0.1:8081).
+	pub api_bind_addr: String,
 }
 
 /// Subdirectory names under the pending-deposits artifacts base path.
@@ -34,6 +36,7 @@ impl SequencerConfig {
 	///
 	/// Optional (with defaults):
 	///   TESSERA_POLL_INTERVAL_SECS (default 12)
+	///   TESSERA_SEQUENCER_API_ADDR (default 127.0.0.1:8081)
 	pub fn from_env() -> Result<Self> {
 		let rpc_url = std::env::var("TESSERA_RPC_URL").context("TESSERA_RPC_URL not set")?;
 
@@ -61,6 +64,8 @@ impl SequencerConfig {
 			.unwrap_or_else(|_| "12".to_string())
 			.parse()
 			.context("invalid TESSERA_POLL_INTERVAL_SECS")?;
+		let api_bind_addr = std::env::var("TESSERA_SEQUENCER_API_ADDR")
+			.unwrap_or_else(|_| "127.0.0.1:8081".to_string());
 
 		Ok(Self {
 			rpc_url,
@@ -70,6 +75,7 @@ impl SequencerConfig {
 			plonky2_data_path,
 			groth16_artifacts_path,
 			poll_interval_secs,
+			api_bind_addr,
 		})
 	}
 }

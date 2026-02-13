@@ -1,215 +1,234 @@
-# Local End-to-End Test (New Consume-Batch Flow)
+# Local E2E (ToyUSDT + ToyTrustedSource + Bridge + Sequencer)
 
-This guide tests the updated bridge + sequencer flow locally:
+This is the exact local flow:
+1. deploy `ToyUSDT`
+2. deploy `Verifier` + `DepositsRollupBridge`
+3. deploy `ToyTrustedSource`
+4. set bridge `trustedSource = ToyTrustedSource`
+5. run sequencer
+6. call `depositAndRecord(note, amount)` many times (e.g. 256)
+7. post a random subset of notes (e.g. 128) to sequencer API
+8. verify `consumedRoot` advanced and posted notes became `Consumed`
 
-1. trusted source records deposits (`recordDeposit`)
-2. consume requests are submitted by commitment (`requestConsume`)
-3. sequencer batches requests (size = `consumeBatchSize`)
-4. sequencer generates proof and calls `finalizeConsumeBatch`
-
-Use **4 terminals**.
-
-## Fast Path (Recommended)
-
-From repo root:
-
-```bash
-source scripts/local_env.sh
-```
-
-Then:
-
-- Terminal A: `anvil`
-- Terminal B: `scripts/local_deploy.sh` (exports/updates bridge address)
-- Terminal C: `scripts/local_run_sequencer.sh`
-- Terminal D: `scripts/local_seed.sh 256 128`
-
-This replaces most manual export/copy-paste steps.
+There is no on-chain `requestConsume` queue in the current model.
 
 ## Prerequisites
 
-- `anvil`, `forge`, `cast`
+- `anvil`, `forge`, `cast`, `curl`
 - Rust toolchain
-- used-deposit artifacts already generated:
-  - `tessera-server/artifacts/used-deposit/plonky2-proof`
-  - `tessera-server/artifacts/used-deposit/groth-artifacts`
 
----
+```bash
+cd tessera-server
+cargo run --bin pending_deposit_artifacts --release
+```
+- generated pending-deposit artifacts under:
+  - `tessera-server/artifacts/pending-deposit/plonky2-proof`
+  - `tessera-server/artifacts/pending-deposit/groth-artifacts`
 
-## Terminal A: Start Chain
+Use 4 terminals.
+
+## Terminal A: Start chain
 
 ```bash
 anvil
 ```
 
-Default anvil keys used below:
-
-- operator (account 0):
-  - address: `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`
-  - key: `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`
-- trusted source (account 1):
-  - address: `0x70997970C51812dc3A010C7d01b50e0d17dc79C8`
-  - key: `0x59c6995e998f97a5a0044966f0945384c6d9e86dae88f6a6a8e10f5c1a4f7a5d`
-
----
-
-## Terminal B: Deploy Bridge + Verifier
-
-From repo root:
+## Terminal B: Deploy contracts
 
 ```bash
-export TESSERA_TRUSTED_SOURCE=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
-export TESSERA_CONSUMED_GENERIS_ROOT=0x1ef897f4a5c3f5c07cddaf7dec41197f2259296bb1bb56264ca73c3e1b998bf9
-export TESSERA_CONSUME_BATCH_SIZE=128
-
 cd tessera-solidity
-forge script script/pending-deposit/Deploy.s.sol \
-  --rpc-url http://localhost:8545 \
-  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
-  --broadcast
+
+export RPC=http://localhost:8545
+export OPERATOR_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# Temporary trusted source for bridge deployment (updated later).
+export TEMP_TRUSTED_SOURCE=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+export TESSERA_CONSUMED_GENERIS_ROOT=0x5d85139746d173c92bf3543b4c6ce3daf11bdff30e5b44879d216bc5f06256b6
+export TESSERA_CONSUME_BATCH_SIZE=128
 ```
 
-Copy the printed bridge address and set it as:
+### 1) Deploy ToyUSDT
 
 ```bash
-export BRIDGE=<DEPLOYED_BRIDGE_ADDRESS>
+TOKEN=$(forge create src/pending-deposit/ToyUSDT.sol:ToyUSDT \
+  --rpc-url "$RPC" \
+  --private-key "$OPERATOR_KEY" \
+  --broadcast | sed -n 's/Deployed to: //p' | tail -n1)
+
+echo "TOKEN=$TOKEN"
 ```
 
----
+### 2) Deploy Verifier + Bridge
 
-## Terminal C: Run Sequencer
+```bash
+export TESSERA_TRUSTED_SOURCE="$TEMP_TRUSTED_SOURCE"
+export TESSERA_MONITORED_TOKEN="$TOKEN"
 
-From `tessera-server` directory:
+DEPLOY_OUT=$(forge script script/pending-deposit/Deploy.s.sol \
+  --rpc-url "$RPC" \
+  --private-key "$OPERATOR_KEY" \
+  --broadcast)
+
+echo "$DEPLOY_OUT"
+
+BRIDGE=$(echo "$DEPLOY_OUT" | sed -n 's/.*Bridge deployed at:[[:space:]]*//p' | tail -n1 | tr -d '\r')
+echo "BRIDGE=$BRIDGE"
+```
+
+### 3) Deploy ToyTrustedSource (cast fallback, robust)
+
+```bash
+# Build creation bytecode + constructor args.
+BYTECODE=$(forge inspect src/pending-deposit/ToyTrustedSource.sol:ToyTrustedSource bytecode)
+
+# Deploy using cast (works even when `forge create` signer resolution is flaky).
+DEPLOY_TS_OUT=$(cast send \
+  --rpc-url "$RPC" \
+  --private-key "$OPERATOR_KEY" \
+  --create "$BYTECODE" \
+  "constructor(address,address)" "$BRIDGE" "$TOKEN")
+
+echo "$DEPLOY_TS_OUT"
+TRUSTED_SOURCE=$(echo "$DEPLOY_TS_OUT" | sed -n 's/^contractAddress[[:space:]]*//p' | head -n1)
+
+echo "TRUSTED_SOURCE=$TRUSTED_SOURCE"
+```
+
+### 4) Point bridge to ToyTrustedSource
+
+```bash
+cast send "$BRIDGE" "setTrustedSource(address)" "$TRUSTED_SOURCE" \
+  --rpc-url "$RPC" \
+  --private-key "$OPERATOR_KEY"
+
+cast call "$BRIDGE" "trustedSource()(address)" --rpc-url "$RPC"
+```
+
+## Terminal C: Run sequencer
 
 ```bash
 cd tessera-server
-export TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=<DEPLOYED_BRIDGE_ADDRESS>
+
+export TESSERA_RPC_URL=http://localhost:8545
+export TESSERA_OPERATOR_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+export TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=<PASTE_BRIDGE_FROM_TERMINAL_B>
+export TESSERA_CHAIN_ID=31337
+export TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH=./artifacts/pending-deposit
+export TESSERA_SEQUENCER_API_ADDR=127.0.0.1:8081
+
 cargo run --bin sequencer --release
 ```
 
-Notes:
-
-- `src/bin/sequencer.rs` loads `tessera-server/.env` automatically.
-- Ensure `.env` points to used-deposit artifacts:
-  - `TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH=./artifacts/used-deposit`
-
----
-
-## Terminal D: Create Deposits + Requests
-
-Set helpers:
+## Terminal D: Deposit 256 notes and request consume for 128 random notes
 
 ```bash
 export RPC=http://localhost:8545
-export BRIDGE=<DEPLOYED_BRIDGE_ADDRESS>
-export TRUSTED_KEY=0x59c6995e998f97a5a0044966f0945384c6d9e86dae88f6a6a8e10f5c1a4f7a5d
-export DEPOSITOR=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
-export RECIPIENT=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
+export BRIDGE=<PASTE_BRIDGE_FROM_TERMINAL_B>
+export TOKEN=<PASTE_TOKEN_FROM_TERMINAL_B>
+export TRUSTED_SOURCE=<PASTE_TRUSTED_SOURCE_FROM_TERMINAL_B>
+
+# User account (anvil account #2)
+export USER_KEY=0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a
+export USER_ADDR=$(cast wallet address --private-key "$USER_KEY")
+
+echo "USER_ADDR=$USER_ADDR"
 ```
 
-Submit 128 deposits and request consume for each:
+### 1) Fund user in ToyUSDT and approve ToyTrustedSource
 
 ```bash
-for i in $(seq 1 128); do
+# Mint 1,000,000,000 units (ToyUSDT uses 6 decimals)
+cast send "$TOKEN" "mint(address,uint256)" "$USER_ADDR" 1000000000 \
+  --rpc-url "$RPC" \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+cast send "$TOKEN" "approve(address,uint256)" "$TRUSTED_SOURCE" 1000000000 \
+  --rpc-url "$RPC" \
+  --private-key "$USER_KEY"
+```
+
+### 2) Create 256 deposits with unique notes via `depositAndRecord`
+
+```bash
+NOTES_FILE=/tmp/tessera_notes_256.txt
+: > "$NOTES_FILE"
+
+for i in $(seq 1 256); do
   NOTE=$(printf "0x%064x" "$i")
-  VALUE=$i
+  AMOUNT=$((1000 + i))
 
-  # 1) recordDeposit from trusted source
-  cast send "$BRIDGE" \
-    "recordDeposit(bytes32,uint256,address,address)" \
-    "$NOTE" "$VALUE" "$DEPOSITOR" "$RECIPIENT" \
-    --rpc-url "$RPC" --private-key "$TRUSTED_KEY" >/dev/null
+  cast send "$TRUSTED_SOURCE" "depositAndRecord(bytes32,uint256)" "$NOTE" "$AMOUNT" \
+    --rpc-url "$RPC" \
+    --private-key "$USER_KEY" >/dev/null
 
-  # 2) compute commitment (must match contract hashing)
-  COMMITMENT=$(cast call "$BRIDGE" \
-    "computeCommitment(bytes32,uint256,address)(bytes32)" \
-    "$NOTE" "$VALUE" "$RECIPIENT" \
-    --rpc-url "$RPC")
-
-  # 3) request consume by leaf value
-  cast send "$BRIDGE" \
-    "requestConsume(bytes32)" \
-    "$COMMITMENT" \
-    --rpc-url "$RPC" --private-key "$TRUSTED_KEY" >/dev/null
+  echo "$NOTE" >> "$NOTES_FILE"
 done
+
+echo "Recorded 256 deposits. Notes in $NOTES_FILE"
 ```
 
-Alternative:
+### 3) Submit 128 random consume requests to sequencer API
 
 ```bash
-scripts/local_seed.sh 256 128
+REQ_FILE=/tmp/tessera_consume_128.txt
+shuf "$NOTES_FILE" | head -n 128 > "$REQ_FILE"
+
+while read -r NOTE; do
+  curl -sS -X POST http://127.0.0.1:8081/consume-request \
+    -H 'content-type: application/json' \
+    -d "{\"note_commitment\":\"$NOTE\"}" >/dev/null
+done < "$REQ_FILE"
+
+echo "Submitted 128 consume requests to sequencer API"
 ```
 
-## Stress Tests
+## Verify results (Terminal D)
 
-From repo root:
-
-```bash
-source scripts/local_env.sh
-```
-
-### Recovery on sequencer restart
-
-This scenario simulates:
-
-1. deposits + partial consume requests
-2. sequencer shutdown before batch can finalize
-3. more requests while sequencer is down
-4. sequencer restart and recovery/finalization
-
-Run:
-
-```bash
-scripts/local_stress_recovery.sh
-```
-
-If successful, it prints `Recovery test passed.` and shows the sequencer log path.
-
-### Inspect deposit statuses
-
-Example: inspect first 20 deposits:
-
-```bash
-scripts/local_status.sh 0 20
-```
-
-### Submit extra consume requests against existing deposits
-
-Example: request consume for note indices `129..256` in random order:
-
-```bash
-scripts/local_request.sh 129 128 random
-```
-
-Expected result:
-
-- Sequencer logs should show a batch proving/finalization cycle.
-- Contract root should advance:
+### 1) `consumedRoot` changed
 
 ```bash
 cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC"
 ```
 
-Optional status check:
+### 2) Count consumed notes among requested subset
 
 ```bash
-cast call "$BRIDGE" "getDeposit(uint256)((bytes32,uint256,address,address,uint8))" 0 --rpc-url "$RPC"
+consumed=0
+while read -r NOTE; do
+  STATUS=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$NOTE" --rpc-url "$RPC" | tr -d '[:space:]')
+  if [[ "$STATUS" == "1" ]]; then
+    consumed=$((consumed + 1))
+  fi
+done < "$REQ_FILE"
+
+echo "Consumed in requested subset: $consumed/128"
 ```
 
-`status` enum values:
+Expected after sequencer finalizes one batch:
+- `Consumed in requested subset: 128/128`
+- non-requested notes remain `Available` (`status = 0`)
+
+## Status codes
 
 - `0 = Available`
-- `1 = Withdrawn`
-- `2 = Consumed`
+- `1 = Consumed`
 
----
+## One command alternative
 
-## If Something Fails
+From repo root, you can run the full Toy E2E automatically:
 
-- `InvalidProof()`:
-  - Verifier/artifacts mismatch. Confirm `src/pending-deposit/Verifier.sol` matches:
-    - `tessera-server/artifacts/used-deposit/groth-artifacts/Verifier.sol`
-- No sequencer batching:
-  - check contract `consumeBatchSize` and number of submitted requests.
-- Root mismatch on startup:
-  - sequencer local replay did not match chain history; redeploy/reset local chain for clean test.
+```bash
+scripts/local_e2e_toy.sh 256 128
+```
+
+This performs deployment, sequencer launch, `depositAndRecord` loop, random consume-request submission, and final assertions.
+
+## Troubleshooting: why `forge create` failed
+
+If you saw:
+
+`Error accessing local wallet...`
+
+while `cast wallet address --private-key ...` worked, your local Foundry setup likely had a signer-resolution issue specific to `forge create`.
+
+Using `cast send --create ...` avoids that path and is compatible with older `cast` versions too.

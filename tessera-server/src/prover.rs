@@ -9,7 +9,7 @@ use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	tree::{
 		hasher::{Hash, Sha256Commitment},
-		ChainedInsertProofTargets, NullifierChainedInsertProof,
+		BatchCommitmentProof, BatchCommitmentProofTargets,
 	},
 	CircuitDataNative, ConfigNative, D, F,
 };
@@ -21,7 +21,7 @@ use crate::types::{ProveOutcome, ProveRequest, SolidityProof};
 /// Encapsulates the full proof pipeline: plonky2 -> BN128 wrap -> Groth16.
 pub struct ProverService {
 	circuit_data: CircuitDataNative,
-	targets: ChainedInsertProofTargets,
+	targets: BatchCommitmentProofTargets,
 	bn128_wrapper: BN128Wrapper,
 }
 
@@ -55,8 +55,12 @@ impl ProverService {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let sha256_com = Sha256Commitment::new(&mut builder, 8);
-		let targets =
-			ChainedInsertProofTargets::new::<F, D>(&mut builder, 32, batch_size, Some(&sha256_com));
+		let targets = BatchCommitmentProofTargets::new::<F, D>(
+			&mut builder,
+			32,
+			batch_size,
+			Some(&sha256_com),
+		);
 		targets.connect::<Hash, F, D>(&mut builder);
 		let circuit_data = builder.build::<ConfigNative>();
 
@@ -70,7 +74,7 @@ impl ProverService {
 	}
 
 	/// Generate a complete Groth16 proof for the given consume batch.
-	pub fn prove(&self, batch_proof: &NullifierChainedInsertProof<Hash>) -> Result<SolidityProof> {
+	pub fn prove(&self, batch_proof: &BatchCommitmentProof<Hash>) -> Result<SolidityProof> {
 		let mut pw = PartialWitness::new();
 		self.targets.set::<Hash, F, 32>(&mut pw, batch_proof)?;
 
@@ -104,14 +108,9 @@ pub fn prover_thread(
 	};
 
 	while let Some(request) = rx.blocking_recv() {
-		let Some(new_root) = request.batch_proof.final_root() else {
-			let _ = tx.blocking_send(ProveOutcome::Failure {
-				error: "empty consume batch proof".to_string(),
-			});
-			continue;
-		};
+		let new_root = request.batch_proof.root_new;
 		info!(
-			batch_size = request.batch_proof.len(),
+			batch_size = request.batch_proof.leaves.len(),
 			"proving consume batch"
 		);
 

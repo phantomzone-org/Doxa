@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use anyhow::Result;
 use tessera_trees::tree::hasher::Hash;
 
-use crate::deposits::UsedDepositTree;
+use crate::deposits::PendingDepositTree;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventOrderKey {
@@ -16,13 +16,12 @@ pub struct EventOrderKey {
 pub struct PendingConsumeRequest {
 	pub order_key: EventOrderKey,
 	pub commitment: [u8; 32],
-	pub deposit_id: u64,
 }
 
 /// Sequencer in-memory state for consume-request processing.
 pub struct SequencerState {
-	/// Local used/nullifier tree mirror.
-	pub used_tree: UsedDepositTree<sha2::Sha256>,
+	/// Local consumed-note append-only tree mirror.
+	pub consumed_tree: PendingDepositTree<sha2::Sha256>,
 	/// Pending consume requests keyed by canonical chain order.
 	pub pending_requests: BTreeMap<EventOrderKey, PendingConsumeRequest>,
 	/// Fast duplicate guard for pending requests.
@@ -32,29 +31,29 @@ pub struct SequencerState {
 impl SequencerState {
 	pub fn new() -> Self {
 		Self {
-			used_tree: UsedDepositTree::<sha2::Sha256>::new(),
+			consumed_tree: PendingDepositTree::<sha2::Sha256>::new(),
 			pending_requests: BTreeMap::new(),
 			pending_commitments: HashSet::new(),
 		}
 	}
 
-	/// Return the consumed-tree genesis root (empty indexed tree root).
+	/// Return the consumed-tree genesis root (empty append tree root).
 	pub fn genesis_consumed_root() -> Hash {
-		let tree = UsedDepositTree::<sha2::Sha256>::new();
+		let tree = PendingDepositTree::<sha2::Sha256>::new();
 		tree.tree.get_root()
 	}
 
 	/// Return current local consumed root.
 	pub fn current_consumed_root(&self) -> Hash {
-		self.used_tree.tree.get_root()
+		self.consumed_tree.tree.get_root()
 	}
 
-	/// Replay one consumed commitment into the local used tree.
+	/// Replay one consumed commitment into the local consumed append tree.
 	pub fn replay_consumed_commitment(&mut self, commitment: Hash) -> Result<()> {
-		let proof = self.used_tree.insert_commitments(vec![commitment])?;
+		let proof = self.consumed_tree.insert_commitments(vec![commitment])?;
 		anyhow::ensure!(
 			proof.verify(),
-			"used-tree proof verification failed during replay"
+			"consumed-tree proof verification failed during replay"
 		);
 		Ok(())
 	}
@@ -66,7 +65,6 @@ impl SequencerState {
 		&mut self,
 		order_key: EventOrderKey,
 		commitment: [u8; 32],
-		deposit_id: u64,
 		batch_size: usize,
 	) -> bool {
 		if self.pending_commitments.contains(&commitment) {
@@ -79,7 +77,6 @@ impl SequencerState {
 			PendingConsumeRequest {
 				order_key,
 				commitment,
-				deposit_id,
 			},
 		);
 		self.pending_requests.len() >= batch_size

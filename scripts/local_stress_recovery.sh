@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end recovery stress:
+# End-to-end restart recovery stress (API-driven flow):
 # - start sequencer
-# - submit partial requests
-# - stop sequencer
-# - submit remaining requests while down
-# - restart sequencer and verify consumption completes
+# - seed deposits
+# - submit first batch consume requests and wait finalize
+# - stop/restart sequencer
+# - submit second batch consume requests and wait finalize
+# - verify recovery and continued operation
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
@@ -22,15 +23,13 @@ if [[ -z "${BRIDGE:-}" ]]; then
   exit 1
 fi
 
+BATCH_SIZE="${TESSERA_CONSUME_BATCH_SIZE:-128}"
+TOTAL=$((BATCH_SIZE * 2))
 LOG_DIR="$ROOT_DIR/scripts/logs"
 mkdir -p "$LOG_DIR"
 SEQ_LOG="$LOG_DIR/tessera_sequencer_stress.log"
 SEQ_PID=""
-WINDOW_START=0
-WINDOW_END=0
-WINDOW_COMMITMENTS_FILE=""
 
-# Best-effort cleanup for stale local sequencer processes from prior runs.
 kill_stale_sequencers() {
   local pids
   pids="$(pgrep -f '/target/release/sequencer' || true)"
@@ -48,36 +47,9 @@ kill_stale_sequencers() {
   fi
 }
 
-# Build and cache commitments for the active test window.
-build_window_commitments() {
-  WINDOW_COMMITMENTS_FILE="$(mktemp)"
-  local i resp commitment
-  for i in $(seq "$WINDOW_START" "$WINDOW_END"); do
-    resp=$(cast call "$BRIDGE" "getDeposit(uint256)((bytes32,uint256,address,address,uint8))" "$i" --rpc-url "$RPC")
-    commitment=$(echo "$resp" | sed -E 's/^\((0x[0-9a-fA-F]{64}).*/\1/')
-    echo "$commitment" >> "$WINDOW_COMMITMENTS_FILE"
-  done
-}
-
-# Count consumeRequested=true inside the active test window.
-count_requested_in_window() {
-  local requested=0
-  local commitment is_requested
-  while read -r commitment; do
-    is_requested=$(cast call "$BRIDGE" "consumeRequested(bytes32)(bool)" "$commitment" --rpc-url "$RPC")
-    is_requested="$(echo "$is_requested" | tr -d '[:space:]')"
-    if [[ "$is_requested" == "true" ]]; then
-      requested=$((requested + 1))
-    fi
-  done < "$WINDOW_COMMITMENTS_FILE"
-  echo "$requested"
-}
-
-# Launch sequencer in background and fail fast if it crashes.
 start_sequencer() {
   echo "Starting sequencer..."
   kill_stale_sequencers
-  # Launch in its own session so we can terminate the whole process group.
   setsid bash -c "BRIDGE='$BRIDGE' '$ROOT_DIR/scripts/local_run_sequencer.sh'" >"$SEQ_LOG" 2>&1 &
   SEQ_PID=$!
   sleep 2
@@ -87,7 +59,6 @@ start_sequencer() {
   fi
 }
 
-# Gracefully stop sequencer process if running.
 stop_sequencer() {
   if [[ -n "${SEQ_PID:-}" ]] && kill -0 "$SEQ_PID" 2>/dev/null; then
     echo "Stopping sequencer process group -$SEQ_PID..."
@@ -99,76 +70,86 @@ stop_sequencer() {
   kill_stale_sequencers
 }
 
-cleanup() {
-  stop_sequencer
-  if [[ -n "${WINDOW_COMMITMENTS_FILE:-}" && -f "$WINDOW_COMMITMENTS_FILE" ]]; then
-    rm -f "$WINDOW_COMMITMENTS_FILE"
-  fi
+count_consumed_in_range() {
+  local start="$1"
+  local end="$2"
+  local consumed=0
+  local i note status
+  for i in $(seq "$start" "$end"); do
+    note=$(printf "0x%064x" "$i")
+    status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
+    status="$(echo "$status" | tr -d '[:space:]')"
+    if [[ "$status" == "1" ]]; then
+      consumed=$((consumed + 1))
+    fi
+  done
+  echo "$consumed"
 }
 
+find_first_missing_note() {
+  local i=1
+  while true; do
+    local note status
+    note=$(printf "0x%064x" "$i")
+    status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
+    status="$(echo "$status" | tr -d '[:space:]')"
+    if [[ -z "$status" ]]; then
+      echo "$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+}
+
+wait_until_consumed() {
+  local start="$1"
+  local end="$2"
+  local target="$3"
+  local deadline=$((SECONDS + 300))
+  while (( SECONDS < deadline )); do
+    local consumed
+    consumed=$(count_consumed_in_range "$start" "$end")
+    echo "Consumed in [$start..$end]: $consumed/$target"
+    if [[ "$consumed" -ge "$target" ]]; then
+      return 0
+    fi
+    sleep 3
+  done
+  return 1
+}
+
+cleanup() {
+  stop_sequencer
+}
 trap cleanup EXIT
 
 start_sequencer
 
-echo "Phase 1: create 256 deposits + only 64 consume requests."
-BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_seed.sh" 256 64
+echo "Phase 1: create $TOTAL deposits (no requests yet)."
+START_NOTE="$(find_first_missing_note)"
+END_NOTE=$((START_NOTE + TOTAL - 1))
+echo "Using note range [$START_NOTE..$END_NOTE]"
+BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_seed.sh" "$TOTAL" 0 "$START_NOTE"
 
-# Scope checks to the exact deposit window created by this run.
-BASE_NEXT_ID_RAW=$(cast call "$BRIDGE" "nextDepositId()(uint256)" --rpc-url "$RPC")
-BASE_NEXT_ID="$(echo "$BASE_NEXT_ID_RAW" | tr -d '[:space:]')"
-WINDOW_START=$((BASE_NEXT_ID - 256))
-WINDOW_END=$((BASE_NEXT_ID - 1))
-build_window_commitments
+echo "Phase 2: submit first batch ($BATCH_SIZE) in random order."
+BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_request.sh" "$START_NOTE" "$BATCH_SIZE" random
 
-echo "Phase 2: simulate crash before batch can finalize."
-stop_sequencer
-
-echo "Phase 3: enqueue remaining 64 consume requests while sequencer is down."
-BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_request.sh" 0 64 random-unconsumed
-
-echo "Waiting for pending consume requests to reach 128 in [$WINDOW_START..$WINDOW_END]..."
-req_deadline=$((SECONDS + 300))
-while (( SECONDS < req_deadline )); do
-  requested=$(count_requested_in_window)
-  echo "Pending consume requests in [$WINDOW_START..$WINDOW_END]: $requested/128"
-  if [[ "$requested" -eq 128 ]]; then
-    break
-  fi
-  missing=$((128 - requested))
-  echo "Top-up: submitting $missing additional requests..."
-  BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_request.sh" 0 "$missing" random-unconsumed
-  sleep 1
-done
-
-if [[ "${requested:-0}" -ne 128 ]]; then
-  echo "ERROR: pending requests did not reach 128 before restart." >&2
-  echo "Check for reverted request txs and sequencer log: $SEQ_LOG" >&2
+if ! wait_until_consumed "$START_NOTE" "$((START_NOTE + BATCH_SIZE - 1))" "$BATCH_SIZE"; then
+  echo "ERROR: first batch did not finalize in time. Check $SEQ_LOG" >&2
   exit 1
 fi
 
-echo "Phase 4: restart sequencer and wait for 128/256 in this window to be consumed."
+echo "Phase 3: restart sequencer."
+stop_sequencer
 start_sequencer
 
-# Poll contract until 128 deposits in this run's window are consumed or timeout.
-deadline=$((SECONDS + 300))
-while (( SECONDS < deadline )); do
-  consumed=0
-  for i in $(seq "$WINDOW_START" "$WINDOW_END"); do
-    resp=$(cast call "$BRIDGE" "getDeposit(uint256)((bytes32,uint256,address,address,uint8))" "$i" --rpc-url "$RPC")
-    status=$(echo "$resp" | sed -E 's/.*,\s*([0-9]+)\)$/\1/')
-    if [[ "$status" == "2" ]]; then
-      consumed=$((consumed + 1))
-    fi
-  done
+echo "Phase 4: submit second batch ($BATCH_SIZE) in random order."
+BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_request.sh" "$((START_NOTE + BATCH_SIZE))" "$BATCH_SIZE" random
 
-  echo "Consumed in [$WINDOW_START..$WINDOW_END]: $consumed/128"
-  if [[ "$consumed" -eq 128 ]]; then
-    echo "Recovery test passed."
-    echo "Sequencer log: $SEQ_LOG"
-    exit 0
-  fi
-  sleep 3
-done
+if ! wait_until_consumed "$((START_NOTE + BATCH_SIZE))" "$END_NOTE" "$BATCH_SIZE"; then
+  echo "ERROR: second batch did not finalize after restart. Check $SEQ_LOG" >&2
+  exit 1
+fi
 
-echo "Recovery test timed out. Check sequencer logs: $SEQ_LOG" >&2
-exit 1
+echo "Recovery test passed."
+echo "Sequencer log: $SEQ_LOG"

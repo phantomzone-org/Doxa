@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Seed deposits and submit consume requests.
+# Seed deposits and optionally submit consume requests to sequencer API.
 # Args:
 #   $1 total deposits to record (default 256)
-#   $2 number of consume requests to submit from random deposits (default 128)
+#   $2 number of consume requests to submit from random notes (default 128)
+#   $3 start note index (default: first missing note on-chain)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
 TOTAL_DEPOSITS="${1:-256}"
 REQUEST_COUNT="${2:-128}"
+START_NOTE="${3:-}"
 
 if [[ "$REQUEST_COUNT" -gt "$TOTAL_DEPOSITS" ]]; then
   echo "ERROR: request count ($REQUEST_COUNT) cannot exceed deposits ($TOTAL_DEPOSITS)" >&2
@@ -33,47 +35,77 @@ echo "BRIDGE=$BRIDGE"
 
 TRUSTED_ADDR=$(cast wallet address --private-key "$TRUSTED_KEY")
 echo "trusted key addr: $TRUSTED_ADDR"
-
 echo "on-chain trustedSource:"
 cast call "$BRIDGE" "trustedSource()(address)" --rpc-url "$RPC"
 
 echo "trusted key balance:"
 cast balance "$TRUSTED_ADDR" --rpc-url "$RPC"
 
+MONITORED_TOKEN=$(cast call "$BRIDGE" "monitoredToken()(address)" --rpc-url "$RPC" | tr -d '[:space:]')
+echo "monitored token: $MONITORED_TOKEN"
 
-# 1) Record deposits via trusted source.
+find_first_missing_note() {
+  local i=1
+  while true; do
+    local note status
+    note=$(printf "0x%064x" "$i")
+    status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
+    status="$(echo "$status" | tr -d '[:space:]')"
+    if [[ -z "$status" ]]; then
+      echo "$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+}
+
+if [[ -z "$START_NOTE" ]]; then
+  START_NOTE="$(find_first_missing_note)"
+fi
+END_NOTE=$((START_NOTE + TOTAL_DEPOSITS - 1))
+echo "note range: [$START_NOTE..$END_NOTE]"
+
+# 1) Record deposits: mint token to bridge then call recordDeposit(note).
+# This assumes local ToyUSDT-style token with open mint(address,uint256).
 echo "Seeding deposits: $TOTAL_DEPOSITS (bridge=$BRIDGE)"
-for i in $(seq 1 "$TOTAL_DEPOSITS"); do
+for i in $(seq "$START_NOTE" "$END_NOTE"); do
   NOTE=$(printf "0x%064x" "$i")
   VALUE=$i
-  cast send "$BRIDGE" \
-    "recordDeposit(bytes32,uint256,address,address)" \
-    "$NOTE" "$VALUE" "$DEPOSITOR" "$RECIPIENT" \
-    --rpc-url "$RPC" --private-key "$TRUSTED_KEY" --gas-limit 500000 >/dev/null
-done
 
-# 2) Choose a random subset of deposit indices and compute commitments.
-TMP_FILE="$(mktemp)"
-for i in $(shuf -i 1-"$TOTAL_DEPOSITS" -n "$REQUEST_COUNT"); do
-  NOTE=$(printf "0x%064x" "$i")
-  VALUE=$i
-  COMMITMENT=$(cast call "$BRIDGE" \
-    "computeCommitment(bytes32,uint256,address)(bytes32)" \
-    "$NOTE" "$VALUE" "$RECIPIENT" \
-    --rpc-url "$RPC")
-  echo "$COMMITMENT" >> "$TMP_FILE"
-done
+  cast send "$MONITORED_TOKEN" \
+    "mint(address,uint256)" \
+    "$BRIDGE" "$VALUE" \
+    --rpc-url "$RPC" --private-key "$OPERATOR_KEY" --gas-limit 200000 >/dev/null
 
-# 3) Submit consume requests in randomized order.
-echo "Submitting $REQUEST_COUNT consume requests from random indices..."
-submitted=0
-while read -r C; do
   cast send "$BRIDGE" \
-    "requestConsume(bytes32)" \
-    "$C" \
+    "recordDeposit(bytes32)" \
+    "$NOTE" \
     --rpc-url "$RPC" --private-key "$TRUSTED_KEY" --gas-limit 300000 >/dev/null
-  submitted=$((submitted + 1))
+done
+
+if [[ "$REQUEST_COUNT" -eq 0 ]]; then
+  echo "Done. Deposits seeded, no consume requests submitted."
+  exit 0
+fi
+
+# 2) Submit random consume requests directly to sequencer API.
+TMP_FILE="$(mktemp)"
+for i in $(shuf -i "$START_NOTE"-"$END_NOTE" -n "$REQUEST_COUNT"); do
+  printf "0x%064x\n" "$i" >> "$TMP_FILE"
+done
+
+echo "Submitting $REQUEST_COUNT consume requests to sequencer API ($TESSERA_SEQUENCER_API_URL)..."
+submitted=0
+while read -r NOTE; do
+  resp=$(curl -sS -X POST "$TESSERA_SEQUENCER_API_URL/consume-request" \
+    -H 'content-type: application/json' \
+    -d "{\"note_commitment\":\"$NOTE\"}")
+  if echo "$resp" | grep -Eq '"accepted"[[:space:]]*:[[:space:]]*true'; then
+    submitted=$((submitted + 1))
+  else
+    echo "WARN: API did not accept note $NOTE (resp=$resp)" >&2
+  fi
 done < <(shuf "$TMP_FILE")
 
 rm -f "$TMP_FILE"
-echo "Done. Submitted $submitted/$REQUEST_COUNT requests. Check sequencer logs for batch proof/finalization."
+echo "Done. Submitted $submitted/$REQUEST_COUNT consume requests to sequencer API."

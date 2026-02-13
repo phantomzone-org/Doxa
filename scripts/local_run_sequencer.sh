@@ -17,7 +17,6 @@ if [[ -z "${BRIDGE:-}" ]]; then
   exit 1
 fi
 
-# Export runtime env expected by `SequencerConfig::from_env`.
 pushd "$ROOT_DIR/tessera-server" >/dev/null
 export TESSERA_RPC_URL="$RPC"
 export TESSERA_OPERATOR_KEY="$OPERATOR_KEY"
@@ -25,7 +24,9 @@ export TESSERA_CHAIN_ID="$TESSERA_CHAIN_ID"
 export TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH="$TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH"
 export TESSERA_POLL_INTERVAL_SECS="$TESSERA_POLL_INTERVAL_SECS"
 export TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS="$BRIDGE"
+export TESSERA_SEQUENCER_API_ADDR="$TESSERA_SEQUENCER_API_ADDR"
 
 echo "Starting sequencer for bridge: $BRIDGE"
+echo "Sequencer API: $TESSERA_SEQUENCER_API_URL"
 cargo run --bin sequencer --release
 popd >/dev/null

@@ -5,6 +5,7 @@
 *.pprof
 /target
 Cargo.lock
+scripts/logs/
 
 #submodule
 tessera-solidity/lib/forge-std
@@ -17,6 +18,7 @@ tessera-solidity/out/
 !/broadcast
 tessera-solidity/broadcast/*/31337/
 tessera-solidity/broadcast/**/dry-run/
+tessera-solidity/.foundry-cache/
 
 # Docs
 tessera-solidity/docs/

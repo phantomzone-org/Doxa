@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+interface IERC20BalanceOf {
+    function balanceOf(address account) external view returns (uint256);
+}
+
 /// @notice Interface matching the gnark-generated Groth16 verifier.
-///         The verifier **reverts** on invalid proofs (no bool return).
+///         The verifier reverts on invalid proofs (no bool return).
 interface IGroth16Verifier {
     function verifyProof(
         uint256[8] calldata proof,
@@ -12,399 +16,224 @@ interface IGroth16Verifier {
     ) external view;
 }
 
-/// @title  DepositsRollupBridge
-/// @notice Deposit bridge for trusted-source ingestion with lifecycle:
-///         Available -> Withdrawn / Consumed.
-///
-/// @dev    Commitment encoding
-///         Each deposit's commitment is computed as:
-///           sha256(DOMAIN_SEP ‖ noteCommitment ‖ value ‖ recipient)
-///         with the MSB of each 64-bit chunk cleared so every chunk fits in the
-///         Goldilocks field (< 2^63 < p). This is an injective mapping on the
-///         252-bit truncated digest, providing 126-bit collision security.
-///
-/// @dev    Consume proof commitment
-///         The circuit public commitment is:
-///           SHA256(consumedRoot_old ‖ consumedRoot_new ‖ deposit_commitment)
-///         then split into 8 big-endian uint32 words as verifier public inputs.
+/// @title DepositsRollupBridge
+/// @notice Deposit bridge with lifecycle: Available -> Consumed.
 contract DepositsRollupBridge {
-    // ----------------------------------------------------------------
-    // Types
-    // ----------------------------------------------------------------
+    enum DepositStatus {
+        Available,
+        Consumed
+    }
 
-    /// @dev Deposit lifecycle status.
-    enum DepositStatus { Available, Withdrawn, Consumed }
-
-    /// @dev On-chain deposit record.
     struct Deposit {
-        bytes32       commitment;  // sha256(DOMAIN_SEP ‖ noteCommitment ‖ value ‖ recipient) w/ MSB clearing
-        uint256       value;       // deposit value
-        address       depositor;   // original user account (authorized withdrawer)
-        address       recipient;   // recipient address
+        uint256 value;
+        address recipient;
         DepositStatus status;
     }
 
-    /// @dev Matches the gnark verifier's calldata layout.
     struct Proof {
-        uint256[8] proof;          // Groth16 A (2), B (4), C (2) in EIP-197 format
-        uint256[2] commitments;    // Pedersen commitment G1 point
-        uint256[2] commitmentPok;  // Proof of knowledge for the Pedersen commitment
+        uint256[8] proof;
+        uint256[2] commitments;
+        uint256[2] commitmentPok;
     }
 
-    // ----------------------------------------------------------------
-    // Constants
-    // ----------------------------------------------------------------
-
-    /// @notice Domain separator for commitment hashing.
     bytes32 public constant DOMAIN_SEP = sha256("tessera.pending-deposit.v1");
 
-    // ----------------------------------------------------------------
-    // Config / State
-    // ----------------------------------------------------------------
-
-    /// @notice Address of the gnark-generated Groth16 verifier contract.
     IGroth16Verifier public immutable verifier;
-
-    /// @notice Centralized operator (sequencer).
     address public operator;
-
-    /// @notice Trusted source allowed to record deposits.
     address public trustedSource;
 
-    /// @notice Current consumed/nullifier tree root.
     bytes32 public consumedRoot;
-
-    /// @notice Number of consume requests per finalized batch.
     uint256 public immutable consumeBatchSize;
 
-    /// @notice Monotonic deposit counter (next available ID).
-    uint256 public nextDepositId;
+    /// @notice ERC20 token monitored for balance-delta deposit value.
+    address public immutable monitoredToken;
+    uint256 public lastMonitoredBalance;
 
-    /// @notice Emergency pause switch.
     bool public paused;
 
-    /// @notice Deposit records indexed by deposit ID.
-    mapping(uint256 => Deposit) public deposits;
-
-    /// @notice Tracks whether a note commitment has ever been used.
-    mapping(bytes32 => bool) public noteCommitmentUsed;
-
-    /// @notice Lookup from deposit commitment to deposit ID.
-    mapping(bytes32 => uint256) public commitmentToDepositId;
-
-    /// @notice Tracks whether a commitment has been recorded.
-    mapping(bytes32 => bool) public commitmentExists;
-
-    /// @notice Tracks whether a commitment currently has a pending consume request.
-    mapping(bytes32 => bool) public consumeRequested;
-
-    // ----------------------------------------------------------------
-    // Events
-    // ----------------------------------------------------------------
+    /// @notice Canonical on-chain state keyed by note commitment.
+    mapping(bytes32 => Deposit) public deposits;
+    mapping(bytes32 => bool) public noteExists;
 
     event OperatorChanged(address indexed oldOp, address indexed newOp);
     event TrustedSourceChanged(address indexed oldSource, address indexed newSource);
     event PausedChanged(bool isPaused);
-    event DepositAvailable(
-        uint256 indexed depositId,
-        bytes32 commitment,
-        address depositor,
-        uint256 value,
-        address recipient
-    );
-    event ConsumeRequested(bytes32 indexed commitment, uint256 indexed depositId, address indexed requester);
-    event DepositWithdrawn(uint256 indexed depositId, address indexed depositor);
+    event DepositAvailable(bytes32 indexed noteCommitment, uint256 value, address recipient);
     event ConsumeBatchFinalized(uint256 batchSize, bytes32 oldRoot, bytes32 newRoot);
-    event DepositConsumed(uint256 indexed depositId, bytes32 indexed commitment);
-
-    // ----------------------------------------------------------------
-    // Errors
-    // ----------------------------------------------------------------
+    event DepositConsumed(bytes32 indexed noteCommitment);
 
     error NotOperator();
     error NotTrustedSource();
     error PausedErr();
     error InvalidProof();
-    error DepositNotFound(uint256 depositId);
-    error CommitmentNotFound(bytes32 commitment);
-    error CommitmentNotRequested(bytes32 commitment);
-    error ConsumeAlreadyRequested(bytes32 commitment);
-    error InvalidDepositState(uint256 depositId);
-    error NotDepositor(uint256 depositId);
+    error NoteNotFound(bytes32 noteCommitment);
+    error InvalidDepositState(bytes32 noteCommitment);
     error DuplicateNoteCommitment(bytes32 noteCommitment);
     error InvalidBatchSize();
     error InvalidConsumeBatchLength(uint256 got, uint256 expected);
+    error InvalidMonitoredToken();
+    error NoTokenIncrease(uint256 previousBalance, uint256 newBalance);
     error ZeroAddress();
-
-    // ----------------------------------------------------------------
-    // Constructor / Admin
-    // ----------------------------------------------------------------
 
     constructor(
         address _verifier,
         address _operator,
         address _trustedSource,
         bytes32 _consumedRoot,
-        uint256 _consumeBatchSize
+        uint256 _consumeBatchSize,
+        address _monitoredToken
     ) {
         if (_operator == address(0) || _trustedSource == address(0)) revert ZeroAddress();
         if (_consumeBatchSize == 0) revert InvalidBatchSize();
+        if (_monitoredToken == address(0)) revert InvalidMonitoredToken();
+
         verifier = IGroth16Verifier(_verifier);
         operator = _operator;
         trustedSource = _trustedSource;
         consumedRoot = _consumedRoot;
         consumeBatchSize = _consumeBatchSize;
+        monitoredToken = _monitoredToken;
+        lastMonitoredBalance = IERC20BalanceOf(_monitoredToken).balanceOf(address(this));
     }
 
     modifier onlyOperator() {
-        if (msg.sender != operator) revert NotOperator();
+        _onlyOperator();
         _;
     }
 
     modifier whenNotPaused() {
-        if (paused) revert PausedErr();
+        _whenNotPaused();
         _;
     }
 
     modifier onlyTrustedSource() {
-        if (msg.sender != trustedSource) revert NotTrustedSource();
+        _onlyTrustedSource();
         _;
     }
 
-    /// @notice Transfer the operator role to a new address.
+    function _onlyOperator() internal view {
+        if (msg.sender != operator) revert NotOperator();
+    }
+
+    function _whenNotPaused() internal view {
+        if (paused) revert PausedErr();
+    }
+
+    function _onlyTrustedSource() internal view {
+        if (msg.sender != trustedSource) revert NotTrustedSource();
+    }
+
     function setOperator(address newOperator) external onlyOperator {
         if (newOperator == address(0)) revert ZeroAddress();
         emit OperatorChanged(operator, newOperator);
         operator = newOperator;
     }
 
-    /// @notice Update the trusted source contract.
     function setTrustedSource(address newTrustedSource) external onlyOperator {
         if (newTrustedSource == address(0)) revert ZeroAddress();
         emit TrustedSourceChanged(trustedSource, newTrustedSource);
         trustedSource = newTrustedSource;
     }
 
-    /// @notice Toggle the pause switch.
     function setPaused(bool _paused) external onlyOperator {
         paused = _paused;
         emit PausedChanged(_paused);
     }
 
-    // ----------------------------------------------------------------
-    // Deposit ingest (trusted source)
-    // ----------------------------------------------------------------
+    /// @notice Record an available deposit for a note commitment.
+    /// @dev Value is inferred from monitored token balance delta.
+    ///      recipient is the caller address of this function.
+    function recordDeposit(bytes32 noteCommitment) external onlyTrustedSource whenNotPaused returns (bytes32) {
+        if (noteExists[noteCommitment]) revert DuplicateNoteCommitment(noteCommitment);
 
-    /// @notice Record an available deposit from the trusted source.
-    ///
-    /// @param noteCommitment  User-provided privacy note commitment.
-    /// @param value           Deposit value.
-    /// @param depositor       Original user account that can withdraw.
-    /// @param recipient       Recipient address.
-    /// @return depositId      Assigned deposit ID.
-    function recordDeposit(
-        bytes32 noteCommitment,
-        uint256 value,
-        address depositor,
-        address recipient
-    )
-        external
-        onlyTrustedSource
-        whenNotPaused
-        returns (uint256 depositId)
-    {
-        if (depositor == address(0)) revert ZeroAddress();
-        if (noteCommitmentUsed[noteCommitment]) revert DuplicateNoteCommitment(noteCommitment);
-        noteCommitmentUsed[noteCommitment] = true;
-        bytes32 commitment = computeCommitment(noteCommitment, value, recipient);
+        uint256 previousBalance = lastMonitoredBalance;
+        uint256 newBalance = IERC20BalanceOf(monitoredToken).balanceOf(address(this));
+        if (newBalance <= previousBalance) revert NoTokenIncrease(previousBalance, newBalance);
 
-        depositId = nextDepositId++;
-        deposits[depositId] = Deposit({
-            commitment: commitment,
-            value: value,
-            depositor: depositor,
-            recipient: recipient,
-            status: DepositStatus.Available
-        });
-        commitmentToDepositId[commitment] = depositId;
-        commitmentExists[commitment] = true;
+        uint256 value = newBalance - previousBalance;
+        lastMonitoredBalance = newBalance;
 
-        emit DepositAvailable(depositId, commitment, depositor, value, recipient);
+        deposits[noteCommitment] = Deposit({value: value, recipient: msg.sender, status: DepositStatus.Available});
+        noteExists[noteCommitment] = true;
+
+        emit DepositAvailable(noteCommitment, value, msg.sender);
+        return noteCommitment;
     }
 
-    // ----------------------------------------------------------------
-    // State transitions
-    // ----------------------------------------------------------------
-
-    /// @notice Withdraw an available deposit back to the original depositor.
-    function withdraw(uint256 depositId)
-        external
-        whenNotPaused
-    {
-        Deposit storage d = deposits[depositId];
-        if (depositId >= nextDepositId) revert DepositNotFound(depositId);
-        if (d.status != DepositStatus.Available) revert InvalidDepositState(depositId);
-        if (msg.sender != d.depositor) revert NotDepositor(depositId);
-
-        d.status = DepositStatus.Withdrawn;
-        emit DepositWithdrawn(depositId, d.depositor);
-    }
-
-    /// @notice Request consumption by commitment (leaf value).
-    ///
-    /// @dev Requests are set-based and can arrive in any order.
-    function requestConsume(bytes32 commitment)
-        external
-        whenNotPaused
-    {
-        if (!commitmentExists[commitment]) revert CommitmentNotFound(commitment);
-        if (consumeRequested[commitment]) revert ConsumeAlreadyRequested(commitment);
-
-        uint256 depositId = commitmentToDepositId[commitment];
-        Deposit storage d = deposits[depositId];
-        if (d.status != DepositStatus.Available) revert InvalidDepositState(depositId);
-
-        consumeRequested[commitment] = true;
-        emit ConsumeRequested(commitment, depositId, msg.sender);
-    }
-
-    /// @notice Finalize a consume batch after verifying the consume proof.
-    ///
-    /// @param newConsumedRoot   Proposed consumed tree root after insertion.
-    /// @param commitments       Commitments consumed in this batch (ordered as in proof).
-    /// @param proof             Groth16 proof with Pedersen commitments.
+    /// @notice Finalize a consume batch after verifying the append proof.
+    /// @param newConsumedRoot Proposed consumed tree root after appending notes.
+    /// @param noteCommitments Notes consumed in this batch (proof order).
     function finalizeConsumeBatch(
         bytes32 newConsumedRoot,
-        bytes32[] calldata commitments,
+        bytes32[] calldata noteCommitments,
         Proof calldata proof
-    )
-        external
-        onlyOperator
-        whenNotPaused
-    {
-        uint256 batchLen = commitments.length;
+    ) external onlyOperator whenNotPaused {
+        uint256 batchLen = noteCommitments.length;
         if (batchLen != consumeBatchSize) revert InvalidConsumeBatchLength(batchLen, consumeBatchSize);
 
         bytes32 oldConsumedRoot = consumedRoot;
-        uint256[] memory depositIds = new uint256[](batchLen);
 
-        // Validate request set membership and status; clear requests to also reject duplicates.
+        // Validate availability before verification/submission side effects.
         for (uint256 i = 0; i < batchLen; i++) {
-            bytes32 c = commitments[i];
-            if (!commitmentExists[c]) revert CommitmentNotFound(c);
-            if (!consumeRequested[c]) revert CommitmentNotRequested(c);
-            consumeRequested[c] = false;
-
-            uint256 depositId = commitmentToDepositId[c];
-            Deposit storage d = deposits[depositId];
-            if (d.status != DepositStatus.Available) revert InvalidDepositState(depositId);
-            depositIds[i] = depositId;
+            bytes32 note = noteCommitments[i];
+            if (!noteExists[note]) revert NoteNotFound(note);
+            if (deposits[note].status != DepositStatus.Available) revert InvalidDepositState(note);
         }
 
-        bytes memory commitmentBytes = new bytes(batchLen * 32);
+        bytes memory noteBytes = new bytes(batchLen * 32);
         for (uint256 i = 0; i < batchLen; i++) {
-            bytes32 c = commitments[i];
+            bytes32 note = noteCommitments[i];
             assembly {
-                mstore(add(add(commitmentBytes, 32), mul(i, 32)), c)
+                mstore(add(add(noteBytes, 32), mul(i, 32)), note)
             }
         }
 
-        // Compute SHA-256 commitment expected by the consume circuit.
-        bytes32 sha256Commit = sha256(abi.encodePacked(oldConsumedRoot, newConsumedRoot, commitmentBytes));
-
-        // Derive public inputs.
+        bytes32 sha256Commit = sha256(abi.encodePacked(oldConsumedRoot, newConsumedRoot, noteBytes));
         uint256[8] memory pubInputs = sha256ToPublicInputs(sha256Commit);
 
-        // Verify the Groth16 proof.
-        try verifier.verifyProof(
-            proof.proof,
-            proof.commitments,
-            proof.commitmentPok,
-            pubInputs
-        ) {
+        try verifier.verifyProof(proof.proof, proof.commitments, proof.commitmentPok, pubInputs) {
             // valid
         } catch {
             revert InvalidProof();
         }
 
         for (uint256 i = 0; i < batchLen; i++) {
-            uint256 depositId = depositIds[i];
-            bytes32 c = commitments[i];
-            deposits[depositId].status = DepositStatus.Consumed;
-            emit DepositConsumed(depositId, c);
+            bytes32 note = noteCommitments[i];
+            deposits[note].status = DepositStatus.Consumed;
+            emit DepositConsumed(note);
         }
 
         consumedRoot = newConsumedRoot;
         emit ConsumeBatchFinalized(batchLen, oldConsumedRoot, newConsumedRoot);
     }
 
-    // ----------------------------------------------------------------
-    // Commitment computation
-    // ----------------------------------------------------------------
+    /// @notice Legacy helper kept for compatibility/debugging.
+    function computeCommitment(bytes32 noteCommitment, uint256 value, address recipient) public pure returns (bytes32) {
+        bytes32 digest = sha256(abi.encodePacked(DOMAIN_SEP, noteCommitment, value, recipient));
 
-    /// @notice Compute the deposit commitment.
-    ///
-    /// @dev Encoding: sha256(DOMAIN_SEP ‖ noteCommitment ‖ value ‖ recipient)
-    ///      The MSB of each 64-bit chunk is cleared so that every chunk
-    ///      fits in the Goldilocks field (< 2^63 < p).
-    function computeCommitment(
-        bytes32 noteCommitment,
-        uint256 value,
-        address recipient
-    ) public pure returns (bytes32) {
-        bytes32 digest = sha256(abi.encodePacked(
-            DOMAIN_SEP,
-            noteCommitment,
-            value,
-            recipient
-        ));
-
-        // Clear MSB of each 64-bit chunk: bits 255, 191, 127, 63
-        uint256 mask = ~(
-            uint256(1) << 255 |
-            uint256(1) << 191 |
-            uint256(1) << 127 |
-            uint256(1) << 63
-        );
+        uint256 mask = ~(uint256(1) << 255 | uint256(1) << 191 | uint256(1) << 127 | uint256(1) << 63);
         return bytes32(uint256(digest) & mask);
     }
 
-    // ----------------------------------------------------------------
-    // Public input mapping
-    // ----------------------------------------------------------------
-
-    /// @notice Splits a SHA-256 digest into the 8 uint32 words expected by
-    ///         the Groth16 verifier as public inputs.
-    ///
-    ///         Word order is big-endian:
-    ///           inputs[0] = most-significant 32 bits
-    ///           inputs[7] = least-significant 32 bits
-    function sha256ToPublicInputs(bytes32 hash)
-        public
-        pure
-        returns (uint256[8] memory inputs)
-    {
+    function sha256ToPublicInputs(bytes32 hash) public pure returns (uint256[8] memory inputs) {
         uint256 h = uint256(hash);
         inputs[0] = (h >> 224) & 0xFFFFFFFF;
         inputs[1] = (h >> 192) & 0xFFFFFFFF;
         inputs[2] = (h >> 160) & 0xFFFFFFFF;
         inputs[3] = (h >> 128) & 0xFFFFFFFF;
-        inputs[4] = (h >> 96)  & 0xFFFFFFFF;
-        inputs[5] = (h >> 64)  & 0xFFFFFFFF;
-        inputs[6] = (h >> 32)  & 0xFFFFFFFF;
+        inputs[4] = (h >> 96) & 0xFFFFFFFF;
+        inputs[5] = (h >> 64) & 0xFFFFFFFF;
+        inputs[6] = (h >> 32) & 0xFFFFFFFF;
         inputs[7] = h & 0xFFFFFFFF;
     }
 
-    // ----------------------------------------------------------------
-    // View helpers
-    // ----------------------------------------------------------------
+    function getDeposit(bytes32 noteCommitment) external view returns (Deposit memory) {
+        if (!noteExists[noteCommitment]) revert NoteNotFound(noteCommitment);
+        return deposits[noteCommitment];
+    }
 
-    /// @notice Read a deposit by ID.
-    function getDeposit(uint256 depositId)
-        external
-        view
-        returns (Deposit memory)
-    {
-        return deposits[depositId];
+    function getDepositStatus(bytes32 noteCommitment) external view returns (DepositStatus) {
+        if (!noteExists[noteCommitment]) revert NoteNotFound(noteCommitment);
+        return deposits[noteCommitment].status;
     }
 }

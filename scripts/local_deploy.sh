@@ -3,11 +3,40 @@ set -euo pipefail
 
 # Deploy Verifier + Bridge on local RPC and persist the bridge address
 # into `tessera-server/.env` for sequencer convenience.
+#
+# If `TESSERA_MONITORED_TOKEN` is not set, deploys local `ToyUSDT` first and
+# uses that address for bridge deployment.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
 pushd "$ROOT_DIR/tessera-solidity" >/dev/null
+
+if [[ -z "${TESSERA_MONITORED_TOKEN:-}" ]]; then
+  echo "TESSERA_MONITORED_TOKEN not set; deploying ToyUSDT..."
+  TOKEN="$(forge create src/pending-deposit/ToyUSDT.sol:ToyUSDT \
+    --rpc-url "$RPC" \
+    --private-key "$OPERATOR_KEY" \
+    --broadcast | sed -n 's/Deployed to: //p' | tail -n1)"
+
+  if [[ -z "${TOKEN:-}" ]]; then
+    echo "forge create failed to return token address, falling back to cast --create..."
+    BYTECODE_TOKEN="$(forge inspect src/pending-deposit/ToyUSDT.sol:ToyUSDT bytecode)"
+    DEPLOY_TOKEN_OUT="$(cast send \
+      --rpc-url "$RPC" \
+      --private-key "$OPERATOR_KEY" \
+      --create "$BYTECODE_TOKEN")"
+    TOKEN="$(echo "$DEPLOY_TOKEN_OUT" | sed -n 's/^contractAddress[[:space:]]*//p' | head -n1)"
+  fi
+
+  if [[ -z "${TOKEN:-}" ]]; then
+    echo "ERROR: could not deploy ToyUSDT." >&2
+    exit 1
+  fi
+
+  export TESSERA_MONITORED_TOKEN="$TOKEN"
+  echo "TESSERA_MONITORED_TOKEN=$TESSERA_MONITORED_TOKEN"
+fi
 
 echo "Deploying Verifier + DepositsRollupBridge..."
 # Capture output so we can parse the deployed bridge address.
@@ -38,7 +67,7 @@ popd >/dev/null
 # Persist bridge address into sequencer .env for convenience.
 ENV_FILE="$ROOT_DIR/tessera-server/.env"
 if [[ -f "$ENV_FILE" ]]; then
-  if rg -q '^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=' "$ENV_FILE"; then
+  if grep -q '^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=' "$ENV_FILE"; then
     sed -i "s/^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=.*/TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$BRIDGE/" "$ENV_FILE"
   else
     echo "TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$BRIDGE" >> "$ENV_FILE"

@@ -1,118 +1,93 @@
 # Local Scripts Guide
 
-This folder contains helper scripts to run the local end-to-end flow with less manual setup.
+These scripts are aligned with the current API-driven consume flow.
+
+Flow:
+1. deposits are recorded on-chain (`recordDeposit(bytes32)` via `depositAndRecord`)
+2. consume requests are pushed to sequencer API (`POST /consume-request`)
+3. sequencer batches and finalizes (`finalizeConsumeBatch`)
 
 ## Scripts
 
 - `local_env.sh`
-  - Loads default local env vars (RPC, keys, trusted source, batch size, genesis root, paths).
-  - Intended to be sourced:
-    - `source scripts/local_env.sh`
+  - Loads local defaults (`RPC`, keys, batch size, artifacts path, sequencer API address).
+  - Defaults sequencer artifacts path to `tessera-server/artifacts/pending-deposit`.
 
 - `local_deploy.sh`
-  - Deploys `Verifier` + `DepositsRollupBridge`.
-  - Parses deployed bridge address from forge output.
+  - Deploys verifier + bridge.
+  - Auto-deploys `ToyUSDT` if `TESSERA_MONITORED_TOKEN` is not pre-set.
   - Writes `TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS` into `tessera-server/.env`.
 
 - `local_run_sequencer.sh`
-  - Starts `tessera-server` sequencer with the loaded env.
-  - Reads bridge address from `BRIDGE` env var, else from `tessera-server/.env`.
+  - Starts sequencer with env expected by `SequencerConfig::from_env()`.
+  - Exposes consume API at `TESSERA_SEQUENCER_API_ADDR` (default `127.0.0.1:8081`).
 
-- `local_seed.sh [total_deposits] [request_count]`
-  - Records deposits (`recordDeposit`) then submits consume requests (`requestConsume`) in random order.
-  - Request targets are selected as a random subset across all newly seeded deposits.
-  - Defaults: `256` deposits, `128` requests.
+- `local_request.sh [start_note] [count] [order] [max_note]`
+  - Pushes consume requests to sequencer API.
 
-- `local_request.sh [start_index] [count] [order]`
-  - Submits consume requests for existing deposits.
-  - `order`: `random` (default), `ordered`, or `random-unconsumed`.
-  - `random-unconsumed` ignores `start_index` and samples `count` random deposits from currently `Available` deposits that are not already `consumeRequested`.
-  - Useful for additional batches after initial seed.
+- `local_status.sh [start_note] [count]`
+  - Prints consumed root + note statuses over a range.
 
-- `local_request_reconsume.sh [count]`
-  - Negative test helper.
-  - Picks random already `Consumed` deposits and simulates `requestConsume` again via `eth_call`.
-  - Expected behavior: all simulations revert (script exits non-zero if any unexpectedly succeeds).
+- `local_request_reconsume.sh [count] [max_note]`
+  - Re-submits consumed notes to API (negative check).
 
-- `local_status.sh [start_index] [count]`
-  - Prints `consumedRoot` and deposit tuples for a range.
-  - Shows summary counts by status (`Available`, `Withdrawn`, `Consumed`).
+## Console-Split E2E (Toy)
 
-- `local_stress_recovery.sh`
-  - Recovery stress scenario:
-    1. start sequencer
-    2. submit partial consume requests (not enough for a full batch)
-    3. stop sequencer
-    4. submit remaining requests while sequencer is down (`random-unconsumed`)
-    5. restart sequencer and verify one full batch finalizes after recovery
+### Console A
 
-## Recommended Run Order
-
-Open terminals as needed.
-
-1. Start anvil:
 ```bash
-anvil
+scripts/local_e2e_toy_a_anvil.sh
 ```
 
-2. Load defaults (repo root):
+### Console B (deployment)
+
 ```bash
-source scripts/local_env.sh
+scripts/local_e2e_toy_b_deploy.sh
 ```
 
-3. Deploy contracts:
+This generates:
+- `scripts/logs/tessera_e2e_latest.env` with `BRIDGE`, `TOKEN`, `TRUSTED_SOURCE`.
+
+### Console C (sequencer)
+
 ```bash
-scripts/local_deploy.sh
+scripts/local_e2e_toy_c_sequencer.sh
 ```
 
-4. Start sequencer:
+Optional:
 ```bash
-scripts/local_run_sequencer.sh
+scripts/local_e2e_toy_c_sequencer.sh scripts/logs/tessera_e2e_latest.env
 ```
 
-5. Seed activity (from another terminal):
+### Console D (traffic + verification)
+
 ```bash
-scripts/local_seed.sh 256 128
+scripts/local_e2e_toy_d_flow.sh 256 128
 ```
 
-6. Check statuses:
+Optional:
 ```bash
-scripts/local_status.sh 0 20
+scripts/local_e2e_toy_d_flow.sh 256 128 scripts/logs/tessera_e2e_latest.env
 ```
 
-7. Negative test: try re-consuming already consumed deposits:
+## One-shot wrapper
+
 ```bash
-scripts/local_request_reconsume.sh 10
+scripts/local_e2e_toy.sh 256 128
 ```
 
-Expected:
-- each request should fail
-- summary should report `unexpected_successes=0`
+This runs console-B deploy, starts console-C sequencer in background, then runs console-D flow.
 
 ## Recovery Test
 
-Before running this test, stop any sequencer you started manually (for example via `scripts/local_run_sequencer.sh`).
-`local_stress_recovery.sh` manages its own sequencer lifecycle and assumes exclusive ownership.
-The script also performs best-effort cleanup of stale local sequencer processes before each start.
-
-Run:
 ```bash
 scripts/local_stress_recovery.sh
 ```
 
-Sequencer log path:
+Log path:
 - `scripts/logs/tessera_sequencer_stress.log`
-
-Expected:
-- script prints progress through phases
-- waits for the phase-3 requests to be fully reflected on-chain before restart
-- if needed, auto-submits top-up requests until the window reaches 128 pending consume requests
-- prints consumed progress for the specific 256-deposit window created by that run
-- eventually prints `Recovery test passed.`
 
 ## Notes
 
-- If `BRIDGE` is empty in a terminal, reload env and/or pull from `.env`:
-  - `source scripts/local_env.sh`
-  - `export BRIDGE=$(sed -n 's/^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=//p' tessera-server/.env | tail -n1)`
-- Ensure used-deposit artifacts exist before deployment/sequencing.
+- `local_e2e_toy_b_deploy.sh` and `local_deploy.sh` include `cast --create` fallback to avoid `forge create` signer-resolution issues.
+- Pending API requests are in-memory; if sequencer is down, requests are not persisted by server state.

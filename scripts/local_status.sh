@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Print per-deposit status and summary for a range.
+# Print per-note status and summary for a note-index range.
 # Args:
-#   $1 start index (default 0)
-#   $2 count       (default 20)
+#   $1 start note index (default 1)
+#   $2 count            (default 20)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
-START_INDEX="${1:-0}"
+START_INDEX="${1:-1}"
 COUNT="${2:-20}"
 
 if [[ -z "${BRIDGE:-}" ]]; then
@@ -23,27 +23,30 @@ if [[ -z "${BRIDGE:-}" ]]; then
   exit 1
 fi
 
-# Snapshot current consumed root and query each deposit in range.
-ROOT=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC")
+ROOT=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
 echo "Bridge: $BRIDGE"
 echo "ConsumedRoot: $ROOT"
 
 available=0
-withdrawn=0
 consumed=0
+missing=0
 
 END_INDEX=$((START_INDEX + COUNT - 1))
 for i in $(seq "$START_INDEX" "$END_INDEX"); do
-  resp=$(cast call "$BRIDGE" "getDeposit(uint256)((bytes32,uint256,address,address,uint8))" "$i" --rpc-url "$RPC")
-  status=$(echo "$resp" | sed -E 's/.*,\s*([0-9]+)\)$/\1/')
+  note=$(printf "0x%064x" "$i")
+  dep=$(cast call "$BRIDGE" "getDeposit(bytes32)((uint256,address,uint8))" "$note" --rpc-url "$RPC" 2>/dev/null || true)
+  if [[ -z "$dep" ]]; then
+    missing=$((missing + 1))
+    echo "note $i ($note) -> <missing>"
+    continue
+  fi
+  status=$(echo "$dep" | sed -E 's/.*,[[:space:]]*([0-9]+)\)$/\1/')
   case "$status" in
     0) available=$((available + 1)) ;;
-    1) withdrawn=$((withdrawn + 1)) ;;
-    2) consumed=$((consumed + 1)) ;;
+    1) consumed=$((consumed + 1)) ;;
   esac
-  echo "deposit $i -> $resp"
+  echo "note $i ($note) -> $dep"
 done
 
-# Aggregate status counts for quick sanity checks.
 echo ""
-echo "Summary ($START_INDEX..$END_INDEX): Available=$available Withdrawn=$withdrawn Consumed=$consumed"
+echo "Summary ($START_INDEX..$END_INDEX): Available=$available Consumed=$consumed Missing=$missing"

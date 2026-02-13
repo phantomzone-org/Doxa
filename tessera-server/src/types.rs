@@ -1,10 +1,10 @@
 use alloy::primitives::U256;
-use tessera_trees::tree::{hasher::Hash, NullifierChainedInsertProof};
+use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof};
 
 /// Sent from Sequencer to Prover via `tokio::mpsc` channel.
 pub struct ProveRequest {
-	/// The used/nullifier chained insertion proof (native witness).
-	pub batch_proof: NullifierChainedInsertProof<Hash>,
+	/// The append-only commitment batch insertion proof (native witness).
+	pub batch_proof: BatchCommitmentProof<Hash>,
 }
 
 /// Sent from Prover back to Sequencer via `tokio::mpsc` channel.

@@ -20,7 +20,7 @@ use tessera_trees::{
 	tree::{
 		hasher::{Hash, Sha256Commitment},
 		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
-		NullifierChainedInsertProof, NullifierInsertProofTargets,
+		NullifierChainedInsertProof,
 	},
 	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };

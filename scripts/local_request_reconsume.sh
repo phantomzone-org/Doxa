@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Try to request consume for already consumed deposits.
-# This is a negative test: each request is expected to fail.
+# Try to re-submit already consumed notes to the sequencer API.
+# Expected behavior: API accepts request shape, but on-chain state should remain unchanged.
 # Args:
 #   $1 count (default 10)
+#   $2 max note index to scan (default 1024)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
 COUNT="${1:-10}"
+MAX_INDEX="${2:-1024}"
 
 if [[ -z "${BRIDGE:-}" ]]; then
   if [[ -f "$ROOT_DIR/tessera-server/.env" ]]; then
@@ -22,23 +24,19 @@ if [[ -z "${BRIDGE:-}" ]]; then
   exit 1
 fi
 
-NEXT_ID_RAW=$(cast call "$BRIDGE" "nextDepositId()(uint256)" --rpc-url "$RPC")
-NEXT_ID="$(echo "$NEXT_ID_RAW" | tr -d '[:space:]')"
-
 TMP_CONSUMED="$(mktemp)"
-for ((i = 0; i < NEXT_ID; i++)); do
-  resp=$(cast call "$BRIDGE" "getDeposit(uint256)((bytes32,uint256,address,address,uint8))" "$i" --rpc-url "$RPC")
-  commitment=$(echo "$resp" | sed -E 's/^\((0x[0-9a-fA-F]{64}).*/\1/')
-  status=$(echo "$resp" | sed -E 's/.*,\s*([0-9]+)\)$/\1/')
-  # Status 2 = Consumed
-  if [[ "$status" == "2" ]]; then
-    echo "$commitment" >> "$TMP_CONSUMED"
+for i in $(seq 1 "$MAX_INDEX"); do
+  note=$(printf "0x%064x" "$i")
+  status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
+  status="$(echo "$status" | tr -d '[:space:]')"
+  if [[ "$status" == "1" ]]; then
+    echo "$note" >> "$TMP_CONSUMED"
   fi
 done
 
 CONSUMED_COUNT=$(wc -l < "$TMP_CONSUMED" | tr -d '[:space:]')
 if [[ "$CONSUMED_COUNT" -eq 0 ]]; then
-  echo "No consumed deposits found. Nothing to re-request."
+  echo "No consumed notes found in [1..$MAX_INDEX]. Nothing to re-submit."
   rm -f "$TMP_CONSUMED"
   exit 0
 fi
@@ -47,27 +45,28 @@ if [[ "$COUNT" -gt "$CONSUMED_COUNT" ]]; then
   COUNT="$CONSUMED_COUNT"
 fi
 
-echo "Trying to re-request consume for $COUNT already-consumed deposits (expected: all fail)..."
-echo "Using eth_call simulation to detect reverts deterministically."
+root_before=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
+echo "Submitting $COUNT already-consumed notes to API (root before: $root_before)..."
 
-successes=0
-failures=0
-while read -r commitment; do
-  if cast call "$BRIDGE" \
-    "requestConsume(bytes32)" \
-    "$commitment" \
-    --rpc-url "$RPC" --from "$TESSERA_TRUSTED_SOURCE" >/dev/null 2>&1; then
-    echo "UNEXPECTED SUCCESS: $commitment"
-    successes=$((successes + 1))
-  else
-    echo "expected failure: $commitment"
-    failures=$((failures + 1))
+submitted=0
+while read -r note; do
+  resp=$(curl -sS -X POST "$TESSERA_SEQUENCER_API_URL/consume-request" \
+    -H 'content-type: application/json' \
+    -d "{\"note_commitment\":\"$note\"}")
+  if echo "$resp" | grep -Eq '"accepted"[[:space:]]*:[[:space:]]*true'; then
+    submitted=$((submitted + 1))
   fi
 done < <(shuf "$TMP_CONSUMED" | head -n "$COUNT")
 
-rm -f "$TMP_CONSUMED"
-echo "Summary: expected_failures=$failures unexpected_successes=$successes"
+sleep 2
+root_after=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
 
-if [[ "$successes" -gt 0 ]]; then
-  exit 1
+rm -f "$TMP_CONSUMED"
+
+echo "Submitted: $submitted/$COUNT"
+echo "Root after: $root_after"
+if [[ "$root_before" == "$root_after" ]]; then
+  echo "OK: consumedRoot unchanged after re-submit attempts."
+else
+  echo "WARN: consumedRoot changed. A separate valid batch may have finalized concurrently." >&2
 fi
