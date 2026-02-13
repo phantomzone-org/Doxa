@@ -17,14 +17,14 @@ cast block-number --rpc-url "$RPC" >/dev/null
 pushd "$ROOT_DIR/tessera-solidity" >/dev/null
 
 echo "Deploying ToyUSDT..."
-TOKEN=$(forge create src/pending-deposit/ToyUSDT.sol:ToyUSDT \
+TOKEN=$(forge create src/ToyUSDT.sol:ToyUSDT \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" \
   --broadcast | sed -n 's/Deployed to: //p' | tail -n1)
 
 if [[ -z "${TOKEN:-}" ]]; then
   echo "forge create failed to return token address, falling back to cast --create..."
-  BYTECODE_TOKEN=$(forge inspect src/pending-deposit/ToyUSDT.sol:ToyUSDT bytecode)
+  BYTECODE_TOKEN=$(forge inspect src/ToyUSDT.sol:ToyUSDT bytecode)
   DEPLOY_TOKEN_OUT=$(cast send \
     --rpc-url "$RPC" \
     --private-key "$OPERATOR_KEY" \
@@ -40,8 +40,11 @@ fi
 echo "TOKEN=$TOKEN"
 
 echo "Deploying Verifier + Bridge..."
-export TESSERA_TRUSTED_SOURCE="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+export TESSERA_TRUSTED_SOURCE="$TESSERA_TRUSTED_SOURCE"
 export TESSERA_MONITORED_TOKEN="$TOKEN"
+export TESSERA_NOTES_NULLIFIER_ROOT="$TESSERA_NOTES_NULLIFIER_ROOT"
+export TESSERA_NOTES_COMMITMENT_ROOT="$TESSERA_NOTES_COMMITMENT_ROOT"
+export TESSERA_BATCH_SIZE="$TESSERA_BATCH_SIZE"
 DEPLOY_OUT=$(forge script script/pending-deposit/Deploy.s.sol \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" \
@@ -57,18 +60,31 @@ fi
 
 echo "BRIDGE=$BRIDGE"
 
-echo "Deploying ToyTrustedSource..."
-BYTECODE_TS=$(forge inspect src/pending-deposit/ToyTrustedSource.sol:ToyTrustedSource bytecode)
-DEPLOY_TS_OUT=$(cast send \
-  --rpc-url "$RPC" \
-  --private-key "$OPERATOR_KEY" \
-  --create "$BYTECODE_TS" \
-  "constructor(address,address)" "$BRIDGE" "$TOKEN")
-TRUSTED_SOURCE=$(echo "$DEPLOY_TS_OUT" | sed -n 's/^contractAddress[[:space:]]*//p' | head -n1)
+echo "Deploying ToyUser (trusted-source adapter)..."
+TRUSTED_SOURCE=$(
+  forge create src/ToyUser.sol:ToyUser \
+    --rpc-url "$RPC" \
+    --private-key "$OPERATOR_KEY" \
+    --broadcast \
+    --constructor-args "$BRIDGE" "$TOKEN" | sed -n 's/Deployed to: //p' | tail -n1
+)
 
 if [[ -z "${TRUSTED_SOURCE:-}" ]]; then
-  echo "ERROR: failed to parse ToyTrustedSource address from cast output." >&2
-  echo "$DEPLOY_TS_OUT"
+  echo "forge create failed to return ToyUser address, falling back to cast --create..."
+  # Note: Foundry project src path is set to src/pending-deposit in foundry.toml,
+  # so `forge inspect src/ToyUser.sol:ToyUser ...` can fail. Inspect by contract name instead.
+  BYTECODE_TS=$(forge inspect ToyUser bytecode)
+  DEPLOY_TS_OUT=$(cast send \
+    --rpc-url "$RPC" \
+    --private-key "$OPERATOR_KEY" \
+    --create "$BYTECODE_TS" \
+    "constructor(address,address)" "$BRIDGE" "$TOKEN")
+  TRUSTED_SOURCE=$(echo "$DEPLOY_TS_OUT" | sed -n 's/^contractAddress[[:space:]]*//p' | head -n1)
+fi
+
+if [[ -z "${TRUSTED_SOURCE:-}" ]]; then
+  echo "ERROR: failed to parse ToyUser address from cast output." >&2
+  echo "${DEPLOY_TS_OUT:-}"
   exit 1
 fi
 

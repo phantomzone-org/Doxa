@@ -5,7 +5,8 @@ use tessera_trees::{tree::hasher::Hash, F};
 sol! {
 	#[sol(rpc)]
 	interface IDepositsRollupBridge {
-		enum DepositStatus { Available, Consumed }
+		// Keep this aligned with `DepositsRollupBridge.DepositStatus` in Solidity.
+		enum DepositStatus { Pending, Validated, Withdrawn }
 
 		struct Proof {
 			uint256[8] proof;
@@ -19,12 +20,13 @@ sol! {
 			DepositStatus status;
 		}
 
-		function consumedRoot() external view returns (bytes32);
-		function consumeBatchSize() external view returns (uint256);
+		function notesNullifierRoot() external view returns (bytes32);
+		function notesCommitmentRoot() external view returns (bytes32);
+		function batchSize() external view returns (uint256);
 		function getDeposit(bytes32 noteCommitment) external view returns (Deposit memory);
 		function getDepositStatus(bytes32 noteCommitment) external view returns (DepositStatus);
-		function finalizeConsumeBatch(
-			bytes32 newConsumedRoot,
+		function validateDepositBatch(
+			bytes32 newNotesCommitmentRoot,
 			bytes32[] calldata noteCommitments,
 			Proof calldata proof
 		) external;
@@ -35,13 +37,13 @@ sol! {
 			address recipient
 		);
 
-		event ConsumeBatchFinalized(
+		event ValidatedBatchFinalized(
 			uint256 batchSize,
 			bytes32 oldRoot,
 			bytes32 newRoot
 		);
 
-		event DepositConsumed(
+		event DepositValidated(
 			bytes32 indexed noteCommitment
 		);
 	}

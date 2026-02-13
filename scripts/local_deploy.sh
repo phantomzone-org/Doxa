@@ -14,14 +14,14 @@ pushd "$ROOT_DIR/tessera-solidity" >/dev/null
 
 if [[ -z "${TESSERA_MONITORED_TOKEN:-}" ]]; then
   echo "TESSERA_MONITORED_TOKEN not set; deploying ToyUSDT..."
-  TOKEN="$(forge create src/pending-deposit/ToyUSDT.sol:ToyUSDT \
+  TOKEN="$(forge create src/ToyUSDT.sol:ToyUSDT \
     --rpc-url "$RPC" \
     --private-key "$OPERATOR_KEY" \
     --broadcast | sed -n 's/Deployed to: //p' | tail -n1)"
 
   if [[ -z "${TOKEN:-}" ]]; then
     echo "forge create failed to return token address, falling back to cast --create..."
-    BYTECODE_TOKEN="$(forge inspect src/pending-deposit/ToyUSDT.sol:ToyUSDT bytecode)"
+    BYTECODE_TOKEN="$(forge inspect src/ToyUSDT.sol:ToyUSDT bytecode)"
     DEPLOY_TOKEN_OUT="$(cast send \
       --rpc-url "$RPC" \
       --private-key "$OPERATOR_KEY" \
@@ -39,6 +39,10 @@ if [[ -z "${TESSERA_MONITORED_TOKEN:-}" ]]; then
 fi
 
 echo "Deploying Verifier + DepositsRollupBridge..."
+export TESSERA_TRUSTED_SOURCE="$TESSERA_TRUSTED_SOURCE"
+export TESSERA_NOTES_NULLIFIER_ROOT="$TESSERA_NOTES_NULLIFIER_ROOT"
+export TESSERA_NOTES_COMMITMENT_ROOT="$TESSERA_NOTES_COMMITMENT_ROOT"
+export TESSERA_BATCH_SIZE="$TESSERA_BATCH_SIZE"
 # Capture output so we can parse the deployed bridge address.
 DEPLOY_OUTPUT="$(
   forge script script/pending-deposit/Deploy.s.sol \

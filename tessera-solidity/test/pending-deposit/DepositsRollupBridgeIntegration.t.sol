@@ -2,9 +2,9 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
-import {DepositsRollupBridge, IGroth16Verifier} from "../../src/pending-deposit/DepositsRollupBridge.sol";
-import {ToyUSDT} from "../../src/pending-deposit/ToyUSDT.sol";
-import {ToyTrustedSource} from "../../src/pending-deposit/ToyTrustedSource.sol";
+import {DepositsRollupBridge, IGroth16Verifier} from "../../src/TesseraRollup.sol";
+import {ToyUSDT} from "../../src/ToyUSDT.sol";
+import {ToyUser} from "../../src/ToyUser.sol";
 
 contract IntegrationMockVerifier is IGroth16Verifier {
     function verifyProof(uint256[8] calldata, uint256[2] calldata, uint256[2] calldata, uint256[8] calldata)
@@ -13,22 +13,9 @@ contract IntegrationMockVerifier is IGroth16Verifier {
 }
 
 contract DepositsRollupBridgeIntegrationTest is Test {
-    function testIntegration_NewFlowPlaceholder() public {
-        IntegrationMockVerifier verifier = new IntegrationMockVerifier();
-        ToyUSDT token = new ToyUSDT();
-        DepositsRollupBridge bridge = new DepositsRollupBridge(
-            address(verifier), address(this), address(0xBEEF), bytes32(uint256(0x1111)), 2, address(token)
-        );
-
-        token.mint(address(bridge), 1e6);
-        vm.prank(address(0xBEEF));
-        bytes32 note = bytes32(uint256(1));
-        bytes32 stored = bridge.recordDeposit(note);
-        assertEq(stored, note);
-    }
-
     function testIntegration_AtomicTransferAndRecord() public {
-        IntegrationMockVerifier verifier = new IntegrationMockVerifier();
+        IntegrationMockVerifier commitmentVerifier = new IntegrationMockVerifier();
+        IntegrationMockVerifier nullifierVerifier = new IntegrationMockVerifier();
         ToyUSDT token = new ToyUSDT();
 
         address user = address(0xCAFE);
@@ -37,22 +24,30 @@ contract DepositsRollupBridgeIntegrationTest is Test {
 
         // Deploy bridge first with placeholder trusted source; update after adapter deployment.
         DepositsRollupBridge bridge = new DepositsRollupBridge(
-            address(verifier), address(this), address(0xBEEF), bytes32(uint256(0x1111)), 2, address(token)
+            address(commitmentVerifier),
+            address(nullifierVerifier),
+            address(this),
+            address(0xBEEF),
+            bytes32(uint256(0x1111)),
+            bytes32(uint256(0x2222)),
+            2,
+            address(token)
         );
 
-        ToyTrustedSource trusted = new ToyTrustedSource(address(bridge), address(token));
-        bridge.setTrustedSource(address(trusted));
+        ToyUser userAdapter = new ToyUser(address(bridge), address(token));
+        bridge.setTrustedSource(address(userAdapter));
 
         token.mint(user, amount);
         vm.prank(user);
-        token.approve(address(trusted), amount);
+        // Allowance must be granted to the bridge, since the bridge executes `transferFrom`.
+        token.approve(address(bridge), amount);
 
         vm.prank(user);
-        bytes32 depositedNote = trusted.depositAndRecord(note, amount);
+        bytes32 depositedNote = userAdapter.depositAndRecord(note, amount);
 
         DepositsRollupBridge.Deposit memory d = bridge.getDeposit(depositedNote);
         assertEq(d.value, amount);
-        assertEq(d.recipient, address(trusted));
+        assertEq(d.recipient, user);
         assertEq(token.balanceOf(address(bridge)), amount);
     }
 }

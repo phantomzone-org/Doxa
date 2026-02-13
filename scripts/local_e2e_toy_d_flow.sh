@@ -54,12 +54,12 @@ USER_KEY="0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
 USER_ADDR=$(cast wallet address --private-key "$USER_KEY")
 echo "USER_ADDR=$USER_ADDR"
 
-echo "Funding user in ToyUSDT + approving trusted source..."
+echo "Funding user in ToyUSDT + approving bridge..."
 cast send "$TOKEN" "mint(address,uint256)" "$USER_ADDR" 1000000000 \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" >/dev/null
 
-cast send "$TOKEN" "approve(address,uint256)" "$TRUSTED_SOURCE" 1000000000 \
+cast send "$TOKEN" "approve(address,uint256)" "$BRIDGE" 1000000000 \
   --rpc-url "$RPC" \
   --private-key "$USER_KEY" >/dev/null
 
@@ -74,8 +74,8 @@ for i in $(seq 1 "$TOTAL_DEPOSITS"); do
   echo "$NOTE" >> "$NOTES_FILE"
 done
 
-ROOT_BEFORE=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
-echo "consumedRoot before requests: $ROOT_BEFORE"
+ROOT_BEFORE=$(cast call "$BRIDGE" "notesCommitmentRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
+echo "notesCommitmentRoot before requests: $ROOT_BEFORE"
 
 echo "Submitting $REQUEST_COUNT random consume requests to sequencer API..."
 shuf "$NOTES_FILE" | head -n "$REQUEST_COUNT" > "$REQ_FILE"
@@ -92,31 +92,33 @@ echo "API accepted: $submitted/$REQUEST_COUNT"
 
 deadline=$((SECONDS + 420))
 while (( SECONDS < deadline )); do
-  consumed=0
+  validated=0
   while read -r NOTE; do
     STATUS=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$NOTE" --rpc-url "$RPC" | tr -d '[:space:]')
+    # 1 == Validated in current bridge.
     if [[ "$STATUS" == "1" ]]; then
-      consumed=$((consumed + 1))
+      validated=$((validated + 1))
     fi
   done < "$REQ_FILE"
 
-  echo "Consumed in requested subset: $consumed/$REQUEST_COUNT"
-  if [[ "$consumed" -eq "$REQUEST_COUNT" ]]; then
+  echo "Validated in requested subset: $validated/$REQUEST_COUNT"
+  if [[ "$validated" -eq "$REQUEST_COUNT" ]]; then
     break
   fi
   sleep 3
 done
 
-if [[ "${consumed:-0}" -ne "$REQUEST_COUNT" ]]; then
-  echo "ERROR: timeout waiting for all requested notes to become Consumed." >&2
+if [[ "${validated:-0}" -ne "$REQUEST_COUNT" ]]; then
+  echo "ERROR: timeout waiting for all requested notes to become Validated." >&2
+  echo "NOTE: This requires the sequencer/server to call validateDepositBatch/recordNotesNullifierTreeUpdate." >&2
   exit 1
 fi
 
-ROOT_AFTER=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
-echo "consumedRoot after requests:  $ROOT_AFTER"
+ROOT_AFTER=$(cast call "$BRIDGE" "notesCommitmentRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
+echo "notesCommitmentRoot after requests:  $ROOT_AFTER"
 
 if [[ "$ROOT_AFTER" == "$ROOT_BEFORE" ]]; then
-  echo "ERROR: consumedRoot did not change after batch finalization." >&2
+  echo "ERROR: notesCommitmentRoot did not change after batch finalization." >&2
   exit 1
 fi
 
@@ -139,8 +141,9 @@ for i in $(seq 1 "$TOTAL_DEPOSITS"); do
   fi
   status=$(echo "$dep" | sed -E 's/.*,[[:space:]]*([0-9]+)\)$/\1/')
   case "$status" in
-    0) status_label="Available" ;;
-    1) status_label="Consumed" ;;
+    0) status_label="Pending" ;;
+    1) status_label="Validated" ;;
+    2) status_label="Withdrawn" ;;
     *) status_label="Unknown($status)" ;;
   esac
   echo "note_index=$i note=$NOTE status=$status_label data=$dep"

@@ -99,25 +99,26 @@ impl Sequencer {
 			&provider,
 		);
 
-		let on_chain_consumed_root = bridge.consumedRoot().call().await?;
-		let consume_batch_size: usize = bridge
-			.consumeBatchSize()
+		let on_chain_commitment_root = bridge.notesCommitmentRoot().call().await?;
+		let batch_size: usize = bridge
+			.batchSize()
 			.call()
 			.await?
 			.try_into()
 			.unwrap_or(0usize);
 		info!(
-			?on_chain_consumed_root,
-			consume_batch_size, "synced on-chain consume state"
+			?on_chain_commitment_root,
+			batch_size,
+			"synced on-chain commitment state"
 		);
 		anyhow::ensure!(
-			consume_batch_size > 0,
-			"on-chain consumeBatchSize must be > 0"
+			batch_size > 0,
+			"on-chain batchSize must be > 0"
 		);
 
-		self.recover_consumed_state(&provider, &on_chain_consumed_root)
+		self.recover_validated_state(&provider, &on_chain_commitment_root)
 			.await?;
-		self.recover_pending_requests(&provider, consume_batch_size)
+		self.recover_pending_requests(&provider, batch_size)
 			.await?;
 		info!(
 			local_root = ?contract::hash_to_bytes32(&self.notes_commitment_state.current_root()),
@@ -133,11 +134,11 @@ impl Sequencer {
 			prover::prover_thread(
 				plonky2_path,
 				groth16_path,
-				consume_batch_size,
-				prove_rx,
-				result_tx,
-			);
-		});
+					batch_size,
+					prove_rx,
+					result_tx,
+				);
+			});
 		self.prove_tx = Some(prove_tx);
 		self.result_rx = Some(result_rx);
 
@@ -176,14 +177,14 @@ impl Sequencer {
 		loop {
 			tokio::select! {
 				_ = interval.tick() => {
-					if in_flight.is_none()
-						&& self.notes_commitment_state.pending_requests.len() >= consume_batch_size
-					{
-						if let Err(e) = self.start_next_batch(&provider, consume_batch_size, &mut in_flight).await {
-							error!("failed to start consume batch: {e}");
-							break;
+						if in_flight.is_none()
+							&& self.notes_commitment_state.pending_requests.len() >= batch_size
+						{
+							if let Err(e) = self.start_next_batch(&provider, batch_size, &mut in_flight).await {
+								error!("failed to start validation batch: {e}");
+								break;
+							}
 						}
-					}
 				}
 
 				Some(note) = async {
@@ -193,24 +194,24 @@ impl Sequencer {
 						None
 					}
 				} => {
-					if !self.is_note_available(&provider, &note).await {
-						warn!(note = ?note, "consume request rejected: note not Available");
-						continue;
-					}
+						if !self.is_note_available(&provider, &note).await {
+							warn!(note = ?note, "consume request rejected: note not Pending");
+							continue;
+						}
 					let order_key = EventOrderKey {
 						block_number: 0,
 						transaction_index: 0,
 						log_index: self.api_order_counter,
-					};
-					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.notes_commitment_state.add_consume_request(order_key, note, consume_batch_size);
+						};
+						self.api_order_counter = self.api_order_counter.saturating_add(1);
+						self.notes_commitment_state.add_consume_request(order_key, note, batch_size);
 
-					if in_flight.is_none() && self.notes_commitment_state.pending_requests.len() >= consume_batch_size {
-						if let Err(e) = self.start_next_batch(&provider, consume_batch_size, &mut in_flight).await {
-							error!("failed to start consume batch: {e}");
-							break;
+						if in_flight.is_none() && self.notes_commitment_state.pending_requests.len() >= batch_size {
+							if let Err(e) = self.start_next_batch(&provider, batch_size, &mut in_flight).await {
+								error!("failed to start validation batch: {e}");
+								break;
+							}
 						}
-					}
 				}
 
 				Some(outcome) = async {
@@ -220,17 +221,17 @@ impl Sequencer {
 						None
 					}
 				} => {
-					if let Err(e) = self.handle_prove_outcome(&provider, outcome, &mut in_flight).await {
-						error!("fatal sequencer error while finalizing consume batch: {e}");
-						break;
-					}
-
-					if in_flight.is_none() && self.notes_commitment_state.pending_requests.len() >= consume_batch_size {
-						if let Err(e) = self.start_next_batch(&provider, consume_batch_size, &mut in_flight).await {
-							error!("failed to start consume batch: {e}");
+						if let Err(e) = self.handle_prove_outcome(&provider, outcome, &mut in_flight).await {
+							error!("fatal sequencer error while finalizing validation batch: {e}");
 							break;
 						}
-					}
+
+						if in_flight.is_none() && self.notes_commitment_state.pending_requests.len() >= batch_size {
+							if let Err(e) = self.start_next_batch(&provider, batch_size, &mut in_flight).await {
+								error!("failed to start validation batch: {e}");
+								break;
+							}
+						}
 				}
 
 				_ = tokio::signal::ctrl_c() => {
@@ -250,7 +251,7 @@ impl Sequencer {
 		);
 		let note = alloy::primitives::FixedBytes::<32>::from(*note);
 		match bridge.getDepositStatus(note).call().await {
-			Ok(status) => matches!(status, IDepositsRollupBridge::DepositStatus::Available),
+			Ok(status) => matches!(status, IDepositsRollupBridge::DepositStatus::Pending),
 			Err(e) => {
 				warn!("failed to fetch note status: {e}");
 				false
@@ -261,7 +262,7 @@ impl Sequencer {
 	async fn start_next_batch<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
-		consume_batch_size: usize,
+		batch_size: usize,
 		in_flight: &mut Option<InFlightBatch>,
 	) -> anyhow::Result<()> {
 		let bridge = IDepositsRollupBridge::IDepositsRollupBridgeInstance::new(
@@ -271,7 +272,7 @@ impl Sequencer {
 
 		let batch = self
 			.notes_commitment_state
-			.pop_next_batch(consume_batch_size)
+			.pop_next_batch(batch_size)
 			.ok_or_else(|| {
 				anyhow::anyhow!("batch requested but pending queue had insufficient size")
 			})?;
@@ -290,7 +291,7 @@ impl Sequencer {
 			.insert_batch(commitments_hash)?;
 		anyhow::ensure!(
 			batch_proof.verify(),
-			"native consume batch proof verification failed"
+			"native validation batch proof verification failed"
 		);
 
 		if let Some(tx) = &self.prove_tx {
@@ -306,8 +307,8 @@ impl Sequencer {
 			requests: batch,
 		});
 		info!(
-			batch_size = consume_batch_size,
-			"consume batch sent to prover"
+			batch_size,
+			"validation batch sent to prover"
 		);
 		Ok(())
 	}
@@ -348,28 +349,28 @@ impl Sequencer {
 					proof: solidity_proof.proof,
 					commitments: solidity_proof.commitments,
 					commitmentPok: solidity_proof.commitment_pok,
-				};
-				let new_root = contract::hash_to_bytes32(&new_root);
-				let pending = bridge
-					.finalizeConsumeBatch(new_root, commitments_vec, sol_proof)
-					.send()
-					.await?;
+					};
+					let new_root = contract::hash_to_bytes32(&new_root);
+					let pending = bridge
+						.validateDepositBatch(new_root, commitments_vec, sol_proof)
+						.send()
+						.await?;
 				let receipt = pending
 					.with_required_confirmations(1)
 					.with_timeout(Some(RECEIPT_TIMEOUT))
 					.get_receipt()
 					.await?;
-				anyhow::ensure!(
-					receipt.status(),
-					"finalizeConsumeBatch reverted on-chain (tx_hash={:?})",
-					receipt.transaction_hash
-				);
-				info!(
-					tx_hash = ?receipt.transaction_hash,
-					consumed = batch.requests.len(),
-					"finalizeConsumeBatch confirmed"
-				);
-			},
+					anyhow::ensure!(
+						receipt.status(),
+						"validateDepositBatch reverted on-chain (tx_hash={:?})",
+						receipt.transaction_hash
+					);
+					info!(
+						tx_hash = ?receipt.transaction_hash,
+						validated = batch.requests.len(),
+						"validateDepositBatch confirmed"
+					);
+				},
 		}
 
 		Ok(())
@@ -380,57 +381,56 @@ impl Sequencer {
 		bridge: IDepositsRollupBridge::IDepositsRollupBridgeInstance<&P>,
 		batch: &[PendingRequest],
 	) -> anyhow::Result<()> {
-		let on_chain_root = bridge.consumedRoot().call().await?;
+		let on_chain_root = bridge.notesCommitmentRoot().call().await?;
 		let local_root = contract::hash_to_bytes32(&self.notes_commitment_state.current_root());
 		anyhow::ensure!(
 			on_chain_root == local_root,
-			"preflight failed: consumedRoot mismatch (on-chain={on_chain_root:?}, local={local_root:?})"
+			"preflight failed: notesCommitmentRoot mismatch (on-chain={on_chain_root:?}, local={local_root:?})"
 		);
 
 		for req in batch {
 			let note = alloy::primitives::FixedBytes::<32>::from(req.commitment);
 			let status = bridge.getDepositStatus(note).call().await?;
 			anyhow::ensure!(
-				matches!(status, IDepositsRollupBridge::DepositStatus::Available),
-				"preflight failed: note not Available"
+				matches!(status, IDepositsRollupBridge::DepositStatus::Pending),
+				"preflight failed: note not Pending"
 			);
 		}
 
 		Ok(())
 	}
 
-	async fn recover_consumed_state<P: Provider + Clone>(
+	async fn recover_validated_state<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
-		on_chain_consumed_root: &alloy::primitives::FixedBytes<32>,
+		on_chain_commitment_root: &alloy::primitives::FixedBytes<32>,
 	) -> anyhow::Result<()> {
-		let consumed_filter = Filter::new()
+		let validated_filter = Filter::new()
 			.address(self.config.bridge_address)
-			.event_signature(IDepositsRollupBridge::DepositConsumed::SIGNATURE_HASH)
+			.event_signature(IDepositsRollupBridge::DepositValidated::SIGNATURE_HASH)
 			.from_block(0);
-		let mut consumed_logs = provider.get_logs(&consumed_filter).await?;
-		consumed_logs.sort_by_key(log_order_key);
+		let mut validated_logs = provider.get_logs(&validated_filter).await?;
+		validated_logs.sort_by_key(log_order_key);
 
-		if consumed_logs.is_empty() {
+		if validated_logs.is_empty() {
 			let local_root = contract::hash_to_bytes32(&CommitmentTreeState::genesis_root());
 			anyhow::ensure!(
-				*on_chain_consumed_root == local_root,
-				"consumed root mismatch at genesis: on-chain={on_chain_consumed_root:?}, local={local_root:?}"
+				*on_chain_commitment_root == local_root,
+				"commitment root mismatch at genesis: on-chain={on_chain_commitment_root:?}, local={local_root:?}"
 			);
 			return Ok(());
 		}
 
-		for log in consumed_logs {
-			let decoded = log.log_decode::<IDepositsRollupBridge::DepositConsumed>()?;
+		for log in validated_logs {
+			let decoded = log.log_decode::<IDepositsRollupBridge::DepositValidated>()?;
 			let note = contract::bytes32_to_hash(&decoded.inner.noteCommitment);
-			self.notes_commitment_state
-				.replay_consumed_commitment(note)?;
+			self.notes_commitment_state.replay_consumed_commitment(note)?;
 		}
 
 		let local_root = contract::hash_to_bytes32(&self.notes_commitment_state.current_root());
 		anyhow::ensure!(
-			*on_chain_consumed_root == local_root,
-			"consumed root mismatch after replay: on-chain={on_chain_consumed_root:?}, local={local_root:?}"
+			*on_chain_commitment_root == local_root,
+			"commitment root mismatch after replay: on-chain={on_chain_commitment_root:?}, local={local_root:?}"
 		);
 		Ok(())
 	}

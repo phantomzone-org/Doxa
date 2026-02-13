@@ -2,8 +2,9 @@
 pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
-import {DepositsRollupBridge} from "../../src/pending-deposit/DepositsRollupBridge.sol";
-import {Verifier} from "../../src/pending-deposit/Verifier.sol";
+import {DepositsRollupBridge} from "../../src/TesseraRollup.sol";
+import {Verifier as CommitmentVerifier} from "../../src/VerifierCommitment.sol";
+import {Verifier as NullifierVerifier} from "../../src/VerifierNullifier.sol";
 
 /// @title  Deploy Verifier + DepositsRollupBridge
 /// @notice Deploys both contracts to the target chain. The deployer
@@ -11,18 +12,20 @@ import {Verifier} from "../../src/pending-deposit/Verifier.sol";
 ///
 /// Required environment variables:
 ///   TESSERA_TRUSTED_SOURCE -- address allowed to record deposits
-///   TESSERA_CONSUMED_GENERIS_ROOT  -- bytes32 consumed/nullifier tree genesis root
-///   TESSERA_CONSUME_BATCH_SIZE -- number of consume requests per batch
-///   TESSERA_MONITORED_TOKEN -- ERC20 address monitored for balance-delta deposits
+///   TESSERA_NOTES_NULLIFIER_ROOT  -- bytes32 nullifier tree genesis root
+///   TESSERA_NOTES_COMMITMENT_ROOT -- bytes32 commitment tree genesis root
+///   TESSERA_BATCH_SIZE -- number of notes per batch
+///   TESSERA_MONITORED_TOKEN -- ERC20 address escrowed by the bridge
 ///
 /// Usage (local anvil):
 ///   # Terminal 1: start anvil
 ///   anvil
 ///
-///   # Terminal 2: set consume tree genesis root + trusted source
-///   export TESSERA_CONSUMED_GENERIS_ROOT=0x5d85139746d173c92bf3543b4c6ce3daf11bdff30e5b44879d216bc5f06256b6
+///   # Terminal 2: set roots + trusted source
+///   export TESSERA_NOTES_NULLIFIER_ROOT=0x5d85139746d173c92bf3543b4c6ce3daf11bdff30e5b44879d216bc5f06256b6
+///   export TESSERA_NOTES_COMMITMENT_ROOT=0x5d85139746d173c92bf3543b4c6ce3daf11bdff30e5b44879d216bc5f06256b6
 ///   export TESSERA_TRUSTED_SOURCE=0xYourTrustedSource
-///   export TESSERA_CONSUME_BATCH_SIZE=128
+///   export TESSERA_BATCH_SIZE=128
 ///   export TESSERA_MONITORED_TOKEN=0xYourToken
 ///
 ///   # Terminal 3: deploy
@@ -32,38 +35,37 @@ import {Verifier} from "../../src/pending-deposit/Verifier.sol";
 ///     --broadcast
 contract DeployScript is Script {
     function run() public {
-        // Sanity check: ensure the deployed verifier matches the Groth16 artifacts.
-        // This prevents on-chain verification failures due to mismatched verifier code.
-        string memory artifactsPath = "../tessera-server/artifacts/commitment-tree/groth-artifacts/Verifier.sol";
-        string memory localPath = "src/pending-deposit/Verifier.sol";
-        bytes memory artifactsSrc = bytes(vm.readFile(artifactsPath));
-        bytes memory localSrc = bytes(vm.readFile(localPath));
-        if (keccak256(artifactsSrc) != keccak256(localSrc)) {
-            revert(
-                "Verifier mismatch: update src/commitment-tree/Verifier.sol from artifacts/commitment-tree/groth-artifacts/Verifier.sol"
-            );
-        }
-
         address trustedSource = vm.envAddress("TESSERA_TRUSTED_SOURCE");
-        bytes32 consumedRoot = vm.envBytes32("TESSERA_CONSUMED_GENERIS_ROOT");
-        uint256 consumeBatchSize = vm.envUint("TESSERA_CONSUME_BATCH_SIZE");
+        bytes32 notesNullifierRoot = vm.envBytes32("TESSERA_NOTES_NULLIFIER_ROOT");
+        bytes32 notesCommitmentRoot = vm.envBytes32("TESSERA_NOTES_COMMITMENT_ROOT");
+        uint256 batchSize = vm.envUint("TESSERA_BATCH_SIZE");
         address monitoredToken = vm.envAddress("TESSERA_MONITORED_TOKEN");
 
         vm.startBroadcast();
 
-        Verifier verifier = new Verifier();
+        CommitmentVerifier commitmentVerifier = new CommitmentVerifier();
+        NullifierVerifier nullifierVerifier = new NullifierVerifier();
         DepositsRollupBridge bridge = new DepositsRollupBridge(
-            address(verifier), msg.sender, trustedSource, consumedRoot, consumeBatchSize, monitoredToken
+            address(commitmentVerifier),
+            address(nullifierVerifier),
+            msg.sender,
+            trustedSource,
+            notesNullifierRoot,
+            notesCommitmentRoot,
+            batchSize,
+            monitoredToken
         );
 
         vm.stopBroadcast();
 
-        console.log("Verifier deployed at:", address(verifier));
+        console.log("Commitment verifier: ", address(commitmentVerifier));
+        console.log("Nullifier verifier:  ", address(nullifierVerifier));
         console.log("Bridge deployed at:  ", address(bridge));
         console.log("Operator:            ", msg.sender);
         console.log("Trusted source:      ", trustedSource);
-        console.log("Consume batch size:  ", consumeBatchSize);
+        console.log("Batch size:          ", batchSize);
         console.log("Monitored token:     ", monitoredToken);
-        console.logBytes32(consumedRoot);
+        console.logBytes32(notesNullifierRoot);
+        console.logBytes32(notesCommitmentRoot);
     }
 }
