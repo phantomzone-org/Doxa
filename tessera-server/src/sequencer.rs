@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use alloy::{
-	primitives::B256,
 	network::EthereumWallet,
+	primitives::B256,
 	providers::{Provider, ProviderBuilder},
 	rpc::types::{Filter, Log},
 	signers::{local::PrivateKeySigner, Signer},
@@ -17,7 +17,7 @@ use crate::{
 	config::SequencerConfig,
 	contract::{self, IDepositsRollupBridge},
 	prover,
-	state::{EventOrderKey, PendingConsumeRequest, SequencerState},
+	states::{CommitmentTreeState, EventOrderKey, PendingRequest},
 	types::{ProveOutcome, ProveRequest},
 };
 
@@ -25,7 +25,7 @@ use crate::{
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct InFlightBatch {
-	requests: Vec<PendingConsumeRequest>,
+	requests: Vec<PendingRequest>,
 }
 
 #[derive(Clone)]
@@ -47,8 +47,8 @@ async fn consume_request_handler(
 	State(state): State<ApiState>,
 	Json(body): Json<ConsumeRequestBody>,
 ) -> Result<Json<ConsumeRequestResponse>, axum::http::StatusCode> {
-	let note = parse_note_hex(&body.note_commitment)
-		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+	let note =
+		parse_note_hex(&body.note_commitment).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 	state
 		.tx
 		.send(note)
@@ -67,7 +67,7 @@ fn parse_note_hex(s: &str) -> anyhow::Result<[u8; 32]> {
 /// The main sequencer: watches note availability, batches by chain order, proves and finalizes.
 pub struct Sequencer {
 	config: SequencerConfig,
-	pub state: SequencerState,
+	pub notes_commitment_state: CommitmentTreeState,
 	prove_tx: Option<mpsc::Sender<ProveRequest>>,
 	result_rx: Option<mpsc::Receiver<ProveOutcome>>,
 	consume_rx: Option<mpsc::Receiver<[u8; 32]>>,
@@ -78,7 +78,7 @@ impl Sequencer {
 	pub fn new(config: SequencerConfig) -> Self {
 		Self {
 			config,
-			state: SequencerState::new(),
+			notes_commitment_state: CommitmentTreeState::new(),
 			prove_tx: None,
 			result_rx: None,
 			consume_rx: None,
@@ -120,8 +120,8 @@ impl Sequencer {
 		self.recover_pending_requests(&provider, consume_batch_size)
 			.await?;
 		info!(
-			local_root = ?contract::hash_to_bytes32(&self.state.current_consumed_root()),
-			pending_requests = self.state.pending_requests.len(),
+			local_root = ?contract::hash_to_bytes32(&self.notes_commitment_state.current_root()),
+			pending_requests = self.notes_commitment_state.pending_requests.len(),
 			"state recovery complete"
 		);
 
@@ -177,7 +177,7 @@ impl Sequencer {
 			tokio::select! {
 				_ = interval.tick() => {
 					if in_flight.is_none()
-						&& self.state.pending_requests.len() >= consume_batch_size
+						&& self.notes_commitment_state.pending_requests.len() >= consume_batch_size
 					{
 						if let Err(e) = self.start_next_batch(&provider, consume_batch_size, &mut in_flight).await {
 							error!("failed to start consume batch: {e}");
@@ -203,9 +203,9 @@ impl Sequencer {
 						log_index: self.api_order_counter,
 					};
 					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.state.add_consume_request(order_key, note, consume_batch_size);
+					self.notes_commitment_state.add_consume_request(order_key, note, consume_batch_size);
 
-					if in_flight.is_none() && self.state.pending_requests.len() >= consume_batch_size {
+					if in_flight.is_none() && self.notes_commitment_state.pending_requests.len() >= consume_batch_size {
 						if let Err(e) = self.start_next_batch(&provider, consume_batch_size, &mut in_flight).await {
 							error!("failed to start consume batch: {e}");
 							break;
@@ -225,7 +225,7 @@ impl Sequencer {
 						break;
 					}
 
-					if in_flight.is_none() && self.state.pending_requests.len() >= consume_batch_size {
+					if in_flight.is_none() && self.notes_commitment_state.pending_requests.len() >= consume_batch_size {
 						if let Err(e) = self.start_next_batch(&provider, consume_batch_size, &mut in_flight).await {
 							error!("failed to start consume batch: {e}");
 							break;
@@ -270,7 +270,7 @@ impl Sequencer {
 		);
 
 		let batch = self
-			.state
+			.notes_commitment_state
 			.pop_next_batch(consume_batch_size)
 			.ok_or_else(|| {
 				anyhow::anyhow!("batch requested but pending queue had insufficient size")
@@ -284,7 +284,10 @@ impl Sequencer {
 			.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(*b)))
 			.collect();
 
-		let batch_proof = self.state.consumed_tree.insert_commitments(commitments_hash)?;
+		let batch_proof = self
+			.notes_commitment_state
+			.tree
+			.insert_batch(commitments_hash)?;
 		anyhow::ensure!(
 			batch_proof.verify(),
 			"native consume batch proof verification failed"
@@ -329,7 +332,7 @@ impl Sequencer {
 			ProveOutcome::Failure {
 				error,
 			} => {
-				self.state.reinsert_batch(batch.requests);
+				self.notes_commitment_state.reinsert_batch(batch.requests);
 				return Err(anyhow::anyhow!("proof generation failed: {error}"));
 			},
 			ProveOutcome::Success {
@@ -375,10 +378,10 @@ impl Sequencer {
 	async fn preflight_batch<P: Provider + Clone>(
 		&self,
 		bridge: IDepositsRollupBridge::IDepositsRollupBridgeInstance<&P>,
-		batch: &[PendingConsumeRequest],
+		batch: &[PendingRequest],
 	) -> anyhow::Result<()> {
 		let on_chain_root = bridge.consumedRoot().call().await?;
-		let local_root = contract::hash_to_bytes32(&self.state.current_consumed_root());
+		let local_root = contract::hash_to_bytes32(&self.notes_commitment_state.current_root());
 		anyhow::ensure!(
 			on_chain_root == local_root,
 			"preflight failed: consumedRoot mismatch (on-chain={on_chain_root:?}, local={local_root:?})"
@@ -409,7 +412,7 @@ impl Sequencer {
 		consumed_logs.sort_by_key(log_order_key);
 
 		if consumed_logs.is_empty() {
-			let local_root = contract::hash_to_bytes32(&SequencerState::genesis_consumed_root());
+			let local_root = contract::hash_to_bytes32(&CommitmentTreeState::genesis_root());
 			anyhow::ensure!(
 				*on_chain_consumed_root == local_root,
 				"consumed root mismatch at genesis: on-chain={on_chain_consumed_root:?}, local={local_root:?}"
@@ -420,10 +423,11 @@ impl Sequencer {
 		for log in consumed_logs {
 			let decoded = log.log_decode::<IDepositsRollupBridge::DepositConsumed>()?;
 			let note = contract::bytes32_to_hash(&decoded.inner.noteCommitment);
-			self.state.replay_consumed_commitment(note)?;
+			self.notes_commitment_state
+				.replay_consumed_commitment(note)?;
 		}
 
-		let local_root = contract::hash_to_bytes32(&self.state.current_consumed_root());
+		let local_root = contract::hash_to_bytes32(&self.notes_commitment_state.current_root());
 		anyhow::ensure!(
 			*on_chain_consumed_root == local_root,
 			"consumed root mismatch after replay: on-chain={on_chain_consumed_root:?}, local={local_root:?}"

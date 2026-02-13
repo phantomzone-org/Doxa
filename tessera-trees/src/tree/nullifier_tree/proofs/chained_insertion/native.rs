@@ -28,15 +28,37 @@
 //! | Parallelization       | Sequential dependency  | More parallelizable    |
 //! | Predecessor handling  | Simple (tree only)     | Complex (pending)      |
 
+use anyhow::{Result, ensure};
 use plonky2::{
 	field::{extension::Extendable, types::Field},
 	hash::hash_types::RichField,
 };
 
 use crate::tree::{
-	NullifierInsertProof,
+	NullifierInsertProof, NullifierTree,
 	hasher::{CommitmentPreimage, DataCommitment, MerkleHash, ToHashOut},
 };
+
+impl<H: MerkleHash> NullifierTree<H> {
+	pub fn insert_chained(
+		&mut self,
+		values: Vec<H::Digest>,
+	) -> Result<NullifierChainedInsertProof<H>> {
+		ensure!(
+			!values.is_empty(),
+			"Chained insertion requires at least one value"
+		);
+
+		let mut proofs = Vec::with_capacity(values.len());
+
+		for value in values {
+			let proof = self.insert(value)?;
+			proofs.push(proof);
+		}
+
+		Ok(NullifierChainedInsertProof::new(proofs))
+	}
+}
 
 /// A chained insertion proof that proves multiple sequential insertions.
 ///

@@ -1,56 +1,46 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use tessera_trees::tree::hasher::Hash;
+use tessera_trees::tree::{hasher::Hash, CommitmentTree};
 
-use crate::deposits::PendingDepositTree;
+use crate::{
+	states::{EventOrderKey, PendingRequest},
+	TREE_DEPTH,
+};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EventOrderKey {
-	pub block_number: u64,
-	pub transaction_index: u64,
-	pub log_index: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingConsumeRequest {
-	pub order_key: EventOrderKey,
-	pub commitment: [u8; 32],
-}
-
-/// Sequencer in-memory state for consume-request processing.
-pub struct SequencerState {
+/// Sequencer in-memory state for commitment-request processing.
+pub struct CommitmentTreeState {
 	/// Local consumed-note append-only tree mirror.
-	pub consumed_tree: PendingDepositTree<sha2::Sha256>,
+	pub tree: CommitmentTree<Hash>,
 	/// Pending consume requests keyed by canonical chain order.
-	pub pending_requests: BTreeMap<EventOrderKey, PendingConsumeRequest>,
+	pub pending_requests: BTreeMap<EventOrderKey, PendingRequest>,
 	/// Fast duplicate guard for pending requests.
 	pub pending_commitments: HashSet<[u8; 32]>,
 }
 
-impl SequencerState {
+impl CommitmentTreeState {
 	pub fn new() -> Self {
 		Self {
-			consumed_tree: PendingDepositTree::<sha2::Sha256>::new(),
+			tree: CommitmentTree::new(TREE_DEPTH),
 			pending_requests: BTreeMap::new(),
 			pending_commitments: HashSet::new(),
 		}
 	}
 
 	/// Return the consumed-tree genesis root (empty append tree root).
-	pub fn genesis_consumed_root() -> Hash {
-		let tree = PendingDepositTree::<sha2::Sha256>::new();
-		tree.tree.get_root()
+	pub fn genesis_root() -> Hash {
+		let tree: CommitmentTree<Hash> = CommitmentTree::new(TREE_DEPTH);
+		tree.get_root()
 	}
 
 	/// Return current local consumed root.
-	pub fn current_consumed_root(&self) -> Hash {
-		self.consumed_tree.tree.get_root()
+	pub fn current_root(&self) -> Hash {
+		self.tree.get_root()
 	}
 
 	/// Replay one consumed commitment into the local consumed append tree.
 	pub fn replay_consumed_commitment(&mut self, commitment: Hash) -> Result<()> {
-		let proof = self.consumed_tree.insert_commitments(vec![commitment])?;
+		let proof = self.tree.insert_batch(vec![commitment])?;
 		anyhow::ensure!(
 			proof.verify(),
 			"consumed-tree proof verification failed during replay"
@@ -74,7 +64,7 @@ impl SequencerState {
 		self.pending_commitments.insert(commitment);
 		self.pending_requests.insert(
 			order_key,
-			PendingConsumeRequest {
+			PendingRequest {
 				order_key,
 				commitment,
 			},
@@ -95,7 +85,7 @@ impl SequencerState {
 		}
 	}
 
-	pub fn pop_next_batch(&mut self, batch_size: usize) -> Option<Vec<PendingConsumeRequest>> {
+	pub fn pop_next_batch(&mut self, batch_size: usize) -> Option<Vec<PendingRequest>> {
 		if self.pending_requests.len() < batch_size {
 			return None;
 		}
@@ -116,7 +106,7 @@ impl SequencerState {
 		Some(out)
 	}
 
-	pub fn reinsert_batch(&mut self, batch: Vec<PendingConsumeRequest>) {
+	pub fn reinsert_batch(&mut self, batch: Vec<PendingRequest>) {
 		for req in batch {
 			self.pending_commitments.insert(req.commitment);
 			self.pending_requests.insert(req.order_key, req);

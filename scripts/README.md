@@ -11,7 +11,7 @@ Flow:
 
 - `local_env.sh`
   - Loads local defaults (`RPC`, keys, batch size, artifacts path, sequencer API address).
-  - Defaults sequencer artifacts path to `tessera-server/artifacts/pending-deposit`.
+  - Defaults sequencer artifacts path to `tessera-server/artifacts/commitment-tree`.
 
 - `local_deploy.sh`
   - Deploys verifier + bridge.

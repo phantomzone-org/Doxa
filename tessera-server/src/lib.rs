@@ -1,29 +1,31 @@
-mod deposits;
+mod data_types;
 
 pub mod config;
 pub mod contract;
 pub mod prover;
 pub mod sequencer;
-pub mod state;
+pub mod states;
 pub mod types;
 
 use std::time::Instant;
 
 use anyhow::Result;
-pub use deposits::*;
+pub use data_types::*;
 use plonky2::{
 	iop::witness::PartialWitness,
 	plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use tessera_trees::{
 	tree::{
-		hasher::{Hash, Sha256Commitment},
+		hasher::{Hash, NewRandom, Sha256Commitment},
 		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
-		NullifierChainedInsertProof,
+		CommitmentTree, NullifierChainedInsertProof, NullifierTree,
 	},
 	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
+
+pub const TREE_DEPTH: usize = 32;
 
 /// Generate a sample batch commitment insertion proof for testing.
 ///
@@ -41,30 +43,25 @@ pub fn sample_batch_commitment_tree_proof(
 	CircuitDataNative,
 	ProofNative,
 	BatchCommitmentProof<Hash>,
-	Vec<Deposit>,
+	Vec<Hash>,
 )> {
 	const DEPTH: usize = 32;
 	const BATCH_SIZE: usize = 128;
 
 	print!("Alloc tree 2^{DEPTH}: ");
 	let now = Instant::now();
-	let mut tree = PendingDepositTree::<sha2::Sha256>::new();
+	let mut tree: CommitmentTree<Hash> = CommitmentTree::new(TREE_DEPTH);
 	println!("{:?}", now.elapsed());
 
 	let mut rng: StdRng = StdRng::from_seed(seed);
 
 	print!("Insert batch: ");
-	let now = Instant::now();
-	let mut batch = DepositsBatch::new(BATCH_SIZE);
+	let now: Instant = Instant::now();
+	let mut batch: Vec<Hash> = Vec::with_capacity(BATCH_SIZE);
 	for _ in 0..BATCH_SIZE {
-		let mut note_commitment = [0u8; 32];
-		let mut address = [0u8; 20];
-		rng.fill_bytes(&mut note_commitment);
-		rng.fill_bytes(&mut address);
-		let deposit = Deposit::new(note_commitment, address, rng.next_u64());
-		batch.add_deposit(deposit)?;
+		batch.push(Hash::new_random(&mut rng));
 	}
-	let batch_proof = tree.insert_batch(&batch)?;
+	let batch_proof = tree.insert_batch(batch.clone())?;
 	assert!(batch_proof.verify());
 	println!("{:?}", now.elapsed());
 
@@ -119,7 +116,7 @@ pub fn sample_batch_commitment_tree_proof(
 	circuit_data.verify(proof.clone())?;
 	println!("{:?}", now.elapsed());
 
-	Ok((circuit_data, proof, batch_proof, batch.deposits))
+	Ok((circuit_data, proof, batch_proof, batch))
 }
 
 /// Generate a sample batch nullifier insertion proof for testing.
@@ -138,30 +135,25 @@ pub fn sample_batch_nullifier_tree_proof(
 	CircuitDataNative,
 	ProofNative,
 	NullifierChainedInsertProof<Hash>,
-	Vec<Deposit>,
+	Vec<Hash>,
 )> {
 	const DEPTH: usize = 32;
 	const BATCH_SIZE: usize = 128;
 
 	print!("Alloc tree 2^{DEPTH}: ");
 	let now = Instant::now();
-	let mut tree = UsedDepositTree::<sha2::Sha256>::new();
+	let mut tree = NullifierTree::new(TREE_DEPTH);
 	println!("{:?}", now.elapsed());
 
 	let mut rng: StdRng = StdRng::from_seed(seed);
 
 	print!("Insert batch: ");
 	let now = Instant::now();
-	let mut batch = DepositsBatch::new(BATCH_SIZE);
+	let mut batch: Vec<Hash> = Vec::with_capacity(BATCH_SIZE);
 	for _ in 0..BATCH_SIZE {
-		let mut note_commitment = [0u8; 32];
-		let mut address = [0u8; 20];
-		rng.fill_bytes(&mut note_commitment);
-		rng.fill_bytes(&mut address);
-		let deposit = Deposit::new(note_commitment, address, rng.next_u64());
-		batch.add_deposit(deposit)?;
+		batch.push(Hash::new_random(&mut rng));
 	}
-	let batch_proof = tree.insert_batch(&batch)?;
+	let batch_proof = tree.insert_chained(batch.clone())?;
 	assert!(batch_proof.verify());
 	println!("{:?}", now.elapsed());
 
@@ -212,5 +204,5 @@ pub fn sample_batch_nullifier_tree_proof(
 	circuit_data.verify(proof.clone())?;
 	println!("{:?}", now.elapsed());
 
-	Ok((circuit_data, proof, batch_proof, batch.deposits))
+	Ok((circuit_data, proof, batch_proof, batch))
 }

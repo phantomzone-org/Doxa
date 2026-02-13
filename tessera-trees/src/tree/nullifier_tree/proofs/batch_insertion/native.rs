@@ -48,7 +48,7 @@ pub struct BatchInsertProof<H: MerkleHash> {
 }
 
 impl<H: MerkleHash> NullifierTree<H> {
-	pub fn insert_leaves(
+	pub fn insert_batch(
 		&mut self,
 		mut leaves: Vec<H::Digest>,
 	) -> MerkleTreeResult<BatchInsertProof<H>> {
@@ -492,7 +492,7 @@ pub mod test {
 			leaves.push(leaf);
 		}
 
-		let batch_proof = tree.insert_leaves(leaves)?;
+		let batch_proof = tree.insert_batch(leaves)?;
 
 		// for i in 0..tree.nodes.len() {
 		//  print!("node[{i}]:\n {}\n", tree.nodes[i]);

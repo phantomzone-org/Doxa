@@ -3,15 +3,17 @@ use digest::{Digest, Output};
 use serde::{Deserialize, Serialize};
 use tessera_trees::tree::hasher::Hash;
 
+use crate::NoteCommitment;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Deposit {
-	note_commitment: [u8; 32],
+	note_commitment: NoteCommitment,
 	address: [u8; 20],
 	amount: u64,
 }
 
 impl Deposit {
-	pub fn new(note_commitment: [u8; 32], address: [u8; 20], amount: u64) -> Self {
+	pub fn new(note_commitment: NoteCommitment, address: [u8; 20], amount: u64) -> Self {
 		Self {
 			note_commitment,
 			address,
@@ -19,7 +21,7 @@ impl Deposit {
 		}
 	}
 
-	pub fn note_commitment(&self) -> [u8; 32] {
+	pub fn note_commitment(&self) -> NoteCommitment {
 		self.note_commitment
 	}
 
@@ -46,7 +48,7 @@ impl Deposit {
 	pub fn hash_inplace<H: Digest>(&self, out: &mut Output<H>) {
 		let mut hasher = H::new();
 		hasher.update(domain_sep::<H>());
-		hasher.update(&self.note_commitment);
+		hasher.update(&self.note_commitment.note_commitment());
 		// value as big-endian uint256: left-pad u64 with 24 zero bytes
 		let mut value_padded = [0u8; 32];
 		value_padded[24..].copy_from_slice(&self.amount.to_be_bytes());
@@ -70,7 +72,7 @@ impl Deposit {
 ///
 /// This matches the Solidity constant `DOMAIN_SEP = sha256("tessera.pending-deposit.v1")`.
 fn domain_sep<H: Digest>() -> Output<H> {
-	H::digest(b"tessera.pending-deposit.v1")
+	H::digest(b"tessera.deposit.v1")
 }
 
 #[cfg(test)]
@@ -91,8 +93,8 @@ mod tests {
 	#[test]
 	fn test_hash_sha256_known_vector() {
 		let deposit: Deposit = Deposit::new(
-			[1u8; 32], // 32 bytes of 1
-			[1u8; 20], // 20 bytes of 1
+			NoteCommitment::new([1u8; 32]), // 32 bytes of 1
+			[1u8; 20],                      // 20 bytes of 1
 			1,
 		);
 

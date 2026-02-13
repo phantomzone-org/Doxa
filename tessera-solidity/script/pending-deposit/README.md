@@ -22,8 +22,8 @@ cd tessera-server
 cargo run --bin pending_deposit_artifacts --release
 ```
 - generated pending-deposit artifacts under:
-  - `tessera-server/artifacts/pending-deposit/plonky2-proof`
-  - `tessera-server/artifacts/pending-deposit/groth-artifacts`
+  - `tessera-server/artifacts/commitment-tree/plonky2-proof`
+  - `tessera-server/artifacts/commitment-tree/groth-artifacts`
 
 Use 4 terminals.
 
@@ -113,7 +113,7 @@ export TESSERA_RPC_URL=http://localhost:8545
 export TESSERA_OPERATOR_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 export TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=<PASTE_BRIDGE_FROM_TERMINAL_B>
 export TESSERA_CHAIN_ID=31337
-export TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH=./artifacts/pending-deposit
+export TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH=./artifacts/commitment-tree
 export TESSERA_SEQUENCER_API_ADDR=127.0.0.1:8081
 
 cargo run --bin sequencer --release

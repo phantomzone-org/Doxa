@@ -1,18 +1,16 @@
-//! Generate Groth16 artifacts for the PendingDeposit tree.
+//! Generate Groth16 artifacts for the CommitmentTree.
 //!
-//! Outputs (in artifacts/pending-deposit/):
+//! Outputs (in artifacts/commitment-tree/):
 //!   - plonky2-proof/    (plonky2 circuit data for R1CS)
 //!   - groth-artifacts/  (Groth16 proving/verifying keys)
-//!   - proof_solidity.json
-//!   - bridge_calldata.json
 //!
 //! Usage:
-//!   cargo run --bin pending_deposit_artifacts --release
+//!   cargo run --bin commitment_tree_artifacts --release
 
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::Result;
-use tessera_server::{sample_batch_commitment_tree_proof, Deposit};
+use tessera_server::{sample_batch_commitment_tree_proof};
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	tree::{hasher::Hash, BatchCommitmentProof},
@@ -34,14 +32,14 @@ fn debug_log(msg: &str) {
 fn main() -> Result<()> {
 	let tmp_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 		.join("artifacts")
-		.join("pending-deposit");
+		.join("commitment-tree");
 
 	fs::create_dir_all(&tmp_dir)?;
 
 	let input_path: PathBuf = tmp_dir.join("plonky2-proof");
 	let output_path: PathBuf = tmp_dir.join("groth-artifacts");
 
-	println!("pending-deposit artifacts: {}", tmp_dir.display());
+	println!("commitment-tree artifacts: {}", tmp_dir.display());
 	println!("plonky2 data: {}", input_path.display());
 	println!("groth16 artifacts: {}", output_path.display());
 
@@ -50,7 +48,7 @@ fn main() -> Result<()> {
 		CircuitDataNative,
 		ProofNative,
 		BatchCommitmentProof<Hash>,
-		Vec<Deposit>,
+		Vec<Hash>,
 	) = sample_batch_commitment_tree_proof([0u8; 32])?;
 	let bn128_wrapper: BN128Wrapper = BN128Wrapper::new(circuit_data, proof_with_pis)?;
 
@@ -72,11 +70,11 @@ fn main() -> Result<()> {
 	let result: String = Groth16Wrapper::check_init();
 	debug_log(&format!("check_init result: {result}"));
 
-	let (_, proof_with_pis, batch_proof, deposits): (
+	let (_, proof_with_pis, _, _): (
 		CircuitDataNative,
 		ProofNative,
 		BatchCommitmentProof<Hash>,
-		Vec<Deposit>,
+		Vec<Hash>,
 	) = sample_batch_commitment_tree_proof([1u8; 32])?;
 
 	println!("wrapping proof to bn128");
@@ -100,50 +98,6 @@ fn main() -> Result<()> {
 	debug_log(&format!(
 		"\n(rust) Solidity proof JSON written to {:?}\n{}",
 		json_path, solidity_json
-	));
-
-	let hash_to_hex = |h: &Hash| -> String {
-		let mut bytes = [0u8; 32];
-		for i in 0..4 {
-			bytes[i * 8..(i + 1) * 8].copy_from_slice(&h.0[i].0.to_be_bytes());
-		}
-		format!("0x{}", hex::encode(bytes))
-	};
-
-	let old_root_hex = hash_to_hex(&batch_proof.root_old);
-	let new_root_hex = hash_to_hex(&batch_proof.root_new);
-
-	let mut leaves_bytes: Vec<u8> = Vec::with_capacity(batch_proof.leaves.len() * 32);
-	for leaf in &batch_proof.leaves {
-		for i in 0..4 {
-			leaves_bytes.extend_from_slice(&leaf.0[i].0.to_be_bytes());
-		}
-	}
-	let leaves_hex = format!("0x{}", hex::encode(&leaves_bytes));
-
-	let mut deposits_json_entries: Vec<String> = Vec::with_capacity(deposits.len());
-	for d in &deposits {
-		let nc_hex = format!("0x{}", hex::encode(d.note_commitment()));
-		let addr_hex = format!("0x{}", hex::encode(d.address()));
-		deposits_json_entries.push(format!(
-			"    {{\n      \"noteCommitment\": \"{}\",\n      \"address\": \"{}\",\n      \"amount\": \"0x{:016x}\"\n    }}",
-			nc_hex,
-			addr_hex,
-			d.amount(),
-		));
-	}
-	let deposits_json_array = format!("[\n{}\n  ]", deposits_json_entries.join(",\n"));
-
-	let bridge_json = format!(
-		"{{\n  \"oldRoot\": \"{}\",\n  \"newRoot\": \"{}\",\n  \"leaves\": \"{}\",\n  \"deposits\": {}\n}}",
-		old_root_hex, new_root_hex, leaves_hex, deposits_json_array
-	);
-	let bridge_json_path = output_path.join("bridge_calldata.json");
-	fs::write(&bridge_json_path, &bridge_json)?;
-	println!("wrote bridge calldata: {}", bridge_json_path.display());
-	debug_log(&format!(
-		"\n(rust) Bridge calldata JSON written to {:?}",
-		bridge_json_path
 	));
 
 	Ok(())

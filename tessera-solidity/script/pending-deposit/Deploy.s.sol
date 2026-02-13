@@ -34,13 +34,13 @@ contract DeployScript is Script {
     function run() public {
         // Sanity check: ensure the deployed verifier matches the Groth16 artifacts.
         // This prevents on-chain verification failures due to mismatched verifier code.
-        string memory artifactsPath = "../tessera-server/artifacts/pending-deposit/groth-artifacts/Verifier.sol";
+        string memory artifactsPath = "../tessera-server/artifacts/commitment-tree/groth-artifacts/Verifier.sol";
         string memory localPath = "src/pending-deposit/Verifier.sol";
         bytes memory artifactsSrc = bytes(vm.readFile(artifactsPath));
         bytes memory localSrc = bytes(vm.readFile(localPath));
         if (keccak256(artifactsSrc) != keccak256(localSrc)) {
             revert(
-                "Verifier mismatch: update src/pending-deposit/Verifier.sol from artifacts/pending-deposit/groth-artifacts/Verifier.sol"
+                "Verifier mismatch: update src/commitment-tree/Verifier.sol from artifacts/commitment-tree/groth-artifacts/Verifier.sol"
             );
         }
 
