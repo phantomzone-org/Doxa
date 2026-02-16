@@ -30,6 +30,8 @@ contract DepositsRollupBridgeIntegrationTest is Test {
             address(0xBEEF),
             bytes32(uint256(0x1111)),
             bytes32(uint256(0x2222)),
+            bytes32(uint256(0x3333)),
+            bytes32(uint256(0x4444)),
             2,
             address(token)
         );

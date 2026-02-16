@@ -3,6 +3,15 @@ use crate::tree::{
 	hasher::MerkleHash,
 };
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(
+	bound(
+		serialize = "H::Digest: Serialize",
+		deserialize = "H::Digest: Deserialize<'de>"
+	)
+)]
 pub struct CommitmentTree<H: MerkleHash> {
 	pub(crate) tree: MerkleTree<H>,
 }
@@ -24,6 +33,11 @@ impl<H: MerkleHash> CommitmentTree<H> {
 
 	pub fn num_leaves(&self) -> usize {
 		self.tree.num_leaves()
+	}
+
+	/// Returns the leaf digests currently stored in the append tree.
+	pub fn leaves(&self) -> &[H::Digest] {
+		self.tree.leaves()
 	}
 
 	pub fn insert(&mut self, leaf: H::Digest) -> MerkleTreeResult<CommitmentInsertProof<H>> {

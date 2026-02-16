@@ -14,6 +14,10 @@ sol! {
 			uint256[2] commitmentPok;
 		}
 
+		struct AggregatedInputProof {
+			bytes proofData;
+		}
+
 		struct Deposit {
 			uint256 value;
 			address recipient;
@@ -22,14 +26,50 @@ sol! {
 
 		function notesNullifierRoot() external view returns (bytes32);
 		function notesCommitmentRoot() external view returns (bytes32);
+		function accountsNullifierRoot() external view returns (bytes32);
+		function accountsCommitmentRoot() external view returns (bytes32);
 		function batchSize() external view returns (uint256);
 		function getDeposit(bytes32 noteCommitment) external view returns (Deposit memory);
 		function getDepositStatus(bytes32 noteCommitment) external view returns (DepositStatus);
-		function validateDepositBatch(
-			bytes32 newNotesCommitmentRoot,
+		function recordNotesNullifierTreeUpdate(
+			bytes32 newRoot,
 			bytes32[] calldata noteCommitments,
 			Proof calldata proof
 		) external;
+		function recordAccountsCommitmentTreeUpdate(
+			bytes32 newRoot,
+			bytes32[] calldata accountCommitments,
+			Proof calldata proof
+		) external;
+		function recordAccountsNullifierTreeUpdate(
+			bytes32 newRoot,
+			bytes32[] calldata accountCommitments,
+			Proof calldata proof
+		) external;
+		function validateDepositBatch(
+			bytes32 newNotesCommitmentRoot,
+			bytes32[] calldata noteCommitments,
+			Proof calldata proof,
+			AggregatedInputProof calldata aggregatedInputProof
+		) external;
+
+		function loadValidateDepositBatch(
+			bytes32 newNotesCommitmentRoot,
+			bytes32[] calldata noteCommitments,
+			Proof calldata proof,
+			AggregatedInputProof calldata aggregatedInputProof
+		) external returns (bytes32);
+
+		function executeValidateDepositBatch(
+			bytes32 newNotesCommitmentRoot,
+			bytes32[] calldata noteCommitments
+		) external returns (bytes32);
+
+		function cancelLoadedValidateDepositBatch(
+			bytes32 oldNotesCommitmentRoot,
+			bytes32 newNotesCommitmentRoot,
+			bytes32[] calldata noteCommitments
+		) external returns (bytes32);
 
 		event DepositAvailable(
 			bytes32 indexed noteCommitment,

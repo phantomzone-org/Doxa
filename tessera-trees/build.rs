@@ -18,6 +18,11 @@ fn main() {
 		|| static_filepath.metadata().unwrap().modified().unwrap()
 			< go_filepath.metadata().unwrap().modified().unwrap()
 	{
+		// Some environments (CI/sandboxes) restrict writes to ~/.cache/go-build.
+		// Force the Go build cache to live under OUT_DIR so c-archive builds succeed.
+		let go_cache = out_path.join("gocache");
+		std::fs::create_dir_all(&go_cache).expect("create GOCACHE dir");
+
 		// go build -buildmode=c-archive -o libgo.a ffi/main.go
 		let mut go_build = Command::new("go");
 		go_build
@@ -25,7 +30,8 @@ fn main() {
 			.arg("-buildmode=c-archive")
 			.arg("-o")
 			.arg(static_filepath)
-			.arg(go_filepath);
+			.arg(go_filepath)
+			.env("GOCACHE", &go_cache);
 
 		go_build.status().expect("Go build failed");
 

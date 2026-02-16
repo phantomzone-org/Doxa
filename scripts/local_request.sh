@@ -30,26 +30,26 @@ fi
 TMP_FILE="$(mktemp)"
 
 if [[ "$ORDER" == "random-unconsumed" ]]; then
-  AVAILABLE_FILE="$(mktemp)"
+  PENDING_FILE="$(mktemp)"
   for i in $(seq 1 "$MAX_INDEX"); do
     NOTE=$(printf "0x%064x" "$i")
     status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$NOTE" --rpc-url "$RPC" 2>/dev/null || true)
     status="$(echo "$status" | tr -d '[:space:]')"
-    # 0 = Available; ignore unknown notes/reverts.
+    # 0 = Pending; ignore unknown notes/reverts.
     if [[ "$status" == "0" ]]; then
-      echo "$NOTE" >> "$AVAILABLE_FILE"
+      echo "$NOTE" >> "$PENDING_FILE"
     fi
   done
 
-  AVAILABLE_COUNT=$(wc -l < "$AVAILABLE_FILE" | tr -d '[:space:]')
-  if [[ "$COUNT" -gt "$AVAILABLE_COUNT" ]]; then
-    echo "ERROR: requested $COUNT consume requests but only $AVAILABLE_COUNT available notes in [1..$MAX_INDEX]." >&2
-    rm -f "$TMP_FILE" "$AVAILABLE_FILE"
+  PENDING_COUNT=$(wc -l < "$PENDING_FILE" | tr -d '[:space:]')
+  if [[ "$COUNT" -gt "$PENDING_COUNT" ]]; then
+    echo "ERROR: requested $COUNT consume requests but only $PENDING_COUNT pending notes in [1..$MAX_INDEX]." >&2
+    rm -f "$TMP_FILE" "$PENDING_FILE"
     exit 1
   fi
 
-  shuf "$AVAILABLE_FILE" | head -n "$COUNT" > "$TMP_FILE"
-  rm -f "$AVAILABLE_FILE"
+  shuf "$PENDING_FILE" | head -n "$COUNT" > "$TMP_FILE"
+  rm -f "$PENDING_FILE"
 else
   END_INDEX=$((START_INDEX + COUNT - 1))
   for i in $(seq "$START_INDEX" "$END_INDEX"); do
@@ -64,7 +64,7 @@ else
 fi
 
 if [[ "$ORDER" == "random-unconsumed" ]]; then
-  echo "Submitting $COUNT consume requests sampled from Available notes in [1..$MAX_INDEX]..."
+  echo "Submitting $COUNT consume requests sampled from Pending notes in [1..$MAX_INDEX]..."
 else
   END_INDEX=$((START_INDEX + COUNT - 1))
   echo "Submitting $COUNT consume requests ($ORDER order), notes [$START_INDEX..$END_INDEX]..."

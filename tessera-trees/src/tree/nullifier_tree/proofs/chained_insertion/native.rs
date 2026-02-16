@@ -33,6 +33,7 @@ use plonky2::{
 	field::{extension::Extendable, types::Field},
 	hash::hash_types::RichField,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::tree::{
 	NullifierInsertProof, NullifierTree,
@@ -72,7 +73,13 @@ impl<H: MerkleHash> NullifierTree<H> {
 ///
 /// ## Private Witnesses
 /// - `proofs`: The individual insertion proofs (with intermediate roots)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+	bound(
+		serialize = "H::Digest: Serialize",
+		deserialize = "H::Digest: Deserialize<'de>"
+	)
+)]
 pub struct NullifierChainedInsertProof<H: MerkleHash> {
 	/// The individual insertion proofs, chained together
 	pub proofs: Vec<NullifierInsertProof<H>>,

@@ -2,6 +2,7 @@ use plonky2::{
 	field::{extension::Extendable, types::Field},
 	hash::hash_types::RichField,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::tree::hasher::{CommitmentPreimage, DataCommitment, MerkleHash, ToHashOut};
 
@@ -13,7 +14,13 @@ use crate::tree::hasher::{CommitmentPreimage, DataCommitment, MerkleHash, ToHash
 ///    tree
 ///
 /// The root commits to the number of leaves: root = H(num_leaves | left | right)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+	bound(
+		serialize = "H::Digest: Serialize",
+		deserialize = "H::Digest: Deserialize<'de>"
+	)
+)]
 pub struct BatchCommitmentProof<H: MerkleHash> {
 	pub leaves: Vec<H::Digest>,
 	pub root_old: H::Digest,

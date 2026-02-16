@@ -3,9 +3,22 @@
 These scripts are aligned with the current API-driven consume flow.
 
 Flow:
-1. deposits are recorded on-chain (`recordDeposit(bytes32)` via `depositAndRecord`)
-2. consume requests are pushed to sequencer API (`POST /consume-request`)
-3. sequencer batches and finalizes (`finalizeConsumeBatch`)
+1. deposits are recorded on-chain (`depositAndRegister*` via `depositAndRecord` in `ToyUser`)
+2. consume requests are pushed to sequencer API (`POST /consume-request` or `POST /notes/commitment`)
+3. other tree leaves can be pushed via:
+- `POST /notes/nullifier` with body `{"leaf":"0x..."}`
+- `POST /accounts/commitment` with body `{"leaf":"0x..."}`
+- `POST /accounts/nullifier` with body `{"leaf":"0x..."}`
+4. private-tx payloads can be pushed via:
+- `POST /private-tx` (or `/private-tx/notes`) with body:
+  - `input_notes[]`
+  - `output_notes[]`
+  - `input_account_commitment`
+  - `output_account_commitment`
+  - `tx_proof`
+3. sequencer batches, proves, then finalizes the deposit-validation batch on-chain
+   - load: `loadValidateDepositBatch(newNotesCommitmentRoot, notes, proof)` (operator-only)
+   - execute: `executeValidateDepositBatch(newNotesCommitmentRoot, notes)` (permissionless)
 
 ## Scripts
 
@@ -18,8 +31,13 @@ Flow:
   - Auto-deploys `ToyUSDT` if `TESSERA_MONITORED_TOKEN` is not pre-set.
   - Writes `TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS` into `tessera-server/.env`.
 
+- `local_run_prover.sh`
+  - Starts standalone prover service (`cargo run --bin prover --release`).
+  - Uses `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`).
+
 - `local_run_sequencer.sh`
   - Starts sequencer with env expected by `SequencerConfig::from_env()`.
+  - Connects to prover service via `TESSERA_PROVER_API_URL`.
   - Exposes consume API at `TESSERA_SEQUENCER_API_ADDR` (default `127.0.0.1:8081`).
 
 - `local_request.sh [start_note] [count] [order] [max_note]`
@@ -30,6 +48,10 @@ Flow:
 
 - `local_request_reconsume.sh [count] [max_note]`
   - Re-submits consumed notes to API (negative check).
+
+- `local_request_private_tx.sh [in_start] [in_count] [out_start] [out_count] [in_account] [out_account] [proof_hex]`
+  - Submits one private-tx style intake payload to `/private-tx`.
+  - Default proof is `0x01` (Phase A dummy placeholder).
 
 ## Console-Split E2E (Toy)
 
@@ -48,7 +70,13 @@ scripts/local_e2e_toy_b_deploy.sh
 This generates:
 - `scripts/logs/tessera_e2e_latest.env` with `BRIDGE`, `TOKEN`, `TRUSTED_SOURCE`.
 
-### Console C (sequencer)
+### Console C (prover)
+
+```bash
+scripts/local_run_prover.sh
+```
+
+### Console D (sequencer)
 
 ```bash
 scripts/local_e2e_toy_c_sequencer.sh
@@ -59,7 +87,7 @@ Optional:
 scripts/local_e2e_toy_c_sequencer.sh scripts/logs/tessera_e2e_latest.env
 ```
 
-### Console D (traffic + verification)
+### Console E (traffic + verification)
 
 ```bash
 scripts/local_e2e_toy_d_flow.sh 256 128
@@ -76,7 +104,12 @@ scripts/local_e2e_toy_d_flow.sh 256 128 scripts/logs/tessera_e2e_latest.env
 scripts/local_e2e_toy.sh 256 128
 ```
 
-This runs console-B deploy, starts console-C sequencer in background, then runs console-D flow.
+This runs deploy + flow only.
+It requires prover and sequencer to already be running in separate terminals.
+
+Required terminals before calling:
+1. `scripts/local_run_prover.sh`
+2. `scripts/local_e2e_toy_c_sequencer.sh`
 
 ## Recovery Test
 
@@ -84,8 +117,73 @@ This runs console-B deploy, starts console-C sequencer in background, then runs 
 scripts/local_stress_recovery.sh
 ```
 
+Purpose:
+- Validates restart resilience with a single local tree store.
+- Ensures the sequencer still works after stop/start and continues finalizing batches.
+
+What must be running before you call it:
+1. Anvil RPC on `http://localhost:8545`
+2. A deployed bridge for that same Anvil instance (run `scripts/local_e2e_toy_b_deploy.sh` after Anvil starts)
+
+What the script runs itself:
+- Starts/stops the sequencer process internally
+- Seeds deposits and submits consume requests
+
+What it does not run:
+- It does not start Anvil
+- It does not deploy contracts
+
+How to run:
+1. Terminal A: `scripts/local_e2e_toy_a_anvil.sh`
+2. Terminal B: `scripts/local_e2e_toy_b_deploy.sh`
+3. Terminal C: `scripts/local_stress_recovery.sh`
+
+Pass criteria:
+- First batch finalizes
+- Sequencer is restarted
+- Second batch finalizes after restart
+
 Log path:
 - `scripts/logs/tessera_sequencer_stress.log`
+
+## Chain Catch-up Recovery Test
+
+```bash
+scripts/local_recover_from_chain.sh
+```
+
+What it validates:
+- Sequencer A writes local store `A`, finalizes batch 1, then stops.
+- Sequencer B runs with independent local store `B`, finalizes batch 2 while A is down.
+- Sequencer A restarts from stale store `A`, catches up from on-chain transactions, and can finalize batch 3.
+- Catch-up depends on chain replay of `ValidatedBatchFinalized` + tx calldata decoding, not only local WAL.
+
+What must be running before you call it:
+1. Anvil RPC on `http://localhost:8545`
+2. A deployed bridge for that same Anvil instance (run `scripts/local_e2e_toy_b_deploy.sh` after Anvil starts)
+
+What the script runs itself:
+- Starts/stops prover + sequencer A/B internally (it kills stale prover/sequencer first)
+- Seeds deposits and submits requests
+
+What it does not run:
+- It does not start Anvil
+- It does not deploy contracts
+
+How to run:
+1. Terminal A: `scripts/local_e2e_toy_a_anvil.sh`
+2. Terminal B: `scripts/local_e2e_toy_b_deploy.sh`
+3. Terminal C: `scripts/local_recover_from_chain.sh`
+
+Pass criteria:
+- Batch 1 finalizes with sequencer A
+- Batch 2 finalizes with sequencer B while A is offline
+- Batch 3 finalizes after A restarts from stale store (proves catch-up from chain)
+
+Log paths:
+- `scripts/logs/tessera_recovery_a_first.log`
+- `scripts/logs/tessera_recovery_b.log`
+- `scripts/logs/tessera_recovery_a_second.log`
 
 ## Notes
 

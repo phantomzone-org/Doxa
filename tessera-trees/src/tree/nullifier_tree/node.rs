@@ -1,6 +1,14 @@
 use std::{fmt::Display, marker::PhantomData};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+	bound(
+		serialize = "H::Digest: Serialize",
+		deserialize = "H::Digest: Deserialize<'de>"
+	)
+)]
 pub struct Node<H: MerkleHash> {
 	pub next_index: usize,
 	pub value: H::Digest,

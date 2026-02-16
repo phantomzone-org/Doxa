@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
 	// Load config from environment variables.
 	let config = SequencerConfig::from_env()?;
 
-	// Start sequencer (spawns prover internally, polls on-chain events).
+	// Start sequencer (polls on-chain events, delegates proving to remote prover API).
 	let mut sequencer = Sequencer::new(config);
 	// println!("genesis_consumed_root: {:?}",
 	// contract::hash_to_bytes32(&SequencerState::genesis_consumed_root()));

@@ -10,6 +10,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
+echo "Syncing Solidity verifier contracts from prover artifacts..."
+"$ROOT_DIR/scripts/sync_verifiers_from_artifacts.sh"
+
 pushd "$ROOT_DIR/tessera-solidity" >/dev/null
 
 if [[ -z "${TESSERA_MONITORED_TOKEN:-}" ]]; then
@@ -42,6 +45,8 @@ echo "Deploying Verifier + DepositsRollupBridge..."
 export TESSERA_TRUSTED_SOURCE="$TESSERA_TRUSTED_SOURCE"
 export TESSERA_NOTES_NULLIFIER_ROOT="$TESSERA_NOTES_NULLIFIER_ROOT"
 export TESSERA_NOTES_COMMITMENT_ROOT="$TESSERA_NOTES_COMMITMENT_ROOT"
+export TESSERA_ACCOUNTS_NULLIFIER_ROOT="$TESSERA_ACCOUNTS_NULLIFIER_ROOT"
+export TESSERA_ACCOUNTS_COMMITMENT_ROOT="$TESSERA_ACCOUNTS_COMMITMENT_ROOT"
 export TESSERA_BATCH_SIZE="$TESSERA_BATCH_SIZE"
 # Capture output so we can parse the deployed bridge address.
 DEPLOY_OUTPUT="$(

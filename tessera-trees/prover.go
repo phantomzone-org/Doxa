@@ -33,8 +33,7 @@ import (
 
 func checkErr(err error, msg ...string) {
 	if err != nil {
-		fmt.Println(err, msg)
-		os.Exit(1)
+		panic(fmt.Sprintf("%v %v", err, msg))
 	}
 }
 

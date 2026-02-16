@@ -25,3 +25,7 @@ tessera-solidity/docs/
 
 # Dotenv file
 tessera-solidity/.env
+
+# Sequencer persistent tree state (WAL + snapshots)
+tessera-server/data/trees/
+tessera-server/data/trees_*/

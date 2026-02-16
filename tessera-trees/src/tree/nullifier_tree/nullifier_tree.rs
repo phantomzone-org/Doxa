@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::anyhow;
+use serde::{Deserialize, Serialize};
 
 use crate::tree::{
 	MerkleTree, Node, NullifierInsertProof,
@@ -8,6 +9,13 @@ use crate::tree::{
 	hasher::MerkleHash,
 };
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(
+	bound(
+		serialize = "H::Digest: Serialize",
+		deserialize = "H::Digest: Deserialize<'de>"
+	)
+)]
 pub struct NullifierTree<H: MerkleHash> {
 	pub(crate) nodes: Vec<Node<H>>,
 	pub(crate) actives: BTreeMap<H::Digest, usize>,

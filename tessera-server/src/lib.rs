@@ -3,8 +3,10 @@ mod data_types;
 pub mod config;
 pub mod contract;
 pub mod prover;
+pub mod prover_client;
 pub mod sequencer;
 pub mod states;
+pub mod tree_store;
 pub mod types;
 
 use std::time::Instant;

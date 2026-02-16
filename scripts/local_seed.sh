@@ -65,21 +65,31 @@ fi
 END_NOTE=$((START_NOTE + TOTAL_DEPOSITS - 1))
 echo "note range: [$START_NOTE..$END_NOTE]"
 
-# 1) Record deposits: mint token to bridge then call recordDeposit(note).
+# 1) Record deposits by minting to an EOA, approving the bridge, then calling depositAndRegister(note, amount).
 # This assumes local ToyUSDT-style token with open mint(address,uint256).
 echo "Seeding deposits: $TOTAL_DEPOSITS (bridge=$BRIDGE)"
+total_mint=0
+for i in $(seq "$START_NOTE" "$END_NOTE"); do
+  total_mint=$((total_mint + i))
+done
+
+cast send "$MONITORED_TOKEN" \
+  "mint(address,uint256)" \
+  "$TRUSTED_ADDR" "$total_mint" \
+  --rpc-url "$RPC" --private-key "$OPERATOR_KEY" --gas-limit 200000 >/dev/null
+
+cast send "$MONITORED_TOKEN" \
+  "approve(address,uint256)" \
+  "$BRIDGE" "$total_mint" \
+  --rpc-url "$RPC" --private-key "$TRUSTED_KEY" --gas-limit 200000 >/dev/null
+
 for i in $(seq "$START_NOTE" "$END_NOTE"); do
   NOTE=$(printf "0x%064x" "$i")
   VALUE=$i
 
-  cast send "$MONITORED_TOKEN" \
-    "mint(address,uint256)" \
-    "$BRIDGE" "$VALUE" \
-    --rpc-url "$RPC" --private-key "$OPERATOR_KEY" --gas-limit 200000 >/dev/null
-
   cast send "$BRIDGE" \
-    "recordDeposit(bytes32)" \
-    "$NOTE" \
+    "depositAndRegister(bytes32,uint256)" \
+    "$NOTE" "$VALUE" \
     --rpc-url "$RPC" --private-key "$TRUSTED_KEY" --gas-limit 300000 >/dev/null
 done
 

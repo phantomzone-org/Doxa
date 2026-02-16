@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Try to re-submit already consumed notes to the sequencer API.
+# Try to re-submit already validated notes to the sequencer API.
 # Expected behavior: API accepts request shape, but on-chain state should remain unchanged.
 # Args:
 #   $1 count (default 10)
@@ -24,29 +24,29 @@ if [[ -z "${BRIDGE:-}" ]]; then
   exit 1
 fi
 
-TMP_CONSUMED="$(mktemp)"
+TMP_VALIDATED="$(mktemp)"
 for i in $(seq 1 "$MAX_INDEX"); do
   note=$(printf "0x%064x" "$i")
   status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
   status="$(echo "$status" | tr -d '[:space:]')"
   if [[ "$status" == "1" ]]; then
-    echo "$note" >> "$TMP_CONSUMED"
+    echo "$note" >> "$TMP_VALIDATED"
   fi
 done
 
-CONSUMED_COUNT=$(wc -l < "$TMP_CONSUMED" | tr -d '[:space:]')
-if [[ "$CONSUMED_COUNT" -eq 0 ]]; then
-  echo "No consumed notes found in [1..$MAX_INDEX]. Nothing to re-submit."
-  rm -f "$TMP_CONSUMED"
+VALIDATED_COUNT=$(wc -l < "$TMP_VALIDATED" | tr -d '[:space:]')
+if [[ "$VALIDATED_COUNT" -eq 0 ]]; then
+  echo "No validated notes found in [1..$MAX_INDEX]. Nothing to re-submit."
+  rm -f "$TMP_VALIDATED"
   exit 0
 fi
 
-if [[ "$COUNT" -gt "$CONSUMED_COUNT" ]]; then
-  COUNT="$CONSUMED_COUNT"
+if [[ "$COUNT" -gt "$VALIDATED_COUNT" ]]; then
+  COUNT="$VALIDATED_COUNT"
 fi
 
-root_before=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
-echo "Submitting $COUNT already-consumed notes to API (root before: $root_before)..."
+root_before=$(cast call "$BRIDGE" "notesCommitmentRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
+echo "Submitting $COUNT already-validated notes to API (notesCommitmentRoot before: $root_before)..."
 
 submitted=0
 while read -r note; do
@@ -56,17 +56,17 @@ while read -r note; do
   if echo "$resp" | grep -Eq '"accepted"[[:space:]]*:[[:space:]]*true'; then
     submitted=$((submitted + 1))
   fi
-done < <(shuf "$TMP_CONSUMED" | head -n "$COUNT")
+done < <(shuf "$TMP_VALIDATED" | head -n "$COUNT")
 
 sleep 2
-root_after=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
+root_after=$(cast call "$BRIDGE" "notesCommitmentRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
 
-rm -f "$TMP_CONSUMED"
+rm -f "$TMP_VALIDATED"
 
 echo "Submitted: $submitted/$COUNT"
-echo "Root after: $root_after"
+echo "notesCommitmentRoot after: $root_after"
 if [[ "$root_before" == "$root_after" ]]; then
-  echo "OK: consumedRoot unchanged after re-submit attempts."
+  echo "OK: notesCommitmentRoot unchanged after re-submit attempts."
 else
-  echo "WARN: consumedRoot changed. A separate valid batch may have finalized concurrently." >&2
+  echo "WARN: notesCommitmentRoot changed. A separate valid batch may have finalized concurrently." >&2
 fi

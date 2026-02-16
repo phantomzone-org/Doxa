@@ -23,12 +23,13 @@ if [[ -z "${BRIDGE:-}" ]]; then
   exit 1
 fi
 
-ROOT=$(cast call "$BRIDGE" "consumedRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
+ROOT=$(cast call "$BRIDGE" "notesCommitmentRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
 echo "Bridge: $BRIDGE"
-echo "ConsumedRoot: $ROOT"
+echo "notesCommitmentRoot: $ROOT"
 
-available=0
-consumed=0
+pending=0
+validated=0
+withdrawn=0
 missing=0
 
 END_INDEX=$((START_INDEX + COUNT - 1))
@@ -42,11 +43,12 @@ for i in $(seq "$START_INDEX" "$END_INDEX"); do
   fi
   status=$(echo "$dep" | sed -E 's/.*,[[:space:]]*([0-9]+)\)$/\1/')
   case "$status" in
-    0) available=$((available + 1)) ;;
-    1) consumed=$((consumed + 1)) ;;
+    0) pending=$((pending + 1)) ;;
+    1) validated=$((validated + 1)) ;;
+    2) withdrawn=$((withdrawn + 1)) ;;
   esac
   echo "note $i ($note) -> $dep"
 done
 
 echo ""
-echo "Summary ($START_INDEX..$END_INDEX): Available=$available Consumed=$consumed Missing=$missing"
+echo "Summary ($START_INDEX..$END_INDEX): Pending=$pending Validated=$validated Withdrawn=$withdrawn Missing=$missing"

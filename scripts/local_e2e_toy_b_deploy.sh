@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Console B: deploy ToyUSDT + Bridge/Verifier + ToyTrustedSource and wire trusted source.
+# Console B: deploy ToyUSDT + Bridge/Verifier + ToyUser and wire trusted source.
 # Writes deployment outputs to: scripts/logs/tessera_e2e_latest.env
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,6 +38,9 @@ if [[ -z "${TOKEN:-}" ]]; then
 fi
 
 echo "TOKEN=$TOKEN"
+
+echo "Syncing Solidity verifier contracts from prover artifacts..."
+"$ROOT_DIR/scripts/sync_verifiers_from_artifacts.sh"
 
 echo "Deploying Verifier + Bridge..."
 export TESSERA_TRUSTED_SOURCE="$TESSERA_TRUSTED_SOURCE"
@@ -124,5 +127,8 @@ echo ""
 echo "Deployment complete."
 echo "State file: $OUT_ENV"
 echo "Next:"
-echo "  Console C -> scripts/local_e2e_toy_c_sequencer.sh"
-echo "  Console D -> scripts/local_e2e_toy_d_flow.sh 256 128"
+echo "  Console C (prover)    -> scripts/local_run_prover.sh"
+echo "    Prover API          -> $TESSERA_PROVER_API_URL"
+echo "  Console D (sequencer) -> scripts/local_e2e_toy_c_sequencer.sh"
+echo "    Sequencer API       -> $TESSERA_SEQUENCER_API_URL"
+echo "  Console E (flow)      -> scripts/local_e2e_toy_d_flow.sh 256 128"

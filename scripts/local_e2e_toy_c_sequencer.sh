@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # Console C: run sequencer for the latest deployed bridge.
+# Requires prover service to be running (scripts/local_run_prover.sh).
 # Args:
 #   $1 optional env file path (default scripts/logs/tessera_e2e_latest.env)
 

@@ -14,6 +14,8 @@ import {Verifier as NullifierVerifier} from "../../src/VerifierNullifier.sol";
 ///   TESSERA_TRUSTED_SOURCE -- address allowed to record deposits
 ///   TESSERA_NOTES_NULLIFIER_ROOT  -- bytes32 nullifier tree genesis root
 ///   TESSERA_NOTES_COMMITMENT_ROOT -- bytes32 commitment tree genesis root
+///   TESSERA_ACCOUNTS_NULLIFIER_ROOT  -- bytes32 accounts nullifier tree genesis root
+///   TESSERA_ACCOUNTS_COMMITMENT_ROOT -- bytes32 accounts commitment tree genesis root
 ///   TESSERA_BATCH_SIZE -- number of notes per batch
 ///   TESSERA_MONITORED_TOKEN -- ERC20 address escrowed by the bridge
 ///
@@ -38,6 +40,8 @@ contract DeployScript is Script {
         address trustedSource = vm.envAddress("TESSERA_TRUSTED_SOURCE");
         bytes32 notesNullifierRoot = vm.envBytes32("TESSERA_NOTES_NULLIFIER_ROOT");
         bytes32 notesCommitmentRoot = vm.envBytes32("TESSERA_NOTES_COMMITMENT_ROOT");
+        bytes32 accountsNullifierRoot = vm.envBytes32("TESSERA_ACCOUNTS_NULLIFIER_ROOT");
+        bytes32 accountsCommitmentRoot = vm.envBytes32("TESSERA_ACCOUNTS_COMMITMENT_ROOT");
         uint256 batchSize = vm.envUint("TESSERA_BATCH_SIZE");
         address monitoredToken = vm.envAddress("TESSERA_MONITORED_TOKEN");
 
@@ -52,6 +56,8 @@ contract DeployScript is Script {
             trustedSource,
             notesNullifierRoot,
             notesCommitmentRoot,
+            accountsNullifierRoot,
+            accountsCommitmentRoot,
             batchSize,
             monitoredToken
         );
@@ -67,5 +73,7 @@ contract DeployScript is Script {
         console.log("Monitored token:     ", monitoredToken);
         console.logBytes32(notesNullifierRoot);
         console.logBytes32(notesCommitmentRoot);
+        console.logBytes32(accountsNullifierRoot);
+        console.logBytes32(accountsCommitmentRoot);
     }
 }

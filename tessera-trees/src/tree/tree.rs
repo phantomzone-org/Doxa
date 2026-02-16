@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 use anyhow::anyhow;
+use serde::{Deserialize, Serialize};
 
 use crate::tree::{
 	error::{MerkleTreeError, MerkleTreeResult},
@@ -14,7 +15,13 @@ use crate::tree::{
 /// The tree is left->right append only and has a
 /// sparse representation (only active [Node] and
 /// siblings are stored).
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(
+	bound(
+		serialize = "H::Digest: Serialize",
+		deserialize = "H::Digest: Deserialize<'de>"
+	)
+)]
 pub struct MerkleTree<H: MerkleHash> {
 	/// Leaves
 	pub(crate) leaves: Vec<H::Digest>,
@@ -101,6 +108,11 @@ impl<H: MerkleHash> MerkleTree<H> {
 	/// Returns the number of leaf slots currently allocated (including inactive ones).
 	pub fn num_leaves(&self) -> usize {
 		self.leaves.len()
+	}
+
+	/// Returns the leaf hashes currently stored (append order).
+	pub fn leaves(&self) -> &[H::Digest] {
+		&self.leaves
 	}
 
 	pub fn get_root(&self) -> H::Digest {

@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end restart recovery stress (API-driven flow):
-# - start sequencer
-# - seed deposits
-# - submit first batch consume requests and wait finalize
-# - stop/restart sequencer
-# - submit second batch consume requests and wait finalize
-# - verify recovery and continued operation
+# End-to-end restart recovery stress (API-driven flow).
+#
+# What this script tests:
+# - A single sequencer instance can be stopped and restarted without breaking
+#   continued batch finalization using the same local store.
+#
+# Prerequisites (must already be running):
+# - Anvil on http://localhost:8545
+# - A bridge deployed on that same Anvil (typically via scripts/local_e2e_toy_b_deploy.sh)
+#
+# Important:
+# - This script starts/stops the sequencer itself.
+# - Do NOT start a separate sequencer manually before running this script.
+#
+# Steps performed:
+# 1) start sequencer
+# 2) seed deposits
+# 3) submit first batch and wait for finalization
+# 4) restart sequencer
+# 5) submit second batch and wait for finalization
+# 6) report pass/fail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
@@ -70,20 +84,20 @@ stop_sequencer() {
   kill_stale_sequencers
 }
 
-count_consumed_in_range() {
+count_validated_in_range() {
   local start="$1"
   local end="$2"
-  local consumed=0
+  local validated=0
   local i note status
   for i in $(seq "$start" "$end"); do
     note=$(printf "0x%064x" "$i")
     status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
     status="$(echo "$status" | tr -d '[:space:]')"
     if [[ "$status" == "1" ]]; then
-      consumed=$((consumed + 1))
+      validated=$((validated + 1))
     fi
   done
-  echo "$consumed"
+  echo "$validated"
 }
 
 find_first_missing_note() {
@@ -101,16 +115,16 @@ find_first_missing_note() {
   done
 }
 
-wait_until_consumed() {
+wait_until_validated() {
   local start="$1"
   local end="$2"
   local target="$3"
   local deadline=$((SECONDS + 300))
   while (( SECONDS < deadline )); do
-    local consumed
-    consumed=$(count_consumed_in_range "$start" "$end")
-    echo "Consumed in [$start..$end]: $consumed/$target"
-    if [[ "$consumed" -ge "$target" ]]; then
+    local validated
+    validated=$(count_validated_in_range "$start" "$end")
+    echo "Validated in [$start..$end]: $validated/$target"
+    if [[ "$validated" -ge "$target" ]]; then
       return 0
     fi
     sleep 3
@@ -134,7 +148,7 @@ BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_seed.sh" "$TOTAL" 0 "$START_NOTE"
 echo "Phase 2: submit first batch ($BATCH_SIZE) in random order."
 BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_request.sh" "$START_NOTE" "$BATCH_SIZE" random
 
-if ! wait_until_consumed "$START_NOTE" "$((START_NOTE + BATCH_SIZE - 1))" "$BATCH_SIZE"; then
+if ! wait_until_validated "$START_NOTE" "$((START_NOTE + BATCH_SIZE - 1))" "$BATCH_SIZE"; then
   echo "ERROR: first batch did not finalize in time. Check $SEQ_LOG" >&2
   exit 1
 fi
@@ -146,7 +160,7 @@ start_sequencer
 echo "Phase 4: submit second batch ($BATCH_SIZE) in random order."
 BRIDGE="$BRIDGE" "$ROOT_DIR/scripts/local_request.sh" "$((START_NOTE + BATCH_SIZE))" "$BATCH_SIZE" random
 
-if ! wait_until_consumed "$((START_NOTE + BATCH_SIZE))" "$END_NOTE" "$BATCH_SIZE"; then
+if ! wait_until_validated "$((START_NOTE + BATCH_SIZE))" "$END_NOTE" "$BATCH_SIZE"; then
   echo "ERROR: second batch did not finalize after restart. Check $SEQ_LOG" >&2
   exit 1
 fi

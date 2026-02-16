@@ -110,7 +110,7 @@ done
 
 if [[ "${validated:-0}" -ne "$REQUEST_COUNT" ]]; then
   echo "ERROR: timeout waiting for all requested notes to become Validated." >&2
-  echo "NOTE: This requires the sequencer/server to call validateDepositBatch/recordNotesNullifierTreeUpdate." >&2
+  echo "NOTE: This requires the sequencer/server to load+execute deposit validation batches (loadValidateDepositBatch+executeValidateDepositBatch)." >&2
   exit 1
 fi
 

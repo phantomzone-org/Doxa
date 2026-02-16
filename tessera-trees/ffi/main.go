@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -34,15 +36,32 @@ var vk groth16.VerifyingKey
 var verifierOnlyCircuitData variables.VerifierOnlyCircuitData
 var commonCircuitData types.CommonCircuitData
 
+var lastErrMu sync.Mutex
+var lastErr string
+
+func setLastErr(err string) {
+	lastErrMu.Lock()
+	lastErr = err
+	lastErrMu.Unlock()
+}
+
 func checkErr(err error, msg ...string) {
 	if err != nil {
-		fmt.Println(err, msg)
-		os.Exit(1)
+		panic(fmt.Sprintf("%v %v", err, msg))
 	}
+}
+
+func recoveredErr(context string, r any) string {
+	return fmt.Sprintf("%s: %v\n%s", context, r, debug.Stack())
 }
 
 //export TrustedSetup
 func TrustedSetup(inputsPathChar *C.char, outputsPathChar *C.char) *C.char {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("TrustedSetup panic", r))
+		}
+	}()
 	inputsPath := C.GoString(inputsPathChar)
 	outputsPath := C.GoString(outputsPathChar)
 
@@ -60,11 +79,17 @@ func TrustedSetup(inputsPathChar *C.char, outputsPathChar *C.char) *C.char {
 	_, _ = wrapper.TrustedSetup(r1cs, outputsPath)
 	fmt.Println("(go) trusted setup generated")
 
+	setLastErr("")
 	return C.CString("trusted setup generated")
 }
 
 //export Init
 func Init(inputsPathChar *C.char, outputsPathChar *C.char) *C.char {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("Init panic", r))
+		}
+	}()
 	inputsPath := C.GoString(inputsPathChar)
 	outputsPath := C.GoString(outputsPathChar)
 
@@ -100,11 +125,17 @@ func Init(inputsPathChar *C.char, outputsPathChar *C.char) *C.char {
 	verifierOnlyCircuitData = variables.DeserializeVerifierOnlyCircuitData(types.ReadVerifierOnlyCircuitData(filepath.Join(inputsPath, "verifier_only_circuit_data.json")))
 	fmt.Println("(go) plonky2's common_circuit_data & verifier_only_circuit_data loaded")
 
+	setLastErr("")
 	return C.CString("r1cs, pk, vk loaded")
 }
 
 //export LoadVk
 func LoadVk(PathChar *C.char) *C.char {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("LoadVk panic", r))
+		}
+	}()
 	path := C.GoString(PathChar)
 
 	fmt.Println("(go) start to load vk")
@@ -116,6 +147,7 @@ func LoadVk(PathChar *C.char) *C.char {
 	checkErr(err)
 	fmt.Println("(go) [DBG] loading vk took:", time.Since(start).Milliseconds())
 
+	setLastErr("")
 	return C.CString("vk loaded")
 }
 
@@ -125,23 +157,41 @@ func CheckInit() *C.char {
 	// the global variables are initialized
 
 	internal, secret, public := r1cs.GetNbVariables()
+	setLastErr("")
 	return C.CString(fmt.Sprintf("internal: %d, secret: %d, public: %d", internal, secret, public))
 }
 
 //export Groth16Proof
 func Groth16Proof(ptr *C.uchar, inLen C.int, outProofLen *C.int, outWitLen *C.int) (*C.uchar, *C.uchar) {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("Groth16Proof panic", r))
+			*outProofLen = 0
+			*outWitLen = 0
+		}
+	}()
 	proofWithPisBytes := C.GoBytes(unsafe.Pointer(ptr), inLen)
 
 	var proofWithPisRaw types.ProofWithPublicInputsRaw
 	err := json.Unmarshal(proofWithPisBytes, &proofWithPisRaw)
-	checkErr(err)
+	if err != nil {
+		setLastErr(fmt.Sprintf("Groth16Proof: json.Unmarshal: %v", err))
+		*outProofLen = 0
+		*outWitLen = 0
+		return nil, nil
+	}
 	proofWithPis := variables.DeserializeProofWithPublicInputs(proofWithPisRaw)
 	fmt.Println("(go) proofWithPis parsed")
 
 	fmt.Println("(go) generate Groth16 proof")
 	start := time.Now()
 	g16Proof, witnessPublic, err := wrapper.Groth16Proof(r1cs, pk, vk, proofWithPis, verifierOnlyCircuitData, commonCircuitData)
-	checkErr(err)
+	if err != nil {
+		setLastErr(fmt.Sprintf("Groth16Proof: wrapper.Groth16Proof: %v", err))
+		*outProofLen = 0
+		*outWitLen = 0
+		return nil, nil
+	}
 	fmt.Println("(go) [DBG] generating Groth16 proof took:", time.Since(start).Milliseconds())
 
 	var buf bytes.Buffer
@@ -170,11 +220,17 @@ func Groth16Proof(ptr *C.uchar, inLen C.int, outProofLen *C.int, outWitLen *C.in
 	copy(outWit, witBytes)
 	*outWitLen = C.int(len(witBytes))
 
+	setLastErr("")
 	return (*C.uchar)(outPtr), (*C.uchar)(outWitPtr)
 }
 
 //export Groth16Verify
 func Groth16Verify(proofPtr *C.uchar, proofInLen C.int, witPtr *C.uchar, witInLen C.int) *C.char {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("Groth16Verify panic", r))
+		}
+	}()
 	proofBytes := C.GoBytes(unsafe.Pointer(proofPtr), proofInLen)
 	witnessPublicBytes := C.GoBytes(unsafe.Pointer(witPtr), witInLen)
 
@@ -191,8 +247,10 @@ func Groth16Verify(proofPtr *C.uchar, proofInLen C.int, witPtr *C.uchar, witInLe
 
 	err = groth16.Verify(proof, vk, witnessPublic, backend.WithVerifierHashToFieldFunction(sha3.NewLegacyKeccak256()))
 	if err != nil {
+		setLastErr(fmt.Sprintf("Groth16Verify: %v", err))
 		return C.CString(fmt.Sprintf("err: %s", err))
 	}
+	setLastErr("")
 	return C.CString("ok")
 }
 
@@ -203,14 +261,29 @@ func Groth16Verify(proofPtr *C.uchar, proofInLen C.int, witPtr *C.uchar, witInLe
 //
 //export Groth16FormatJSON
 func Groth16FormatJSON(proofPtr *C.uchar, proofLen C.int, witPtr *C.uchar, witLen C.int) *C.char {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("Groth16FormatJSON panic", r))
+		}
+	}()
 	proofBytes := C.GoBytes(unsafe.Pointer(proofPtr), proofLen)
 	witBytes := C.GoBytes(unsafe.Pointer(witPtr), witLen)
 
 	jsonStr, err := wrapper.FormatSolidityJSON(proofBytes, witBytes)
 	if err != nil {
+		setLastErr(fmt.Sprintf("Groth16FormatJSON: %v", err))
 		return C.CString(fmt.Sprintf("error: %s", err))
 	}
+	setLastErr("")
 	return C.CString(jsonStr)
+}
+
+//export LastError
+func LastError() *C.char {
+	lastErrMu.Lock()
+	s := lastErr
+	lastErrMu.Unlock()
+	return C.CString(s)
 }
 
 //export GoFree

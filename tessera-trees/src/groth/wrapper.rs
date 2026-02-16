@@ -107,6 +107,9 @@ impl Groth16Wrapper {
 			let s = String::from_utf8_lossy(cstr.to_bytes()).to_string();
 			GoFree(cstr.as_ptr() as *mut c_uchar);
 			Self::info_log("groth16 init (ffi) completed");
+			if s.starts_with("error:") {
+				return Err(anyhow!(s));
+			}
 			Ok(s)
 		}
 	}
@@ -164,7 +167,8 @@ impl Groth16Wrapper {
 			unsafe { GoFree(proof_out_ptr) };
 			vec
 		} else {
-			return Err(anyhow!("groth16_prove: null pointer of proof_out"));
+			let go_err = unsafe { Self::go_last_error() };
+			return Err(anyhow!("groth16_prove failed: {go_err}"));
 		};
 		let pub_inp_bytes: Vec<u8> = if wit_out_len > 0 && !wit_out_ptr.is_null() {
 			let slice = unsafe { std::slice::from_raw_parts(wit_out_ptr, wit_out_len as usize) };
@@ -172,10 +176,26 @@ impl Groth16Wrapper {
 			unsafe { GoFree(wit_out_ptr) };
 			vec
 		} else {
-			return Err(anyhow!("groth16_prove: null pointer of wit_out"));
+			let go_err = unsafe { Self::go_last_error() };
+			return Err(anyhow!("groth16_prove failed: {go_err}"));
 		};
 		Self::info_log("groth16 prove (ffi) completed");
 		Ok((proof_bytes, pub_inp_bytes))
+	}
+
+	unsafe fn go_last_error() -> String {
+		let ptr = unsafe { LastError() };
+		if ptr.is_null() {
+			return "<no error (LastError returned null)>".to_string();
+		}
+		let cstr = unsafe { CStr::from_ptr(ptr) };
+		let s = String::from_utf8_lossy(cstr.to_bytes()).to_string();
+		unsafe { GoFree(ptr as *mut c_uchar) };
+		if s.is_empty() {
+			"<no error (empty)>".to_string()
+		} else {
+			s
+		}
 	}
 
 	/// verify the given Groth16 proof with the given public inputs
