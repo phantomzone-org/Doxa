@@ -1,5 +1,5 @@
 use super::*;
-use crate::sequencer::revert::{humanize_bridge_revert, is_note_not_found_revert};
+use crate::sequencer::revert::humanize_bridge_revert;
 use tracing::{debug, info, warn};
 
 impl Sequencer {
@@ -31,7 +31,15 @@ impl Sequencer {
 							error = %e,
 							"prover unavailable; keeping batch pending and retrying"
 						);
-						tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+						// Sleep before retrying, but exit immediately if the sequencer
+						// shuts down (result_rx dropped → channel closed).
+						tokio::select! {
+							_ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {},
+							_ = result_tx.closed() => {
+								warn!(job = ?job, "sequencer shutting down; abandoning prover retry");
+								break;
+							},
+						}
 					},
 				}
 			}
@@ -46,15 +54,17 @@ impl Sequencer {
 		);
 		let note = alloy::primitives::FixedBytes::<32>::from(*note);
 		match bridge.getDepositStatus(note).call().await {
-			Ok(status) => matches!(status, IDepositsRollupBridge::DepositStatus::Pending),
-			Err(e) => {
-				if is_note_not_found_revert(&e) {
-					true
-				} else {
-					warn!("failed to fetch note status: {e}");
-					false
-				}
+			Ok(status) => {
+				matches!(
+					status,
+					IDepositsRollupBridge::DepositStatus::Pending
+						| IDepositsRollupBridge::DepositStatus::None
+				)
 			},
+			Err(e) => {
+				warn!("failed to fetch note status: {e}");
+				false
+			}
 		}
 	}
 
@@ -69,15 +79,17 @@ impl Sequencer {
 		);
 		let note = alloy::primitives::FixedBytes::<32>::from(*note);
 		match bridge.getDepositStatus(note).call().await {
-			Ok(status) => matches!(status, IDepositsRollupBridge::DepositStatus::Validated),
-			Err(e) => {
-				if is_note_not_found_revert(&e) {
-					true
-				} else {
-					warn!("failed to fetch note status: {e}");
-					false
-				}
+			Ok(status) => {
+				matches!(
+					status,
+					IDepositsRollupBridge::DepositStatus::Validated
+						| IDepositsRollupBridge::DepositStatus::None
+				)
 			},
+			Err(e) => {
+				warn!("failed to fetch note status: {e}");
+				false
+			}
 		}
 	}
 
@@ -141,19 +153,19 @@ impl Sequencer {
 
 		for req in &batch {
 			let note = alloy::primitives::FixedBytes::<32>::from(req.commitment);
-			match bridge.getDepositStatus(note).call().await {
-				Ok(status) => {
-					anyhow::ensure!(
-						matches!(status, IDepositsRollupBridge::DepositStatus::Pending),
-						"preflight failed: existing bridge note not Pending"
-					);
-				},
-				Err(e) => {
-					if !is_note_not_found_revert(&e) {
-						return Err(anyhow::anyhow!("preflight failed: unable to fetch note status: {e}"));
-					}
-				},
-			}
+			let status = bridge
+				.getDepositStatus(note)
+				.call()
+				.await
+				.map_err(|e| anyhow::anyhow!("preflight failed: unable to fetch note status: {e}"))?;
+			anyhow::ensure!(
+				matches!(
+					status,
+					IDepositsRollupBridge::DepositStatus::Pending
+						| IDepositsRollupBridge::DepositStatus::None
+				),
+				"preflight failed: existing bridge note not Pending/None"
+			);
 		}
 		debug!(
 			batch = batch.len(),
@@ -163,10 +175,7 @@ impl Sequencer {
 		);
 
 		let commitments_bytes: Vec<[u8; 32]> = batch.iter().map(|r| r.commitment).collect();
-		let commitments_hash: Vec<Hash> = commitments_bytes
-			.iter()
-			.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(*b)))
-			.collect();
+		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
 
 		let mut tmp_tree = self.notes_commitment_state.tree.clone();
 		let batch_proof = tmp_tree.insert_batch(commitments_hash.clone())?;
@@ -218,19 +227,19 @@ impl Sequencer {
 
 		for req in &batch {
 			let note = alloy::primitives::FixedBytes::<32>::from(req.commitment);
-			match bridge.getDepositStatus(note).call().await {
-				Ok(status) => {
-					anyhow::ensure!(
-						matches!(status, IDepositsRollupBridge::DepositStatus::Validated),
-						"preflight failed: existing bridge note not Validated"
-					);
-				},
-				Err(e) => {
-					if !is_note_not_found_revert(&e) {
-						return Err(anyhow::anyhow!("preflight failed: unable to fetch note status: {e}"));
-					}
-				},
-			}
+			let status = bridge
+				.getDepositStatus(note)
+				.call()
+				.await
+				.map_err(|e| anyhow::anyhow!("preflight failed: unable to fetch note status: {e}"))?;
+			anyhow::ensure!(
+				matches!(
+					status,
+					IDepositsRollupBridge::DepositStatus::Validated
+						| IDepositsRollupBridge::DepositStatus::None
+				),
+				"preflight failed: existing bridge note not Validated/None"
+			);
 		}
 		debug!(
 			batch = batch.len(),
@@ -240,10 +249,7 @@ impl Sequencer {
 		);
 
 		let commitments_bytes: Vec<[u8; 32]> = batch.iter().map(|r| r.commitment).collect();
-		let commitments_hash: Vec<Hash> = commitments_bytes
-			.iter()
-			.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(*b)))
-			.collect();
+		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
 
 		let mut tmp_tree = self.notes_nullifier_state.tree.clone();
 		let batch_proof = tmp_tree.insert_chained(commitments_hash.clone())?;
@@ -300,10 +306,7 @@ impl Sequencer {
 			local_root = ?local_root,
 			"accounts commitment preflight passed"
 		);
-		let commitments_hash: Vec<Hash> = commitments_bytes
-			.iter()
-			.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(*b)))
-			.collect();
+		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
 
 		let mut tmp_tree = self.accounts_commitment_state.tree.clone();
 		let batch_proof = tmp_tree.insert_batch(commitments_hash.clone())?;
@@ -353,6 +356,17 @@ impl Sequencer {
 			"preflight failed: accountsNullifierRoot mismatch (on-chain={on_chain_root:?}, local={local_root:?})"
 		);
 
+		// Verify each leaf-to-be-nullified was previously committed to the accounts commitment tree.
+		for req in &batch {
+			let commitment_hash =
+				contract::bytes32_to_hash(&alloy::primitives::B256::from(req.commitment))?;
+			anyhow::ensure!(
+				self.accounts_commitment_state.tree.contains_leaf(&commitment_hash),
+				"preflight failed: accounts nullifier leaf {:?} not found in accounts commitment tree",
+				alloy::primitives::B256::from(req.commitment)
+			);
+		}
+
 		let commitments_bytes: Vec<[u8; 32]> = batch.iter().map(|r| r.commitment).collect();
 		debug!(
 			batch = batch.len(),
@@ -360,10 +374,7 @@ impl Sequencer {
 			local_root = ?local_root,
 			"accounts nullifier preflight passed"
 		);
-		let commitments_hash: Vec<Hash> = commitments_bytes
-			.iter()
-			.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(*b)))
-			.collect();
+		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
 
 		let mut tmp_tree = self.accounts_nullifier_state.tree.clone();
 		let batch_proof = tmp_tree.insert_chained(commitments_hash.clone())?;
@@ -430,77 +441,48 @@ impl Sequencer {
 					commitments: solidity_proof.commitments,
 					commitmentPok: solidity_proof.commitment_pok,
 				};
-				let aggregated_input_proof = IDepositsRollupBridge::AggregatedInputProof {
-					proofData: alloy::primitives::Bytes::from_static(&[0x01]),
-				};
 				let new_root_hash = new_root;
 				let new_root_bytes = contract::hash_to_bytes32(&new_root_hash);
+				// Phase A: PI-validity proof path is wired in the contract API, but
+				// sequencer currently sends a dummy Groth16 proof and relies on the
+				// dev dummy verifier contract for acceptance.
+				let zero = alloy::primitives::U256::ZERO;
+				let aggregated_input_proof = IDepositsRollupBridge::Proof {
+					proof: [zero; 8],
+					commitments: [zero; 2],
+					commitmentPok: [zero; 2],
+				};
 
-				let receipt = match batch.job {
+				let receipt_result: anyhow::Result<_> = match batch.job {
 					TreeJob::NotesCommitment => {
-						let old_root = bridge.notesCommitmentRoot().call().await?;
-						let pending_load = bridge
-							.loadValidateDepositBatch(
+						let pending = bridge
+							.recordNotesCommitmentTreeUpdate(
 								new_root_bytes,
-								commitments_vec.clone(),
+								commitments_vec,
 								sol_proof,
 								aggregated_input_proof.clone(),
 							)
 							.send()
 							.await
 							.map_err(|e| anyhow::anyhow!(
-								"loadValidateDepositBatch reverted: {}",
+								"recordNotesCommitmentTreeUpdate reverted: {}",
 								humanize_bridge_revert(&e)
 							))?;
-						let receipt_load = pending_load
+						pending
 							.with_required_confirmations(1)
 							.with_timeout(Some(RECEIPT_TIMEOUT))
 							.get_receipt()
-							.await?;
-						if !receipt_load.status() {
-							self.notes_commitment_state.reinsert_batch(batch.requests);
-							return Err(anyhow::anyhow!(
-								"deposit batch load reverted on-chain (tx_hash={:?})",
-								receipt_load.transaction_hash
-							));
-						}
-
-						let pending_exec = bridge
-							.executeValidateDepositBatch(new_root_bytes, commitments_vec.clone())
-							.send()
 							.await
-							.map_err(|e| anyhow::anyhow!(
-								"executeValidateDepositBatch reverted: {}",
-								humanize_bridge_revert(&e)
-							))?;
-						let receipt_exec = pending_exec
-							.with_required_confirmations(1)
-							.with_timeout(Some(RECEIPT_TIMEOUT))
-							.get_receipt()
-							.await?;
-						if !receipt_exec.status() {
-							if let Ok(pending_cancel) = bridge
-								.cancelLoadedValidateDepositBatch(old_root, new_root_bytes, commitments_vec.clone())
-								.send()
-								.await
-							{
-								let _ = pending_cancel
-									.with_required_confirmations(1)
-									.with_timeout(Some(RECEIPT_TIMEOUT))
-									.get_receipt()
-									.await;
-							}
-							self.notes_commitment_state.reinsert_batch(batch.requests);
-							return Err(anyhow::anyhow!(
-								"deposit batch execute reverted on-chain (tx_hash={:?})",
-								receipt_exec.transaction_hash
-							));
-						}
-						receipt_exec
+							.map_err(|e| anyhow::anyhow!("receipt timeout/error: {e}"))
 					},
 					TreeJob::NotesNullifier => {
 						let pending = bridge
-							.recordNotesNullifierTreeUpdate(new_root_bytes, commitments_vec, sol_proof)
+							.recordNotesNullifierTreeUpdate(
+								new_root_bytes,
+								commitments_vec,
+								sol_proof,
+								aggregated_input_proof.clone(),
+							)
 							.send()
 							.await
 							.map_err(|e| anyhow::anyhow!(
@@ -511,11 +493,17 @@ impl Sequencer {
 							.with_required_confirmations(1)
 							.with_timeout(Some(RECEIPT_TIMEOUT))
 							.get_receipt()
-							.await?
+							.await
+							.map_err(|e| anyhow::anyhow!("receipt timeout/error: {e}"))
 					},
 					TreeJob::AccountsCommitment => {
 						let pending = bridge
-							.recordAccountsCommitmentTreeUpdate(new_root_bytes, commitments_vec, sol_proof)
+							.recordAccountsCommitmentTreeUpdate(
+								new_root_bytes,
+								commitments_vec,
+								sol_proof,
+								aggregated_input_proof.clone(),
+							)
 							.send()
 							.await
 							.map_err(|e| anyhow::anyhow!(
@@ -526,11 +514,17 @@ impl Sequencer {
 							.with_required_confirmations(1)
 							.with_timeout(Some(RECEIPT_TIMEOUT))
 							.get_receipt()
-							.await?
+							.await
+							.map_err(|e| anyhow::anyhow!("receipt timeout/error: {e}"))
 					},
 					TreeJob::AccountsNullifier => {
 						let pending = bridge
-							.recordAccountsNullifierTreeUpdate(new_root_bytes, commitments_vec, sol_proof)
+							.recordAccountsNullifierTreeUpdate(
+								new_root_bytes,
+								commitments_vec,
+								sol_proof,
+								aggregated_input_proof,
+							)
 							.send()
 							.await
 							.map_err(|e| anyhow::anyhow!(
@@ -541,7 +535,27 @@ impl Sequencer {
 							.with_required_confirmations(1)
 							.with_timeout(Some(RECEIPT_TIMEOUT))
 							.get_receipt()
-							.await?
+							.await
+							.map_err(|e| anyhow::anyhow!("receipt timeout/error: {e}"))
+					},
+				};
+				// Receipt timeout/error is non-fatal: requeue the batch so it can be retried.
+				// The tx may still be in flight; chain recovery on next startup will reconcile.
+				let receipt = match receipt_result {
+					Ok(r) => r,
+					Err(e) => {
+						warn!(
+							job = ?batch.job,
+							error = %e,
+							"receipt polling failed; requeueing batch for retry"
+						);
+						match batch.job {
+							TreeJob::NotesCommitment => self.notes_commitment_state.reinsert_batch(batch.requests),
+							TreeJob::NotesNullifier => self.notes_nullifier_state.reinsert_batch(batch.requests),
+							TreeJob::AccountsCommitment => self.accounts_commitment_state.reinsert_batch(batch.requests),
+							TreeJob::AccountsNullifier => self.accounts_nullifier_state.reinsert_batch(batch.requests),
+						}
+						return Ok(());
 					},
 				};
 				anyhow::ensure!(

@@ -8,10 +8,8 @@ The sequencer is API-driven for intake:
 - sequencer checks note status on-chain:
   - if note exists on bridge: required status depends on endpoint/tree flow
   - if note is not tracked by bridge (`NoteNotFound`): accepted as external/network-native leaf
-- when `batchSize` notes are queued, sequencer proves append insertion and finalizes on-chain via a two-phase flow:
-  - `loadValidateDepositBatch`
-  - `executeValidateDepositBatch` (permissionless, but the server executes immediately)
-  - Phase A also sends a second aggregated-input proof payload (dummy placeholder for now)
+- when `batchSize` notes are queued, sequencer proves append insertion and finalizes on-chain via:
+  - `recordNotesCommitmentTreeUpdate` (single-phase)
 
 ## High-Level Flow
 
@@ -21,9 +19,8 @@ The sequencer is API-driven for intake:
 4. Sequencer batches notes (`batchSize` from contract)
 5. Sequencer sends `ProveRequest` to dedicated prover API
 6. Prover returns `ProveOutcome` with Solidity proof
-7. Sequencer submits `loadValidateDepositBatch(newRoot, notes, proof)`
-8. Anyone can submit `executeValidateDepositBatch(newRoot, notes)`; server does this immediately
-9. Contract marks notes `Validated` and updates `notesCommitmentRoot`
+7. Sequencer submits `recordNotesCommitmentTreeUpdate(newRoot, notes, proof)`
+8. Contract marks tracked notes `Validated` and updates `notesCommitmentRoot`
 
 ## Components
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Console B: deploy ToyUSDT + Bridge/Verifier + ToyUser and wire trusted source.
+# Console B: deploy ToyUSDT + Bridge/Verifier + ToyUser.
 # Writes deployment outputs to: scripts/logs/tessera_e2e_latest.env
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,7 +43,6 @@ echo "Syncing Solidity verifier contracts from prover artifacts..."
 "$ROOT_DIR/scripts/sync_verifiers_from_artifacts.sh"
 
 echo "Deploying Verifier + Bridge..."
-export TESSERA_TRUSTED_SOURCE="$TESSERA_TRUSTED_SOURCE"
 export TESSERA_MONITORED_TOKEN="$TOKEN"
 export TESSERA_NOTES_NULLIFIER_ROOT="$TESSERA_NOTES_NULLIFIER_ROOT"
 export TESSERA_NOTES_COMMITMENT_ROOT="$TESSERA_NOTES_COMMITMENT_ROOT"
@@ -63,8 +62,8 @@ fi
 
 echo "BRIDGE=$BRIDGE"
 
-echo "Deploying ToyUser (trusted-source adapter)..."
-TRUSTED_SOURCE=$(
+echo "Deploying ToyUser adapter..."
+TOY_USER=$(
   forge create src/ToyUser.sol:ToyUser \
     --rpc-url "$RPC" \
     --private-key "$OPERATOR_KEY" \
@@ -72,7 +71,7 @@ TRUSTED_SOURCE=$(
     --constructor-args "$BRIDGE" "$TOKEN" | sed -n 's/Deployed to: //p' | tail -n1
 )
 
-if [[ -z "${TRUSTED_SOURCE:-}" ]]; then
+if [[ -z "${TOY_USER:-}" ]]; then
   echo "forge create failed to return ToyUser address, falling back to cast --create..."
   # Note: Foundry project src path is set to src/pending-deposit in foundry.toml,
   # so `forge inspect src/ToyUser.sol:ToyUser ...` can fail. Inspect by contract name instead.
@@ -82,26 +81,16 @@ if [[ -z "${TRUSTED_SOURCE:-}" ]]; then
     --private-key "$OPERATOR_KEY" \
     --create "$BYTECODE_TS" \
     "constructor(address,address)" "$BRIDGE" "$TOKEN")
-  TRUSTED_SOURCE=$(echo "$DEPLOY_TS_OUT" | sed -n 's/^contractAddress[[:space:]]*//p' | head -n1)
+  TOY_USER=$(echo "$DEPLOY_TS_OUT" | sed -n 's/^contractAddress[[:space:]]*//p' | head -n1)
 fi
 
-if [[ -z "${TRUSTED_SOURCE:-}" ]]; then
+if [[ -z "${TOY_USER:-}" ]]; then
   echo "ERROR: failed to parse ToyUser address from cast output." >&2
   echo "${DEPLOY_TS_OUT:-}"
   exit 1
 fi
 
-echo "TRUSTED_SOURCE=$TRUSTED_SOURCE"
-
-cast send "$BRIDGE" "setTrustedSource(address)" "$TRUSTED_SOURCE" \
-  --rpc-url "$RPC" \
-  --private-key "$OPERATOR_KEY" >/dev/null
-
-ACTUAL_TRUSTED=$(cast call "$BRIDGE" "trustedSource()(address)" --rpc-url "$RPC" | tr -d '[:space:]')
-if [[ "${ACTUAL_TRUSTED,,}" != "${TRUSTED_SOURCE,,}" ]]; then
-  echo "ERROR: trusted source mismatch after setTrustedSource." >&2
-  exit 1
-fi
+echo "TOY_USER=$TOY_USER"
 
 popd >/dev/null
 
@@ -120,7 +109,7 @@ cat > "$OUT_ENV" <<EOV
 export RPC="$RPC"
 export BRIDGE="$BRIDGE"
 export TOKEN="$TOKEN"
-export TRUSTED_SOURCE="$TRUSTED_SOURCE"
+export TOY_USER="$TOY_USER"
 EOV
 
 echo ""

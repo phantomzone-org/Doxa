@@ -23,15 +23,6 @@ pub(super) fn humanize_bridge_revert(err: &impl std::fmt::Display) -> String {
 	}
 }
 
-pub(super) fn is_note_not_found_revert(err: &impl std::fmt::Display) -> bool {
-	const NOTE_NOT_FOUND: [u8; 4] = [0x70, 0x82, 0x97, 0xd2];
-	let s = err.to_string();
-	if let Some(data) = extract_revert_data(&s) {
-		return data.len() >= 4 && data[..4] == NOTE_NOT_FOUND;
-	}
-	extract_custom_error_selector(&s) == Some(NOTE_NOT_FOUND)
-}
-
 fn extract_custom_error_selector(s: &str) -> Option<[u8; 4]> {
 	let needle = "custom error 0x";
 	let idx = s.find(needle)?;
@@ -67,7 +58,6 @@ fn extract_revert_data(s: &str) -> Option<Vec<u8>> {
 
 fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String> {
 	const NOT_OPERATOR: [u8; 4] = [0x7c, 0x21, 0x4f, 0x04];
-	const NOT_TRUSTED_SOURCE: [u8; 4] = [0x4c, 0x9e, 0xc4, 0xbb];
 	const PAUSED: [u8; 4] = [0xda, 0x82, 0x93, 0x39];
 	const INVALID_PROOF: [u8; 4] = [0x09, 0xbd, 0xe3, 0x39];
 	const NOTE_NOT_FOUND: [u8; 4] = [0x70, 0x82, 0x97, 0xd2];
@@ -80,14 +70,11 @@ fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String>
 	const NO_TOKEN_RECEIVED: [u8; 4] = [0x4b, 0xf4, 0x79, 0x0a];
 	const NOT_DEPOSIT_RECIPIENT: [u8; 4] = [0x63, 0xba, 0x28, 0x3e];
 	const TOKEN_TRANSFER_FAILED: [u8; 4] = [0x04, 0x5c, 0x4b, 0x02];
-	const INSUFFICIENT_TRACKED_BALANCE: [u8; 4] = [0xf0, 0x92, 0xaa, 0xce];
 	const ZERO_ADDRESS: [u8; 4] = [0xd9, 0x2e, 0x23, 0x3d];
-	const LOADED_BATCH_NOT_FOUND: [u8; 4] = [0x6c, 0xc9, 0xe0, 0x4f];
 	const INVALID_AGG_INPUT_PROOF: [u8; 4] = [0x13, 0xa2, 0x9f, 0xa2];
 
 	let name = match *selector {
 		NOT_OPERATOR => "NotOperator()",
-		NOT_TRUSTED_SOURCE => "NotTrustedSource()",
 		PAUSED => "PausedErr()",
 		INVALID_PROOF => "InvalidProof()",
 		NOTE_NOT_FOUND => "NoteNotFound(bytes32)",
@@ -100,9 +87,7 @@ fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String>
 		NO_TOKEN_RECEIVED => "NoTokenReceived()",
 		NOT_DEPOSIT_RECIPIENT => "NotDepositRecipient()",
 		TOKEN_TRANSFER_FAILED => "TokenTransferFailed()",
-		INSUFFICIENT_TRACKED_BALANCE => "InsufficientTrackedBalance(uint256,uint256)",
 		ZERO_ADDRESS => "ZeroAddress()",
-		LOADED_BATCH_NOT_FOUND => "LoadedBatchNotFound(bytes32)",
 		INVALID_AGG_INPUT_PROOF => "InvalidAggregatedInputProof()",
 		_ => return None,
 	};
@@ -112,11 +97,11 @@ fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String>
 	}
 
 	match *selector {
-		NOTE_NOT_FOUND | INVALID_DEPOSIT_STATE | DUPLICATE_NOTE | LOADED_BATCH_NOT_FOUND => {
+		NOTE_NOT_FOUND | INVALID_DEPOSIT_STATE | DUPLICATE_NOTE => {
 			let arg = &data[4..36];
 			Some(format!("{name}: 0x{}", hex::encode(arg)))
 		},
-		INVALID_BATCH_LENGTH | INSUFFICIENT_TRACKED_BALANCE => {
+		INVALID_BATCH_LENGTH => {
 			if data.len() < 4 + 64 {
 				return Some(name.to_string());
 			}

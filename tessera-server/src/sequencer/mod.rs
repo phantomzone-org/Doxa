@@ -158,11 +158,15 @@ impl Sequencer {
 			let leaves: Vec<Hash> = vals
 				.into_iter()
 				.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(b)))
-				.collect();
+				.collect::<anyhow::Result<Vec<_>>>()?;
 			let proof = t.insert_batch(leaves)?;
 			anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
 			Ok(())
 		})?;
+		// Backward compatibility for legacy snapshots that predate CommitmentTree::leaf_counts.
+		if meta0.snapshot_version < 2 {
+			tree.rebuild_leaf_counts();
+		}
 		let mut meta = meta0.clone();
 		meta.wal_pos = wal_pos;
 		meta.committed_batches = meta.committed_batches.saturating_add(replayed);
@@ -304,6 +308,17 @@ impl Sequencer {
 						None
 					}
 				} => {
+					let note_hash = match contract::bytes32_to_hash(&alloy::primitives::B256::from(note)) {
+						Ok(h) => h,
+						Err(e) => {
+							warn!(note = ?alloy::primitives::B256::from(note), error = %e, "notes nullifier request rejected: invalid leaf encoding");
+							continue;
+						},
+					};
+					if self.notes_nullifier_state.tree.find_node_index_by_value(&note_hash).is_some() {
+						warn!(note = ?alloy::primitives::B256::from(note), "notes nullifier request rejected: leaf already nullified");
+						continue;
+					}
 					if !self.is_note_validated(&provider, &note).await {
 						warn!(note = ?note, "notes nullifier request rejected: note exists on bridge but is not Validated");
 						continue;
@@ -356,6 +371,17 @@ impl Sequencer {
 						None
 					}
 				} => {
+					let leaf_hash = match contract::bytes32_to_hash(&alloy::primitives::B256::from(leaf)) {
+						Ok(h) => h,
+						Err(e) => {
+							warn!(leaf = ?alloy::primitives::B256::from(leaf), error = %e, "accounts nullifier request rejected: invalid leaf encoding");
+							continue;
+						},
+					};
+					if self.accounts_nullifier_state.tree.find_node_index_by_value(&leaf_hash).is_some() {
+						warn!(leaf = ?alloy::primitives::B256::from(leaf), "accounts nullifier request rejected: leaf already nullified");
+						continue;
+					}
 					let order_key = EventOrderKey {
 						block_number: 0,
 						transaction_index: 0,

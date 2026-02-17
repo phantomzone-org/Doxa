@@ -35,8 +35,8 @@ if [[ "$ORDER" == "random-unconsumed" ]]; then
     NOTE=$(printf "0x%064x" "$i")
     status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$NOTE" --rpc-url "$RPC" 2>/dev/null || true)
     status="$(echo "$status" | tr -d '[:space:]')"
-    # 0 = Pending; ignore unknown notes/reverts.
-    if [[ "$status" == "0" ]]; then
+    # 1 = Pending (DepositStatus.None=0); ignore unknown notes/reverts.
+    if [[ "$status" == "1" ]]; then
       echo "$NOTE" >> "$PENDING_FILE"
     fi
   done

@@ -169,7 +169,7 @@ find_first_missing_note() {
     note=$(printf "0x%064x" "$i")
     status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
     status="$(echo "$status" | tr -d '[:space:]')"
-    if [[ -z "$status" ]]; then
+    if [[ "$status" == "0" ]]; then
       echo "$i"
       return 0
     fi
@@ -186,7 +186,7 @@ count_validated_in_range() {
     note=$(printf "0x%064x" "$i")
     status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
     status="$(echo "$status" | tr -d '[:space:]')"
-    if [[ "$status" == "1" ]]; then
+    if [[ "$status" == "2" ]]; then
       validated=$((validated + 1))
     fi
   done

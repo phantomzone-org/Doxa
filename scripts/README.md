@@ -16,9 +16,8 @@ Flow:
   - `input_account_commitment`
   - `output_account_commitment`
   - `tx_proof`
-3. sequencer batches, proves, then finalizes the deposit-validation batch on-chain
-   - load: `loadValidateDepositBatch(newNotesCommitmentRoot, notes, proof)` (operator-only)
-   - execute: `executeValidateDepositBatch(newNotesCommitmentRoot, notes)` (permissionless)
+3. sequencer batches, proves, then records notes commitment update on-chain
+   - `recordNotesCommitmentTreeUpdate(newNotesCommitmentRoot, notes, proof)` (operator-only)
 
 ## Scripts
 
@@ -68,7 +67,7 @@ scripts/local_e2e_toy_b_deploy.sh
 ```
 
 This generates:
-- `scripts/logs/tessera_e2e_latest.env` with `BRIDGE`, `TOKEN`, `TRUSTED_SOURCE`.
+- `scripts/logs/tessera_e2e_latest.env` with `BRIDGE`, `TOKEN`, `TOY_USER`.
 
 ### Console C (prover)
 

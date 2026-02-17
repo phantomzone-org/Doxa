@@ -8,13 +8,13 @@ use crate::{
 	TREE_DEPTH,
 };
 
-/// Sequencer in-memory state for commitment-request processing.
+/// Sequencer in-memory state for nullifier-request processing.
 pub struct NullifierTreeState {
-	/// Local consumed-note append-only tree mirror.
+	/// Local nullifier tree mirror.
 	pub tree: NullifierTree<Hash>,
 	/// Pending consume requests keyed by canonical chain order.
 	pub pending_requests: BTreeMap<EventOrderKey, PendingRequest>,
-	/// Fast duplicate guard for pending requests.
+	/// Fast duplicate guard for requests currently in the pending queue.
 	pub pending_commitments: HashSet<[u8; 32]>,
 }
 
@@ -48,15 +48,19 @@ impl NullifierTreeState {
 		Ok(())
 	}
 
-	/// Add a pending consume request by canonical chain order.
+	/// Add a pending nullifier consume request by canonical chain order.
 	///
-	/// Returns true when we have at least `batch_size` pending requests.
+	/// Returns `true` when we have at least `batch_size` pending requests.
+	///
+	/// The request is silently dropped (and `false` returned) when the leaf is
+	/// already in the pending queue.
 	pub fn add_consume_request(
 		&mut self,
 		order_key: EventOrderKey,
 		commitment: [u8; 32],
 		batch_size: usize,
 	) -> bool {
+		// Within-epoch duplicate guard.
 		if self.pending_commitments.contains(&commitment) {
 			return self.pending_requests.len() >= batch_size;
 		}

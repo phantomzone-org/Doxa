@@ -2,6 +2,7 @@ use crate::tree::{
 	BatchCommitmentProof, CommitmentInsertProof, MerkleTree, error::MerkleTreeResult,
 	hasher::MerkleHash,
 };
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -14,12 +15,15 @@ use serde::{Deserialize, Serialize};
 )]
 pub struct CommitmentTree<H: MerkleHash> {
 	pub(crate) tree: MerkleTree<H>,
+	#[serde(default)]
+	pub(crate) leaf_counts: BTreeMap<H::Digest, u64>,
 }
 
 impl<H: MerkleHash> CommitmentTree<H> {
 	pub fn new(depth: usize) -> Self {
 		Self {
 			tree: MerkleTree::new(depth),
+			leaf_counts: BTreeMap::new(),
 		}
 	}
 
@@ -40,6 +44,29 @@ impl<H: MerkleHash> CommitmentTree<H> {
 		self.tree.leaves()
 	}
 
+	/// Returns how many times `leaf` appears in this append tree.
+	///
+	/// Duplicates are allowed in commitment trees, so callers should use
+	/// multiplicity checks rather than simple set-membership assumptions.
+	pub fn leaf_count(&self, leaf: &H::Digest) -> u64 {
+		*self.leaf_counts.get(leaf).unwrap_or(&0)
+	}
+
+	/// Returns whether `leaf` is present at least once.
+	pub fn contains_leaf(&self, leaf: &H::Digest) -> bool {
+		self.leaf_count(leaf) > 0
+	}
+
+	/// Rebuilds the multiplicity index from `tree.leaves()`.
+	///
+	/// Needed when loading snapshots produced before `leaf_counts` existed.
+	pub fn rebuild_leaf_counts(&mut self) {
+		self.leaf_counts.clear();
+		for leaf in self.tree.leaves() {
+			*self.leaf_counts.entry(*leaf).or_insert(0) += 1;
+		}
+	}
+
 	pub fn insert(&mut self, leaf: H::Digest) -> MerkleTreeResult<CommitmentInsertProof<H>> {
 		let index: usize = self.num_leaves();
 
@@ -49,6 +76,7 @@ impl<H: MerkleHash> CommitmentTree<H> {
 			self.tree.generate_siblings_array(index, 0, self.depth())?;
 
 		self.tree.insert(leaf)?;
+		*self.leaf_counts.entry(leaf).or_insert(0) += 1;
 
 		let siblings_new: Vec<H::Digest> =
 			self.tree.generate_siblings_array(index, 0, self.depth())?;
@@ -81,6 +109,9 @@ impl<H: MerkleHash> CommitmentTree<H> {
 		)?;
 
 		self.tree.insert_batch(leaves.clone())?;
+		for leaf in &leaves {
+			*self.leaf_counts.entry(*leaf).or_insert(0) += 1;
+		}
 
 		let upper_siblings_new: Vec<H::Digest> = self.tree.generate_siblings_array(
 			start_index,
@@ -139,6 +170,55 @@ mod tests {
 
 		let proof: BatchCommitmentProof<Hash> = tree.insert_batch(batch)?;
 		assert!(proof.verify());
+
+		Ok(())
+	}
+
+	#[test]
+	fn test_duplicate_leaf_counts() -> Result<()> {
+		let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let mut rng: StdRng = StdRng::from_seed([1u8; 32]);
+
+		let a = Hash::new_random(&mut rng);
+		let b = Hash::new_random(&mut rng);
+
+		let p1 = tree.insert_batch(vec![a, b, a, a])?;
+		assert!(p1.verify());
+		assert_eq!(tree.leaf_count(&a), 3);
+		assert_eq!(tree.leaf_count(&b), 1);
+		assert!(tree.contains_leaf(&a));
+		assert!(tree.contains_leaf(&b));
+
+		let p2 = tree.insert(a)?;
+		assert!(p2.verify());
+		assert_eq!(tree.leaf_count(&a), 4);
+
+		Ok(())
+	}
+
+	#[test]
+	fn test_rebuild_leaf_counts_from_leaves() -> Result<()> {
+		let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let mut rng: StdRng = StdRng::from_seed([2u8; 32]);
+
+		let a = Hash::new_random(&mut rng);
+		let b = Hash::new_random(&mut rng);
+
+		let p = tree.insert_batch(vec![a, b, a, b])?;
+		assert!(p.verify());
+		assert_eq!(tree.leaf_count(&a), 2);
+		assert_eq!(tree.leaf_count(&b), 2);
+
+		// Simulate loading legacy state where no multiplicity index was persisted.
+		tree.leaf_counts.clear();
+		assert_eq!(tree.leaf_count(&a), 0);
+		assert_eq!(tree.leaf_count(&b), 0);
+
+		tree.rebuild_leaf_counts();
+		assert_eq!(tree.leaf_count(&a), 2);
+		assert_eq!(tree.leaf_count(&b), 2);
+		assert!(tree.contains_leaf(&a));
+		assert!(tree.contains_leaf(&b));
 
 		Ok(())
 	}

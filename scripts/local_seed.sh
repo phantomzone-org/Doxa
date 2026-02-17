@@ -34,11 +34,9 @@ echo "RPC=$RPC"
 echo "BRIDGE=$BRIDGE"
 
 TRUSTED_ADDR=$(cast wallet address --private-key "$TRUSTED_KEY")
-echo "trusted key addr: $TRUSTED_ADDR"
-echo "on-chain trustedSource:"
-cast call "$BRIDGE" "trustedSource()(address)" --rpc-url "$RPC"
+echo "seed key addr: $TRUSTED_ADDR"
 
-echo "trusted key balance:"
+echo "seed key balance:"
 cast balance "$TRUSTED_ADDR" --rpc-url "$RPC"
 
 MONITORED_TOKEN=$(cast call "$BRIDGE" "monitoredToken()(address)" --rpc-url "$RPC" | tr -d '[:space:]')
@@ -51,7 +49,7 @@ find_first_missing_note() {
     note=$(printf "0x%064x" "$i")
     status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
     status="$(echo "$status" | tr -d '[:space:]')"
-    if [[ -z "$status" ]]; then
+    if [[ "$status" == "0" ]]; then
       echo "$i"
       return 0
     fi

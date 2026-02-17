@@ -108,9 +108,10 @@ impl CommitmentProverService {
 
 		let bn128_proof = self.bn128_wrapper.wrap_proof_to_bn128(plonky2_proof)?;
 		let (g16_proof, g16_pub_inp) = Groth16Wrapper::prove(bn128_proof)?;
-		Groth16Wrapper::verify(g16_proof.clone(), g16_pub_inp.clone())?;
-
+		// Call proof_to_solidity_json (takes &[u8]) before verify (takes Vec<u8>) to
+		// avoid cloning g16_proof and g16_pub_inp.
 		let solidity_json = Groth16Wrapper::proof_to_solidity_json(&g16_proof, &g16_pub_inp)?;
+		Groth16Wrapper::verify(g16_proof, g16_pub_inp)?;
 		parse_solidity_proof_json(&solidity_json)
 	}
 }
@@ -164,9 +165,10 @@ impl NullifierProverService {
 
 		let bn128_proof = self.bn128_wrapper.wrap_proof_to_bn128(plonky2_proof)?;
 		let (g16_proof, g16_pub_inp) = Groth16Wrapper::prove(bn128_proof)?;
-		Groth16Wrapper::verify(g16_proof.clone(), g16_pub_inp.clone())?;
-
+		// Call proof_to_solidity_json (takes &[u8]) before verify (takes Vec<u8>) to
+		// avoid cloning g16_proof and g16_pub_inp.
 		let solidity_json = Groth16Wrapper::proof_to_solidity_json(&g16_proof, &g16_pub_inp)?;
+		Groth16Wrapper::verify(g16_proof, g16_pub_inp)?;
 		parse_solidity_proof_json(&solidity_json)
 	}
 }

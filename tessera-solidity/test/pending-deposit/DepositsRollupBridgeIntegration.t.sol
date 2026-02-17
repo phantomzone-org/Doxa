@@ -22,12 +22,12 @@ contract DepositsRollupBridgeIntegrationTest is Test {
         uint256 amount = 25e6;
         bytes32 note = bytes32(uint256(77));
 
-        // Deploy bridge first with placeholder trusted source; update after adapter deployment.
+        // Deploy bridge.
         DepositsRollupBridge bridge = new DepositsRollupBridge(
             address(commitmentVerifier),
             address(nullifierVerifier),
+            address(new IntegrationMockVerifier()),
             address(this),
-            address(0xBEEF),
             bytes32(uint256(0x1111)),
             bytes32(uint256(0x2222)),
             bytes32(uint256(0x3333)),
@@ -37,7 +37,6 @@ contract DepositsRollupBridgeIntegrationTest is Test {
         );
 
         ToyUser userAdapter = new ToyUser(address(bridge), address(token));
-        bridge.setTrustedSource(address(userAdapter));
 
         token.mint(user, amount);
         vm.prank(user);

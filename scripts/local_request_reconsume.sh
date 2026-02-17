@@ -29,7 +29,7 @@ for i in $(seq 1 "$MAX_INDEX"); do
   note=$(printf "0x%064x" "$i")
   status=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$note" --rpc-url "$RPC" 2>/dev/null || true)
   status="$(echo "$status" | tr -d '[:space:]')"
-  if [[ "$status" == "1" ]]; then
+  if [[ "$status" == "2" ]]; then
     echo "$note" >> "$TMP_VALIDATED"
   fi
 done

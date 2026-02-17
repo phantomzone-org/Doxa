@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use crate::contract::GOLDILOCKS_PRIME;
+
 #[derive(Clone)]
 pub(super) struct ApiState {
 	pub(super) notes_commitment_tx: mpsc::Sender<[u8; 32]>,
@@ -264,6 +266,16 @@ async fn accounts_nullifier_handler(
 
 fn parse_note_hex(s: &str) -> anyhow::Result<[u8; 32]> {
 	let b = s.parse::<B256>()?;
+	// Validate every 64-bit limb is within the Goldilocks field so
+	// bytes32_to_hash never silently wraps an out-of-range commitment.
+	let bytes = b.as_slice();
+	for i in 0..4usize {
+		let limb = u64::from_be_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
+		anyhow::ensure!(
+			limb < GOLDILOCKS_PRIME,
+			"note commitment limb {i} is out of Goldilocks field range"
+		);
+	}
 	Ok(b.into())
 }
 
@@ -274,12 +286,36 @@ fn parse_input_proof_hex(s: &str) -> anyhow::Result<Vec<u8>> {
 	Ok(bytes)
 }
 
+/// Verify an associated transaction proof.
+///
+/// # Security notice
+/// This is currently a **stub** that is fail-closed by default.
+///
+/// In production builds (without the `insecure-stub-proof-verify` feature)
+/// every proof is rejected so the endpoint cannot be used accidentally with no
+/// real cryptographic verification backing it.
+///
+/// Enable the feature **only for local/dev environments**:
+/// ```
+/// cargo run --features insecure-stub-proof-verify ...
+/// ```
 fn verify_associated_tx_proof(proof: &[u8]) -> Result<(), &'static str> {
 	if proof.is_empty() {
 		return Err("tx proof is empty");
 	}
-	if proof[0] != 0x01 {
-		return Err("tx proof verification failed");
+	#[cfg(feature = "insecure-stub-proof-verify")]
+	{
+		// STUB: accept any proof whose first byte is 0x01.
+		// Provides NO security guarantee – local dev / integration testing only.
+		if proof[0] == 0x01 {
+			return Ok(());
+		}
+		return Err("tx proof verification failed (stub)");
 	}
-	Ok(())
+	#[cfg(not(feature = "insecure-stub-proof-verify"))]
+	{
+		let _ = proof;
+		Err("real tx proof verification is not yet implemented; \
+		     enable feature `insecure-stub-proof-verify` for local dev only")
+	}
 }

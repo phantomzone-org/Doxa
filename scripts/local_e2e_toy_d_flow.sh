@@ -28,8 +28,8 @@ fi
 # shellcheck disable=SC1090
 source "$E2E_ENV"
 
-if [[ -z "${BRIDGE:-}" || -z "${TOKEN:-}" || -z "${TRUSTED_SOURCE:-}" ]]; then
-  echo "ERROR: BRIDGE/TOKEN/TRUSTED_SOURCE missing in $E2E_ENV" >&2
+if [[ -z "${BRIDGE:-}" || -z "${TOKEN:-}" || -z "${TOY_USER:-}" ]]; then
+  echo "ERROR: BRIDGE/TOKEN/TOY_USER missing in $E2E_ENV" >&2
   exit 1
 fi
 
@@ -68,7 +68,7 @@ echo "Creating $TOTAL_DEPOSITS deposits via depositAndRecord..."
 for i in $(seq 1 "$TOTAL_DEPOSITS"); do
   NOTE=$(printf "0x%064x" "$i")
   AMOUNT=$((1000 + i))
-  cast send "$TRUSTED_SOURCE" "depositAndRecord(bytes32,uint256)" "$NOTE" "$AMOUNT" \
+  cast send "$TOY_USER" "depositAndRecord(bytes32,uint256)" "$NOTE" "$AMOUNT" \
     --rpc-url "$RPC" \
     --private-key "$USER_KEY" >/dev/null
   echo "$NOTE" >> "$NOTES_FILE"
@@ -95,8 +95,8 @@ while (( SECONDS < deadline )); do
   validated=0
   while read -r NOTE; do
     STATUS=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$NOTE" --rpc-url "$RPC" | tr -d '[:space:]')
-    # 1 == Validated in current bridge.
-    if [[ "$STATUS" == "1" ]]; then
+    # 2 == Validated in current bridge (DepositStatus.None=0, Pending=1, Validated=2, Withdrawn=3).
+    if [[ "$STATUS" == "2" ]]; then
       validated=$((validated + 1))
     fi
   done < "$REQ_FILE"
@@ -110,7 +110,7 @@ done
 
 if [[ "${validated:-0}" -ne "$REQUEST_COUNT" ]]; then
   echo "ERROR: timeout waiting for all requested notes to become Validated." >&2
-  echo "NOTE: This requires the sequencer/server to load+execute deposit validation batches (loadValidateDepositBatch+executeValidateDepositBatch)." >&2
+  echo "NOTE: This requires the sequencer/server to record notes commitment updates on-chain (recordNotesCommitmentTreeUpdate)." >&2
   exit 1
 fi
 
@@ -126,7 +126,7 @@ echo ""
 echo "E2E FLOW PASSED"
 echo "BRIDGE=$BRIDGE"
 echo "TOKEN=$TOKEN"
-echo "TRUSTED_SOURCE=$TRUSTED_SOURCE"
+echo "TOY_USER=$TOY_USER"
 echo "NOTES_FILE=$NOTES_FILE"
 echo "REQ_FILE=$REQ_FILE"
 
@@ -141,9 +141,10 @@ for i in $(seq 1 "$TOTAL_DEPOSITS"); do
   fi
   status=$(echo "$dep" | sed -E 's/.*,[[:space:]]*([0-9]+)\)$/\1/')
   case "$status" in
-    0) status_label="Pending" ;;
-    1) status_label="Validated" ;;
-    2) status_label="Withdrawn" ;;
+    0) status_label="None" ;;
+    1) status_label="Pending" ;;
+    2) status_label="Validated" ;;
+    3) status_label="Withdrawn" ;;
     *) status_label="Unknown($status)" ;;
   esac
   echo "note_index=$i note=$NOTE status=$status_label data=$dep"

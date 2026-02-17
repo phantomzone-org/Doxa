@@ -148,12 +148,14 @@ impl Groth16Wrapper {
 		Self::info_log("groth16 prove (ffi) starting");
 		let json: String = serde_json::to_string_pretty(&proof_with_pis)?;
 		let input: Vec<u8> = json.into_bytes();
+		let input_len = c_int::try_from(input.len())
+			.map_err(|_| anyhow!("proof JSON too large for FFI ({}B > c_int::MAX)", input.len()))?;
 		let mut proof_out_len: c_int = 0;
 		let mut wit_out_len: c_int = 0;
 		let res = unsafe {
 			Groth16Proof(
 				input.as_ptr() as *mut u8,
-				input.len() as c_int,
+				input_len,
 				&mut proof_out_len as *mut c_int,
 				&mut wit_out_len as *mut c_int,
 			)
@@ -201,12 +203,17 @@ impl Groth16Wrapper {
 	/// verify the given Groth16 proof with the given public inputs
 	pub fn verify(proof: Vec<u8>, public_inputs: Vec<u8>) -> Result<()> {
 		Self::info_log("groth16 verify (ffi) starting");
+		let proof_len = c_int::try_from(proof.len())
+			.map_err(|_| anyhow!("proof too large for FFI ({}B > c_int::MAX)", proof.len()))?;
+		let pub_inp_len = c_int::try_from(public_inputs.len()).map_err(|_| {
+			anyhow!("public inputs too large for FFI ({}B > c_int::MAX)", public_inputs.len())
+		})?;
 		let res_string = unsafe {
 			let ptr = Groth16Verify(
 				proof.as_ptr() as *mut u8,
-				proof.len() as c_int,
+				proof_len,
 				public_inputs.as_ptr() as *mut u8,
-				public_inputs.len() as c_int,
+				pub_inp_len,
 			);
 
 			let cstr = CStr::from_ptr(ptr);
@@ -239,12 +246,18 @@ impl Groth16Wrapper {
 	/// types live); this method is a thin FFI bridge.
 	pub fn proof_to_solidity_json(proof_bytes: &[u8], pub_inp_bytes: &[u8]) -> Result<String> {
 		Self::info_log("groth16 format solidity json (ffi) starting");
+		let proof_len = c_int::try_from(proof_bytes.len()).map_err(|_| {
+			anyhow!("proof bytes too large for FFI ({}B > c_int::MAX)", proof_bytes.len())
+		})?;
+		let pub_inp_len = c_int::try_from(pub_inp_bytes.len()).map_err(|_| {
+			anyhow!("public input bytes too large for FFI ({}B > c_int::MAX)", pub_inp_bytes.len())
+		})?;
 		unsafe {
 			let ptr = Groth16FormatJSON(
 				proof_bytes.as_ptr() as *mut u8,
-				proof_bytes.len() as c_int,
+				proof_len,
 				pub_inp_bytes.as_ptr() as *mut u8,
-				pub_inp_bytes.len() as c_int,
+				pub_inp_len,
 			);
 			let cstr = CStr::from_ptr(ptr);
 			let s = String::from_utf8_lossy(cstr.to_bytes()).to_string();
