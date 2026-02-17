@@ -15,4 +15,5 @@ pub struct EventOrderKey {
 pub struct PendingRequest {
 	pub order_key: EventOrderKey,
 	pub commitment: [u8; 32],
+	pub associated_input_proof: Option<Vec<u8>>,
 }

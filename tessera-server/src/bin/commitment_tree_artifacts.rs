@@ -10,7 +10,7 @@
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::Result;
-use tessera_server::{sample_batch_commitment_tree_proof};
+use tessera_server::sample_batch_commitment_tree_proof;
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	tree::{hasher::Hash, BatchCommitmentProof},

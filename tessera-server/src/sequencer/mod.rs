@@ -1,11 +1,12 @@
 use std::time::Duration;
 
-use anyhow::Context;
 use alloy::{
 	network::EthereumWallet,
 	providers::{Provider, ProviderBuilder},
 	signers::{local::PrivateKeySigner, Signer},
 };
+use anyhow::Context;
+use tessera_trees::tree::{hasher::Hash, CommitmentTree, NullifierTree};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -18,12 +19,13 @@ use crate::{
 	types::ProveOutcome,
 	TREE_DEPTH,
 };
-use tessera_trees::tree::{hasher::Hash, CommitmentTree, NullifierTree};
 
 mod api;
 mod pipeline;
 mod recovery;
 mod revert;
+
+const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
 
 /// Receipt polling timeout for on-chain transactions.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -41,6 +43,12 @@ enum TreeJob {
 	NotesNullifier,
 	AccountsCommitment,
 	AccountsNullifier,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct NotesCommitmentRequest {
+	pub note: [u8; 32],
+	pub associated_input_proof: Vec<u8>,
 }
 
 /// The main sequencer: watches note availability, batches by chain order, proves and finalizes.
@@ -61,7 +69,7 @@ pub struct Sequencer {
 	prover_client: Option<HttpProverClient>,
 	result_tx: Option<mpsc::Sender<ProveOutcome>>,
 	result_rx: Option<mpsc::Receiver<ProveOutcome>>,
-	notes_commitment_rx: Option<mpsc::Receiver<[u8; 32]>>,
+	notes_commitment_rx: Option<mpsc::Receiver<NotesCommitmentRequest>>,
 	notes_nullifier_rx: Option<mpsc::Receiver<[u8; 32]>>,
 	accounts_commitment_rx: Option<mpsc::Receiver<[u8; 32]>>,
 	accounts_nullifier_rx: Option<mpsc::Receiver<[u8; 32]>>,
@@ -154,15 +162,16 @@ impl Sequencer {
 			self.config.snapshot_every_batches,
 		)?;
 		let (mut tree, meta0) = store.load_or_init(|| CommitmentTree::new(TREE_DEPTH))?;
-		let (wal_pos, replayed) = store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-			let leaves: Vec<Hash> = vals
-				.into_iter()
-				.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(b)))
-				.collect::<anyhow::Result<Vec<_>>>()?;
-			let proof = t.insert_batch(leaves)?;
-			anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
-			Ok(())
-		})?;
+		let (wal_pos, replayed) =
+			store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
+				let leaves: Vec<Hash> = vals
+					.into_iter()
+					.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(b)))
+					.collect::<anyhow::Result<Vec<_>>>()?;
+				let proof = t.insert_batch(leaves)?;
+				anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
+				Ok(())
+			})?;
 		// Backward compatibility for legacy snapshots that predate CommitmentTree::leaf_counts.
 		if meta0.snapshot_version < 2 {
 			tree.rebuild_leaf_counts();
@@ -190,15 +199,14 @@ impl Sequencer {
 		// Step 3: reconcile local cache with chain by replaying only missing batches.
 		// This is authoritative recovery: if local is behind, we recover leaves from
 		// on-chain transaction calldata and append them locally.
-		self
-			.recover_missing_chain_updates(
-				&provider,
-				&on_chain_notes_commitment_root,
-				&on_chain_notes_nullifier_root,
-				&on_chain_accounts_commitment_root,
-				&on_chain_accounts_nullifier_root,
-			)
-			.await?;
+		self.recover_missing_chain_updates(
+			&provider,
+			&on_chain_notes_commitment_root,
+			&on_chain_notes_nullifier_root,
+			&on_chain_accounts_commitment_root,
+			&on_chain_accounts_nullifier_root,
+		)
+		.await?;
 
 		self.recover_pending_requests(&provider, batch_size).await?;
 		info!(
@@ -222,7 +230,8 @@ impl Sequencer {
 		self.result_tx = Some(result_tx);
 		self.result_rx = Some(result_rx);
 
-		let (notes_commitment_tx, notes_commitment_rx) = mpsc::channel::<[u8; 32]>(1024);
+		let (notes_commitment_tx, notes_commitment_rx) =
+			mpsc::channel::<NotesCommitmentRequest>(1024);
 		let (notes_nullifier_tx, notes_nullifier_rx) = mpsc::channel::<[u8; 32]>(1024);
 		let (accounts_commitment_tx, accounts_commitment_rx) = mpsc::channel::<[u8; 32]>(1024);
 		let (accounts_nullifier_tx, accounts_nullifier_rx) = mpsc::channel::<[u8; 32]>(1024);
@@ -273,13 +282,14 @@ impl Sequencer {
 					}
 				}
 
-				Some(note) = async {
+				Some(req) = async {
 					if let Some(rx) = &mut self.notes_commitment_rx {
 						rx.recv().await
 					} else {
 						None
 					}
 				} => {
+					let note = req.note;
 					if !self.is_note_available(&provider, &note).await {
 						warn!(note = ?note, "notes commitment request rejected: note exists on bridge but is not Pending");
 						continue;
@@ -290,7 +300,12 @@ impl Sequencer {
 						log_index: self.api_order_counter,
 					};
 					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.notes_commitment_state.add_consume_request(order_key, note, batch_size);
+					self.notes_commitment_state.add_consume_request(
+						order_key,
+						note,
+						req.associated_input_proof,
+						batch_size,
+					);
 					self.log_pool_status("accepted notes commitment leaf");
 
 					if in_flight.is_none() {
@@ -353,7 +368,12 @@ impl Sequencer {
 						log_index: self.api_order_counter,
 					};
 					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.accounts_commitment_state.add_consume_request(order_key, leaf, batch_size);
+					self.accounts_commitment_state.add_consume_request(
+						order_key,
+						leaf,
+						DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(),
+						batch_size,
+					);
 					self.log_pool_status("accepted accounts commitment leaf");
 
 					if in_flight.is_none() {

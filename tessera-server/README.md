@@ -18,8 +18,10 @@ The sequencer is API-driven for intake:
 3. Sequencer validates each note is `Pending` using `getDepositStatus(note)`
 4. Sequencer batches notes (`batchSize` from contract)
 5. Sequencer sends `ProveRequest` to dedicated prover API
-6. Prover returns `ProveOutcome` with Solidity proof
-7. Sequencer submits `recordNotesCommitmentTreeUpdate(newRoot, notes, proof)`
+6. Prover returns `ProveOutcome` with:
+   - tree-update Solidity proof
+   - aggregated-input Solidity proof
+7. Sequencer submits `recordNotesCommitmentTreeUpdate(newRoot, notes, treeProof, aggregatedInputProof)`
 8. Contract marks tracked notes `Validated` and updates `notesCommitmentRoot`
 
 ## Components
@@ -57,6 +59,12 @@ HTTP errors:
 
 Note: `accepted=true` means the request entered the sequencer queue; the note is still checked against on-chain status before batching.
 
+`input_proof` rules (current Phase A):
+- required for each request
+- validated by sequencer before pooling
+- dummy verifier currently accepts only `0x01`
+- any other value is rejected with `accepted=false`
+
 ### `POST /private-tx`
 
 Request body:
@@ -73,7 +81,7 @@ Request body:
 ```
 
 Semantics:
-- `tx_proof` is validated as non-empty hex (Phase A placeholder gate).
+- `tx_proof` is validated by the same dummy verifier (currently accepts only `0x01`).
 - if proof verification fails, the payload is dropped and response is:
   - `{"accepted":false,"invalid_proof_tx":{"tx_id":"...","reason":"..."}}`
 - routing is deterministic:
@@ -81,6 +89,11 @@ Semantics:
   - `output_notes` -> notes commitment queue
   - `input_account_commitment` -> accounts nullifier queue
   - `output_account_commitment` -> accounts commitment queue
+
+Batch proving semantics:
+- Sequencer sends one associated-input proof per leaf in batch order to prover.
+- Prover dummy-verifies each associated proof and dummy-aggregates them.
+- Prover returns both proofs (tree update + aggregated input) to sequencer.
 
 ## Configuration
 

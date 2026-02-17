@@ -10,7 +10,7 @@
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::{ensure, Result};
-use tessera_server::{sample_batch_nullifier_tree_proof};
+use tessera_server::sample_batch_nullifier_tree_proof;
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	tree::{hasher::Hash, NullifierChainedInsertProof},

@@ -1,4 +1,3 @@
-use super::*;
 use alloy::{
 	consensus::Transaction as _,
 	rpc::types::{Filter, Log},
@@ -6,7 +5,13 @@ use alloy::{
 };
 use tracing::{debug, info, warn};
 
+use super::*;
+
 impl Sequencer {
+	/// Maximum block range per `eth_getLogs` call.
+	/// Nodes commonly limit responses to ~2 000–10 000 blocks; 1 000 is conservative.
+	const LOG_FETCH_CHUNK_BLOCKS: u64 = 1_000;
+
 	pub(super) fn load_other_trees(&mut self) -> anyhow::Result<()> {
 		{
 			let mut store = TreeStore::<NullifierTree<Hash>>::open(
@@ -15,12 +20,13 @@ impl Sequencer {
 				self.config.snapshot_every_batches,
 			)?;
 			let (mut tree, meta0) = store.load_or_init(|| NullifierTree::new(TREE_DEPTH))?;
-			let (wal_pos, replayed) = store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-				let values: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
-				let proof = t.insert_chained(values)?;
-				anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
-				Ok(())
-			})?;
+			let (wal_pos, replayed) =
+				store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
+					let values: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
+					let proof = t.insert_chained(values)?;
+					anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
+					Ok(())
+				})?;
 			let mut meta = meta0.clone();
 			meta.wal_pos = wal_pos;
 			meta.committed_batches = meta.committed_batches.saturating_add(replayed);
@@ -46,12 +52,13 @@ impl Sequencer {
 				self.config.snapshot_every_batches,
 			)?;
 			let (mut tree, meta0) = store.load_or_init(|| CommitmentTree::new(TREE_DEPTH))?;
-			let (wal_pos, replayed) = store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-				let leaves: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
-				let proof = t.insert_batch(leaves)?;
-				anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
-				Ok(())
-			})?;
+			let (wal_pos, replayed) =
+				store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
+					let leaves: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
+					let proof = t.insert_batch(leaves)?;
+					anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
+					Ok(())
+				})?;
 			// Backward compatibility for legacy snapshots that predate CommitmentTree::leaf_counts.
 			if meta0.snapshot_version < 2 {
 				tree.rebuild_leaf_counts();
@@ -81,12 +88,13 @@ impl Sequencer {
 				self.config.snapshot_every_batches,
 			)?;
 			let (mut tree, meta0) = store.load_or_init(|| NullifierTree::new(TREE_DEPTH))?;
-			let (wal_pos, replayed) = store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-				let values: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
-				let proof = t.insert_chained(values)?;
-				anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
-				Ok(())
-			})?;
+			let (wal_pos, replayed) =
+				store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
+					let values: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
+					let proof = t.insert_chained(values)?;
+					anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
+					Ok(())
+				})?;
 			let mut meta = meta0.clone();
 			meta.wal_pos = wal_pos;
 			meta.committed_batches = meta.committed_batches.saturating_add(replayed);
@@ -107,10 +115,6 @@ impl Sequencer {
 
 		Ok(())
 	}
-
-	/// Maximum block range per `eth_getLogs` call.
-	/// Nodes commonly limit responses to ~2 000–10 000 blocks; 1 000 is conservative.
-	const LOG_FETCH_CHUNK_BLOCKS: u64 = 1_000;
 
 	pub(super) async fn recover_missing_chain_updates<P: Provider + Clone>(
 		&mut self,
@@ -209,8 +213,12 @@ impl Sequencer {
 
 			// Determine tree type directly from the event discriminator — no calldata guessing.
 			let job = match decoded.inner.treeType {
-				contract::IDepositsRollupBridge::TreeType::NotesCommitment => TreeJob::NotesCommitment,
-				contract::IDepositsRollupBridge::TreeType::NotesNullifier => TreeJob::NotesNullifier,
+				contract::IDepositsRollupBridge::TreeType::NotesCommitment => {
+					TreeJob::NotesCommitment
+				},
+				contract::IDepositsRollupBridge::TreeType::NotesNullifier => {
+					TreeJob::NotesNullifier
+				},
 				contract::IDepositsRollupBridge::TreeType::AccountsCommitment => {
 					TreeJob::AccountsCommitment
 				},
@@ -223,9 +231,9 @@ impl Sequencer {
 				},
 			};
 
-			let tx_hash = log
-				.transaction_hash
-				.ok_or_else(|| anyhow::anyhow!("ValidatedBatchFinalized log missing transaction hash"))?;
+			let tx_hash = log.transaction_hash.ok_or_else(|| {
+				anyhow::anyhow!("ValidatedBatchFinalized log missing transaction hash")
+			})?;
 			let tx = provider
 				.get_transaction_by_hash(tx_hash)
 				.await?
@@ -336,13 +344,17 @@ impl Sequencer {
 				if let Ok(call) =
 					IDepositsRollupBridge::recordNotesCommitmentTreeUpdateCall::abi_decode(input)
 				{
-					return Ok(Some(call.noteCommitments.into_iter().map(Into::into).collect()));
+					return Ok(Some(
+						call.noteCommitments.into_iter().map(Into::into).collect(),
+					));
 				}
 				Ok(None)
 			},
 			TreeJob::NotesNullifier => {
 				match IDepositsRollupBridge::recordNotesNullifierTreeUpdateCall::abi_decode(input) {
-					Ok(call) => Ok(Some(call.noteCommitments.into_iter().map(Into::into).collect())),
+					Ok(call) => Ok(Some(
+						call.noteCommitments.into_iter().map(Into::into).collect(),
+					)),
 					Err(_) => Ok(None),
 				}
 			},
@@ -350,9 +362,12 @@ impl Sequencer {
 				match IDepositsRollupBridge::recordAccountsCommitmentTreeUpdateCall::abi_decode(
 					input,
 				) {
-					Ok(call) => {
-						Ok(Some(call.accountCommitments.into_iter().map(Into::into).collect()))
-					},
+					Ok(call) => Ok(Some(
+						call.accountCommitments
+							.into_iter()
+							.map(Into::into)
+							.collect(),
+					)),
 					Err(_) => Ok(None),
 				}
 			},
@@ -360,9 +375,12 @@ impl Sequencer {
 				match IDepositsRollupBridge::recordAccountsNullifierTreeUpdateCall::abi_decode(
 					input,
 				) {
-					Ok(call) => {
-						Ok(Some(call.accountCommitments.into_iter().map(Into::into).collect()))
-					},
+					Ok(call) => Ok(Some(
+						call.accountCommitments
+							.into_iter()
+							.map(Into::into)
+							.collect(),
+					)),
 					Err(_) => Ok(None),
 				}
 			},
@@ -386,7 +404,8 @@ impl Sequencer {
 					debug!(job = ?job, log_key = ?log_key, "skipping already applied recovered batch");
 					return Ok(false);
 				}
-				let current_root = contract::hash_to_bytes32(&self.notes_commitment_state.current_root());
+				let current_root =
+					contract::hash_to_bytes32(&self.notes_commitment_state.current_root());
 				if current_root != new_root {
 					anyhow::ensure!(
 						current_root == old_root,
@@ -396,9 +415,16 @@ impl Sequencer {
 						old_root,
 						new_root
 					);
-					let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
-					let proof = self.notes_commitment_state.tree.insert_batch(commitments_hash)?;
-					anyhow::ensure!(proof.verify(), "recovered notes commitment proof verification failed");
+					let commitments_hash: Vec<Hash> =
+						contract::bytes_slice_to_hashes(&commitments_bytes)?;
+					let proof = self
+						.notes_commitment_state
+						.tree
+						.insert_batch(commitments_hash)?;
+					anyhow::ensure!(
+						proof.verify(),
+						"recovered notes commitment proof verification failed"
+					);
 					anyhow::ensure!(
 						proof.root_new == contract::bytes32_to_hash(&new_root)?,
 						"recovered notes commitment root mismatch after apply"
@@ -407,7 +433,11 @@ impl Sequencer {
 					meta.last_tx_index = log_key.1;
 					meta.last_log_index = log_key.2;
 					if let Some(store) = self.notes_commitment_store.as_mut() {
-						store.commit_batch(&self.notes_commitment_state.tree, meta, commitments_bytes)?;
+						store.commit_batch(
+							&self.notes_commitment_state.tree,
+							meta,
+							commitments_bytes,
+						)?;
 					}
 				} else {
 					meta.last_block = log_key.0;
@@ -423,7 +453,8 @@ impl Sequencer {
 					debug!(job = ?job, log_key = ?log_key, "skipping already applied recovered batch");
 					return Ok(false);
 				}
-				let current_root = contract::hash_to_bytes32(&self.notes_nullifier_state.current_root());
+				let current_root =
+					contract::hash_to_bytes32(&self.notes_nullifier_state.current_root());
 				if current_root != new_root {
 					anyhow::ensure!(
 						current_root == old_root,
@@ -433,18 +464,30 @@ impl Sequencer {
 						old_root,
 						new_root
 					);
-					let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
-					let proof = self.notes_nullifier_state.tree.insert_chained(commitments_hash)?;
-					anyhow::ensure!(proof.verify(), "recovered notes nullifier proof verification failed");
+					let commitments_hash: Vec<Hash> =
+						contract::bytes_slice_to_hashes(&commitments_bytes)?;
+					let proof = self
+						.notes_nullifier_state
+						.tree
+						.insert_chained(commitments_hash)?;
 					anyhow::ensure!(
-						proof.proofs.last().map(|p| p.new_root) == Some(contract::bytes32_to_hash(&new_root)?),
+						proof.verify(),
+						"recovered notes nullifier proof verification failed"
+					);
+					anyhow::ensure!(
+						proof.proofs.last().map(|p| p.new_root)
+							== Some(contract::bytes32_to_hash(&new_root)?),
 						"recovered notes nullifier root mismatch after apply"
 					);
 					meta.last_block = log_key.0;
 					meta.last_tx_index = log_key.1;
 					meta.last_log_index = log_key.2;
 					if let Some(store) = self.notes_nullifier_store.as_mut() {
-						store.commit_batch(&self.notes_nullifier_state.tree, meta, commitments_bytes)?;
+						store.commit_batch(
+							&self.notes_nullifier_state.tree,
+							meta,
+							commitments_bytes,
+						)?;
 					}
 				} else {
 					meta.last_block = log_key.0;
@@ -454,13 +497,16 @@ impl Sequencer {
 			},
 			TreeJob::AccountsCommitment => {
 				let Some(meta) = self.accounts_commitment_meta.as_mut() else {
-					return Err(anyhow::anyhow!("accounts commitment metadata not initialized"));
+					return Err(anyhow::anyhow!(
+						"accounts commitment metadata not initialized"
+					));
 				};
 				if !is_log_after_cursor(log_key, meta) {
 					debug!(job = ?job, log_key = ?log_key, "skipping already applied recovered batch");
 					return Ok(false);
 				}
-				let current_root = contract::hash_to_bytes32(&self.accounts_commitment_state.current_root());
+				let current_root =
+					contract::hash_to_bytes32(&self.accounts_commitment_state.current_root());
 				if current_root != new_root {
 					anyhow::ensure!(
 						current_root == old_root,
@@ -470,9 +516,16 @@ impl Sequencer {
 						old_root,
 						new_root
 					);
-					let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
-					let proof = self.accounts_commitment_state.tree.insert_batch(commitments_hash)?;
-					anyhow::ensure!(proof.verify(), "recovered accounts commitment proof verification failed");
+					let commitments_hash: Vec<Hash> =
+						contract::bytes_slice_to_hashes(&commitments_bytes)?;
+					let proof = self
+						.accounts_commitment_state
+						.tree
+						.insert_batch(commitments_hash)?;
+					anyhow::ensure!(
+						proof.verify(),
+						"recovered accounts commitment proof verification failed"
+					);
 					anyhow::ensure!(
 						proof.root_new == contract::bytes32_to_hash(&new_root)?,
 						"recovered accounts commitment root mismatch after apply"
@@ -481,7 +534,11 @@ impl Sequencer {
 					meta.last_tx_index = log_key.1;
 					meta.last_log_index = log_key.2;
 					if let Some(store) = self.accounts_commitment_store.as_mut() {
-						store.commit_batch(&self.accounts_commitment_state.tree, meta, commitments_bytes)?;
+						store.commit_batch(
+							&self.accounts_commitment_state.tree,
+							meta,
+							commitments_bytes,
+						)?;
 					}
 				} else {
 					meta.last_block = log_key.0;
@@ -491,13 +548,16 @@ impl Sequencer {
 			},
 			TreeJob::AccountsNullifier => {
 				let Some(meta) = self.accounts_nullifier_meta.as_mut() else {
-					return Err(anyhow::anyhow!("accounts nullifier metadata not initialized"));
+					return Err(anyhow::anyhow!(
+						"accounts nullifier metadata not initialized"
+					));
 				};
 				if !is_log_after_cursor(log_key, meta) {
 					debug!(job = ?job, log_key = ?log_key, "skipping already applied recovered batch");
 					return Ok(false);
 				}
-				let current_root = contract::hash_to_bytes32(&self.accounts_nullifier_state.current_root());
+				let current_root =
+					contract::hash_to_bytes32(&self.accounts_nullifier_state.current_root());
 				if current_root != new_root {
 					anyhow::ensure!(
 						current_root == old_root,
@@ -507,18 +567,30 @@ impl Sequencer {
 						old_root,
 						new_root
 					);
-					let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
-					let proof = self.accounts_nullifier_state.tree.insert_chained(commitments_hash)?;
-					anyhow::ensure!(proof.verify(), "recovered accounts nullifier proof verification failed");
+					let commitments_hash: Vec<Hash> =
+						contract::bytes_slice_to_hashes(&commitments_bytes)?;
+					let proof = self
+						.accounts_nullifier_state
+						.tree
+						.insert_chained(commitments_hash)?;
 					anyhow::ensure!(
-						proof.proofs.last().map(|p| p.new_root) == Some(contract::bytes32_to_hash(&new_root)?),
+						proof.verify(),
+						"recovered accounts nullifier proof verification failed"
+					);
+					anyhow::ensure!(
+						proof.proofs.last().map(|p| p.new_root)
+							== Some(contract::bytes32_to_hash(&new_root)?),
 						"recovered accounts nullifier root mismatch after apply"
 					);
 					meta.last_block = log_key.0;
 					meta.last_tx_index = log_key.1;
 					meta.last_log_index = log_key.2;
 					if let Some(store) = self.accounts_nullifier_store.as_mut() {
-						store.commit_batch(&self.accounts_nullifier_state.tree, meta, commitments_bytes)?;
+						store.commit_batch(
+							&self.accounts_nullifier_state.tree,
+							meta,
+							commitments_bytes,
+						)?;
 					}
 				} else {
 					meta.last_block = log_key.0;

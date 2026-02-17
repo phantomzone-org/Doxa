@@ -71,6 +71,7 @@ impl NullifierTreeState {
 			PendingRequest {
 				order_key,
 				commitment,
+				associated_input_proof: None,
 			},
 		);
 		self.pending_requests.len() >= batch_size

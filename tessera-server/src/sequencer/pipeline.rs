@@ -1,6 +1,9 @@
+use tracing::{debug, info, warn};
+
 use super::*;
 use crate::sequencer::revert::humanize_bridge_revert;
-use tracing::{debug, info, warn};
+
+const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
 
 impl Sequencer {
 	fn submit_prove_request_with_retry(
@@ -47,7 +50,11 @@ impl Sequencer {
 		Ok(())
 	}
 
-	pub(super) async fn is_note_available<P: Provider + Clone>(&self, provider: &P, note: &[u8; 32]) -> bool {
+	pub(super) async fn is_note_available<P: Provider + Clone>(
+		&self,
+		provider: &P,
+		note: &[u8; 32],
+	) -> bool {
 		let bridge = IDepositsRollupBridge::IDepositsRollupBridgeInstance::new(
 			self.config.bridge_address,
 			provider,
@@ -64,7 +71,7 @@ impl Sequencer {
 			Err(e) => {
 				warn!("failed to fetch note status: {e}");
 				false
-			}
+			},
 		}
 	}
 
@@ -89,7 +96,7 @@ impl Sequencer {
 			Err(e) => {
 				warn!("failed to fetch note status: {e}");
 				false
-			}
+			},
 		}
 	}
 
@@ -105,10 +112,14 @@ impl Sequencer {
 		self.log_pool_status("batch scheduling tick");
 
 		if self.notes_commitment_state.pending_requests.len() >= batch_size {
-			return self.start_notes_commitment_batch(provider, batch_size, in_flight).await;
+			return self
+				.start_notes_commitment_batch(provider, batch_size, in_flight)
+				.await;
 		}
 		if self.notes_nullifier_state.pending_requests.len() >= batch_size {
-			return self.start_notes_nullifier_batch(provider, batch_size, in_flight).await;
+			return self
+				.start_notes_nullifier_batch(provider, batch_size, in_flight)
+				.await;
 		}
 		if self.accounts_commitment_state.pending_requests.len() >= batch_size {
 			return self
@@ -135,14 +146,15 @@ impl Sequencer {
 		);
 		debug!(
 			pending = self.notes_commitment_state.pending_requests.len(),
-			batch_size,
-			"starting notes commitment batch preflight"
+			batch_size, "starting notes commitment batch preflight"
 		);
 
 		let batch = self
 			.notes_commitment_state
 			.pop_next_batch(batch_size)
-			.ok_or_else(|| anyhow::anyhow!("batch requested but pending queue had insufficient size"))?;
+			.ok_or_else(|| {
+				anyhow::anyhow!("batch requested but pending queue had insufficient size")
+			})?;
 
 		let on_chain_root = bridge.notesCommitmentRoot().call().await?;
 		let local_root = contract::hash_to_bytes32(&self.notes_commitment_state.current_root());
@@ -153,11 +165,9 @@ impl Sequencer {
 
 		for req in &batch {
 			let note = alloy::primitives::FixedBytes::<32>::from(req.commitment);
-			let status = bridge
-				.getDepositStatus(note)
-				.call()
-				.await
-				.map_err(|e| anyhow::anyhow!("preflight failed: unable to fetch note status: {e}"))?;
+			let status = bridge.getDepositStatus(note).call().await.map_err(|e| {
+				anyhow::anyhow!("preflight failed: unable to fetch note status: {e}")
+			})?;
 			anyhow::ensure!(
 				matches!(
 					status,
@@ -176,13 +186,30 @@ impl Sequencer {
 
 		let commitments_bytes: Vec<[u8; 32]> = batch.iter().map(|r| r.commitment).collect();
 		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
+		let associated_input_proofs: Vec<Vec<u8>> = batch
+			.iter()
+			.map(|r| {
+				r.associated_input_proof.clone().ok_or_else(|| {
+					anyhow::anyhow!(
+						"missing associated input proof for notes commitment leaf {:?}",
+						alloy::primitives::B256::from(r.commitment)
+					)
+				})
+			})
+			.collect::<anyhow::Result<_>>()?;
 
 		let mut tmp_tree = self.notes_commitment_state.tree.clone();
 		let batch_proof = tmp_tree.insert_batch(commitments_hash.clone())?;
-		anyhow::ensure!(batch_proof.verify(), "native commitment proof verification failed");
+		anyhow::ensure!(
+			batch_proof.verify(),
+			"native commitment proof verification failed"
+		);
 
 		self.submit_prove_request_with_retry(
-			crate::types::ProveRequest::Commitment { batch_proof },
+			crate::types::ProveRequest::Commitment {
+				batch_proof,
+				associated_input_proofs,
+			},
 			TreeJob::NotesCommitment,
 		)?;
 
@@ -209,14 +236,15 @@ impl Sequencer {
 		);
 		debug!(
 			pending = self.notes_nullifier_state.pending_requests.len(),
-			batch_size,
-			"starting notes nullifier batch preflight"
+			batch_size, "starting notes nullifier batch preflight"
 		);
 
 		let batch = self
 			.notes_nullifier_state
 			.pop_next_batch(batch_size)
-			.ok_or_else(|| anyhow::anyhow!("batch requested but pending queue had insufficient size"))?;
+			.ok_or_else(|| {
+				anyhow::anyhow!("batch requested but pending queue had insufficient size")
+			})?;
 
 		let on_chain_root = bridge.notesNullifierRoot().call().await?;
 		let local_root = contract::hash_to_bytes32(&self.notes_nullifier_state.current_root());
@@ -227,11 +255,9 @@ impl Sequencer {
 
 		for req in &batch {
 			let note = alloy::primitives::FixedBytes::<32>::from(req.commitment);
-			let status = bridge
-				.getDepositStatus(note)
-				.call()
-				.await
-				.map_err(|e| anyhow::anyhow!("preflight failed: unable to fetch note status: {e}"))?;
+			let status = bridge.getDepositStatus(note).call().await.map_err(|e| {
+				anyhow::anyhow!("preflight failed: unable to fetch note status: {e}")
+			})?;
 			anyhow::ensure!(
 				matches!(
 					status,
@@ -250,13 +276,20 @@ impl Sequencer {
 
 		let commitments_bytes: Vec<[u8; 32]> = batch.iter().map(|r| r.commitment).collect();
 		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
+		let associated_input_proofs = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch.len()];
 
 		let mut tmp_tree = self.notes_nullifier_state.tree.clone();
 		let batch_proof = tmp_tree.insert_chained(commitments_hash.clone())?;
-		anyhow::ensure!(batch_proof.verify(), "native nullifier proof verification failed");
+		anyhow::ensure!(
+			batch_proof.verify(),
+			"native nullifier proof verification failed"
+		);
 
 		self.submit_prove_request_with_retry(
-			crate::types::ProveRequest::Nullifier { batch_proof },
+			crate::types::ProveRequest::Nullifier {
+				batch_proof,
+				associated_input_proofs,
+			},
 			TreeJob::NotesNullifier,
 		)?;
 
@@ -283,14 +316,15 @@ impl Sequencer {
 		);
 		debug!(
 			pending = self.accounts_commitment_state.pending_requests.len(),
-			batch_size,
-			"starting accounts commitment batch preflight"
+			batch_size, "starting accounts commitment batch preflight"
 		);
 
 		let batch = self
 			.accounts_commitment_state
 			.pop_next_batch(batch_size)
-			.ok_or_else(|| anyhow::anyhow!("batch requested but pending queue had insufficient size"))?;
+			.ok_or_else(|| {
+				anyhow::anyhow!("batch requested but pending queue had insufficient size")
+			})?;
 
 		let on_chain_root = bridge.accountsCommitmentRoot().call().await?;
 		let local_root = contract::hash_to_bytes32(&self.accounts_commitment_state.current_root());
@@ -307,13 +341,20 @@ impl Sequencer {
 			"accounts commitment preflight passed"
 		);
 		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
+		let associated_input_proofs = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch.len()];
 
 		let mut tmp_tree = self.accounts_commitment_state.tree.clone();
 		let batch_proof = tmp_tree.insert_batch(commitments_hash.clone())?;
-		anyhow::ensure!(batch_proof.verify(), "native commitment proof verification failed");
+		anyhow::ensure!(
+			batch_proof.verify(),
+			"native commitment proof verification failed"
+		);
 
 		self.submit_prove_request_with_retry(
-			crate::types::ProveRequest::Commitment { batch_proof },
+			crate::types::ProveRequest::Commitment {
+				batch_proof,
+				associated_input_proofs,
+			},
 			TreeJob::AccountsCommitment,
 		)?;
 
@@ -340,14 +381,15 @@ impl Sequencer {
 		);
 		debug!(
 			pending = self.accounts_nullifier_state.pending_requests.len(),
-			batch_size,
-			"starting accounts nullifier batch preflight"
+			batch_size, "starting accounts nullifier batch preflight"
 		);
 
 		let batch = self
 			.accounts_nullifier_state
 			.pop_next_batch(batch_size)
-			.ok_or_else(|| anyhow::anyhow!("batch requested but pending queue had insufficient size"))?;
+			.ok_or_else(|| {
+				anyhow::anyhow!("batch requested but pending queue had insufficient size")
+			})?;
 
 		let on_chain_root = bridge.accountsNullifierRoot().call().await?;
 		let local_root = contract::hash_to_bytes32(&self.accounts_nullifier_state.current_root());
@@ -356,7 +398,8 @@ impl Sequencer {
 			"preflight failed: accountsNullifierRoot mismatch (on-chain={on_chain_root:?}, local={local_root:?})"
 		);
 
-		// Verify each leaf-to-be-nullified was previously committed to the accounts commitment tree.
+		// Verify each leaf-to-be-nullified was previously committed to the accounts commitment
+		// tree.
 		for req in &batch {
 			let commitment_hash =
 				contract::bytes32_to_hash(&alloy::primitives::B256::from(req.commitment))?;
@@ -375,13 +418,20 @@ impl Sequencer {
 			"accounts nullifier preflight passed"
 		);
 		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
+		let associated_input_proofs = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch.len()];
 
 		let mut tmp_tree = self.accounts_nullifier_state.tree.clone();
 		let batch_proof = tmp_tree.insert_chained(commitments_hash.clone())?;
-		anyhow::ensure!(batch_proof.verify(), "native nullifier proof verification failed");
+		anyhow::ensure!(
+			batch_proof.verify(),
+			"native nullifier proof verification failed"
+		);
 
 		self.submit_prove_request_with_retry(
-			crate::types::ProveRequest::Nullifier { batch_proof },
+			crate::types::ProveRequest::Nullifier {
+				batch_proof,
+				associated_input_proofs,
+			},
 			TreeJob::AccountsNullifier,
 		)?;
 
@@ -413,19 +463,33 @@ impl Sequencer {
 		};
 
 		match outcome {
-			ProveOutcome::Failure { error } => {
+			ProveOutcome::Failure {
+				error,
+			} => {
 				warn!(job = ?batch.job, "prover returned failure, re-queueing batch");
 				match batch.job {
-					TreeJob::NotesCommitment => self.notes_commitment_state.reinsert_batch(batch.requests),
-					TreeJob::NotesNullifier => self.notes_nullifier_state.reinsert_batch(batch.requests),
-					TreeJob::AccountsCommitment => self.accounts_commitment_state.reinsert_batch(batch.requests),
-					TreeJob::AccountsNullifier => self.accounts_nullifier_state.reinsert_batch(batch.requests),
+					TreeJob::NotesCommitment => {
+						self.notes_commitment_state.reinsert_batch(batch.requests)
+					},
+					TreeJob::NotesNullifier => {
+						self.notes_nullifier_state.reinsert_batch(batch.requests)
+					},
+					TreeJob::AccountsCommitment => self
+						.accounts_commitment_state
+						.reinsert_batch(batch.requests),
+					TreeJob::AccountsNullifier => {
+						self.accounts_nullifier_state.reinsert_batch(batch.requests)
+					},
 				}
 				warn!(job = ?batch.job, error, "proof generation failed; batch requeued");
 				self.log_pool_status("batch requeued after prover failure");
 				return Ok(());
 			},
-			ProveOutcome::Success { new_root, solidity_proof } => {
+			ProveOutcome::Success {
+				new_root,
+				solidity_proof,
+				aggregated_input_solidity_proof,
+			} => {
 				info!(
 					job = ?batch.job,
 					requests = batch.requests.len(),
@@ -441,17 +505,13 @@ impl Sequencer {
 					commitments: solidity_proof.commitments,
 					commitmentPok: solidity_proof.commitment_pok,
 				};
+				let aggregated_input_proof = IDepositsRollupBridge::Proof {
+					proof: aggregated_input_solidity_proof.proof,
+					commitments: aggregated_input_solidity_proof.commitments,
+					commitmentPok: aggregated_input_solidity_proof.commitment_pok,
+				};
 				let new_root_hash = new_root;
 				let new_root_bytes = contract::hash_to_bytes32(&new_root_hash);
-				// Phase A: PI-validity proof path is wired in the contract API, but
-				// sequencer currently sends a dummy Groth16 proof and relies on the
-				// dev dummy verifier contract for acceptance.
-				let zero = alloy::primitives::U256::ZERO;
-				let aggregated_input_proof = IDepositsRollupBridge::Proof {
-					proof: [zero; 8],
-					commitments: [zero; 2],
-					commitmentPok: [zero; 2],
-				};
 
 				let receipt_result: anyhow::Result<_> = match batch.job {
 					TreeJob::NotesCommitment => {
@@ -464,10 +524,12 @@ impl Sequencer {
 							)
 							.send()
 							.await
-							.map_err(|e| anyhow::anyhow!(
-								"recordNotesCommitmentTreeUpdate reverted: {}",
-								humanize_bridge_revert(&e)
-							))?;
+							.map_err(|e| {
+								anyhow::anyhow!(
+									"recordNotesCommitmentTreeUpdate reverted: {}",
+									humanize_bridge_revert(&e)
+								)
+							})?;
 						pending
 							.with_required_confirmations(1)
 							.with_timeout(Some(RECEIPT_TIMEOUT))
@@ -485,10 +547,12 @@ impl Sequencer {
 							)
 							.send()
 							.await
-							.map_err(|e| anyhow::anyhow!(
-								"recordNotesNullifierTreeUpdate reverted: {}",
-								humanize_bridge_revert(&e)
-							))?;
+							.map_err(|e| {
+								anyhow::anyhow!(
+									"recordNotesNullifierTreeUpdate reverted: {}",
+									humanize_bridge_revert(&e)
+								)
+							})?;
 						pending
 							.with_required_confirmations(1)
 							.with_timeout(Some(RECEIPT_TIMEOUT))
@@ -506,10 +570,12 @@ impl Sequencer {
 							)
 							.send()
 							.await
-							.map_err(|e| anyhow::anyhow!(
-								"recordAccountsCommitmentTreeUpdate reverted: {}",
-								humanize_bridge_revert(&e)
-							))?;
+							.map_err(|e| {
+								anyhow::anyhow!(
+									"recordAccountsCommitmentTreeUpdate reverted: {}",
+									humanize_bridge_revert(&e)
+								)
+							})?;
 						pending
 							.with_required_confirmations(1)
 							.with_timeout(Some(RECEIPT_TIMEOUT))
@@ -527,10 +593,12 @@ impl Sequencer {
 							)
 							.send()
 							.await
-							.map_err(|e| anyhow::anyhow!(
-								"recordAccountsNullifierTreeUpdate reverted: {}",
-								humanize_bridge_revert(&e)
-							))?;
+							.map_err(|e| {
+								anyhow::anyhow!(
+									"recordAccountsNullifierTreeUpdate reverted: {}",
+									humanize_bridge_revert(&e)
+								)
+							})?;
 						pending
 							.with_required_confirmations(1)
 							.with_timeout(Some(RECEIPT_TIMEOUT))
@@ -550,10 +618,18 @@ impl Sequencer {
 							"receipt polling failed; requeueing batch for retry"
 						);
 						match batch.job {
-							TreeJob::NotesCommitment => self.notes_commitment_state.reinsert_batch(batch.requests),
-							TreeJob::NotesNullifier => self.notes_nullifier_state.reinsert_batch(batch.requests),
-							TreeJob::AccountsCommitment => self.accounts_commitment_state.reinsert_batch(batch.requests),
-							TreeJob::AccountsNullifier => self.accounts_nullifier_state.reinsert_batch(batch.requests),
+							TreeJob::NotesCommitment => {
+								self.notes_commitment_state.reinsert_batch(batch.requests)
+							},
+							TreeJob::NotesNullifier => {
+								self.notes_nullifier_state.reinsert_batch(batch.requests)
+							},
+							TreeJob::AccountsCommitment => self
+								.accounts_commitment_state
+								.reinsert_batch(batch.requests),
+							TreeJob::AccountsNullifier => {
+								self.accounts_nullifier_state.reinsert_batch(batch.requests)
+							},
 						}
 						return Ok(());
 					},
@@ -572,17 +648,30 @@ impl Sequencer {
 
 				match batch.job {
 					TreeJob::NotesCommitment => {
-						let proof_local = self.notes_commitment_state.tree.insert_batch(batch.commitments_hash)?;
-						anyhow::ensure!(proof_local.root_new == new_root_hash, "local root mismatch after confirm");
+						let proof_local = self
+							.notes_commitment_state
+							.tree
+							.insert_batch(batch.commitments_hash)?;
+						anyhow::ensure!(
+							proof_local.root_new == new_root_hash,
+							"local root mismatch after confirm"
+						);
 						if let (Some(store), Some(meta)) = (
 							self.notes_commitment_store.as_mut(),
 							self.notes_commitment_meta.as_mut(),
 						) {
-							store.commit_batch(&self.notes_commitment_state.tree, meta, batch.commitments_bytes)?;
+							store.commit_batch(
+								&self.notes_commitment_state.tree,
+								meta,
+								batch.commitments_bytes,
+							)?;
 						}
 					},
 					TreeJob::NotesNullifier => {
-						let proof_local = self.notes_nullifier_state.tree.insert_chained(batch.commitments_hash)?;
+						let proof_local = self
+							.notes_nullifier_state
+							.tree
+							.insert_chained(batch.commitments_hash)?;
 						anyhow::ensure!(
 							proof_local.proofs.last().unwrap().new_root == new_root_hash,
 							"local root mismatch after confirm"
@@ -591,21 +680,38 @@ impl Sequencer {
 							self.notes_nullifier_store.as_mut(),
 							self.notes_nullifier_meta.as_mut(),
 						) {
-							store.commit_batch(&self.notes_nullifier_state.tree, meta, batch.commitments_bytes)?;
+							store.commit_batch(
+								&self.notes_nullifier_state.tree,
+								meta,
+								batch.commitments_bytes,
+							)?;
 						}
 					},
 					TreeJob::AccountsCommitment => {
-						let proof_local = self.accounts_commitment_state.tree.insert_batch(batch.commitments_hash)?;
-						anyhow::ensure!(proof_local.root_new == new_root_hash, "local root mismatch after confirm");
+						let proof_local = self
+							.accounts_commitment_state
+							.tree
+							.insert_batch(batch.commitments_hash)?;
+						anyhow::ensure!(
+							proof_local.root_new == new_root_hash,
+							"local root mismatch after confirm"
+						);
 						if let (Some(store), Some(meta)) = (
 							self.accounts_commitment_store.as_mut(),
 							self.accounts_commitment_meta.as_mut(),
 						) {
-							store.commit_batch(&self.accounts_commitment_state.tree, meta, batch.commitments_bytes)?;
+							store.commit_batch(
+								&self.accounts_commitment_state.tree,
+								meta,
+								batch.commitments_bytes,
+							)?;
 						}
 					},
 					TreeJob::AccountsNullifier => {
-						let proof_local = self.accounts_nullifier_state.tree.insert_chained(batch.commitments_hash)?;
+						let proof_local = self
+							.accounts_nullifier_state
+							.tree
+							.insert_chained(batch.commitments_hash)?;
 						anyhow::ensure!(
 							proof_local.proofs.last().unwrap().new_root == new_root_hash,
 							"local root mismatch after confirm"
@@ -614,7 +720,11 @@ impl Sequencer {
 							self.accounts_nullifier_store.as_mut(),
 							self.accounts_nullifier_meta.as_mut(),
 						) {
-							store.commit_batch(&self.accounts_nullifier_state.tree, meta, batch.commitments_bytes)?;
+							store.commit_batch(
+								&self.accounts_nullifier_state.tree,
+								meta,
+								batch.commitments_bytes,
+							)?;
 						}
 					},
 				}

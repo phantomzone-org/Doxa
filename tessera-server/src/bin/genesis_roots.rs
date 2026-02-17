@@ -19,4 +19,3 @@ fn main() {
 	println!("commitment_genesis_root={commitment:?}");
 	println!("nullifier_genesis_root={nullifier:?}");
 }
-

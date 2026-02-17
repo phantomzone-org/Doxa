@@ -55,6 +55,7 @@ impl CommitmentTreeState {
 		&mut self,
 		order_key: EventOrderKey,
 		commitment: [u8; 32],
+		associated_input_proof: Vec<u8>,
 		batch_size: usize,
 	) -> bool {
 		if self.pending_commitments.contains(&commitment) {
@@ -67,6 +68,7 @@ impl CommitmentTreeState {
 			PendingRequest {
 				order_key,
 				commitment,
+				associated_input_proof: Some(associated_input_proof),
 			},
 		);
 		self.pending_requests.len() >= batch_size

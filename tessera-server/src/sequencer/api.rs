@@ -4,11 +4,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::contract::GOLDILOCKS_PRIME;
+use crate::{contract::GOLDILOCKS_PRIME, sequencer::NotesCommitmentRequest};
+
+const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
 
 #[derive(Clone)]
 pub(super) struct ApiState {
-	pub(super) notes_commitment_tx: mpsc::Sender<[u8; 32]>,
+	pub(super) notes_commitment_tx: mpsc::Sender<NotesCommitmentRequest>,
 	pub(super) notes_nullifier_tx: mpsc::Sender<[u8; 32]>,
 	pub(super) accounts_commitment_tx: mpsc::Sender<[u8; 32]>,
 	pub(super) accounts_nullifier_tx: mpsc::Sender<[u8; 32]>,
@@ -17,7 +19,7 @@ pub(super) struct ApiState {
 #[derive(Debug, Deserialize)]
 struct ConsumeRequestBody {
 	note_commitment: String,
-	input_proof: Option<String>,
+	input_proof: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,39 +66,44 @@ async fn consume_request_handler(
 	Json(body): Json<ConsumeRequestBody>,
 ) -> Result<Json<ConsumeRequestResponse>, axum::http::StatusCode> {
 	debug!(
-		has_input_proof = body.input_proof.is_some(),
+		has_input_proof = !body.input_proof.is_empty(),
 		"received notes commitment request"
 	);
-	if let Some(p) = &body.input_proof {
-		let proof = match parse_input_proof_hex(p) {
-			Ok(v) => v,
-			Err(_) => {
-				warn!("rejecting notes commitment request: invalid input proof hex");
-				return Ok(Json(ConsumeRequestResponse {
-					accepted: false,
-					invalid_proof_tx: Some(InvalidProofTx {
-						tx_id: None,
-						reason: "input proof is not valid hex".to_string(),
-					}),
-				}));
-			},
-		};
-		if let Err(reason) = verify_associated_tx_proof(&proof) {
-			warn!(reason, "rejecting notes commitment request: proof verification failed");
+	let proof = match parse_input_proof_hex(&body.input_proof) {
+		Ok(v) => v,
+		Err(_) => {
+			warn!("rejecting notes commitment request: invalid input proof hex");
 			return Ok(Json(ConsumeRequestResponse {
 				accepted: false,
 				invalid_proof_tx: Some(InvalidProofTx {
 					tx_id: None,
-					reason: reason.to_string(),
+					reason: "input proof is not valid hex".to_string(),
 				}),
 			}));
-		}
-		info!(proof_len = proof.len(), "notes commitment proof verified");
+		},
+	};
+	if let Err(reason) = verify_associated_tx_proof(&proof) {
+		warn!(
+			reason,
+			"rejecting notes commitment request: proof verification failed"
+		);
+		return Ok(Json(ConsumeRequestResponse {
+			accepted: false,
+			invalid_proof_tx: Some(InvalidProofTx {
+				tx_id: None,
+				reason: reason.to_string(),
+			}),
+		}));
 	}
-	let note = parse_note_hex(&body.note_commitment).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+	info!(proof_len = proof.len(), "notes commitment proof verified");
+	let note =
+		parse_note_hex(&body.note_commitment).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 	state
 		.notes_commitment_tx
-		.send(note)
+		.send(NotesCommitmentRequest {
+			note,
+			associated_input_proof: proof,
+		})
 		.await
 		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
 	info!(note = ?B256::from(note), "accepted notes commitment leaf");
@@ -135,8 +142,7 @@ async fn private_tx_notes_handler(
 	if let Err(reason) = verify_associated_tx_proof(&tx_proof) {
 		warn!(
 			tx_id = body.tx_id.as_deref().unwrap_or("unknown"),
-			reason,
-			"rejecting private tx: proof verification failed"
+			reason, "rejecting private tx: proof verification failed"
 		);
 		return Ok(Json(ConsumeRequestResponse {
 			accepted: false,
@@ -167,8 +173,8 @@ async fn private_tx_notes_handler(
 		.map(|n| parse_note_hex(&n))
 		.collect::<Result<Vec<_>, _>>()
 		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-	let input_account_leaf =
-		parse_note_hex(&body.input_account_commitment).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+	let input_account_leaf = parse_note_hex(&body.input_account_commitment)
+		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 	let output_account_leaf = parse_note_hex(&body.output_account_commitment)
 		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 	let input_notes_count = input_notes.len();
@@ -184,7 +190,10 @@ async fn private_tx_notes_handler(
 	for leaf in output_notes {
 		state
 			.notes_commitment_tx
-			.send(leaf)
+			.send(NotesCommitmentRequest {
+				note: leaf,
+				associated_input_proof: tx_proof.clone(),
+			})
 			.await
 			.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
 	}
@@ -288,34 +297,12 @@ fn parse_input_proof_hex(s: &str) -> anyhow::Result<Vec<u8>> {
 
 /// Verify an associated transaction proof.
 ///
-/// # Security notice
-/// This is currently a **stub** that is fail-closed by default.
-///
-/// In production builds (without the `insecure-stub-proof-verify` feature)
-/// every proof is rejected so the endpoint cannot be used accidentally with no
-/// real cryptographic verification backing it.
-///
-/// Enable the feature **only for local/dev environments**:
-/// ```
-/// cargo run --features insecure-stub-proof-verify ...
-/// ```
+/// Current behavior is a local-development stub. Only a fixed dummy proof
+/// payload is accepted until a real verifier is integrated.
 fn verify_associated_tx_proof(proof: &[u8]) -> Result<(), &'static str> {
-	if proof.is_empty() {
-		return Err("tx proof is empty");
-	}
-	#[cfg(feature = "insecure-stub-proof-verify")]
-	{
-		// STUB: accept any proof whose first byte is 0x01.
-		// Provides NO security guarantee – local dev / integration testing only.
-		if proof[0] == 0x01 {
-			return Ok(());
-		}
-		return Err("tx proof verification failed (stub)");
-	}
-	#[cfg(not(feature = "insecure-stub-proof-verify"))]
-	{
-		let _ = proof;
-		Err("real tx proof verification is not yet implemented; \
-		     enable feature `insecure-stub-proof-verify` for local dev only")
+	if proof == DUMMY_ASSOCIATED_INPUT_PROOF {
+		Ok(())
+	} else {
+		Err("associated input proof verification failed (dummy verifier expects 0x01)")
 	}
 }

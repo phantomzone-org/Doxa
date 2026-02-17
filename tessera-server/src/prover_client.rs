@@ -36,9 +36,7 @@ impl HttpProverClient {
 		let status = response.status();
 		if status != StatusCode::OK {
 			let body = response.text().await.unwrap_or_default();
-			return Err(anyhow::anyhow!(
-				"prover service returned {status}: {body}"
-			));
+			return Err(anyhow::anyhow!("prover service returned {status}: {body}"));
 		}
 
 		response

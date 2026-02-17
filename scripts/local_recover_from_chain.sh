@@ -106,7 +106,7 @@ wait_for_api() {
     local code
     code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$TESSERA_SEQUENCER_API_URL/consume-request" \
       -H 'content-type: application/json' \
-      -d '{"note_commitment":"0x00"}' 2>/dev/null || true)
+      -d '{"note_commitment":"0x00","input_proof":"0x01"}' 2>/dev/null || true)
     if [[ "$code" == "200" || "$code" == "400" || "$code" == "422" ]]; then
       return 0
     fi

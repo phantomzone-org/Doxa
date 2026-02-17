@@ -8,52 +8,62 @@ set -euo pipefail
 #   $3 optional env file path (default scripts/logs/tessera_e2e_latest.env)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Step 1: Load shared local environment variables (RPC, API URLs, keys, defaults).
 source "$ROOT_DIR/scripts/local_env.sh"
 
+# Step 2: Resolve runtime parameters with safe defaults.
 TOTAL_DEPOSITS="${1:-256}"
 REQUEST_COUNT="${2:-$TESSERA_CONSUME_BATCH_SIZE}"
 E2E_ENV="${3:-$ROOT_DIR/scripts/logs/tessera_e2e_latest.env}"
 
+# Step 3: Guardrail - you cannot consume more notes than you deposit in this run.
 if [[ "$REQUEST_COUNT" -gt "$TOTAL_DEPOSITS" ]]; then
   echo "ERROR: request count ($REQUEST_COUNT) cannot exceed deposits ($TOTAL_DEPOSITS)." >&2
   exit 1
 fi
 
+# Step 4: Ensure deployment metadata exists (produced by local_e2e_toy_b_deploy.sh).
 if [[ ! -f "$E2E_ENV" ]]; then
   echo "ERROR: missing env file: $E2E_ENV" >&2
   echo "Run scripts/local_e2e_toy_b_deploy.sh first." >&2
   exit 1
 fi
 
+# Step 5: Load deployed contract addresses and actors (BRIDGE, TOKEN, TOY_USER).
 # shellcheck disable=SC1090
 source "$E2E_ENV"
 
+# Step 6: Validate required deployment variables are available.
 if [[ -z "${BRIDGE:-}" || -z "${TOKEN:-}" || -z "${TOY_USER:-}" ]]; then
   echo "ERROR: BRIDGE/TOKEN/TOY_USER missing in $E2E_ENV" >&2
   exit 1
 fi
 
-# Check sequencer API readiness.
+# Step 7: Wait for sequencer API readiness before sending real consume requests.
 for _ in $(seq 1 20); do
   code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$TESSERA_SEQUENCER_API_URL/consume-request" \
     -H 'content-type: application/json' \
-    -d '{"note_commitment":"0x01"}' || true)
+    -d '{"note_commitment":"0x01","input_proof":"0x01"}' || true)
   if [[ "$code" == "200" || "$code" == "400" ]]; then
     break
   fi
   sleep 1
 done
 
+# Step 8: Prepare run-scoped log/output files (notes universe + sampled requests).
 LOG_DIR="$ROOT_DIR/scripts/logs"
 mkdir -p "$LOG_DIR"
 TS="$(date +%Y%m%d_%H%M%S)"
 NOTES_FILE="$LOG_DIR/tessera_e2e_notes_${TS}.txt"
 REQ_FILE="$LOG_DIR/tessera_e2e_requests_${TS}.txt"
 
+# Step 9: Derive the test user address from the fixed local private key.
 USER_KEY="0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
 USER_ADDR=$(cast wallet address --private-key "$USER_KEY")
 echo "USER_ADDR=$USER_ADDR"
 
+# Step 10: Mint ToyUSDT to user and approve the bridge for deposits.
 echo "Funding user in ToyUSDT + approving bridge..."
 cast send "$TOKEN" "mint(address,uint256)" "$USER_ADDR" 1000000000 \
   --rpc-url "$RPC" \
@@ -63,6 +73,13 @@ cast send "$TOKEN" "approve(address,uint256)" "$BRIDGE" 1000000000 \
   --rpc-url "$RPC" \
   --private-key "$USER_KEY" >/dev/null
 
+# Step 11: Create deterministic deposits through ToyUser.depositAndRecord.
+# Each iteration:
+#   - Builds a unique note commitment from index i.
+#   - Uses amount 1000+i.
+#   - Records the note in NOTES_FILE for later sampling.
+#
+# Calls the sequencer to validates the deposits.
 echo "Creating $TOTAL_DEPOSITS deposits via depositAndRecord..."
 : > "$NOTES_FILE"
 for i in $(seq 1 "$TOTAL_DEPOSITS"); do
@@ -74,28 +91,31 @@ for i in $(seq 1 "$TOTAL_DEPOSITS"); do
   echo "$NOTE" >> "$NOTES_FILE"
 done
 
+# Step 12: Snapshot commitment root before consume requests to prove root advancement.
 ROOT_BEFORE=$(cast call "$BRIDGE" "notesCommitmentRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
 echo "notesCommitmentRoot before requests: $ROOT_BEFORE"
 
+# Step 13: Randomly pick REQUEST_COUNT notes and submit consume requests to sequencer API.
 echo "Submitting $REQUEST_COUNT random consume requests to sequencer API..."
 shuf "$NOTES_FILE" | head -n "$REQUEST_COUNT" > "$REQ_FILE"
 submitted=0
 while read -r NOTE; do
   resp=$(curl -sS -X POST "$TESSERA_SEQUENCER_API_URL/consume-request" \
     -H 'content-type: application/json' \
-    -d "{\"note_commitment\":\"$NOTE\"}")
+    -d "{\"note_commitment\":\"$NOTE\",\"input_proof\":\"0x01\"}")
   if echo "$resp" | grep -Eq '"accepted"[[:space:]]*:[[:space:]]*true'; then
     submitted=$((submitted + 1))
   fi
 done < "$REQ_FILE"
 echo "API accepted: $submitted/$REQUEST_COUNT"
 
+# Step 14: Poll on-chain deposit status until all requested notes are Validated or timeout.
 deadline=$((SECONDS + 420))
 while (( SECONDS < deadline )); do
   validated=0
   while read -r NOTE; do
+    # DepositStatus enum: None=0, Pending=1, Validated=2, Withdrawn=3.
     STATUS=$(cast call "$BRIDGE" "getDepositStatus(bytes32)(uint8)" "$NOTE" --rpc-url "$RPC" | tr -d '[:space:]')
-    # 2 == Validated in current bridge (DepositStatus.None=0, Pending=1, Validated=2, Withdrawn=3).
     if [[ "$STATUS" == "2" ]]; then
       validated=$((validated + 1))
     fi
@@ -108,12 +128,14 @@ while (( SECONDS < deadline )); do
   sleep 3
 done
 
+# Step 15: Fail if validation did not complete in time.
 if [[ "${validated:-0}" -ne "$REQUEST_COUNT" ]]; then
   echo "ERROR: timeout waiting for all requested notes to become Validated." >&2
   echo "NOTE: This requires the sequencer/server to record notes commitment updates on-chain (recordNotesCommitmentTreeUpdate)." >&2
   exit 1
 fi
 
+# Step 16: Verify root changed after successful batch finalization.
 ROOT_AFTER=$(cast call "$BRIDGE" "notesCommitmentRoot()(bytes32)" --rpc-url "$RPC" | tr -d '[:space:]')
 echo "notesCommitmentRoot after requests:  $ROOT_AFTER"
 
@@ -122,6 +144,7 @@ if [[ "$ROOT_AFTER" == "$ROOT_BEFORE" ]]; then
   exit 1
 fi
 
+# Step 17: Print success summary and artifact file locations.
 echo ""
 echo "E2E FLOW PASSED"
 echo "BRIDGE=$BRIDGE"
@@ -130,6 +153,7 @@ echo "TOY_USER=$TOY_USER"
 echo "NOTES_FILE=$NOTES_FILE"
 echo "REQ_FILE=$REQ_FILE"
 
+# Step 18: Print all deposits for manual auditing (status + raw tuple).
 echo ""
 echo "All deposits in contract (note_index 1..$TOTAL_DEPOSITS):"
 for i in $(seq 1 "$TOTAL_DEPOSITS"); do

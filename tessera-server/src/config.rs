@@ -60,7 +60,8 @@ impl SequencerConfig {
 	///
 	/// Required:
 	///   TESSERA_RPC_URL, TESSERA_OPERATOR_KEY, TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS,
-	///   TESSERA_CHAIN_ID, TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH, TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH
+	///   TESSERA_CHAIN_ID, TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH,
+	/// TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH
 	///
 	/// Optional (with defaults):
 	///   TESSERA_POLL_INTERVAL_SECS (default 12)
@@ -94,7 +95,8 @@ impl SequencerConfig {
 			std::env::var("TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH")
 				.context("TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH not set")?
 				.into();
-		let nullifier_plonky2_data_path = nullifier_artifacts_base.join(PENDING_DEPOSITS_PLONKY2_DIR);
+		let nullifier_plonky2_data_path =
+			nullifier_artifacts_base.join(PENDING_DEPOSITS_PLONKY2_DIR);
 		let nullifier_groth16_artifacts_path =
 			nullifier_artifacts_base.join(PENDING_DEPOSITS_GROTH16_DIR);
 
@@ -162,7 +164,8 @@ impl ProverConfig {
 			std::env::var("TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH")
 				.context("TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH not set")?
 				.into();
-		let nullifier_plonky2_data_path = nullifier_artifacts_base.join(PENDING_DEPOSITS_PLONKY2_DIR);
+		let nullifier_plonky2_data_path =
+			nullifier_artifacts_base.join(PENDING_DEPOSITS_PLONKY2_DIR);
 		let nullifier_groth16_artifacts_path =
 			nullifier_artifacts_base.join(PENDING_DEPOSITS_GROTH16_DIR);
 

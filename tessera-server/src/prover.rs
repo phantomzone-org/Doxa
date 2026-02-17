@@ -19,6 +19,8 @@ use tracing::{error, info};
 
 use crate::types::{ProveOutcome, ProveRequest, SolidityProof};
 
+const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ActiveGroth {
 	Commitment,
@@ -174,6 +176,31 @@ impl NullifierProverService {
 }
 
 impl ProverRuntime {
+	fn dummy_verify_and_aggregate_associated_input_proofs(
+		associated_input_proofs: &[Vec<u8>],
+		expected_count: usize,
+	) -> Result<SolidityProof> {
+		anyhow::ensure!(
+			associated_input_proofs.len() == expected_count,
+			"associated input proof count mismatch: got {}, expected {}",
+			associated_input_proofs.len(),
+			expected_count
+		);
+		for (i, proof) in associated_input_proofs.iter().enumerate() {
+			anyhow::ensure!(
+				proof.as_slice() == DUMMY_ASSOCIATED_INPUT_PROOF,
+				"associated input proof {i} failed dummy verification (expected 0x01)"
+			);
+		}
+		// Dummy aggregation output for Phase A. Contract-side aggregated-input
+		// verifier is also dummy and accepts this placeholder proof.
+		Ok(SolidityProof {
+			proof: [alloy::primitives::U256::ZERO; 8],
+			commitments: [alloy::primitives::U256::ZERO; 2],
+			commitment_pok: [alloy::primitives::U256::ZERO; 2],
+		})
+	}
+
 	pub fn init(
 		commitment_plonky2_data_path: std::path::PathBuf,
 		commitment_groth16_artifacts_path: std::path::PathBuf,
@@ -203,19 +230,31 @@ impl ProverRuntime {
 	}
 
 	pub fn prove_request(&mut self, request: ProveRequest) -> ProveOutcome {
-		let (need_active, new_root, batch_size) = match &request {
-			ProveRequest::Commitment { batch_proof } => (
+		let (need_active, new_root, batch_size, associated_input_proofs) = match &request {
+			ProveRequest::Commitment {
+				batch_proof,
+				associated_input_proofs,
+			} => (
 				ActiveGroth::Commitment,
 				batch_proof.root_new,
 				batch_proof.leaves.len(),
+				associated_input_proofs,
 			),
-			ProveRequest::Nullifier { batch_proof } => {
+			ProveRequest::Nullifier {
+				batch_proof,
+				associated_input_proofs,
+			} => {
 				let Some(last) = batch_proof.proofs.last() else {
 					return ProveOutcome::Failure {
 						error: "nullifier proof request contains no insertions".to_string(),
 					};
 				};
-				(ActiveGroth::Nullifier, last.new_root, batch_proof.len())
+				(
+					ActiveGroth::Nullifier,
+					last.new_root,
+					batch_proof.len(),
+					associated_input_proofs,
+				)
 			},
 		};
 
@@ -241,22 +280,37 @@ impl ProverRuntime {
 		}
 
 		let proof_res = match &request {
-			ProveRequest::Commitment { batch_proof } => {
+			ProveRequest::Commitment {
+				batch_proof, ..
+			} => {
 				info!(batch_size, "proving commitment batch");
 				self.commitment_prover.prove(batch_proof)
 			},
-			ProveRequest::Nullifier { batch_proof } => {
+			ProveRequest::Nullifier {
+				batch_proof, ..
+			} => {
 				info!(batch_size, "proving nullifier batch");
 				self.nullifier_prover.prove(batch_proof)
 			},
 		};
+		let aggregated_input_proof_res = Self::dummy_verify_and_aggregate_associated_input_proofs(
+			associated_input_proofs,
+			batch_size,
+		);
 
-		match proof_res {
-			Ok(solidity_proof) => ProveOutcome::Success {
+		match (proof_res, aggregated_input_proof_res) {
+			(Ok(solidity_proof), Ok(aggregated_input_solidity_proof)) => ProveOutcome::Success {
 				new_root,
 				solidity_proof,
+				aggregated_input_solidity_proof,
 			},
-			Err(e) => {
+			(_, Err(e)) => {
+				error!("associated input proof aggregation failed: {e}");
+				ProveOutcome::Failure {
+					error: e.to_string(),
+				}
+			},
+			(Err(e), _) => {
 				error!("proof generation failed: {e}");
 				ProveOutcome::Failure {
 					error: e.to_string(),
@@ -276,15 +330,17 @@ pub fn prover_thread(
 	mut rx: mpsc::Receiver<ProveRequest>,
 	tx: mpsc::Sender<ProveOutcome>,
 ) {
-	let commitment_prover =
-		match CommitmentProverService::init(&plonky2_data_path, &groth16_artifacts_path, batch_size)
-		{
-			Ok(p) => p,
-			Err(e) => {
-				error!("commitment prover initialization failed: {e}");
-				return;
-			},
-		};
+	let commitment_prover = match CommitmentProverService::init(
+		&plonky2_data_path,
+		&groth16_artifacts_path,
+		batch_size,
+	) {
+		Ok(p) => p,
+		Err(e) => {
+			error!("commitment prover initialization failed: {e}");
+			return;
+		},
+	};
 	let nullifier_prover = match NullifierProverService::init(
 		&nullifier_plonky2_data_path,
 		&nullifier_groth16_artifacts_path,

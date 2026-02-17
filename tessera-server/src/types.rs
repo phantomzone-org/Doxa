@@ -8,10 +8,14 @@ pub enum ProveRequest {
 	Commitment {
 		/// The append-only commitment batch insertion proof (native witness).
 		batch_proof: BatchCommitmentProof<Hash>,
+		/// One note-validity proof per leaf in `batch_proof.leaves` order.
+		associated_input_proofs: Vec<Vec<u8>>,
 	},
 	Nullifier {
 		/// The chained nullifier insertion proof (native witness).
 		batch_proof: NullifierChainedInsertProof<Hash>,
+		/// One associated input proof per leaf order for this batch.
+		associated_input_proofs: Vec<Vec<u8>>,
 	},
 }
 
@@ -23,6 +27,8 @@ pub enum ProveOutcome {
 		new_root: Hash,
 		/// Groth16 proof formatted for the Solidity contract.
 		solidity_proof: SolidityProof,
+		/// Aggregated validity proof for the public inputs in the batch.
+		aggregated_input_solidity_proof: SolidityProof,
 	},
 	Failure {
 		error: String,

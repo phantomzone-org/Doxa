@@ -74,7 +74,7 @@ submitted=0
 while read -r NOTE; do
   resp=$(curl -sS -X POST "$TESSERA_SEQUENCER_API_URL/consume-request" \
     -H 'content-type: application/json' \
-    -d "{\"note_commitment\":\"$NOTE\"}")
+    -d "{\"note_commitment\":\"$NOTE\",\"input_proof\":\"0x01\"}")
   if echo "$resp" | grep -Eq '"accepted"[[:space:]]*:[[:space:]]*true'; then
     submitted=$((submitted + 1))
   else

@@ -5,6 +5,7 @@ These scripts are aligned with the current API-driven consume flow.
 Flow:
 1. deposits are recorded on-chain (`depositAndRegister*` via `depositAndRecord` in `ToyUser`)
 2. consume requests are pushed to sequencer API (`POST /consume-request` or `POST /notes/commitment`)
+   - each request must include `input_proof` (dummy value in Phase A: `0x01`)
 3. other tree leaves can be pushed via:
 - `POST /notes/nullifier` with body `{"leaf":"0x..."}`
 - `POST /accounts/commitment` with body `{"leaf":"0x..."}`
@@ -17,7 +18,7 @@ Flow:
   - `output_account_commitment`
   - `tx_proof`
 3. sequencer batches, proves, then records notes commitment update on-chain
-   - `recordNotesCommitmentTreeUpdate(newNotesCommitmentRoot, notes, proof)` (operator-only)
+   - `recordNotesCommitmentTreeUpdate(newNotesCommitmentRoot, notes, treeProof, aggregatedInputProof)` (operator-only)
 
 ## Scripts
 
@@ -40,17 +41,17 @@ Flow:
   - Exposes consume API at `TESSERA_SEQUENCER_API_ADDR` (default `127.0.0.1:8081`).
 
 - `local_request.sh [start_note] [count] [order] [max_note]`
-  - Pushes consume requests to sequencer API.
+  - Pushes consume requests to sequencer API with mandatory `input_proof` (dummy `0x01`).
 
 - `local_status.sh [start_note] [count]`
   - Prints consumed root + note statuses over a range.
 
 - `local_request_reconsume.sh [count] [max_note]`
-  - Re-submits consumed notes to API (negative check).
+  - Re-submits consumed notes to API (negative check), with mandatory `input_proof` (dummy `0x01`).
 
 - `local_request_private_tx.sh [in_start] [in_count] [out_start] [out_count] [in_account] [out_account] [proof_hex]`
   - Submits one private-tx style intake payload to `/private-tx`.
-  - Default proof is `0x01` (Phase A dummy placeholder).
+  - Default proof is `0x01` (Phase A dummy placeholder verifier).
 
 ## Console-Split E2E (Toy)
 

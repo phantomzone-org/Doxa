@@ -4,9 +4,8 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use crc32fast::Hasher as Crc32Hasher;
-
 use anyhow::{Context, Result};
+use crc32fast::Hasher as Crc32Hasher;
 use serde::{Deserialize, Serialize};
 
 const SNAPSHOT_VERSION_V1: u32 = 1;
@@ -66,7 +65,10 @@ struct WalRecord {
 impl WalRecord {
 	fn new(values: Vec<[u8; 32]>) -> Self {
 		let checksum = Self::crc32(&values);
-		Self { values, checksum }
+		Self {
+			values,
+			checksum,
+		}
 	}
 
 	fn verify(&self) -> bool {
@@ -337,7 +339,6 @@ fn read_len_prefixed<T: for<'de> Deserialize<'de>>(f: &mut File, pos: u64) -> Re
 	Ok((v, next))
 }
 
-
 fn atomic_write(dir: &Path, dst: &Path, contents: &[u8]) -> Result<()> {
 	let tmp = dst.with_extension("tmp");
 	{
@@ -356,12 +357,13 @@ fn atomic_write(dir: &Path, dst: &Path, contents: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	use rand::{SeedableRng, rngs::StdRng};
+	use rand::{rngs::StdRng, SeedableRng};
 	use tessera_trees::tree::{
-		CommitmentTree,
 		hasher::{Hash, NewRandom},
+		CommitmentTree,
 	};
+
+	use super::*;
 
 	fn unique_test_dir(name: &str) -> PathBuf {
 		let pid = std::process::id();
@@ -393,7 +395,10 @@ mod tests {
 			state: state.clone(),
 		};
 		let legacy_bytes = bincode::serialize(&legacy_snapshot)?;
-		fs::write(base.join("notes_commitment").join("snapshot.bin"), legacy_bytes)?;
+		fs::write(
+			base.join("notes_commitment").join("snapshot.bin"),
+			legacy_bytes,
+		)?;
 
 		let mut store = TreeStore::<CommitmentTree<Hash>>::open(&base, TreeId::NotesCommitment, 1)?;
 		let (loaded_state, meta) = store.load_or_init(|| CommitmentTree::new(4))?;
@@ -413,7 +418,8 @@ mod tests {
 	#[test]
 	fn fresh_snapshot_written_as_current_version() -> Result<()> {
 		let base = unique_test_dir("fresh_v2");
-		let mut store = TreeStore::<CommitmentTree<Hash>>::open(&base, TreeId::AccountsCommitment, 1)?;
+		let mut store =
+			TreeStore::<CommitmentTree<Hash>>::open(&base, TreeId::AccountsCommitment, 1)?;
 		let (state, meta) = store.load_or_init(|| CommitmentTree::new(4))?;
 		assert_eq!(meta.snapshot_version, CURRENT_SNAPSHOT_VERSION);
 
