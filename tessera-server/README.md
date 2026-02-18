@@ -172,3 +172,16 @@ Notes:
 cargo check -p tessera-server
 cargo test -p tessera-server --release
 ```
+
+Feature-gated scripted integration test (runs local devnet + deploy + recovery flow):
+
+```bash
+TESSERA_RUN_INTEGRATION_SCRIPTS=1 \
+cargo test -p tessera-server --features integration-tests scripted_chain_recovery_e2e -- --nocapture --test-threads=1
+```
+
+Notes:
+- This is intentionally opt-in and heavy.
+- It requires `anvil`, `cast`, `forge`, and local Rust/Foundry toolchain availability.
+- Artifacts are auto-generated only when missing, then reused (cached by presence under `tessera-server/artifacts`).
+- Set `TESSERA_REBUILD_ARTIFACTS=1` to force regeneration.

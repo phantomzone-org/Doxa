@@ -7,6 +7,8 @@ edition = "2021"
 # WARNING: enables a trivially-bypassable proof-verification stub.
 # Never enable in production builds.
 insecure-stub-proof-verify = []
+# Enables heavy end-to-end integration tests that orchestrate local devnet scripts.
+integration-tests = []
 
 [dependencies]
 tessera-trees = {workspace = true}
