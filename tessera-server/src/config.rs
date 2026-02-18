@@ -23,6 +23,8 @@ pub struct SequencerConfig {
 	pub nullifier_groth16_artifacts_path: PathBuf,
 	/// Polling interval in seconds for on-chain events (default: 12).
 	pub poll_interval_secs: u64,
+	/// Max time to wait before flushing a partially filled batch (default: 12).
+	pub batch_timeout_secs: u64,
 	/// HTTP bind address for direct consume requests API (default: 127.0.0.1:8081).
 	pub api_bind_addr: String,
 	/// Base directory for persisted tree state (WAL + snapshots).
@@ -104,6 +106,10 @@ impl SequencerConfig {
 			.unwrap_or_else(|_| "12".to_string())
 			.parse()
 			.context("invalid TESSERA_POLL_INTERVAL_SECS")?;
+		let batch_timeout_secs: u64 = std::env::var("TESSERA_BATCH_TIMEOUT_SECS")
+			.unwrap_or_else(|_| "12".to_string())
+			.parse()
+			.context("invalid TESSERA_BATCH_TIMEOUT_SECS")?;
 		let api_bind_addr = std::env::var("TESSERA_SEQUENCER_API_ADDR")
 			.unwrap_or_else(|_| "127.0.0.1:8081".to_string());
 
@@ -136,6 +142,7 @@ impl SequencerConfig {
 			nullifier_plonky2_data_path,
 			nullifier_groth16_artifacts_path,
 			poll_interval_secs,
+			batch_timeout_secs,
 			api_bind_addr,
 			tree_store_path,
 			snapshot_every_batches,

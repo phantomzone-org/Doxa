@@ -6,6 +6,7 @@ use alloy::{
 use tracing::{debug, info, warn};
 
 use super::*;
+use crate::dummy::{self, DummyTreeType};
 
 impl Sequencer {
 	/// Maximum block range per `eth_getLogs` call.
@@ -256,6 +257,11 @@ impl Sequencer {
 				job,
 				decoded.inner.oldRoot,
 				decoded.inner.newRoot,
+				decoded
+					.inner
+					.batchSize
+					.try_into()
+					.map_err(|_| anyhow::anyhow!("batchSize too large in event"))?,
 				commitments_bytes,
 				key,
 			)?;
@@ -392,7 +398,8 @@ impl Sequencer {
 		job: TreeJob,
 		old_root: alloy::primitives::FixedBytes<32>,
 		new_root: alloy::primitives::FixedBytes<32>,
-		commitments_bytes: Vec<[u8; 32]>,
+		batch_size: usize,
+		real_commitments_bytes: Vec<[u8; 32]>,
 		log_key: (u64, u64, u64),
 	) -> anyhow::Result<bool> {
 		match job {
@@ -415,6 +422,13 @@ impl Sequencer {
 						old_root,
 						new_root
 					);
+					let batch_start_index = self.notes_commitment_state.tree.num_leaves();
+					let commitments_bytes = dummy::pad_leaves(
+						DummyTreeType::NotesCommitment,
+						batch_start_index,
+						batch_size,
+						&real_commitments_bytes,
+					)?;
 					let commitments_hash: Vec<Hash> =
 						contract::bytes_slice_to_hashes(&commitments_bytes)?;
 					let proof = self
@@ -464,6 +478,13 @@ impl Sequencer {
 						old_root,
 						new_root
 					);
+					let batch_start_index = self.notes_nullifier_state.tree.num_leaves();
+					let commitments_bytes = dummy::pad_leaves(
+						DummyTreeType::NotesNullifier,
+						batch_start_index,
+						batch_size,
+						&real_commitments_bytes,
+					)?;
 					let commitments_hash: Vec<Hash> =
 						contract::bytes_slice_to_hashes(&commitments_bytes)?;
 					let proof = self
@@ -516,6 +537,13 @@ impl Sequencer {
 						old_root,
 						new_root
 					);
+					let batch_start_index = self.accounts_commitment_state.tree.num_leaves();
+					let commitments_bytes = dummy::pad_leaves(
+						DummyTreeType::AccountsCommitment,
+						batch_start_index,
+						batch_size,
+						&real_commitments_bytes,
+					)?;
 					let commitments_hash: Vec<Hash> =
 						contract::bytes_slice_to_hashes(&commitments_bytes)?;
 					let proof = self
@@ -567,6 +595,13 @@ impl Sequencer {
 						old_root,
 						new_root
 					);
+					let batch_start_index = self.accounts_nullifier_state.tree.num_leaves();
+					let commitments_bytes = dummy::pad_leaves(
+						DummyTreeType::AccountsNullifier,
+						batch_start_index,
+						batch_size,
+						&real_commitments_bytes,
+					)?;
 					let commitments_hash: Vec<Hash> =
 						contract::bytes_slice_to_hashes(&commitments_bytes)?;
 					let proof = self

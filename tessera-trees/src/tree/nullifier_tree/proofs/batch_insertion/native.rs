@@ -27,10 +27,6 @@ pub struct BatchInsertProof<H: MerkleHash> {
 	/// Contains all predecessors infos, including the ones
 	/// that where not previously committed in the tree
 	/// (i.e present in the batch).
-	///
-	/// Each array is of size batch_size and groups two sets:
-	/// [0..split]: predecessors previously in the tree
-	/// [split..] : predecessors in the batch.
 	pub pred_paths: Vec<usize>,
 	pub pred_values: Vec<H::Digest>,
 	pub pred_old_next_indexes: Vec<usize>,
@@ -42,7 +38,6 @@ pub struct BatchInsertProof<H: MerkleHash> {
 
 	/// Emptiness commit of the batch in the tree, before and after
 	/// the update of the predecessors that were already in the tree
-	/// i.e. [0..split].
 	pub new_node_upper_siblings_before_pred_update: Vec<H::Digest>,
 	pub new_node_upper_siblings_after_pred_update: Vec<H::Digest>,
 }

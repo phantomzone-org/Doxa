@@ -1,13 +1,12 @@
-use crate::tree::hasher::MerkleHash;
 use serde::{Deserialize, Serialize};
 
+use crate::tree::hasher::MerkleHash;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(
-	bound(
-		serialize = "H::Digest: Serialize",
-		deserialize = "H::Digest: Deserialize<'de>"
-	)
-)]
+#[serde(bound(
+	serialize = "H::Digest: Serialize",
+	deserialize = "H::Digest: Deserialize<'de>"
+))]
 pub struct NullifierInsertProof<H: MerkleHash> {
 	// ============ PUBLIC INPUTS ============
 	/// Initial tree root (before insertion)

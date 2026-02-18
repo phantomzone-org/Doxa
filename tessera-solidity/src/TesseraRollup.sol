@@ -38,7 +38,7 @@ interface IGroth16Verifier {
 ///        corresponding verifier (`commitmentVerifier` or `nullifierVerifier`).
 ///
 ///      Notes-commitment updates use a single-phase entry point:
-///      - `recordNotesCommitmentTreeUpdate(newRoot, notes, proof)`
+///      - `recordNotesCommitmentTreeUpdate(newRoot, notes, treeProof, inputsProof)`
 ///      which verifies proof, validates tracked-note state, marks tracked notes as `Validated`,
 ///      and advances `notesCommitmentRoot` atomically.
 ///
@@ -107,8 +107,16 @@ contract DepositsRollupBridge {
     /// @notice Accounts commitment tree root (proven by `commitmentVerifier`).
     bytes32 public accountsCommitmentRoot;
     /// @notice Fixed batch size required by the circuits/verifiers.
-    /// @dev All batch entry points require exactly `batchSize` leaves.
+    /// @dev Circuits/verifiers are fixed-width and always bind to `batchSize` leaves.
     uint256 public immutable batchSize;
+    /// @notice Number of leaves committed in notes commitment tree.
+    uint256 public notesCommitmentLeafCount;
+    /// @notice Number of leaves committed in notes nullifier tree.
+    uint256 public notesNullifierLeafCount;
+    /// @notice Number of leaves committed in accounts commitment tree.
+    uint256 public accountsCommitmentLeafCount;
+    /// @notice Number of leaves committed in accounts nullifier tree.
+    uint256 public accountsNullifierLeafCount;
 
     /// @notice ERC20 token escrowed by this bridge for pending deposits.
     address public immutable monitoredToken;
@@ -196,6 +204,11 @@ contract DepositsRollupBridge {
 
         // Batch size is circuit-defined and must match the prover configuration.
         batchSize = _batchSize;
+        // Commitment trees start empty; nullifier trees start with one sentinel node.
+        notesCommitmentLeafCount = 0;
+        notesNullifierLeafCount = 1;
+        accountsCommitmentLeafCount = 0;
+        accountsNullifierLeafCount = 1;
 
         // Token escrow configuration.
         monitoredToken = _monitoredToken;
@@ -357,8 +370,9 @@ contract DepositsRollupBridge {
     ///
     ///      How it must be used:
     ///      - Only operator can call.
-    ///      - `noteCommitments.length` MUST equal `batchSize`.
+    ///      - `0 < noteCommitments.length <= batchSize`.
     ///      - `noteCommitments` order MUST match the prover's circuit order.
+    ///      - Missing leaves are deterministically reconstructed on-chain as dummies.
     ///
     ///      Step-by-step:
     ///      1) Snapshot `oldRoot`.
@@ -371,13 +385,15 @@ contract DepositsRollupBridge {
         Proof calldata treeProof,
         Proof calldata inputsProof
     ) external onlyOperator whenNotPaused {
-        uint256 batchLen = noteCommitments.length;
-        if (batchLen != batchSize) revert InvalidBatchLength(batchLen, batchSize);
+        uint256 realLen = noteCommitments.length;
+        if (realLen == 0 || realLen > batchSize) revert InvalidBatchLength(realLen, batchSize);
 
         bytes32 oldRoot = notesNullifierRoot;
+        bytes32[] memory fullBatch =
+            _reconstructBatchWithDummies(TreeType.NotesNullifier, notesNullifierLeafCount, noteCommitments);
 
         // Pack leaves into bytes for the commitment hash.
-        bytes memory noteBytes = _packBytes32Array(noteCommitments);
+        bytes memory noteBytes = _packBytes32ArrayMemory(fullBatch);
 
         // Public input is SHA256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
         bytes32 sha256Commit = sha256(abi.encodePacked(oldRoot, newRoot, noteBytes));
@@ -399,7 +415,8 @@ contract DepositsRollupBridge {
 
         // Apply the verified root update.
         notesNullifierRoot = newRoot;
-        emit ValidatedBatchFinalized(TreeType.NotesNullifier, batchLen, oldRoot, newRoot);
+        notesNullifierLeafCount += batchSize;
+        emit ValidatedBatchFinalized(TreeType.NotesNullifier, batchSize, oldRoot, newRoot);
     }
 
     /// @notice Records a notes-commitment tree update after proof verification.
@@ -413,8 +430,9 @@ contract DepositsRollupBridge {
     ///
     ///      How it must be used:
     ///      - Only operator can call.
-    ///      - `noteCommitments.length` MUST equal `batchSize`.
+    ///      - `0 < noteCommitments.length <= batchSize`.
     ///      - Leaf ordering MUST match the prover's circuit order.
+    ///      - Missing leaves are deterministically reconstructed on-chain as dummies.
     ///
     ///      Tracked-note semantics:
     ///      - If a note exists in bridge storage, it MUST be `Pending`.
@@ -426,13 +444,16 @@ contract DepositsRollupBridge {
         Proof calldata treeProof,
         Proof calldata inputsProof
     ) external onlyOperator whenNotPaused {
-        uint256 batchLen = noteCommitments.length;
-        if (batchLen != batchSize) revert InvalidBatchLength(batchLen, batchSize);
+        uint256 realLen = noteCommitments.length;
+        if (realLen == 0 || realLen > batchSize) revert InvalidBatchLength(realLen, batchSize);
 
         bytes32 oldRoot = notesCommitmentRoot;
+        bytes32[] memory fullBatch = _reconstructBatchWithDummies(
+            TreeType.NotesCommitment, notesCommitmentLeafCount, noteCommitments
+        );
 
         // Fail fast only for notes tracked by this bridge and no longer pending.
-        for (uint256 i = 0; i < batchLen; i++) {
+        for (uint256 i = 0; i < realLen; i++) {
             bytes32 note = noteCommitments[i];
             DepositStatus status = deposits[note].status;
             if (status != DepositStatus.None && status != DepositStatus.Pending) {
@@ -441,7 +462,7 @@ contract DepositsRollupBridge {
         }
 
         // Pack leaves into bytes for the commitment hash.
-        bytes memory leafBytes = _packBytes32Array(noteCommitments);
+        bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
 
         // Public input is SHA256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
         bytes32 sha256Commit = sha256(abi.encodePacked(oldRoot, newRoot, leafBytes));
@@ -462,7 +483,7 @@ contract DepositsRollupBridge {
         }
 
         // Apply effects for tracked deposits only.
-        for (uint256 i = 0; i < batchLen; i++) {
+        for (uint256 i = 0; i < realLen; i++) {
             bytes32 note = noteCommitments[i];
             if (deposits[note].status != DepositStatus.None) {
                 deposits[note].status = DepositStatus.Validated;
@@ -472,7 +493,8 @@ contract DepositsRollupBridge {
 
         // Apply the verified root update.
         notesCommitmentRoot = newRoot;
-        emit ValidatedBatchFinalized(TreeType.NotesCommitment, batchLen, oldRoot, newRoot);
+        notesCommitmentLeafCount += batchSize;
+        emit ValidatedBatchFinalized(TreeType.NotesCommitment, batchSize, oldRoot, newRoot);
     }
 
     /// @notice Records an accounts-commitment tree update after proof verification.
@@ -485,8 +507,9 @@ contract DepositsRollupBridge {
     ///
     ///      How it must be used:
     ///      - Only operator can call.
-    ///      - `accountCommitments.length` MUST equal `batchSize`.
+    ///      - `0 < accountCommitments.length <= batchSize`.
     ///      - Leaf ordering MUST match the prover's circuit order.
+    ///      - Missing leaves are deterministically reconstructed on-chain as dummies.
     ///
     ///      Step-by-step mirrors `recordNotesNullifierTreeUpdate`.
     function recordAccountsCommitmentTreeUpdate(
@@ -495,13 +518,16 @@ contract DepositsRollupBridge {
         Proof calldata treeProof,
         Proof calldata inputsProof
     ) external onlyOperator whenNotPaused {
-        uint256 batchLen = accountCommitments.length;
-        if (batchLen != batchSize) revert InvalidBatchLength(batchLen, batchSize);
+        uint256 realLen = accountCommitments.length;
+        if (realLen == 0 || realLen > batchSize) revert InvalidBatchLength(realLen, batchSize);
 
         bytes32 oldRoot = accountsCommitmentRoot;
+        bytes32[] memory fullBatch = _reconstructBatchWithDummies(
+            TreeType.AccountsCommitment, accountsCommitmentLeafCount, accountCommitments
+        );
 
         // Pack leaves into bytes for the commitment hash.
-        bytes memory leafBytes = _packBytes32Array(accountCommitments);
+        bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
 
         // Public input is SHA256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
         bytes32 sha256Commit = sha256(abi.encodePacked(oldRoot, newRoot, leafBytes));
@@ -523,7 +549,8 @@ contract DepositsRollupBridge {
 
         // Apply the verified root update.
         accountsCommitmentRoot = newRoot;
-        emit ValidatedBatchFinalized(TreeType.AccountsCommitment, batchLen, oldRoot, newRoot);
+        accountsCommitmentLeafCount += batchSize;
+        emit ValidatedBatchFinalized(TreeType.AccountsCommitment, batchSize, oldRoot, newRoot);
     }
 
     /// @notice Records an accounts-nullifier tree update after proof verification.
@@ -536,7 +563,8 @@ contract DepositsRollupBridge {
     ///
     ///      How it must be used:
     ///      - Only operator can call.
-    ///      - `accountCommitments.length` MUST equal `batchSize`.
+    ///      - `0 < accountCommitments.length <= batchSize`.
+    ///      - Missing leaves are deterministically reconstructed on-chain as dummies.
     ///
     ///      Step-by-step mirrors `recordNotesNullifierTreeUpdate`.
     function recordAccountsNullifierTreeUpdate(
@@ -545,13 +573,16 @@ contract DepositsRollupBridge {
         Proof calldata treeProof,
         Proof calldata inputsProof
     ) external onlyOperator whenNotPaused {
-        uint256 batchLen = accountCommitments.length;
-        if (batchLen != batchSize) revert InvalidBatchLength(batchLen, batchSize);
+        uint256 realLen = accountCommitments.length;
+        if (realLen == 0 || realLen > batchSize) revert InvalidBatchLength(realLen, batchSize);
 
         bytes32 oldRoot = accountsNullifierRoot;
+        bytes32[] memory fullBatch = _reconstructBatchWithDummies(
+            TreeType.AccountsNullifier, accountsNullifierLeafCount, accountCommitments
+        );
 
         // Pack leaves into bytes for the commitment hash.
-        bytes memory leafBytes = _packBytes32Array(accountCommitments);
+        bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
 
         // Public input is SHA256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
         bytes32 sha256Commit = sha256(abi.encodePacked(oldRoot, newRoot, leafBytes));
@@ -573,7 +604,8 @@ contract DepositsRollupBridge {
 
         // Apply the verified root update.
         accountsNullifierRoot = newRoot;
-        emit ValidatedBatchFinalized(TreeType.AccountsNullifier, batchLen, oldRoot, newRoot);
+        accountsNullifierLeafCount += batchSize;
+        emit ValidatedBatchFinalized(TreeType.AccountsNullifier, batchSize, oldRoot, newRoot);
     }
 
     /// @dev Packs a `bytes32[]` into a contiguous byte array (32 bytes per element, in order).
@@ -588,6 +620,46 @@ contract DepositsRollupBridge {
                 mstore(add(add(out, 32), mul(i, 32)), v)
             }
         }
+    }
+
+    function _packBytes32ArrayMemory(bytes32[] memory arr) internal pure returns (bytes memory out) {
+        out = new bytes(arr.length * 32);
+        for (uint256 i = 0; i < arr.length; i++) {
+            bytes32 v = arr[i];
+            assembly {
+                mstore(add(add(out, 32), mul(i, 32)), v)
+            }
+        }
+    }
+
+    function _reconstructBatchWithDummies(
+        TreeType treeType,
+        uint256 batchStartIndex,
+        bytes32[] calldata realLeaves
+    ) internal view returns (bytes32[] memory out) {
+        uint256 realLen = realLeaves.length;
+        out = new bytes32[](batchSize);
+        for (uint256 i = 0; i < realLen; i++) {
+            out[i] = realLeaves[i];
+        }
+        if (realLen == batchSize) {
+            return out;
+        }
+
+        bytes32 packedHash = keccak256(
+            abi.encodePacked(uint8(treeType), batchStartIndex, _packBytes32Array(realLeaves))
+        );
+        for (uint256 i = realLen; i < batchSize; i++) {
+            uint256 leafIndex = batchStartIndex + i;
+            bytes32 raw = keccak256(abi.encodePacked(leafIndex, packedHash));
+            out[i] = _fieldSafeDigest(raw);
+        }
+    }
+
+    function _fieldSafeDigest(bytes32 digest) internal pure returns (bytes32) {
+        uint256 h = uint256(digest);
+        uint256 mask = ~(uint256(1) << 255 | uint256(1) << 191 | uint256(1) << 127 | uint256(1) << 63);
+        return bytes32(h & mask);
     }
 
     /// @notice Computes the legacy deposit commitment used by some off-chain tooling.

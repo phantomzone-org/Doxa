@@ -2,6 +2,7 @@ mod data_types;
 
 pub mod config;
 pub mod contract;
+pub mod dummy;
 pub mod prover;
 pub mod prover_client;
 pub mod sequencer;

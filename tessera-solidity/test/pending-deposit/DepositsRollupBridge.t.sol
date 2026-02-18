@@ -136,4 +136,31 @@ contract DepositsRollupBridgeTest is Test {
         assertEq(uint256(bridge.getDepositStatus(externalNote)), uint256(DepositsRollupBridge.DepositStatus.None));
     }
 
+    function testValidateDepositBatch_AllowsPartialBatchAndUpdatesOnlyRealNotes() public {
+        address user = address(0xCAFE);
+        uint256 amount = 1e6;
+        bytes32 tracked = bytes32(uint256(1));
+
+        token.mint(user, amount);
+        vm.prank(user);
+        token.approve(address(bridge), amount);
+        vm.prank(user);
+        bridge.depositAndRegister(tracked, amount);
+
+        bytes32[] memory notes = new bytes32[](1);
+        notes[0] = tracked;
+
+        uint256 beforeLeafCount = bridge.notesCommitmentLeafCount();
+        bridge.recordNotesCommitmentTreeUpdate(bytes32(uint256(0x9999)), notes, _dummyProof(), _dummyProof());
+
+        assertEq(uint256(bridge.getDepositStatus(tracked)), uint256(DepositsRollupBridge.DepositStatus.Validated));
+        assertEq(bridge.notesCommitmentLeafCount(), beforeLeafCount + BATCH_SIZE);
+    }
+
+    function testRecordNotesCommitmentRejectsZeroLength() public {
+        bytes32[] memory notes = new bytes32[](0);
+        vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidBatchLength.selector, 0, BATCH_SIZE));
+        bridge.recordNotesCommitmentTreeUpdate(bytes32(uint256(0x9999)), notes, _dummyProof(), _dummyProof());
+    }
+
 }

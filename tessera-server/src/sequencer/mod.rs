@@ -33,8 +33,9 @@ const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
 struct InFlightBatch {
 	job: TreeJob,
 	requests: Vec<PendingRequest>,
-	commitments_bytes: Vec<[u8; 32]>,
-	commitments_hash: Vec<Hash>,
+	real_commitments_bytes: Vec<[u8; 32]>,
+	proving_commitments_bytes: Vec<[u8; 32]>,
+	proving_commitments_hash: Vec<Hash>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +75,10 @@ pub struct Sequencer {
 	accounts_commitment_rx: Option<mpsc::Receiver<[u8; 32]>>,
 	accounts_nullifier_rx: Option<mpsc::Receiver<[u8; 32]>>,
 	api_order_counter: u64,
+	notes_commitment_pending_since: Option<std::time::Instant>,
+	notes_nullifier_pending_since: Option<std::time::Instant>,
+	accounts_commitment_pending_since: Option<std::time::Instant>,
+	accounts_nullifier_pending_since: Option<std::time::Instant>,
 }
 
 impl Sequencer {
@@ -85,6 +90,33 @@ impl Sequencer {
 			accounts_commitment_pending = self.accounts_commitment_state.pending_requests.len(),
 			accounts_nullifier_pending = self.accounts_nullifier_state.pending_requests.len(),
 			"sequencer pool status"
+		);
+	}
+
+	fn refresh_pending_since(slot: &mut Option<std::time::Instant>, pending_len: usize) {
+		if pending_len == 0 {
+			*slot = None;
+		} else if slot.is_none() {
+			*slot = Some(std::time::Instant::now());
+		}
+	}
+
+	fn refresh_pending_timers(&mut self) {
+		Self::refresh_pending_since(
+			&mut self.notes_commitment_pending_since,
+			self.notes_commitment_state.pending_requests.len(),
+		);
+		Self::refresh_pending_since(
+			&mut self.notes_nullifier_pending_since,
+			self.notes_nullifier_state.pending_requests.len(),
+		);
+		Self::refresh_pending_since(
+			&mut self.accounts_commitment_pending_since,
+			self.accounts_commitment_state.pending_requests.len(),
+		);
+		Self::refresh_pending_since(
+			&mut self.accounts_nullifier_pending_since,
+			self.accounts_nullifier_state.pending_requests.len(),
 		);
 	}
 
@@ -111,6 +143,10 @@ impl Sequencer {
 			accounts_commitment_rx: None,
 			accounts_nullifier_rx: None,
 			api_order_counter: 0,
+			notes_commitment_pending_since: None,
+			notes_nullifier_pending_since: None,
+			accounts_commitment_pending_since: None,
+			accounts_nullifier_pending_since: None,
 		}
 	}
 
@@ -266,6 +302,7 @@ impl Sequencer {
 		});
 
 		let poll_interval = Duration::from_secs(self.config.poll_interval_secs);
+		let batch_timeout = Duration::from_secs(self.config.batch_timeout_secs);
 		let mut interval = tokio::time::interval(poll_interval);
 		let mut in_flight: Option<InFlightBatch> = None;
 
@@ -275,7 +312,7 @@ impl Sequencer {
 			tokio::select! {
 				_ = interval.tick() => {
 					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, &mut in_flight).await {
+						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
 							error!("failed to start next batch: {e}");
 							break;
 						}
@@ -306,10 +343,11 @@ impl Sequencer {
 						req.associated_input_proof,
 						batch_size,
 					);
+					self.refresh_pending_timers();
 					self.log_pool_status("accepted notes commitment leaf");
 
 					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, &mut in_flight).await {
+						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
 							error!("failed to start next batch: {e}");
 							break;
 						}
@@ -345,10 +383,11 @@ impl Sequencer {
 					};
 					self.api_order_counter = self.api_order_counter.saturating_add(1);
 					self.notes_nullifier_state.add_consume_request(order_key, note, batch_size);
+					self.refresh_pending_timers();
 					self.log_pool_status("accepted notes nullifier leaf");
 
 					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, &mut in_flight).await {
+						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
 							error!("failed to start next batch: {e}");
 							break;
 						}
@@ -374,10 +413,11 @@ impl Sequencer {
 						DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(),
 						batch_size,
 					);
+					self.refresh_pending_timers();
 					self.log_pool_status("accepted accounts commitment leaf");
 
 					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, &mut in_flight).await {
+						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
 							error!("failed to start next batch: {e}");
 							break;
 						}
@@ -409,10 +449,11 @@ impl Sequencer {
 					};
 					self.api_order_counter = self.api_order_counter.saturating_add(1);
 					self.accounts_nullifier_state.add_consume_request(order_key, leaf, batch_size);
+					self.refresh_pending_timers();
 					self.log_pool_status("accepted accounts nullifier leaf");
 
 					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, &mut in_flight).await {
+						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
 							error!("failed to start next batch: {e}");
 							break;
 						}
@@ -430,9 +471,10 @@ impl Sequencer {
 						error!("fatal sequencer error while finalizing batch: {e}");
 						break;
 					}
+					self.refresh_pending_timers();
 
 					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, &mut in_flight).await {
+						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
 							error!("failed to start next batch: {e}");
 							break;
 						}

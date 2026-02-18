@@ -8,7 +8,7 @@ The sequencer is API-driven for intake:
 - sequencer checks note status on-chain:
   - if note exists on bridge: required status depends on endpoint/tree flow
   - if note is not tracked by bridge (`NoteNotFound`): accepted as external/network-native leaf
-- when `batchSize` notes are queued, sequencer proves append insertion and finalizes on-chain via:
+- when enough notes are queued **or** batch timeout elapses, sequencer proves a full `batchSize` insertion (padding with deterministic dummies when needed) and finalizes on-chain via:
   - `recordNotesCommitmentTreeUpdate` (single-phase)
 
 ## High-Level Flow
@@ -16,7 +16,7 @@ The sequencer is API-driven for intake:
 1. Trusted source records deposits on-chain via `depositAndRegister*`
 2. External caller sends note commitments to sequencer API
 3. Sequencer validates each note is `Pending` using `getDepositStatus(note)`
-4. Sequencer batches notes (`batchSize` from contract)
+4. Sequencer batches notes (`batchSize` from contract), with timeout-based flush for partial pools
 5. Sequencer sends `ProveRequest` to dedicated prover API
 6. Prover returns `ProveOutcome` with:
    - tree-update Solidity proof
@@ -108,6 +108,7 @@ Required:
 
 Optional:
 - `TESSERA_POLL_INTERVAL_SECS` (default `12`)
+- `TESSERA_BATCH_TIMEOUT_SECS` (default `12`)
 - `TESSERA_SEQUENCER_API_ADDR` (default `127.0.0.1:8081`)
 - `TESSERA_PROVER_API_URL` (default `http://127.0.0.1:8091`)
 - `TESSERA_PROVER_API_TIMEOUT_SECS` (default `1800`)
@@ -148,8 +149,9 @@ Boot sequence:
 3. If any local root is behind, replay missing updates from chain:
    - query `ValidatedBatchFinalized` logs
    - fetch tx calldata for each log
-   - decode function and leaf payload
-   - apply leaves locally in canonical chain order
+   - decode function and real leaf payload
+   - re-derive any omitted dummy leaves
+   - apply full (padded) leaves locally in canonical chain order
 4. Verify all local roots equal on-chain roots before serving API traffic.
 
 Persistence details:

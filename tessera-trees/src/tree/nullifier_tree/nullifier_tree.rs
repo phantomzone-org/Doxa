@@ -10,12 +10,10 @@ use crate::tree::{
 };
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(
-	bound(
-		serialize = "H::Digest: Serialize",
-		deserialize = "H::Digest: Deserialize<'de>"
-	)
-)]
+#[serde(bound(
+	serialize = "H::Digest: Serialize",
+	deserialize = "H::Digest: Deserialize<'de>"
+))]
 pub struct NullifierTree<H: MerkleHash> {
 	pub(crate) nodes: Vec<Node<H>>,
 	pub(crate) actives: BTreeMap<H::Digest, usize>,
@@ -64,6 +62,10 @@ impl<H: MerkleHash> NullifierTree<H> {
 
 	pub fn depth(&self) -> usize {
 		self.tree.depth()
+	}
+
+	pub fn num_leaves(&self) -> usize {
+		self.tree.num_leaves()
 	}
 
 	/// Inserts a new leaf into the indexed Merkle tree and produces a

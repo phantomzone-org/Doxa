@@ -15,12 +15,10 @@ use crate::tree::hasher::{CommitmentPreimage, DataCommitment, MerkleHash, ToHash
 ///
 /// The root commits to the number of leaves: root = H(num_leaves | left | right)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(
-	bound(
-		serialize = "H::Digest: Serialize",
-		deserialize = "H::Digest: Deserialize<'de>"
-	)
-)]
+#[serde(bound(
+	serialize = "H::Digest: Serialize",
+	deserialize = "H::Digest: Deserialize<'de>"
+))]
 pub struct BatchCommitmentProof<H: MerkleHash> {
 	pub leaves: Vec<H::Digest>,
 	pub root_old: H::Digest,

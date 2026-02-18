@@ -16,12 +16,10 @@ use crate::tree::{
 /// sparse representation (only active [Node] and
 /// siblings are stored).
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(
-	bound(
-		serialize = "H::Digest: Serialize",
-		deserialize = "H::Digest: Deserialize<'de>"
-	)
-)]
+#[serde(bound(
+	serialize = "H::Digest: Serialize",
+	deserialize = "H::Digest: Deserialize<'de>"
+))]
 pub struct MerkleTree<H: MerkleHash> {
 	/// Leaves
 	pub(crate) leaves: Vec<H::Digest>,

@@ -1,18 +1,17 @@
-use crate::tree::{
-	BatchCommitmentProof, CommitmentInsertProof, MerkleTree, error::MerkleTreeResult,
-	hasher::MerkleHash,
-};
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::tree::{
+	BatchCommitmentProof, CommitmentInsertProof, MerkleTree, error::MerkleTreeResult,
+	hasher::MerkleHash,
+};
+
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(
-	bound(
-		serialize = "H::Digest: Serialize",
-		deserialize = "H::Digest: Deserialize<'de>"
-	)
-)]
+#[serde(bound(
+	serialize = "H::Digest: Serialize",
+	deserialize = "H::Digest: Deserialize<'de>"
+))]
 pub struct CommitmentTree<H: MerkleHash> {
 	pub(crate) tree: MerkleTree<H>,
 	#[serde(default)]

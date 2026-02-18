@@ -1,0 +1,16 @@
+# Assumptions & Gaps
+
+| # | Item | Type | Details | Source |
+|---|---|---|---|---|
+| 1 | **Aggregated Input Proof** | Stub | `dummy_verify_and_aggregate_associated_input_proofs()` accepts `[0x01]` as valid. Contract uses `DummyVerifier` which accepts anything. Phase A placeholder — real aggregation of transaction validity proofs is not yet implemented. | `tessera-server/src/prover.rs`, `tessera-solidity/src/DummyVerifier.sol` |
+| 2 | **`recover_pending_requests()`** | Stub | Returns `Ok(())` with no implementation. Pending requests in the API queue are lost on sequencer restart. Only committed (finalized) batches are recovered. | `tessera-server/src/sequencer/recovery.rs` |
+| 3 | **Single-operator model** | Trust boundary | Only one `operator` address can submit proofs and manage the bridge. No multi-sig, rotation scheme, or decentralized operator set. | `tessera-solidity/src/TesseraRollup.sol` (`onlyOperator` modifier) |
+| 4 | **No authentication on Sequencer API** | Security gap | All HTTP endpoints on `:8081` are unauthenticated. Anyone with network access can submit consume requests or private transactions. | `tessera-server/src/sequencer/api.rs` |
+| 5 | **Prover is a global FFI singleton** | Concurrency limit | `Groth16Wrapper` calls into Go via FFI with global state. `Arc<Mutex<ProverRuntime>>` serializes all proof requests. Only one proof can be generated at a time, and circuit switching (commitment ↔ nullifier) requires reloading keys. | `tessera-server/src/prover.rs`, `tessera-trees/src/groth/wrapper.rs` |
+| 6 | **Batch priority is hardcoded** | Design decision | Notes commitment always takes priority over other trees. Under sustained load, accounts trees may starve. No configurable priority or fair scheduling. | `tessera-server/src/sequencer/pipeline.rs` (`maybe_start_next_batch()`) |
+| 7 | **`insecure-stub-proof-verify` feature** | Cargo feature flag | Present in `tessera-server/Cargo.toml`. Likely bypasses proof verification for testing. Must never be enabled in production. Usage not fully traced. | `tessera-server/Cargo.toml` |
+| 8 | **Tree depth fixed at 32** | Invariant | Hardcoded in commitment tree initialization. Supports a maximum of ~4 billion leaves. Not configurable at runtime. | `tessera-trees/src/tree/commitment_tree/tree.rs` |
+| 9 | **No mempool / TX management** | Gap | Sequencer submits on-chain TXs but only polls for receipt with a 60s timeout. No nonce management, TX replacement (speed-up), or gas price adjustment is visible in the code. | `tessera-server/src/sequencer/pipeline.rs` |
+| 10 | **Edition 2024 in tessera-trees** | Uncertain | `Cargo.toml` lists `edition = "2024"`. Standard Rust editions are 2015, 2018, 2021. This may be a nightly/unstable edition or a typo. | `tessera-trees/Cargo.toml` |
+| 11 | **No rate limiting on API** | Gap | The sequencer API has no rate limiting. Channel capacity (1024) is the only backpressure mechanism. | `tessera-server/src/sequencer/api.rs`, `tessera-server/src/sequencer/mod.rs` |
+| 12 | **Deposit commitment not enforced in nullifier path** | Design note | Notes submitted to `/notes/nullifier` are validated as `Validated` on-chain, but the nullifier value itself is not cryptographically bound to the original deposit. This relies on the (currently stubbed) transaction proof for correctness. | `tessera-server/src/sequencer/mod.rs` |

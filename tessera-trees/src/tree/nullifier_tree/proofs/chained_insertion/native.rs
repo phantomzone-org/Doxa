@@ -74,12 +74,10 @@ impl<H: MerkleHash> NullifierTree<H> {
 /// ## Private Witnesses
 /// - `proofs`: The individual insertion proofs (with intermediate roots)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(
-	bound(
-		serialize = "H::Digest: Serialize",
-		deserialize = "H::Digest: Deserialize<'de>"
-	)
-)]
+#[serde(bound(
+	serialize = "H::Digest: Serialize",
+	deserialize = "H::Digest: Deserialize<'de>"
+))]
 pub struct NullifierChainedInsertProof<H: MerkleHash> {
 	/// The individual insertion proofs, chained together
 	pub proofs: Vec<NullifierInsertProof<H>>,

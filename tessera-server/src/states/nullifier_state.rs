@@ -94,14 +94,16 @@ impl NullifierTreeState {
 		if self.pending_requests.len() < batch_size {
 			return None;
 		}
+		self.pop_next_up_to(batch_size)
+	}
 
-		let keys: Vec<EventOrderKey> = self
-			.pending_requests
-			.keys()
-			.take(batch_size)
-			.copied()
-			.collect();
-		let mut out = Vec::with_capacity(batch_size);
+	pub fn pop_next_up_to(&mut self, batch_size: usize) -> Option<Vec<PendingRequest>> {
+		if self.pending_requests.is_empty() {
+			return None;
+		}
+		let take_n = batch_size.min(self.pending_requests.len());
+		let keys: Vec<EventOrderKey> = self.pending_requests.keys().take(take_n).copied().collect();
+		let mut out = Vec::with_capacity(take_n);
 		for key in keys {
 			if let Some(req) = self.pending_requests.remove(&key) {
 				self.pending_commitments.remove(&req.commitment);
