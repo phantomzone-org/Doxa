@@ -111,8 +111,8 @@ impl BatchCommitmentProofTargets {
 		// Enforce start_index alignment: the lower `batch_depth` bits must be zero
 		// This is equivalent to: start_index % batch_size == 0
 		let zero = builder.zero();
-		for i in 0..batch_depth {
-			builder.connect(path[i].target, zero);
+		for path_elem in path[..batch_depth].iter() {
+			builder.connect(path_elem.target, zero);
 		}
 
 		// 1) Verifies against old root

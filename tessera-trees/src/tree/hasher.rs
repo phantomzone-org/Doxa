@@ -1,6 +1,7 @@
 use std::{
 	cmp::Ordering,
 	fmt::{Debug, Display},
+	marker::PhantomData,
 };
 
 use plonky2::{
@@ -13,14 +14,24 @@ use plonky2::{
 		poseidon::PoseidonHash,
 	},
 	iop::target::{BoolTarget, Target},
-	plonk::{circuit_builder::CircuitBuilder, config::Hasher},
+	plonk::{
+		circuit_builder::CircuitBuilder,
+		config::{AlgebraicHasher, GenericConfig, Hasher},
+	},
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::{
 	F,
-	plonky2_gadgets::sha256::{CircuitBuilderSha256, Sha256Luts, sha256_field_elements_native},
+	plonky2_gadgets::{
+		keccak256::{builder::BuilderKeccak256, utils::keccak256_field_elements_native},
+		sha256::{
+			CircuitBuilderSha256, Sha256Luts, circuit::decompose_field_to_u32_pair,
+			sha256_field_elements_native,
+		},
+		u32::add_u8_range_check_lookup_table,
+	},
 };
 
 pub trait MerkleHash: Copy + Clone + Debug {
@@ -82,6 +93,7 @@ pub trait MerkleHash: Copy + Clone + Debug {
 /// |---|---|---|
 /// | [`PoseidonCommitment`] | Poseidon | 4 Goldilocks elements (256 bit) |
 /// | [`Sha256Commitment`] | SHA-256 | 8 `u32` words (256 bit) |
+/// | [`Keccak256Commitment`] | Keccak-256 | 8 `u32` words (256 bit) |
 ///
 /// # Usage
 ///
@@ -95,6 +107,10 @@ pub trait MerkleHash: Copy + Clone + Debug {
 /// // SHA-256 commitment (registers lookup tables first):
 /// let sha256 = Sha256Commitment::new(&mut builder, 8);
 /// let targets = ProofTargets::new(&mut builder, depth, batch, Some(&sha256));
+///
+/// // Keccak-256 commitment (registers a byte-range lookup table):
+/// let keccak = Keccak256Commitment::<C, D>::new(&mut builder);
+/// let targets = ProofTargets::new(&mut builder, depth, batch, Some(&keccak));
 ///
 /// // No commitment — raw public inputs:
 /// let targets = ProofTargets::new(&mut builder, depth, batch, None);
@@ -134,7 +150,7 @@ pub trait DataCommitment<F: RichField + Extendable<D>, const D: usize> {
 	///
 	/// The number and interpretation of the registered public inputs
 	/// is implementation-defined (e.g. 4 field elements for Poseidon,
-	/// 8 `u32` words for SHA-256).
+	/// 8 `u32` words for Keccak-256 or SHA-256).
 	fn commit_public_inputs(&self, builder: &mut CircuitBuilder<F, D>, preimage: Vec<Target>);
 
 	/// Computes the commitment digest natively (outside the circuit).
@@ -217,6 +233,80 @@ impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Sha2
 		let mut preimage = Vec::new();
 		source.write_preimage(&mut preimage);
 		sha256_field_elements_native(&preimage)
+			.iter()
+			.map(|&w| F::from_canonical_u64(w as u64))
+			.collect()
+	}
+}
+
+/// Keccak-256-based data commitment.
+///
+/// Computes `keccak256(preimage)` where each target is treated as a
+/// Goldilocks field element encoded in big-endian 8-byte form (high
+/// 32-bit word followed by low 32-bit word).
+/// Registers the 8-word (256-bit) digest as public inputs
+/// (8 targets, each holding a `u32` value).
+///
+/// The encoding is identical to [`Sha256Commitment`], so the preimage
+/// byte layout is unchanged — only the hash function differs.
+/// This makes the on-chain verifier input (`uint256[8]`) identical in
+/// shape to the SHA-256 variant, avoiding ABI churn.
+///
+/// The circuit output matches `keccak256(abi.encodePacked(fields))`
+/// in Solidity when each Goldilocks element maps to one big-endian
+/// `uint64`.
+///
+/// # Construction
+///
+/// A byte-range lookup table is registered when
+/// `Keccak256Commitment::new` is called.  Create this **before**
+/// passing it to proof-target constructors, and only once per circuit.
+#[derive(Clone, Copy, Debug)]
+pub struct Keccak256Commitment<C, const D: usize> {
+	byte_range_lut: usize,
+	_marker: PhantomData<C>,
+}
+
+impl<C, const D: usize> Keccak256Commitment<C, D> {
+	/// Registers the byte-range lookup table and returns a ready-to-use
+	/// commitment object.  Call once per circuit builder.
+	pub fn new<F: RichField + Extendable<D>>(builder: &mut CircuitBuilder<F, D>) -> Self
+	where
+		C: GenericConfig<D, F = F> + 'static,
+		<C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
+	{
+		Self {
+			byte_range_lut: add_u8_range_check_lookup_table(builder),
+			_marker: PhantomData,
+		}
+	}
+}
+
+impl<F: RichField + Extendable<D>, C: GenericConfig<D, F = F> + 'static, const D: usize>
+	DataCommitment<F, D> for Keccak256Commitment<C, D>
+where
+	<C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
+{
+	fn commit_public_inputs(&self, builder: &mut CircuitBuilder<F, D>, preimage: Vec<Target>) {
+		// Decompose each Goldilocks field element into [hi, lo] u32 targets
+		// (big-endian word order) and feed the resulting words to the Keccak-256
+		// gadget, matching the native encoding.
+		let mut u32_targets = Vec::with_capacity(preimage.len() * 2);
+		for &elem in &preimage {
+			let [hi, lo] = decompose_field_to_u32_pair(builder, elem, self.byte_range_lut);
+			u32_targets.push(hi.0);
+			u32_targets.push(lo.0);
+		}
+		let hash = builder.keccak256::<C>(&u32_targets);
+		for word in &hash {
+			builder.register_public_input(*word);
+		}
+	}
+
+	fn commit_native(&self, source: &dyn CommitmentPreimage<F>) -> Vec<F> {
+		let mut preimage = Vec::new();
+		source.write_preimage(&mut preimage);
+		keccak256_field_elements_native(&preimage)
 			.iter()
 			.map(|&w| F::from_canonical_u64(w as u64))
 			.collect()
@@ -306,7 +396,7 @@ impl PartialOrd for Hash {
 
 impl Ord for Hash {
 	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-		return self.to_u64().cmp(&other.to_u64());
+		self.to_u64().cmp(&other.to_u64())
 	}
 }
 

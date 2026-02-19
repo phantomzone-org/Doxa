@@ -116,7 +116,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 		let depth: usize = self.tree.depth();
 
 		// Ensure there is at least one empty leaf
-		if !(self.tree.leaves.len() < 1 << depth) {
+		if self.tree.leaves.len() >= 1 << depth {
 			return Err(anyhow!(MerkleTreeError::FullTree()));
 		}
 
@@ -291,9 +291,9 @@ impl<H: MerkleHash> NullifierTree<H> {
 		}
 
 		if self.nodes.len() != self.tree.num_leaves() {
-			return Err(anyhow!(MerkleTreeError::IndexError(format!(
-				"self.nodes.len() != self.tree.num_leaves()"
-			))));
+			return Err(anyhow!(MerkleTreeError::IndexError(
+				"self.nodes.len() != self.tree.num_leaves()".to_string()
+			)));
 		}
 
 		for i in 0..self.nodes.len() {

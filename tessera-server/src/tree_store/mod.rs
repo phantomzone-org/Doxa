@@ -240,7 +240,10 @@ where
 	}
 
 	pub fn maybe_checkpoint(&self, state: &T, meta: &StoreMeta) -> Result<()> {
-		if meta.committed_batches % self.snapshot_every_batches != 0 {
+		if !meta
+			.committed_batches
+			.is_multiple_of(self.snapshot_every_batches)
+		{
 			return Ok(());
 		}
 		self.write_snapshot(state, meta)
@@ -251,15 +254,12 @@ where
 	}
 
 	pub fn truncate(&mut self) -> Result<()> {
-		// Close and reopen WAL to truncate.
 		self.wal.flush().ok();
-		self.wal = OpenOptions::new()
-			.create(true)
-			.read(true)
-			.append(true)
-			.truncate(true)
-			.open(&self.wal_path)
+		// Truncate the existing append-mode handle to zero; no need to reopen.
+		self.wal
+			.set_len(0)
 			.with_context(|| format!("truncate wal: {}", self.wal_path.display()))?;
+		self.wal_end = 0;
 		if self.snapshot_path.is_file() {
 			let _ = fs::remove_file(&self.snapshot_path);
 		}

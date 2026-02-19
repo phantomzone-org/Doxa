@@ -27,12 +27,12 @@ use crate::{
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-const PROVING_KEY_PATH: &str = &"proving.key";
-const VERIFYING_KEY_PATH: &str = &"verifying.key";
+const PROVING_KEY_PATH: &str = "proving.key";
+const VERIFYING_KEY_PATH: &str = "verifying.key";
 const R1CS_PATH: &str = "r1cs";
-const VERIFIER_DATA_PATH: &str = &"verifier_only_circuit_data.json";
-const COMMON_DATA_PATH: &str = &"common_circuit_data.json";
-const PROOF_WITH_PI: &str = &"proof_with_public_inputs.json";
+const VERIFIER_DATA_PATH: &str = "verifier_only_circuit_data.json";
+const COMMON_DATA_PATH: &str = "common_circuit_data.json";
+const PROOF_WITH_PI: &str = "proof_with_public_inputs.json";
 const NATIVE_CIRCUIT_DATA_PATH: &str = "native_circuit_data.bin";
 const BN128_CIRCUIT_DATA_PATH: &str = "bn128_circuit_data.bin";
 
@@ -80,6 +80,7 @@ impl Groth16Wrapper {
 	/// Loads into memory the
 	///   - Groth16's R1CS, ProvingKey and VerifierKey
 	///   - Plonky2's VerifierOnlyCircuitData, CommonCircuitData
+	///
 	/// so that they can be used by later calls to `groth16_prove` and `groth16_verify`.
 	pub fn init(input_path: &Path, output_path: &Path) -> Result<String> {
 		Self::info_log("groth16 init (ffi) starting");
@@ -420,8 +421,8 @@ impl BN128Wrapper {
 			.map_err(|_| {
 				anyhow!(
 					"serialize native circuit failed (plonky2 IoError — no inner detail available). \
-				 TesseraGeneratorSerializer covers all 24 standard generators plus the 8 custom \
-				 SHA-256/u32 generators. If a new custom generator was added to the circuit, \
+				 TesseraGeneratorSerializer covers all 24 standard generators plus the 10 custom \
+				 Keccak-256 / SHA-256 / u32 generators. If a new custom generator was added to the circuit, \
 				 register it in tessera-trees/src/groth/serializer.rs."
 				)
 			})?;

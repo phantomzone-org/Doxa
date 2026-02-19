@@ -1,10 +1,10 @@
 //! Custom [`WitnessGeneratorSerializer`] for the Tessera native circuit.
 //!
-//! The native plonky2 circuit uses 8 custom witness generators from the
-//! SHA-256 / u32 gadgets that are not included in plonky2's
+//! The native plonky2 circuit uses 10 custom witness generators from the
+//! Keccak-256 / SHA-256 / u32 gadgets that are not included in plonky2's
 //! [`DefaultGeneratorSerializer`].  This module provides
 //! [`TesseraGeneratorSerializer`] which covers all 24 standard generators
-//! plus the 8 custom ones, enabling full round-trip serialization of the
+//! plus the 10 custom ones, enabling full round-trip serialization of the
 //! native circuit data with [`CircuitData::to_bytes`] / `from_bytes`.
 
 // The impl_generator_serializer! macro expands to calls of these two helper macros.
@@ -38,6 +38,10 @@ use plonky2::{get_generator_tag_impl, read_generator_impl};
 use crate::{
 	ConfigNative, F,
 	plonky2_gadgets::{
+		keccak256::generators::{
+			single_generator::Keccak256SingleGenerator,
+			stark_proof_generator::Keccak256StarkProofGenerator,
+		},
 		sha256::circuit::{CanonicalCheckGenerator, FieldDecompositionGenerator},
 		u32::gadgets::{
 			// defined directly in gadgets/mod.rs
@@ -55,8 +59,8 @@ use crate::{
 const D: usize = 2;
 
 /// A [`WitnessGeneratorSerializer`] that covers both the 24 default plonky2
-/// generators and the 8 custom generators used by Tessera's SHA-256 / u32
-/// gadgets.
+/// generators and the 10 custom generators used by Tessera's Keccak-256 /
+/// SHA-256 / u32 gadgets.
 ///
 /// Use this in place of [`DefaultGeneratorSerializer`] when serializing or
 /// deserializing the native circuit data (`CircuitDataNative`).
@@ -91,7 +95,7 @@ impl WitnessGeneratorSerializer<F, D> for TesseraGeneratorSerializer {
 		ReducingExtensionGenerator<D>,
 		SplitGenerator,
 		WireSplitGenerator,
-		// --- 8 custom Tessera generators (SHA-256 / u32 gadgets) ---
+		// --- 10 custom Tessera generators (Keccak-256 / SHA-256 / u32 gadgets) ---
 		ByteDecompositionGenerator,
 		ChunkDecompositionGenerator,
 		U16LimbDecompositionGenerator,
@@ -99,6 +103,8 @@ impl WitnessGeneratorSerializer<F, D> for TesseraGeneratorSerializer {
 		U32WrappingAddGenerator,
 		SplitLowHighGenerator,
 		FieldDecompositionGenerator,
-		CanonicalCheckGenerator
+		CanonicalCheckGenerator,
+		Keccak256SingleGenerator,
+		Keccak256StarkProofGenerator<F, ConfigNative, D>
 	}
 }

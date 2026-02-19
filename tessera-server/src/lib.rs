@@ -21,7 +21,7 @@ use plonky2::{
 use rand::{rngs::StdRng, SeedableRng};
 use tessera_trees::{
 	tree::{
-		hasher::{Hash, NewRandom, Sha256Commitment},
+		hasher::{Hash, Keccak256Commitment, NewRandom},
 		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
 		CommitmentTree, NullifierChainedInsertProof, NullifierTree,
 	},
@@ -32,10 +32,10 @@ pub const TREE_DEPTH: usize = 32;
 
 /// Generate a sample batch commitment insertion proof for testing.
 ///
-/// Creates 128 random deposits, hashes each via SHA-256 to derive Merkle
-/// leaves, inserts them into a depth-32 commitment tree, builds and proves
-/// a plonky2 circuit (with SHA-256 commitment), and returns the circuit
-/// data, proof, batch proof (roots + leaves), and raw deposits.
+/// Creates 128 random deposits, inserts them into a depth-32 commitment
+/// tree, builds and proves a plonky2 circuit (with Keccak-256 commitment),
+/// and returns the circuit data, proof, batch proof (roots + leaves), and
+/// raw deposits.
 ///
 /// The `seed` parameter controls the PRNG, ensuring deterministic but
 /// distinct test vectors across calls (e.g. seed `[0u8; 32]` for R1CS
@@ -71,9 +71,9 @@ pub fn sample_batch_commitment_tree_proof(
 	let config: CircuitConfig = CircuitConfig::standard_recursion_config();
 	let mut builder: CircuitBuilder<F, D> = CircuitBuilder::<F, D>::new(config);
 
-	print!("sha256 commit builder init: ");
+	print!("keccak256 commit builder init: ");
 	let now: Instant = Instant::now();
-	let sha256_com: Sha256Commitment = Sha256Commitment::new(&mut builder, 8);
+	let keccak_com: Keccak256Commitment<ConfigNative, D> = Keccak256Commitment::new(&mut builder);
 	println!("{:?}", now.elapsed());
 
 	print!("Alloc Targets: ");
@@ -82,7 +82,7 @@ pub fn sample_batch_commitment_tree_proof(
 		&mut builder,
 		DEPTH,
 		BATCH_SIZE,
-		Some(&sha256_com),
+		Some(&keccak_com),
 	);
 	println!("{:?}", now.elapsed());
 
@@ -102,7 +102,7 @@ pub fn sample_batch_commitment_tree_proof(
 	let circuit_data: CircuitDataNative = builder.build::<ConfigNative>();
 	println!("{:?}", now.elapsed());
 
-	let com = batch_proof.compute_commitment::<F, D>(&sha256_com);
+	let com = batch_proof.compute_commitment::<F, D>(&keccak_com);
 
 	print!("Prove: ");
 	let now = Instant::now();
@@ -124,10 +124,10 @@ pub fn sample_batch_commitment_tree_proof(
 
 /// Generate a sample batch nullifier insertion proof for testing.
 ///
-/// Creates 128 random deposits, hashes each via SHA-256 to derive Merkle
-/// leaves, inserts them into a depth-32 nullifier tree, builds and proves
-/// a plonky2 circuit (with SHA-256 nullifier), and returns the circuit
-/// data, proof, batch proof (roots + leaves), and raw deposits.
+/// Creates 128 random deposits, inserts them into a depth-32 nullifier
+/// tree, builds and proves a plonky2 circuit (with Keccak-256 commitment),
+/// and returns the circuit data, proof, batch proof (roots + leaves), and
+/// raw deposits.
 ///
 /// The `seed` parameter controls the PRNG, ensuring deterministic but
 /// distinct test vectors across calls (e.g. seed `[0u8; 32]` for R1CS
@@ -163,15 +163,15 @@ pub fn sample_batch_nullifier_tree_proof(
 	let config: CircuitConfig = CircuitConfig::standard_recursion_config();
 	let mut builder: CircuitBuilder<F, D> = CircuitBuilder::<F, D>::new(config);
 
-	print!("sha256 commit builder init: ");
+	print!("keccak256 commit builder init: ");
 	let now: Instant = Instant::now();
-	let sha256_com: Sha256Commitment = Sha256Commitment::new(&mut builder, 8);
+	let keccak_com: Keccak256Commitment<ConfigNative, D> = Keccak256Commitment::new(&mut builder);
 	println!("{:?}", now.elapsed());
 
 	print!("Alloc Targets: ");
 	let now: Instant = Instant::now();
 	let targets: ChainedInsertProofTargets =
-		ChainedInsertProofTargets::new::<F, D>(&mut builder, DEPTH, BATCH_SIZE, Some(&sha256_com));
+		ChainedInsertProofTargets::new::<F, D>(&mut builder, DEPTH, BATCH_SIZE, Some(&keccak_com));
 	println!("{:?}", now.elapsed());
 
 	print!("Connect: ");
@@ -190,7 +190,7 @@ pub fn sample_batch_nullifier_tree_proof(
 	let circuit_data: CircuitDataNative = builder.build::<ConfigNative>();
 	println!("{:?}", now.elapsed());
 
-	let com = batch_proof.compute_commitment::<F, D>(&sha256_com);
+	let com = batch_proof.compute_commitment::<F, D>(&keccak_com);
 
 	print!("Prove: ");
 	let now = Instant::now();

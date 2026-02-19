@@ -9,3 +9,4 @@ noncanonical
 Pedersen
 Plonky
 Rollup
+starky

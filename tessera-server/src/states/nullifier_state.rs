@@ -18,6 +18,12 @@ pub struct NullifierTreeState {
 	pub pending_commitments: HashSet<[u8; 32]>,
 }
 
+impl Default for NullifierTreeState {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 impl NullifierTreeState {
 	pub fn new() -> Self {
 		Self {

@@ -1,5 +1,6 @@
 mod commitment_tree;
 mod nullifier_tree;
+#[allow(clippy::module_inception)]
 mod tree;
 pub(crate) mod verification;
 

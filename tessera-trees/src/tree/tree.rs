@@ -46,13 +46,11 @@ impl<H: MerkleHash> MerkleTree<H> {
 			));
 		}
 
-		let tree = Self {
+		Self {
 			leaves: Vec::new(),
 			layers: vec![Vec::new(); depth],
 			default_siblings,
-		};
-
-		tree
+		}
 	}
 
 	#[allow(dead_code)]
@@ -130,7 +128,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 	pub(crate) fn update_merkle_path(&mut self, index: usize) {
 		// `pos` tracks the node position at the current level.
 		// At level 0 this is a leaf index; afterwards it becomes the parent index.
-		let mut pos: usize = index as usize;
+		let mut pos: usize = index;
 
 		// The hash we propagate upward.
 		// Starts as the updated leaf's hash.
@@ -306,9 +304,9 @@ impl<H: MerkleHash> MerkleTree<H> {
 		let num_leaves = self.leaves.len();
 
 		if start + batch_size > 1 << depth {
-			return Err(anyhow!(MerkleTreeError::IndexError(format!(
-				"IndexError: start+batch_size > 1<<depth"
-			))));
+			return Err(anyhow!(MerkleTreeError::IndexError(
+				"IndexError: start+batch_size > 1<<depth".to_string()
+			)));
 		}
 
 		let mut cur_start = start;

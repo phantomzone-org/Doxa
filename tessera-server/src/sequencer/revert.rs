@@ -32,7 +32,7 @@ fn extract_custom_error_selector(s: &str) -> Option<[u8; 4]> {
 		return None;
 	}
 	let bytes = hex::decode(&s[hex_start..hex_end]).ok()?;
-	Some(bytes.as_slice().try_into().ok()?)
+	bytes.as_slice().try_into().ok()
 }
 
 fn extract_revert_data(s: &str) -> Option<Vec<u8>> {

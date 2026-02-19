@@ -18,6 +18,12 @@ pub struct CommitmentTreeState {
 	pub pending_commitments: HashSet<[u8; 32]>,
 }
 
+impl Default for CommitmentTreeState {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 impl CommitmentTreeState {
 	pub fn new() -> Self {
 		Self {

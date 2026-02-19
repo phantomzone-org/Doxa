@@ -141,6 +141,7 @@ pub struct StreamingAggregator<
 	/// Index 0 = circuit for aggregating leaf proofs
 	/// Index 1 = circuit for aggregating level-0 aggregated proofs
 	/// etc.
+	#[allow(clippy::type_complexity)]
 	level_circuits: Vec<RwLock<Option<Arc<AggregationCircuit<F, C, D>>>>>,
 
 	/// Channel to send the final root proof

@@ -26,9 +26,9 @@ pub enum ProveOutcome {
 		/// The new consumed root after insertion.
 		new_root: Hash,
 		/// Groth16 proof formatted for the Solidity contract.
-		solidity_proof: SolidityProof,
+		solidity_proof: Box<SolidityProof>,
 		/// Aggregated validity proof for the public inputs in the batch.
-		aggregated_input_solidity_proof: SolidityProof,
+		aggregated_input_solidity_proof: Box<SolidityProof>,
 	},
 	Failure {
 		error: String,

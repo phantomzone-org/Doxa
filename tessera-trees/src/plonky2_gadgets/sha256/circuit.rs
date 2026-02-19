@@ -121,8 +121,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 	) -> Sha256Target {
 		let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
 
-		for t in 0..64 {
-			let k_t = self.constant_u32(super::constants::K[t]);
+		for (&k_const, &w_t) in super::constants::K.iter().zip(w.iter()) {
+			let k_t = self.constant_u32(k_const);
 
 			// T1 = h + Σ₁(e) + Ch(e,f,g) + K[t] + W[t]
 			let sigma1_e = self.big_sigma1_u32(e, luts);
@@ -131,7 +131,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 			let t1 = self.wrapping_add_u32(h, sigma1_e, luts.byte_range_lut);
 			let t1 = self.wrapping_add_u32(t1, ch_efg, luts.byte_range_lut);
 			let t1 = self.wrapping_add_u32(t1, k_t, luts.byte_range_lut);
-			let t1 = self.wrapping_add_u32(t1, w[t], luts.byte_range_lut);
+			let t1 = self.wrapping_add_u32(t1, w_t, luts.byte_range_lut);
 
 			// T2 = Σ₀(a) + Maj(a,b,c)
 			let sigma0_a = self.big_sigma0_u32(a, luts);
@@ -193,7 +193,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 		let msg_words = 2 * n;
 
 		// Need room for: msg_words + 1 (0x80 pad) + 2 (length) words minimum
-		let num_blocks = (msg_words + 3 + 15) / 16;
+		let num_blocks = (msg_words + 3).div_ceil(16);
 		let total_words = num_blocks * 16;
 
 		let zero = self.constant_u32(0);
@@ -241,7 +241,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderSha256<F, D>
 /// `(0xFFFFFFFF, value + 1)`.  An additional is-zero gadget on
 /// `0xFFFFFFFF - hi` enforces `hi = 0xFFFFFFFF → lo = 0`, ruling out
 /// the non-canonical encoding while still allowing `p - 1 = (0xFFFFFFFF, 0)`.
-fn decompose_field_to_u32_pair<F: RichField + Extendable<D>, const D: usize>(
+pub(crate) fn decompose_field_to_u32_pair<F: RichField + Extendable<D>, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 	value: Target,
 	range_lut: usize,

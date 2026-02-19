@@ -45,7 +45,7 @@ interface IGroth16Verifier {
 ///
 ///      Proof binding:
 ///      - For batch validation and tree updates, the verifier input is derived from
-///        `SHA256(oldRoot || newRoot || packedLeaves)` converted to 8x uint32 public inputs.
+///        `keccak256(oldRoot || newRoot || packedLeaves)` converted to 8x uint32 public inputs.
 ///      - Tree update entry points are:
 ///        `recordNotesCommitmentTreeUpdate`,
 ///        `recordNotesNullifierTreeUpdate`,
@@ -376,8 +376,8 @@ contract DepositsRollupBridge {
     ///
     ///      Step-by-step:
     ///      1) Snapshot `oldRoot`.
-    ///      2) Pack leaves and hash `(oldRoot, newRoot, packedLeaves)` with SHA256.
-    ///      3) Convert SHA256 digest to the verifier's 8x uint32 public inputs.
+    ///      2) Pack leaves and hash `(oldRoot, newRoot, packedLeaves)` with keccak256.
+    ///      3) Convert keccak256 digest to the verifier's 8x uint32 public inputs.
     ///      4) Verify Groth16 proof and, if valid, update the stored root.
     function recordNotesNullifierTreeUpdate(
         bytes32 newRoot,
@@ -395,9 +395,9 @@ contract DepositsRollupBridge {
         // Pack leaves into bytes for the commitment hash.
         bytes memory noteBytes = _packBytes32ArrayMemory(fullBatch);
 
-        // Public input is SHA256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
-        bytes32 sha256Commit = sha256(abi.encodePacked(oldRoot, newRoot, noteBytes));
-        uint256[8] memory pubInputs = sha256ToPublicInputs(sha256Commit);
+        // Public input is keccak256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
+        bytes32 keccakCommit = keccak256(abi.encodePacked(oldRoot, newRoot, noteBytes));
+        uint256[8] memory pubInputs = keccakToPublicInputs(keccakCommit);
 
         try aggregatedInputVerifier.verifyProof(
             inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
@@ -464,9 +464,9 @@ contract DepositsRollupBridge {
         // Pack leaves into bytes for the commitment hash.
         bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
 
-        // Public input is SHA256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
-        bytes32 sha256Commit = sha256(abi.encodePacked(oldRoot, newRoot, leafBytes));
-        uint256[8] memory pubInputs = sha256ToPublicInputs(sha256Commit);
+        // Public input is keccak256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
+        bytes32 keccakCommit = keccak256(abi.encodePacked(oldRoot, newRoot, leafBytes));
+        uint256[8] memory pubInputs = keccakToPublicInputs(keccakCommit);
 
         try aggregatedInputVerifier.verifyProof(
             inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
@@ -529,9 +529,9 @@ contract DepositsRollupBridge {
         // Pack leaves into bytes for the commitment hash.
         bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
 
-        // Public input is SHA256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
-        bytes32 sha256Commit = sha256(abi.encodePacked(oldRoot, newRoot, leafBytes));
-        uint256[8] memory pubInputs = sha256ToPublicInputs(sha256Commit);
+        // Public input is keccak256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
+        bytes32 keccakCommit = keccak256(abi.encodePacked(oldRoot, newRoot, leafBytes));
+        uint256[8] memory pubInputs = keccakToPublicInputs(keccakCommit);
 
         try aggregatedInputVerifier.verifyProof(
             inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
@@ -584,9 +584,9 @@ contract DepositsRollupBridge {
         // Pack leaves into bytes for the commitment hash.
         bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
 
-        // Public input is SHA256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
-        bytes32 sha256Commit = sha256(abi.encodePacked(oldRoot, newRoot, leafBytes));
-        uint256[8] memory pubInputs = sha256ToPublicInputs(sha256Commit);
+        // Public input is keccak256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
+        bytes32 keccakCommit = keccak256(abi.encodePacked(oldRoot, newRoot, leafBytes));
+        uint256[8] memory pubInputs = keccakToPublicInputs(keccakCommit);
 
         try aggregatedInputVerifier.verifyProof(
             inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
@@ -610,7 +610,7 @@ contract DepositsRollupBridge {
 
     /// @dev Packs a `bytes32[]` into a contiguous byte array (32 bytes per element, in order).
     ///      Why this exists:
-    ///      - The Groth16 public-input commitment uses SHA256 over packed bytes.
+    ///      - The Groth16 public-input commitment uses keccak256 over packed bytes.
     ///      - Any change to packing/order will invalidate proofs.
     function _packBytes32Array(bytes32[] calldata arr) internal pure returns (bytes memory out) {
         out = new bytes(arr.length * 32);
@@ -676,12 +676,30 @@ contract DepositsRollupBridge {
         return bytes32(uint256(digest) & mask);
     }
 
-    /// @notice Converts a bytes32 SHA256 digest into 8 public inputs (uint32 words) expected by the gnark verifier.
+    /// @notice Converts a bytes32 keccak256 digest into 8 public inputs (uint32 words) expected by the gnark verifier.
     /// @dev Why needed:
     ///      - The generated verifier takes an array of 8 uint32-like values as public inputs.
+    ///      - Splits the 256-bit digest into 8 big-endian uint32 words, matching the
+    ///        Rust circuit's Keccak-256 commitment output (8 u32 words, big-endian).
     ///
     ///      How it must be used:
     ///      - The conversion here must match the circuit/verifier encoding exactly.
+    ///      - Do not mix with `sha256ToPublicInputs`; only one hash is in use at a time.
+    function keccakToPublicInputs(bytes32 hash) public pure returns (uint256[8] memory inputs) {
+        uint256 h = uint256(hash);
+        inputs[0] = (h >> 224) & 0xFFFFFFFF;
+        inputs[1] = (h >> 192) & 0xFFFFFFFF;
+        inputs[2] = (h >> 160) & 0xFFFFFFFF;
+        inputs[3] = (h >> 128) & 0xFFFFFFFF;
+        inputs[4] = (h >> 96) & 0xFFFFFFFF;
+        inputs[5] = (h >> 64) & 0xFFFFFFFF;
+        inputs[6] = (h >> 32) & 0xFFFFFFFF;
+        inputs[7] = h & 0xFFFFFFFF;
+    }
+
+    /// @notice Converts a bytes32 SHA256 digest into 8 public inputs (uint32 words).
+    /// @dev Kept for reference and tooling compatibility; not used by tree-update proof paths
+    ///      after the Keccak-256 migration.  Use `keccakToPublicInputs` for all new proofs.
     function sha256ToPublicInputs(bytes32 hash) public pure returns (uint256[8] memory inputs) {
         uint256 h = uint256(hash);
         inputs[0] = (h >> 224) & 0xFFFFFFFF;

@@ -140,6 +140,7 @@ impl IndexRangeCheckTarget {
 	}
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn inclusion<F: Field + RichField + Extendable<D>, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 	a: &[Target], // MSB-first, field limbs
@@ -216,6 +217,7 @@ fn split_and_flatten<
 /// This function computes:
 ///   x = a + 1 + u
 ///   b = x + 1 + v
+#[allow(clippy::too_many_arguments)]
 pub fn populate_inclusion_witness<F: Field + PrimeField64>(
 	pw: &mut PartialWitness<F>,
 	a: &[F], // MSB-first field limbs
@@ -327,6 +329,7 @@ pub fn populate_inclusion_witness<F: Field + PrimeField64>(
 ///   u >= 0, v >= 0
 ///
 /// This avoids explicit comparison and proves inclusion via arithmetic.
+#[allow(clippy::too_many_arguments)]
 fn enforce_strict_inclusion_radix<
 	F: Field + RichField + Extendable<D>, // Required Plonky2 field bounds
 	const D: usize,                       // Extension degree
@@ -367,13 +370,13 @@ fn enforce_strict_inclusion_radix<
 	//   x = a + u + 1
 	//
 	// The +1 makes the inequality strict: x > a
-	enforce_add_eq(builder, a, &u, x, c_ax, base, true);
+	enforce_add_eq(builder, a, u, x, c_ax, base, true);
 
 	// Enforce big-integer equation:
 	//   b = x + v + 1
 	//
 	// The +1 makes the inequality strict: b > x
-	enforce_add_eq(builder, x, &v, b, c_xb, base, true);
+	enforce_add_eq(builder, x, v, b, c_xb, base, true);
 }
 
 fn enforce_add_eq<F: Field + RichField + Extendable<D>, const D: usize>(

@@ -29,7 +29,7 @@ impl NoteCommitment {
 
 	pub fn hash_inplace<H: Digest>(&self, out: &mut Output<H>) {
 		let mut hasher = H::new();
-		hasher.update(&self.note_commitment());
+		hasher.update(self.note_commitment());
 		*out = hasher.finalize();
 	}
 
@@ -40,7 +40,10 @@ impl NoteCommitment {
 	}
 
 	pub fn as_field_hash<H: Digest>(&self) -> Hash {
-		Hash::from_32bytes_digest(*self.hash::<H>().as_array::<32>().unwrap())
+		let digest = self.hash::<H>();
+		let mut bytes = [0u8; 32];
+		bytes.copy_from_slice(&digest[..32]);
+		Hash::from_32bytes_digest(bytes)
 	}
 }
 
@@ -66,10 +69,7 @@ impl NoteCommitmentBatch {
 	}
 
 	pub fn leaves_as_field_hashes<H: Digest>(&self) -> Vec<Hash> {
-		self.notes
-			.iter()
-			.map(|d| d.as_field_hash::<H>().into())
-			.collect()
+		self.notes.iter().map(|d| d.as_field_hash::<H>()).collect()
 	}
 }
 

@@ -16,9 +16,13 @@ itertools = "0.14.0"
 num = "0.4.3"
 hex = {workspace = true}
 plonky2 = {workspace = true}
-rayon = "1.10"
-num_cpus = "1.16"
+starky = {workspace = true}
+rayon = "1.11.0"
+num_cpus = "1.17.0"
 log = "0.4"
+hashbrown = { version = "0.14.5" }
+tiny-keccak = { version = "2.0.2" }
+env_logger = "0.11.9"
 
 # dependencies for the wrapper
 ff = { package = "ff", version = "0.13", features = ["derive"] }

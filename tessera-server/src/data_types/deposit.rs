@@ -48,12 +48,12 @@ impl Deposit {
 	pub fn hash_inplace<H: Digest>(&self, out: &mut Output<H>) {
 		let mut hasher = H::new();
 		hasher.update(domain_sep::<H>());
-		hasher.update(&self.note_commitment.note_commitment());
+		hasher.update(self.note_commitment.note_commitment());
 		// value as big-endian uint256: left-pad u64 with 24 zero bytes
 		let mut value_padded = [0u8; 32];
 		value_padded[24..].copy_from_slice(&self.amount.to_be_bytes());
-		hasher.update(&value_padded);
-		hasher.update(&self.address);
+		hasher.update(value_padded);
+		hasher.update(self.address);
 		*out = hasher.finalize();
 	}
 
@@ -64,7 +64,10 @@ impl Deposit {
 	}
 
 	pub fn as_field_hash<H: Digest>(&self) -> Hash {
-		Hash::from_32bytes_digest(*self.hash::<H>().as_array::<32>().unwrap())
+		let digest = self.hash::<H>();
+		let mut bytes = [0u8; 32];
+		bytes.copy_from_slice(&digest[..32]);
+		Hash::from_32bytes_digest(bytes)
 	}
 }
 
@@ -140,7 +143,7 @@ impl DepositsBatch {
 	pub fn leaves_as_field_hashes<H: Digest>(&self) -> Vec<Hash> {
 		self.deposits
 			.iter()
-			.map(|d| d.as_field_hash::<H>().into())
+			.map(|d| d.as_field_hash::<H>())
 			.collect()
 	}
 }

@@ -8,7 +8,7 @@ use plonky2::{
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	tree::{
-		hasher::{Hash, Sha256Commitment},
+		hasher::{Hash, Keccak256Commitment},
 		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
 		NullifierChainedInsertProof,
 	},
@@ -81,12 +81,12 @@ impl CommitmentProverService {
 
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let sha256_com = Sha256Commitment::new(&mut builder, 8);
+		let keccak_com = Keccak256Commitment::<ConfigNative, D>::new(&mut builder);
 		let targets = BatchCommitmentProofTargets::new::<F, D>(
 			&mut builder,
 			32,
 			batch_size,
-			Some(&sha256_com),
+			Some(&keccak_com),
 		);
 		targets.connect::<Hash, F, D>(&mut builder);
 		let circuit_data = builder.build::<ConfigNative>();
@@ -143,9 +143,9 @@ impl NullifierProverService {
 
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let sha256_com = Sha256Commitment::new(&mut builder, 8);
+		let keccak_com = Keccak256Commitment::<ConfigNative, D>::new(&mut builder);
 		let targets =
-			ChainedInsertProofTargets::new::<F, D>(&mut builder, 32, batch_size, Some(&sha256_com));
+			ChainedInsertProofTargets::new::<F, D>(&mut builder, 32, batch_size, Some(&keccak_com));
 		targets.connect::<Hash, F, D>(&mut builder);
 		let circuit_data = builder.build::<ConfigNative>();
 
@@ -301,8 +301,8 @@ impl ProverRuntime {
 		match (proof_res, aggregated_input_proof_res) {
 			(Ok(solidity_proof), Ok(aggregated_input_solidity_proof)) => ProveOutcome::Success {
 				new_root,
-				solidity_proof,
-				aggregated_input_solidity_proof,
+				solidity_proof: Box::new(solidity_proof),
+				aggregated_input_solidity_proof: Box::new(aggregated_input_solidity_proof),
 			},
 			(_, Err(e)) => {
 				error!("associated input proof aggregation failed: {e}");

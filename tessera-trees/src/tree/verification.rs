@@ -14,7 +14,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 	}
 
 	fn verify_layers(&self) -> MerkleTreeResult<()> {
-		let mut prev_hashes: Vec<H::Digest> = self.leaves.iter().map(|n| *n).collect();
+		let mut prev_hashes: Vec<H::Digest> = self.leaves.to_vec();
 
 		for (level, layer) in self.layers.iter().enumerate() {
 			let mut expected_layer = Vec::with_capacity(layer.len());
@@ -54,10 +54,10 @@ impl<H: MerkleHash> MerkleTree<H> {
 	}
 
 	fn recompute_root(&self) -> H::Digest {
-		let mut current: Vec<H::Digest> = self.leaves.iter().map(|n| *n).collect();
+		let mut current: Vec<H::Digest> = self.leaves.to_vec();
 
 		for level in 0..self.depth() {
-			let mut next = Vec::with_capacity((current.len() + 1) / 2);
+			let mut next = Vec::with_capacity(current.len().div_ceil(2));
 
 			let mut i = 0;
 			while i < current.len() {
