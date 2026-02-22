@@ -1,5 +1,5 @@
 [workspace]
-members = ["tessera-server", "tessera-trees"]
+members = ["tessera-client","tessera-server", "tessera-trees"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -13,11 +13,14 @@ sha2 = "0.10.9"
 sha3 = "0.10.8"
 digest = "0.10.7"
 hex = "0.4.3"
-plonky2 = { git = "https://github.com/0xPARC/plonky2.git", rev = "109d517d09c210ae4c2cee381d3e3fbc04aa3812" }
-starky = { git = "https://github.com/0xPARC/plonky2.git", rev = "109d517d09c210ae4c2cee381d3e3fbc04aa3812" }
+plonky2 = { git = "https://github.com/phantomzone-org/plonky2.git" }
+plonky2_field = { git = "https://github.com/phantomzone-org/plonky2.git" }
+starky = { git = "https://github.com/phantomzone-org/plonky2.git" }
 tokio = { version = "1", features = ["full"] }
 alloy = { version = "1.7.3", features = ["full", "node-bindings"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 axum = "0.8.8"
+itertools = "0.14.0"
+primitive-types = "0.14.0"

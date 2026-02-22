@@ -1,0 +1,13 @@
+[package]
+name = "tessera-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+plonky2_field = {workspace = true}
+plonky2 = {workspace = true}
+anyhow = {workspace = true}
+rand = {workspace = true}
+itertools = {workspace = true}
+tessera-trees = {path = "../tessera-trees"}
+primitive-types = {workspace = true}
