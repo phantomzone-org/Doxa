@@ -68,6 +68,15 @@ impl<H: MerkleHash> NullifierTree<H> {
 		self.tree.num_leaves()
 	}
 
+	pub fn merkle_path(
+		&self,
+		index: usize,
+		start_depth: usize,
+		end_depth: usize,
+	) -> MerkleTreeResult<Vec<H::Digest>> {
+		self.tree.merkle_path(index, start_depth, end_depth)
+	}
+
 	/// Inserts a new leaf into the indexed Merkle tree and produces a
 	/// STARK-friendly insertion proof.
 	///
@@ -164,7 +173,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 		// Proves predecessor membership in `old_root`
 		let pred_old_siblings: Vec<H::Digest> =
 			self.tree
-				.generate_siblings_array(pred_index, 0, self.tree.depth())?;
+				.merkle_path(pred_index, 0, self.tree.depth())?;
 
 		// ============================================================
 		// Phase 2: Mutate the tree
@@ -185,7 +194,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 		// ------------------------------------------------------------
 		let new_node_siblings_before_pred_update: Vec<H::Digest> = self
 			.tree
-			.generate_siblings_array(next_empty_index, 0, depth)?;
+			.merkle_path(next_empty_index, 0, depth)?;
 
 		// ------------------------------------------------------------
 		// 2.b. Update predecessor: old_root → mid_root
@@ -206,7 +215,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 		// ------------------------------------------------------------
 		let new_node_siblings_after_pred_update: Vec<H::Digest> = self
 			.tree
-			.generate_siblings_array(next_empty_index, 0, depth)?;
+			.merkle_path(next_empty_index, 0, depth)?;
 
 		// ------------------------------------------------------------
 		// 2.d. Insert the new node

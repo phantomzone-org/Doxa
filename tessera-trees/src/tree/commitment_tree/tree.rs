@@ -66,19 +66,28 @@ impl<H: MerkleHash> CommitmentTree<H> {
 		}
 	}
 
+	pub fn merkle_path(
+		&self,
+		index: usize,
+		start_depth: usize,
+		end_depth: usize,
+	) -> MerkleTreeResult<Vec<H::Digest>> {
+		self.tree.merkle_path(index, start_depth, end_depth)
+	}
+
 	pub fn insert(&mut self, leaf: H::Digest) -> MerkleTreeResult<CommitmentInsertProof<H>> {
 		let index: usize = self.num_leaves();
 
 		let root_old: H::Digest = self.get_root();
 
 		let siblings_old: Vec<H::Digest> =
-			self.tree.generate_siblings_array(index, 0, self.depth())?;
+			self.tree.merkle_path(index, 0, self.depth())?;
 
 		self.tree.insert(leaf)?;
 		*self.leaf_counts.entry(leaf).or_insert(0) += 1;
 
 		let siblings_new: Vec<H::Digest> =
-			self.tree.generate_siblings_array(index, 0, self.depth())?;
+			self.tree.merkle_path(index, 0, self.depth())?;
 
 		let root_new: H::Digest = self.get_root();
 
@@ -101,7 +110,7 @@ impl<H: MerkleHash> CommitmentTree<H> {
 
 		let root_old: H::Digest = self.get_root();
 
-		let upper_siblings_old: Vec<H::Digest> = self.tree.generate_siblings_array(
+		let upper_siblings_old: Vec<H::Digest> = self.tree.merkle_path(
 			start_index,
 			batch_size.trailing_zeros() as usize,
 			self.depth(),
@@ -112,7 +121,7 @@ impl<H: MerkleHash> CommitmentTree<H> {
 			*self.leaf_counts.entry(*leaf).or_insert(0) += 1;
 		}
 
-		let upper_siblings_new: Vec<H::Digest> = self.tree.generate_siblings_array(
+		let upper_siblings_new: Vec<H::Digest> = self.tree.merkle_path(
 			start_index,
 			batch_size.trailing_zeros() as usize,
 			self.depth(),
