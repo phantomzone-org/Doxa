@@ -1,6 +1,6 @@
 use plonky2::{field::extension::Extendable, hash::hash_types::RichField, plonk::{config::GenericConfig, proof::ProofWithPublicInputs}};
 use serde::{Deserialize, Serialize};
-use tessera_client::{AccountCommitment, AccountNullifier, NoteCommitment, NoteNullifier};
+use tessera_client::{AccountCommitment, AccountNullifier};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound = "")]

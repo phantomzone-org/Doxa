@@ -128,6 +128,55 @@ contract DepositsRollupBridge {
     /// @dev Existence is encoded by `status != DepositStatus.None`.
     mapping(bytes32 => Deposit) public deposits;
 
+    // -------------------------------------------------------------------------
+    // Two-phase transaction-batch state
+    // -------------------------------------------------------------------------
+
+    /// @notice Tree index constants used by registerTransactionBatchUpdate / confirmTreeUpdate.
+    uint8 public constant TREE_NOTES_COMMITMENT    = 0;
+    uint8 public constant TREE_NOTES_NULLIFIER     = 1;
+    uint8 public constant TREE_ACCOUNTS_COMMITMENT = 2;
+    uint8 public constant TREE_ACCOUNTS_NULLIFIER  = 3;
+
+    /// @notice Maximum number of simultaneously in-flight transaction batches.
+    /// @dev Sized to pre-allocate a fixed-size storage buffer so every register/confirm
+    ///      writes into an already-warm slot (2,900 gas) rather than cold (20,000 gas).
+    uint256 public constant MAX_PENDING_BATCHES = 128;
+
+    /// @notice On-chain record for a pending transaction batch (registered but not yet fully confirmed).
+    struct PendingBatch {
+        /// @notice 0 = free slot; set on register, cleared on full confirmation.
+        uint256 batchId;
+        bytes32 newNotesCommitmentRoot;
+        bytes32 newNotesNullifierRoot;
+        bytes32 newAccountsCommitmentRoot;
+        bytes32 newAccountsNullifierRoot;
+        /// @notice One PI commitment per tree (index matches TREE_* constants).
+        ///         Each = keccak256 digest of (oldRoot || newRoot || packedLeaves), used as
+        ///         Groth16 public inputs at confirm time.
+        bytes32[4] piCommitments;
+        /// @notice Bit i is set when tree i's proof has been confirmed. Batch complete at 0xF.
+        uint8 confirmedMask;
+    }
+
+    /// @notice Fixed-size pre-warmed pending-batch buffer. Indexed by batchId % MAX_PENDING_BATCHES.
+    PendingBatch[MAX_PENDING_BATCHES] public pendingBatches;
+    /// @notice Number of currently occupied slots in pendingBatches.
+    uint256 private _pendingCount;
+    /// @notice Monotonically increasing batch ID counter; 1-based (0 = unset/free).
+    uint256 private _nextBatchId;
+
+    /// @notice Confirmed roots — advance per-tree as each tree's proof is verified.
+    ///         For the deposit-only record*TreeUpdate path these always match notesXxxRoot.
+    bytes32 public confirmedNotesCommitmentRoot;
+    bytes32 public confirmedNotesNullifierRoot;
+    bytes32 public confirmedAccountsCommitmentRoot;
+    bytes32 public confirmedAccountsNullifierRoot;
+
+    // -------------------------------------------------------------------------
+    // Events
+    // -------------------------------------------------------------------------
+
     event OperatorChanged(address indexed oldOp, address indexed newOp);
     event PausedChanged(bool isPaused);
     event DepositAvailable(bytes32 indexed noteCommitment, uint256 value, address recipient);
@@ -148,6 +197,20 @@ contract DepositsRollupBridge {
     );
     event DepositValidated(bytes32 indexed noteCommitment);
 
+    /// @dev Emitted when all four tree roots are registered optimistically as a batch.
+    event TransactionBatchRegistered(
+        uint256 indexed batchId,
+        bytes32 newNotesCommitmentRoot,
+        bytes32 newNotesNullifierRoot,
+        bytes32 newAccountsCommitmentRoot,
+        bytes32 newAccountsNullifierRoot,
+        bytes32[4] piCommitments
+    );
+    /// @dev Emitted each time one tree's proof is confirmed within a batch.
+    event TreeUpdateConfirmed(uint256 indexed batchId, uint8 treeIndex);
+    /// @dev Emitted once all four trees in a batch are confirmed (confirmedMask == 0xF).
+    event TransactionBatchConfirmed(uint256 indexed batchId);
+
     error NotOperator();
     error PausedErr();
     error InvalidProof();
@@ -163,6 +226,11 @@ contract DepositsRollupBridge {
     error TokenTransferFailed();
     error ZeroAddress();
     error InvalidinputsProof();
+    error PendingQueueFull();
+    error SlotConflict(uint256 slotIndex);
+    error UnknownBatch(uint256 batchId);
+    error AlreadyConfirmed(uint256 batchId, uint8 treeIndex);
+    error InvalidTreeIndex(uint8 treeIndex);
 
     /// @notice Deploy bridge with verifier addresses, initial roots, and access-control parameters.
     /// @dev Why these parameters exist:
@@ -212,6 +280,23 @@ contract DepositsRollupBridge {
 
         // Token escrow configuration.
         monitoredToken = _monitoredToken;
+
+        // Two-phase batch state initialisation.
+        _nextBatchId = 1;
+
+        // Mirror genesis roots into confirmed roots (no pending proofs at deploy time).
+        confirmedNotesCommitmentRoot    = _notesCommitmentRoot;
+        confirmedNotesNullifierRoot     = _notesNullifierRoot;
+        confirmedAccountsCommitmentRoot = _accountsCommitmentRoot;
+        confirmedAccountsNullifierRoot  = _accountsNullifierRoot;
+
+        // Pre-warm all pending-batch slots so every future register/confirm is a warm SSTORE.
+        // Write then immediately clear confirmedMask on each slot: cold write (20k gas) done
+        // once here so register/confirm only pay 2,900 gas for warm rewrites.
+        for (uint256 i = 0; i < MAX_PENDING_BATCHES; i++) {
+            pendingBatches[i].confirmedMask = 0xFF;
+            pendingBatches[i].confirmedMask = 0;
+        }
     }
 
     /// @dev Restricts caller to `operator`.
@@ -413,8 +498,9 @@ contract DepositsRollupBridge {
             revert InvalidProof();
         }
 
-        // Apply the verified root update.
+        // Apply the verified root update (deposit-only path: both latest and confirmed advance).
         notesNullifierRoot = newRoot;
+        confirmedNotesNullifierRoot = newRoot;
         notesNullifierLeafCount += batchSize;
         emit ValidatedBatchFinalized(TreeType.NotesNullifier, batchSize, oldRoot, newRoot);
     }
@@ -491,8 +577,9 @@ contract DepositsRollupBridge {
             }
         }
 
-        // Apply the verified root update.
+        // Apply the verified root update (deposit-only path: both latest and confirmed advance).
         notesCommitmentRoot = newRoot;
+        confirmedNotesCommitmentRoot = newRoot;
         notesCommitmentLeafCount += batchSize;
         emit ValidatedBatchFinalized(TreeType.NotesCommitment, batchSize, oldRoot, newRoot);
     }
@@ -547,8 +634,9 @@ contract DepositsRollupBridge {
             revert InvalidProof();
         }
 
-        // Apply the verified root update.
+        // Apply the verified root update (deposit-only path: both latest and confirmed advance).
         accountsCommitmentRoot = newRoot;
+        confirmedAccountsCommitmentRoot = newRoot;
         accountsCommitmentLeafCount += batchSize;
         emit ValidatedBatchFinalized(TreeType.AccountsCommitment, batchSize, oldRoot, newRoot);
     }
@@ -602,10 +690,205 @@ contract DepositsRollupBridge {
             revert InvalidProof();
         }
 
-        // Apply the verified root update.
+        // Apply the verified root update (deposit-only path: both latest and confirmed advance).
         accountsNullifierRoot = newRoot;
+        confirmedAccountsNullifierRoot = newRoot;
         accountsNullifierLeafCount += batchSize;
         emit ValidatedBatchFinalized(TreeType.AccountsNullifier, batchSize, oldRoot, newRoot);
+    }
+
+    // -------------------------------------------------------------------------
+    // Two-phase transaction-batch entry points
+    // -------------------------------------------------------------------------
+
+    /// @notice Optimistically registers a private-transaction batch for all four trees at once.
+    /// @dev This is the first phase (register) of the two-phase model. All four latest roots are
+    ///      updated atomically. Proofs for each tree are submitted separately via confirmTreeUpdate.
+    ///
+    ///      Why optimistic / non-final:
+    ///      - Decouples state-application from proof generation, removing prover latency from
+    ///        the hot path. Eventual ZK finality is preserved via confirmTreeUpdate.
+    ///
+    ///      Gas model:
+    ///      - All storage slots in pendingBatches[] were pre-warmed in the constructor (20k → 2.9k).
+    ///      - The slot at `batchId % MAX_PENDING_BATCHES` is written in one register call.
+    ///
+    ///      Deposit safety note (Phase 2):
+    ///      - Tracked notes are currently advanced to `Validated` at register time.
+    ///      - A future slice will introduce a `Staged` status so withdrawal is blocked only
+    ///        until confirmation.
+    ///
+    /// @param newNotesCommitmentRoot  New notes-commitment tree root after appending noteCommitmentsOut.
+    /// @param noteCommitmentsOut      Note commitments added to the commitment tree (proof order).
+    /// @param newNotesNullifierRoot   New notes-nullifier tree root after consuming noteNullifiersIn.
+    /// @param noteNullifiersIn        Note nullifiers consumed in this batch.
+    /// @param newAccountsCommitmentRoot New accounts-commitment tree root.
+    /// @param accountCommitmentsOut   Account commitments added to the commitment tree.
+    /// @param newAccountsNullifierRoot  New accounts-nullifier tree root.
+    /// @param accountNullifiersIn     Account nullifiers consumed in this batch.
+    /// @param piCommitments           Pre-computed keccak256 PI digest per tree (index = TREE_* constant).
+    ///                                Each is used as-is by confirmTreeUpdate for Groth16 verification.
+    /// @return batchId  Unique 1-based ID assigned to this batch.
+    function registerTransactionBatchUpdate(
+        bytes32 newNotesCommitmentRoot,
+        bytes32[] calldata noteCommitmentsOut,
+        bytes32 newNotesNullifierRoot,
+        bytes32[] calldata noteNullifiersIn,
+        bytes32 newAccountsCommitmentRoot,
+        bytes32[] calldata accountCommitmentsOut,
+        bytes32 newAccountsNullifierRoot,
+        bytes32[] calldata accountNullifiersIn,
+        bytes32[4] calldata piCommitments
+    ) external onlyOperator whenNotPaused returns (uint256 batchId) {
+        if (_pendingCount == MAX_PENDING_BATCHES) revert PendingQueueFull();
+
+        // Batch-length checks for all four arrays.
+        {
+            uint256 bs = batchSize;
+            uint256 lenNC = noteCommitmentsOut.length;
+            uint256 lenNN = noteNullifiersIn.length;
+            uint256 lenAC = accountCommitmentsOut.length;
+            uint256 lenAN = accountNullifiersIn.length;
+            if (lenNC == 0 || lenNC > bs) revert InvalidBatchLength(lenNC, bs);
+            if (lenNN == 0 || lenNN > bs) revert InvalidBatchLength(lenNN, bs);
+            if (lenAC == 0 || lenAC > bs) revert InvalidBatchLength(lenAC, bs);
+            if (lenAN == 0 || lenAN > bs) revert InvalidBatchLength(lenAN, bs);
+        }
+
+        // Notes-commitment: check deposit state for tracked notes, then validate them.
+        {
+            uint256 realLen = noteCommitmentsOut.length;
+            for (uint256 i = 0; i < realLen; i++) {
+                bytes32 note = noteCommitmentsOut[i];
+                DepositStatus status = deposits[note].status;
+                if (status != DepositStatus.None && status != DepositStatus.Pending) {
+                    revert InvalidDepositState(note);
+                }
+            }
+            for (uint256 i = 0; i < realLen; i++) {
+                bytes32 note = noteCommitmentsOut[i];
+                if (deposits[note].status != DepositStatus.None) {
+                    deposits[note].status = DepositStatus.Validated;
+                    emit DepositValidated(note);
+                }
+            }
+        }
+
+        // Assign batch ID and compute slot.
+        batchId = _nextBatchId++;
+        uint256 slotIndex = batchId % MAX_PENDING_BATCHES;
+
+        // Defensive: slot should always be free if _pendingCount < MAX_PENDING_BATCHES.
+        if (pendingBatches[slotIndex].batchId != 0) revert SlotConflict(slotIndex);
+
+        // Write pending record into the pre-warmed slot.
+        PendingBatch storage slot = pendingBatches[slotIndex];
+        slot.batchId                   = batchId;
+        slot.newNotesCommitmentRoot    = newNotesCommitmentRoot;
+        slot.newNotesNullifierRoot     = newNotesNullifierRoot;
+        slot.newAccountsCommitmentRoot = newAccountsCommitmentRoot;
+        slot.newAccountsNullifierRoot  = newAccountsNullifierRoot;
+        slot.piCommitments[TREE_NOTES_COMMITMENT]    = piCommitments[TREE_NOTES_COMMITMENT];
+        slot.piCommitments[TREE_NOTES_NULLIFIER]     = piCommitments[TREE_NOTES_NULLIFIER];
+        slot.piCommitments[TREE_ACCOUNTS_COMMITMENT] = piCommitments[TREE_ACCOUNTS_COMMITMENT];
+        slot.piCommitments[TREE_ACCOUNTS_NULLIFIER]  = piCommitments[TREE_ACCOUNTS_NULLIFIER];
+        slot.confirmedMask = 0;
+
+        // Advance latest roots and leaf counts for all four trees.
+        notesCommitmentRoot    = newNotesCommitmentRoot;
+        notesNullifierRoot     = newNotesNullifierRoot;
+        accountsCommitmentRoot = newAccountsCommitmentRoot;
+        accountsNullifierRoot  = newAccountsNullifierRoot;
+        notesCommitmentLeafCount    += batchSize;
+        notesNullifierLeafCount     += batchSize;
+        accountsCommitmentLeafCount += batchSize;
+        accountsNullifierLeafCount  += batchSize;
+
+        _pendingCount++;
+
+        emit TransactionBatchRegistered(
+            batchId,
+            newNotesCommitmentRoot,
+            newNotesNullifierRoot,
+            newAccountsCommitmentRoot,
+            newAccountsNullifierRoot,
+            piCommitments
+        );
+    }
+
+    /// @notice Confirms a single tree's proof for a previously registered transaction batch.
+    /// @dev Second phase of the two-phase model. Each tree is confirmed independently; the batch
+    ///      is fully finalized only when all four trees are confirmed (confirmedMask == 0xF).
+    ///
+    ///      Proof binding: `piCommitments[treeIndex]` stored at register time is used directly as
+    ///      the 8x uint32 Groth16 public inputs. No leaf data re-submission required.
+    ///
+    ///      Retry safety: if the transaction lands after a crash the caller can read
+    ///      `pendingBatches[batchId % MAX_PENDING_BATCHES].confirmedMask` to check which trees
+    ///      are already confirmed and skip them (avoiding AlreadyConfirmed revert).
+    ///
+    /// @param batchId    Batch ID returned by registerTransactionBatchUpdate.
+    /// @param treeIndex  TREE_* constant (0-3) identifying which tree to confirm.
+    /// @param treeProof  Groth16 proof for the tree circuit.
+    /// @param inputsProof Groth16 proof for aggregated public-input validity.
+    function confirmTreeUpdate(
+        uint256 batchId,
+        uint8   treeIndex,
+        Proof calldata treeProof,
+        Proof calldata inputsProof
+    ) external onlyOperator whenNotPaused {
+        if (treeIndex > 3) revert InvalidTreeIndex(treeIndex);
+
+        uint256 slotIndex = batchId % MAX_PENDING_BATCHES;
+        PendingBatch storage slot = pendingBatches[slotIndex];
+
+        if (slot.batchId != batchId) revert UnknownBatch(batchId);
+
+        uint8 bit = uint8(1 << treeIndex);
+        if (slot.confirmedMask & bit != 0) revert AlreadyConfirmed(batchId, treeIndex);
+
+        // Derive public inputs from the stored PI commitment for this tree.
+        uint256[8] memory pubInputs = keccakToPublicInputs(slot.piCommitments[treeIndex]);
+
+        // Verify aggregated inputs proof.
+        try aggregatedInputVerifier.verifyProof(
+            inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
+        ) {
+            // valid
+        } catch {
+            revert InvalidinputsProof();
+        }
+
+        // Verify tree proof using the appropriate verifier circuit.
+        IGroth16Verifier verifier = (treeIndex == TREE_NOTES_COMMITMENT || treeIndex == TREE_ACCOUNTS_COMMITMENT)
+            ? commitmentVerifier
+            : nullifierVerifier;
+        try verifier.verifyProof(treeProof.proof, treeProof.commitments, treeProof.commitmentPok, pubInputs) {
+            // valid
+        } catch {
+            revert InvalidProof();
+        }
+
+        // Mark tree as confirmed and advance the per-tree confirmed root.
+        slot.confirmedMask |= bit;
+        if (treeIndex == TREE_NOTES_COMMITMENT) {
+            confirmedNotesCommitmentRoot = slot.newNotesCommitmentRoot;
+        } else if (treeIndex == TREE_NOTES_NULLIFIER) {
+            confirmedNotesNullifierRoot = slot.newNotesNullifierRoot;
+        } else if (treeIndex == TREE_ACCOUNTS_COMMITMENT) {
+            confirmedAccountsCommitmentRoot = slot.newAccountsCommitmentRoot;
+        } else {
+            confirmedAccountsNullifierRoot = slot.newAccountsNullifierRoot;
+        }
+        emit TreeUpdateConfirmed(batchId, treeIndex);
+
+        // Fully confirmed: free the slot.
+        if (slot.confirmedMask == 0xF) {
+            emit TransactionBatchConfirmed(batchId);
+            slot.batchId       = 0;
+            slot.confirmedMask = 0;
+            _pendingCount--;
+        }
     }
 
     /// @dev Packs a `bytes32[]` into a contiguous byte array (32 bytes per element, in order).
