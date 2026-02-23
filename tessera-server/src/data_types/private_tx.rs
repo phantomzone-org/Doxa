@@ -16,3 +16,9 @@ pub struct PrivateTx<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>, c
     pub proof: ProofWithPublicInputs<F, C, D>
 }
 
+pub struct WithdrawalTX{
+    pub address: [u8; 20],
+    pub input_account_state: AccountNullifier,
+    pub output_account_state: AccountCommitment,
+    pub proof: ProofWithPublicInputs<F, C, D>
+}
