@@ -96,7 +96,7 @@ mod tests {
 	fn test_hash_sha256_known_vector() {
 		let deposit: Deposit = Deposit::new(
 			NoteCommitment::new_from_bytes([1u8; 32]), // 32 bytes of 1
-			[1u8; 20],                      // 20 bytes of 1
+			[1u8; 20],                                 // 20 bytes of 1
 			1,
 		);
 

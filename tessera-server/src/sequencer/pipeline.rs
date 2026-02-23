@@ -257,6 +257,8 @@ impl Sequencer {
 
 		self.submit_prove_request_with_retry(
 			crate::types::ProveRequest::Commitment {
+				batch_id: 0,
+				tree_index: crate::types::TREE_NOTES_COMMITMENT,
 				batch_proof,
 				associated_input_proofs,
 			},
@@ -350,6 +352,8 @@ impl Sequencer {
 
 		self.submit_prove_request_with_retry(
 			crate::types::ProveRequest::Nullifier {
+				batch_id: 0,
+				tree_index: crate::types::TREE_NOTES_NULLIFIER,
 				batch_proof,
 				associated_input_proofs,
 			},
@@ -428,6 +432,8 @@ impl Sequencer {
 
 		self.submit_prove_request_with_retry(
 			crate::types::ProveRequest::Commitment {
+				batch_id: 0,
+				tree_index: crate::types::TREE_ACCOUNTS_COMMITMENT,
 				batch_proof,
 				associated_input_proofs,
 			},
@@ -518,6 +524,8 @@ impl Sequencer {
 
 		self.submit_prove_request_with_retry(
 			crate::types::ProveRequest::Nullifier {
+				batch_id: 0,
+				tree_index: crate::types::TREE_ACCOUNTS_NULLIFIER,
 				batch_proof,
 				associated_input_proofs,
 			},
@@ -581,6 +589,8 @@ impl Sequencer {
 				return Ok(());
 			},
 			ProveOutcome::Success {
+				batch_id: _batch_id,
+				tree_index: _tree_index,
 				new_root,
 				solidity_proof,
 				aggregated_input_solidity_proof,

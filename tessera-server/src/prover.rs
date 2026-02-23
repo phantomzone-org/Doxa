@@ -230,33 +230,42 @@ impl ProverRuntime {
 	}
 
 	pub fn prove_request(&mut self, request: ProveRequest) -> ProveOutcome {
-		let (need_active, new_root, batch_size, associated_input_proofs) = match &request {
-			ProveRequest::Commitment {
-				batch_proof,
-				associated_input_proofs,
-			} => (
-				ActiveGroth::Commitment,
-				batch_proof.root_new,
-				batch_proof.leaves.len(),
-				associated_input_proofs,
-			),
-			ProveRequest::Nullifier {
-				batch_proof,
-				associated_input_proofs,
-			} => {
-				let Some(last) = batch_proof.proofs.last() else {
-					return ProveOutcome::Failure {
-						error: "nullifier proof request contains no insertions".to_string(),
-					};
-				};
-				(
-					ActiveGroth::Nullifier,
-					last.new_root,
-					batch_proof.len(),
+		let (batch_id, tree_index, need_active, new_root, batch_size, associated_input_proofs) =
+			match &request {
+				ProveRequest::Commitment {
+					batch_id,
+					tree_index,
+					batch_proof,
 					associated_input_proofs,
-				)
-			},
-		};
+				} => (
+					*batch_id,
+					*tree_index,
+					ActiveGroth::Commitment,
+					batch_proof.root_new,
+					batch_proof.leaves.len(),
+					associated_input_proofs,
+				),
+				ProveRequest::Nullifier {
+					batch_id,
+					tree_index,
+					batch_proof,
+					associated_input_proofs,
+				} => {
+					let Some(last) = batch_proof.proofs.last() else {
+						return ProveOutcome::Failure {
+							error: "nullifier proof request contains no insertions".to_string(),
+						};
+					};
+					(
+						*batch_id,
+						*tree_index,
+						ActiveGroth::Nullifier,
+						last.new_root,
+						batch_proof.len(),
+						associated_input_proofs,
+					)
+				},
+			};
 
 		if self.active != Some(need_active) {
 			let init_res = match need_active {
@@ -300,6 +309,8 @@ impl ProverRuntime {
 
 		match (proof_res, aggregated_input_proof_res) {
 			(Ok(solidity_proof), Ok(aggregated_input_solidity_proof)) => ProveOutcome::Success {
+				batch_id,
+				tree_index,
 				new_root,
 				solidity_proof: Box::new(solidity_proof),
 				aggregated_input_solidity_proof: Box::new(aggregated_input_solidity_proof),
