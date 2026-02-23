@@ -60,7 +60,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 
 	/// Generates a fixed-size sibling array for a given index.
 	/// Any index is supported, even for empty nodes.
-	pub(crate) fn generate_siblings_array(
+	pub fn merkle_path(
 		&self,
 		index: usize,
 		start_depth: usize,
