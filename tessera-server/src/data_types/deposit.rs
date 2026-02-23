@@ -1,9 +1,8 @@
 use anyhow::{anyhow, Result};
 use digest::{Digest, Output};
 use serde::{Deserialize, Serialize};
+use tessera_client::NoteCommitment;
 use tessera_trees::tree::hasher::Hash;
-
-use crate::NoteCommitment;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Deposit {
@@ -48,7 +47,7 @@ impl Deposit {
 	pub fn hash_inplace<H: Digest>(&self, out: &mut Output<H>) {
 		let mut hasher = H::new();
 		hasher.update(domain_sep::<H>());
-		hasher.update(self.note_commitment.note_commitment());
+		hasher.update(self.note_commitment.as_ref());
 		// value as big-endian uint256: left-pad u64 with 24 zero bytes
 		let mut value_padded = [0u8; 32];
 		value_padded[24..].copy_from_slice(&self.amount.to_be_bytes());
@@ -96,7 +95,7 @@ mod tests {
 	#[test]
 	fn test_hash_sha256_known_vector() {
 		let deposit: Deposit = Deposit::new(
-			NoteCommitment::new([1u8; 32]), // 32 bytes of 1
+			NoteCommitment::new_from_bytes([1u8; 32]), // 32 bytes of 1
 			[1u8; 20],                      // 20 bytes of 1
 			1,
 		);
@@ -107,7 +106,7 @@ mod tests {
 
 		// sha256(domain_sep || [0x01;32] || [0x00*31,0x01] || [0x01;20])
 		let expected =
-			hex::decode("78ee2c67c361a384e9587e5839beb9e2cac364079ecd903b88dbd6117ad46371")
+			hex::decode("c8b52176c9cb17debbe4c213e3a4a89ae42c7c1a98f99cf205b077f33985f30d")
 				.unwrap();
 		assert_eq!(leaf.as_slice(), expected.as_slice());
 	}

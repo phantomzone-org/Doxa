@@ -177,7 +177,7 @@ Feature-gated scripted integration test (runs local devnet + deploy + recovery f
 
 ```bash
 TESSERA_RUN_INTEGRATION_SCRIPTS=1 \
-cargo test -p tessera-server --features integration-tests scripted_chain_recovery_e2e -- --nocapture --test-threads=1
+cargo test --release -p tessera-server --features integration-tests scripted_chain_recovery_e2e -- --nocapture --test-threads=1
 ```
 
 Notes:

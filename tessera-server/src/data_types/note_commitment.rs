@@ -1,7 +1,14 @@
 use anyhow::{anyhow, Result};
 use digest::{Digest, Output};
 use serde::{Deserialize, Serialize};
+use tessera_client::NoteCommitment;
 use tessera_trees::tree::hasher::Hash;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteCommitmentBatch {
+	pub notes: Vec<NoteCommitment>,
+	batch_size: usize,
+}
 
 impl NoteCommitmentBatch {
 	pub fn new(batch_size: usize) -> Self {
@@ -25,7 +32,7 @@ impl NoteCommitmentBatch {
 	}
 
 	pub fn leaves_as_field_hashes<H: Digest>(&self) -> Vec<Hash> {
-		self.notes.iter().map(|d| d.as_field_hash::<H>()).collect()
+		self.notes.iter().map(|d| d.as_field_hash()).collect()
 	}
 }
 
