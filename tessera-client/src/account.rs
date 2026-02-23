@@ -9,7 +9,10 @@ use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt};
 use tessera_trees::{F, tree::hasher::Hash};
 
-use crate::{DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, schnorr::PublicKey};
+use crate::{DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, commitment::Commitment, schnorr::PublicKey};
+
+pub type  AccountCommitment = Commitment;
+pub type AccountNullifier = Commitment;
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct NullifierKey(pub [F; 4]);
