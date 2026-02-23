@@ -8,3 +8,5 @@ pub const DS_NULLIFIER_KEY: u64 = 12;
 pub const DS_PUBLIC_IDENTIFIER: u64 = 13;
 
 pub const NOTE_BATCH: usize = 8;
+
+pub use note::*;

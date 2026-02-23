@@ -9,5 +9,7 @@ plonky2 = {workspace = true}
 anyhow = {workspace = true}
 rand = {workspace = true}
 itertools = {workspace = true}
-tessera-trees = {path = "../tessera-trees"}
+tessera-trees = {workspace = true}
 primitive-types = {workspace = true}
+digest = {workspace = true}
+serde = {workspace = true}
