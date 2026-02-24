@@ -253,6 +253,8 @@ impl ProverRuntime {
 				} => {
 					let Some(last) = batch_proof.proofs.last() else {
 						return ProveOutcome::Failure {
+							batch_id: *batch_id,
+							tree_index: *tree_index,
 							error: "nullifier proof request contains no insertions".to_string(),
 						};
 					};
@@ -281,6 +283,8 @@ impl ProverRuntime {
 			if let Err(e) = init_res {
 				error!("groth16 init failed: {e}");
 				return ProveOutcome::Failure {
+					batch_id,
+					tree_index,
 					error: e.to_string(),
 				};
 			}
@@ -318,12 +322,16 @@ impl ProverRuntime {
 			(_, Err(e)) => {
 				error!("associated input proof aggregation failed: {e}");
 				ProveOutcome::Failure {
+					batch_id,
+					tree_index,
 					error: e.to_string(),
 				}
 			},
 			(Err(e), _) => {
 				error!("proof generation failed: {e}");
 				ProveOutcome::Failure {
+					batch_id,
+					tree_index,
 					error: e.to_string(),
 				}
 			},

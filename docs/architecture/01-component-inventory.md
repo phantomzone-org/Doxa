@@ -4,7 +4,7 @@
 |---|---|---|---|---|---|
 | **Sequencer** | Long-running server | `src/bin/sequencer.rs` → `main()` | HTTP API (axum) on `:8081` | Prover, Bridge Contract, RPC Node | `tessera-server/src/sequencer/mod.rs`, `tessera-server/src/sequencer/api.rs`, `tessera-server/src/sequencer/pipeline.rs`, `tessera-server/src/sequencer/recovery.rs` |
 | **Prover** | Long-running server | `src/bin/prover.rs` → `main()` | HTTP API (axum) on `:8091`, `POST /prove` | tessera-trees, gnark FFI | `tessera-server/src/prover.rs`, `tessera-server/src/bin/prover.rs` |
-| **DepositsRollupBridge** | Solidity smart contract | Constructor (deployment) | 4x `recordTree*Update()`, `depositAndRegister()`, `withdrawPendingDeposit()` | VerifierCommitment, VerifierNullifier, DummyVerifier, ERC20 Token | `tessera-solidity/src/TesseraRollup.sol` |
+| **DepositsRollupBridge** | Solidity smart contract | Constructor (deployment) | `registerTransactionBatchUpdate()`, `confirmTreeUpdate()`, 4x `recordTree*Update()`, `depositAndRegister()`, `withdrawPendingDeposit()` | VerifierCommitment, VerifierNullifier, DummyVerifier, ERC20 Token | `tessera-solidity/src/TesseraRollup.sol` |
 | **VerifierCommitment** | Solidity smart contract | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/VerifierCommitment.sol` |
 | **VerifierNullifier** | Solidity smart contract | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/VerifierNullifier.sol` |
 | **DummyVerifier** | Solidity smart contract (dev) | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/DummyVerifier.sol` |
@@ -19,8 +19,8 @@ All routes are `POST`:
 
 | Route | Handler | Body | Channel | Description |
 |---|---|---|---|---|
-| `/consume-request`, `/notes/commitment` | `consume_request_handler()` | `{ note_commitment, input_proof }` | `notes_commitment_tx` | Submit a note for commitment tree inclusion |
-| `/private-tx`, `/private-tx/notes` | `private_tx_notes_handler()` | `{ input_notes[], output_notes[], input_account_commitment, output_account_commitment, tx_proof, tx_id }` | All 4 channels | Submit a full private transaction |
+| `/consume-request`, `/notes/commitment` | `consume_request_handler()` | `{ note_commitment, input_proof }` | `notes_commitment_tx` | Submit a note for deposit-only commitment tree inclusion |
+| `/private-tx`, `/private-tx/notes` | `private_tx_notes_handler()` | `{ input_notes[], output_notes[], input_account_commitment, output_account_commitment, tx_proof, tx_id }` | `private_tx_tx` | Submit a full private transaction via optimistic two-phase register+confirm |
 | `/notes/nullifier` | `notes_nullifier_handler()` | `{ leaf }` | `notes_nullifier_tx` | Submit a nullifier leaf |
 | `/accounts/commitment` | `accounts_commitment_handler()` | `{ leaf }` | `accounts_commitment_tx` | Submit an account commitment leaf |
 | `/accounts/nullifier` | `accounts_nullifier_handler()` | `{ leaf }` | `accounts_nullifier_tx` | Submit an account nullifier leaf |

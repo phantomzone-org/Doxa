@@ -1,9 +1,4 @@
-use plonky2::{
-	hash::{
-		poseidon::PoseidonHash,
-	},
-	plonk::config::Hasher,
-};
+use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64};
 use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt};
@@ -11,7 +6,7 @@ use tessera_trees::{F, tree::hasher::Hash};
 
 use crate::{DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, commitment::Commitment, schnorr::PublicKey};
 
-pub type  AccountCommitment = Commitment;
+pub type AccountCommitment = Commitment;
 pub type AccountNullifier = Commitment;
 
 #[derive(PartialEq, Eq, Clone, Debug)]

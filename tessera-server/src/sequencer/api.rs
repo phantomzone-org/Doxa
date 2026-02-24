@@ -14,6 +14,9 @@ pub(super) struct ApiState {
 	pub(super) notes_nullifier_tx: mpsc::Sender<[u8; 32]>,
 	pub(super) accounts_commitment_tx: mpsc::Sender<[u8; 32]>,
 	pub(super) accounts_nullifier_tx: mpsc::Sender<[u8; 32]>,
+	/// When `Some`, `/private-tx` uses the optimistic two-phase register path.
+	/// When `None`, falls back to the per-tree fan-out (deposit-only) path.
+	pub(super) private_tx_tx: Option<mpsc::Sender<super::PrivateTxRequest>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,42 +183,25 @@ async fn private_tx_notes_handler(
 	let input_notes_count = input_notes.len();
 	let output_notes_count = output_notes.len();
 
-	for leaf in input_notes {
-		state
-			.notes_nullifier_tx
-			.send(leaf)
-			.await
-			.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	}
-	for leaf in output_notes {
-		state
-			.notes_commitment_tx
-			.send(NotesCommitmentRequest {
-				note: leaf,
-				associated_input_proof: tx_proof.clone(),
-			})
-			.await
-			.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	}
 	state
-		.accounts_nullifier_tx
-		.send(input_account_leaf)
-		.await
-		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	state
-		.accounts_commitment_tx
-		.send(output_account_leaf)
+		.private_tx_tx
+		.as_ref()
+		.ok_or(axum::http::StatusCode::SERVICE_UNAVAILABLE)?
+		.send(super::PrivateTxRequest {
+			tx_id: body.tx_id,
+			input_notes,
+			output_notes,
+			input_account_leaf,
+			output_account_leaf,
+			tx_proof,
+		})
 		.await
 		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
 	info!(
-		tx_id = body.tx_id.as_deref().unwrap_or("unknown"),
 		enqueued_notes_nullifier = input_notes_count,
 		enqueued_notes_commitment = output_notes_count,
-		enqueued_accounts_nullifier = 1,
-		enqueued_accounts_commitment = 1,
-		"accepted private tx leaves into sequencer pools"
+		"accepted private tx via optimistic register path"
 	);
-
 	Ok(Json(ConsumeRequestResponse {
 		accepted: true,
 		invalid_proof_tx: None,

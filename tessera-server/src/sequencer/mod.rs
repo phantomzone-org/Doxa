@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use alloy::{
 	network::EthereumWallet,
@@ -30,12 +30,55 @@ const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
 /// Receipt polling timeout for on-chain transactions.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Mirror of `MAX_PENDING_BATCHES` in `TesseraRollup.sol`.
+const MAX_PENDING_BATCHES: usize = 128;
+
 struct InFlightBatch {
 	job: TreeJob,
 	requests: Vec<PendingRequest>,
 	real_commitments_bytes: Vec<[u8; 32]>,
 	proving_commitments_bytes: Vec<[u8; 32]>,
 	proving_commitments_hash: Vec<Hash>,
+}
+
+/// Per-tree witness data stored for one slot in an in-flight two-phase batch.
+/// Fields are read by Slice 5 (confirm pipeline) and Slice 6 (recovery).
+#[allow(dead_code)]
+struct TxPerTreeBatch {
+	real_commitments_bytes: Vec<[u8; 32]>,
+	proving_commitments_bytes: Vec<[u8; 32]>,
+	proving_commitments_hash: Vec<Hash>,
+	associated_input_proofs: Vec<Vec<u8>>,
+}
+
+/// A batch registered on-chain but not yet fully confirmed (all 4 trees).
+/// Fields are read by Slice 5 (confirm pipeline) and Slice 6 (recovery).
+#[allow(dead_code)]
+struct TxBatch {
+	batch_id: u64,
+	/// The PI commitments submitted at register time (one `bytes32` per tree,
+	/// index matches TREE_* constants).
+	pi_commitments: [[u8; 32]; 4],
+	/// Per-tree batch data indexed by `TREE_*` constants.
+	per_tree: [TxPerTreeBatch; 4],
+	/// Mirrors the on-chain `confirmedMask`; complete when `== 0xF`.
+	local_confirmed_mask: u8,
+}
+
+/// A decoded private transaction forwarded from the API to the sequencer's
+/// optimistic register path.
+pub(super) struct PrivateTxRequest {
+	pub tx_id: Option<String>,
+	/// Notes nullifier leaves (input notes being spent).
+	pub input_notes: Vec<[u8; 32]>,
+	/// Notes commitment leaves (output notes being created).
+	pub output_notes: Vec<[u8; 32]>,
+	/// Accounts nullifier leaf (input account state being consumed).
+	pub input_account_leaf: [u8; 32],
+	/// Accounts commitment leaf (output account state being created).
+	pub output_account_leaf: [u8; 32],
+	/// The validated transaction proof bytes.
+	pub tx_proof: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +117,10 @@ pub struct Sequencer {
 	notes_nullifier_rx: Option<mpsc::Receiver<[u8; 32]>>,
 	accounts_commitment_rx: Option<mpsc::Receiver<[u8; 32]>>,
 	accounts_nullifier_rx: Option<mpsc::Receiver<[u8; 32]>>,
+	/// Registered-but-unconfirmed two-phase batches keyed by on-chain `batchId`.
+	registered_pending_batches: BTreeMap<u64, TxBatch>,
+	/// Receiver end of the private-tx channel for optimistic two-phase register.
+	private_tx_rx: Option<mpsc::Receiver<PrivateTxRequest>>,
 	api_order_counter: u64,
 	notes_commitment_pending_since: Option<std::time::Instant>,
 	notes_nullifier_pending_since: Option<std::time::Instant>,
@@ -142,6 +189,8 @@ impl Sequencer {
 			notes_nullifier_rx: None,
 			accounts_commitment_rx: None,
 			accounts_nullifier_rx: None,
+			registered_pending_batches: BTreeMap::new(),
+			private_tx_rx: None,
 			api_order_counter: 0,
 			notes_commitment_pending_since: None,
 			notes_nullifier_pending_since: None,
@@ -235,23 +284,28 @@ impl Sequencer {
 		// Step 3: reconcile local cache with chain by replaying only missing batches.
 		// This is authoritative recovery: if local is behind, we recover leaves from
 		// on-chain transaction calldata and append them locally.
+		//
+		// Two-phase batches advance notesCommitmentRoot() ahead of the per-tree confirmed
+		// roots.  Reconcile local trees against the confirmed roots here;
+		// recover_pending_requests re-applies all two-phase batches (confirmed + pending)
+		// on top.
+		let (recovery_nc_root, recovery_nn_root, recovery_ac_root, recovery_an_root) = (
+			bridge.confirmedNotesCommitmentRoot().call().await?,
+			bridge.confirmedNotesNullifierRoot().call().await?,
+			bridge.confirmedAccountsCommitmentRoot().call().await?,
+			bridge.confirmedAccountsNullifierRoot().call().await?,
+		);
 		self.recover_missing_chain_updates(
 			&provider,
-			&on_chain_notes_commitment_root,
-			&on_chain_notes_nullifier_root,
-			&on_chain_accounts_commitment_root,
-			&on_chain_accounts_nullifier_root,
+			&recovery_nc_root,
+			&recovery_nn_root,
+			&recovery_ac_root,
+			&recovery_an_root,
 		)
 		.await?;
 
-		self.recover_pending_requests(&provider, batch_size).await?;
-		info!(
-			local_root = ?contract::hash_to_bytes32(&self.notes_commitment_state.current_root()),
-			pending_requests = self.notes_commitment_state.pending_requests.len(),
-			"state recovery complete"
-		);
-		self.log_pool_status("after startup recovery");
-
+		// Initialise the prover client and result channel before recover_pending_requests so
+		// that the recovery path can submit prove jobs via submit_prove_request_with_retry.
 		let (result_tx, result_rx) = mpsc::channel::<ProveOutcome>(4);
 		let prover_client = HttpProverClient::new(
 			self.config.prover_api_url.clone(),
@@ -266,6 +320,14 @@ impl Sequencer {
 		self.result_tx = Some(result_tx);
 		self.result_rx = Some(result_rx);
 
+		self.recover_pending_requests(&provider, batch_size).await?;
+		info!(
+			local_root = ?contract::hash_to_bytes32(&self.notes_commitment_state.current_root()),
+			pending_requests = self.notes_commitment_state.pending_requests.len(),
+			"state recovery complete"
+		);
+		self.log_pool_status("after startup recovery");
+
 		let (notes_commitment_tx, notes_commitment_rx) =
 			mpsc::channel::<NotesCommitmentRequest>(1024);
 		let (notes_nullifier_tx, notes_nullifier_rx) = mpsc::channel::<[u8; 32]>(1024);
@@ -275,6 +337,13 @@ impl Sequencer {
 		self.notes_nullifier_rx = Some(notes_nullifier_rx);
 		self.accounts_commitment_rx = Some(accounts_commitment_rx);
 		self.accounts_nullifier_rx = Some(accounts_nullifier_rx);
+
+		let private_tx_tx = {
+			let (tx, rx) = mpsc::channel::<PrivateTxRequest>(MAX_PENDING_BATCHES);
+			self.private_tx_rx = Some(rx);
+			tx
+		};
+
 		let api_addr: std::net::SocketAddr = self
 			.config
 			.api_bind_addr
@@ -285,6 +354,7 @@ impl Sequencer {
 			notes_nullifier_tx,
 			accounts_commitment_tx,
 			accounts_nullifier_tx,
+			private_tx_tx: Some(private_tx_tx),
 		};
 		let app = api::build_router(api_state);
 		tokio::spawn(async move {
@@ -478,6 +548,20 @@ impl Sequencer {
 							error!("failed to start next batch: {e}");
 							break;
 						}
+					}
+				}
+
+				// Optimistic two-phase register path for private transactions.
+				Some(tx_req) = async {
+					if let Some(rx) = &mut self.private_tx_rx {
+						rx.recv().await
+					} else {
+						None
+					}
+				} => {
+					if let Err(e) = self.register_tx_batch(&provider, tx_req, batch_size).await {
+						error!("failed to register private tx batch: {e}");
+						// Non-fatal: log and continue processing other requests.
 					}
 				}
 

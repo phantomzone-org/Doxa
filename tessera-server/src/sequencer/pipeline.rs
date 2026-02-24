@@ -1,3 +1,8 @@
+use alloy::primitives::FixedBytes;
+use tessera_trees::{
+	plonky2_gadgets::keccak256::utils::keccak256_field_elements_native,
+	tree::hasher::CommitmentPreimage, F,
+};
 use tracing::{debug, info, warn};
 
 use super::*;
@@ -9,7 +14,7 @@ use crate::{
 const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
 
 impl Sequencer {
-	fn submit_prove_request_with_retry(
+	pub(super) fn submit_prove_request_with_retry(
 		&self,
 		request: crate::types::ProveRequest,
 		job: TreeJob,
@@ -555,6 +560,20 @@ impl Sequencer {
 		outcome: ProveOutcome,
 		in_flight: &mut Option<InFlightBatch>,
 	) -> anyhow::Result<()> {
+		// Two-phase path: batch_id != 0 means this outcome belongs to a
+		// registered TxBatch; route to the confirm pipeline.
+		let outcome_batch_id = match &outcome {
+			ProveOutcome::Success {
+				batch_id, ..
+			}
+			| ProveOutcome::Failure {
+				batch_id, ..
+			} => *batch_id,
+		};
+		if outcome_batch_id != 0 {
+			return self.confirm_tx_batch_tree(provider, outcome).await;
+		}
+
 		let bridge = IDepositsRollupBridge::IDepositsRollupBridgeInstance::new(
 			self.config.bridge_address,
 			provider,
@@ -567,6 +586,8 @@ impl Sequencer {
 
 		match outcome {
 			ProveOutcome::Failure {
+				batch_id: _,
+				tree_index: _,
 				error,
 			} => {
 				warn!(job = ?batch.job, "prover returned failure, re-queueing batch");
@@ -589,8 +610,8 @@ impl Sequencer {
 				return Ok(());
 			},
 			ProveOutcome::Success {
-				batch_id: _batch_id,
-				tree_index: _tree_index,
+				batch_id: _,
+				tree_index: _,
 				new_root,
 				solidity_proof,
 				aggregated_input_solidity_proof,
@@ -839,4 +860,413 @@ impl Sequencer {
 
 		Ok(())
 	}
+
+	/// Register a private transaction as an optimistic two-phase batch.
+	///
+	/// Steps:
+	/// 1. Guard against a full pending-batch queue.
+	/// 2. For each of the four trees: pad real leaves to `batch_size`, compute the native batch
+	///    proof from a tree clone, and derive the PI commitment.
+	/// 3. Call `registerTransactionBatchUpdate` on-chain; extract the assigned `batchId` from the
+	///    emitted `TransactionBatchRegistered` event.
+	/// 4. Apply the padded inserts to the real local trees (advancing their roots so subsequent
+	///    registrations can build on top).
+	/// 5. Store a `TxBatch` record and submit four async prove jobs.
+	pub(super) async fn register_tx_batch<P: Provider + Clone>(
+		&mut self,
+		provider: &P,
+		request: PrivateTxRequest,
+		batch_size: usize,
+	) -> anyhow::Result<()> {
+		// 1. Queue-full guard.
+		if self.registered_pending_batches.len() >= MAX_PENDING_BATCHES {
+			warn!(
+				tx_id = request.tx_id.as_deref().unwrap_or("unknown"),
+				"optimistic register queue full; dropping private tx"
+			);
+			return Err(anyhow::anyhow!("PendingQueueFull"));
+		}
+		let tx_id = request.tx_id.clone().unwrap_or_else(|| "unknown".into());
+
+		debug!(tx_id = %tx_id, "starting optimistic register for private tx");
+
+		// 2. Pad + compute native proofs from clones.
+
+		// --- Notes Commitment (TREE_NOTES_COMMITMENT = 0) ---
+		let nc_real = request.output_notes;
+		let nc_start = self.notes_commitment_state.tree.num_leaves();
+		let nc_padded = dummy::pad_leaves(
+			DummyTreeType::NotesCommitment,
+			nc_start,
+			batch_size,
+			&nc_real,
+		)?;
+		let nc_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nc_padded)?;
+		let mut nc_tmp = self.notes_commitment_state.tree.clone();
+		let nc_proof = nc_tmp.insert_batch(nc_hashes.clone())?;
+		anyhow::ensure!(nc_proof.verify(), "NC native proof failed (private tx)");
+		let nc_pi = {
+			let mut pre: Vec<F> = Vec::new();
+			nc_proof.write_preimage(&mut pre);
+			u32x8_to_bytes32(keccak256_field_elements_native(&pre))
+		};
+		let mut nc_assoc: Vec<Vec<u8>> = nc_real.iter().map(|_| request.tx_proof.clone()).collect();
+		nc_assoc.resize(batch_size, DUMMY_ASSOCIATED_INPUT_PROOF.to_vec());
+
+		// --- Notes Nullifier (TREE_NOTES_NULLIFIER = 1) ---
+		let nn_real = request.input_notes;
+		let nn_start = self.notes_nullifier_state.tree.num_leaves();
+		let nn_padded = dummy::pad_leaves(
+			DummyTreeType::NotesNullifier,
+			nn_start,
+			batch_size,
+			&nn_real,
+		)?;
+		let nn_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nn_padded)?;
+		let mut nn_tmp = self.notes_nullifier_state.tree.clone();
+		let nn_proof = nn_tmp.insert_chained(nn_hashes.clone())?;
+		anyhow::ensure!(nn_proof.verify(), "NN native proof failed (private tx)");
+		let new_nn_root = crate::contract::hash_to_bytes32(
+			&nn_proof
+				.proofs
+				.last()
+				.ok_or_else(|| anyhow::anyhow!("notes nullifier proof is empty"))?
+				.new_root,
+		);
+		let nn_pi = {
+			let mut pre: Vec<F> = Vec::new();
+			nn_proof.write_preimage(&mut pre);
+			u32x8_to_bytes32(keccak256_field_elements_native(&pre))
+		};
+		let nn_assoc = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch_size];
+
+		// --- Accounts Commitment (TREE_ACCOUNTS_COMMITMENT = 2) ---
+		let ac_real = vec![request.output_account_leaf];
+		let ac_start = self.accounts_commitment_state.tree.num_leaves();
+		let ac_padded = dummy::pad_leaves(
+			DummyTreeType::AccountsCommitment,
+			ac_start,
+			batch_size,
+			&ac_real,
+		)?;
+		let ac_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&ac_padded)?;
+		let mut ac_tmp = self.accounts_commitment_state.tree.clone();
+		let ac_proof = ac_tmp.insert_batch(ac_hashes.clone())?;
+		anyhow::ensure!(ac_proof.verify(), "AC native proof failed (private tx)");
+		let ac_pi = {
+			let mut pre: Vec<F> = Vec::new();
+			ac_proof.write_preimage(&mut pre);
+			u32x8_to_bytes32(keccak256_field_elements_native(&pre))
+		};
+		let ac_assoc = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch_size];
+
+		// --- Accounts Nullifier (TREE_ACCOUNTS_NULLIFIER = 3) ---
+		let an_real = vec![request.input_account_leaf];
+		let an_start = self.accounts_nullifier_state.tree.num_leaves();
+		let an_padded = dummy::pad_leaves(
+			DummyTreeType::AccountsNullifier,
+			an_start,
+			batch_size,
+			&an_real,
+		)?;
+		let an_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&an_padded)?;
+		let mut an_tmp = self.accounts_nullifier_state.tree.clone();
+		let an_proof = an_tmp.insert_chained(an_hashes.clone())?;
+		anyhow::ensure!(an_proof.verify(), "AN native proof failed (private tx)");
+		let new_an_root = crate::contract::hash_to_bytes32(
+			&an_proof
+				.proofs
+				.last()
+				.ok_or_else(|| anyhow::anyhow!("accounts nullifier proof is empty"))?
+				.new_root,
+		);
+		let an_pi = {
+			let mut pre: Vec<F> = Vec::new();
+			an_proof.write_preimage(&mut pre);
+			u32x8_to_bytes32(keccak256_field_elements_native(&pre))
+		};
+		let an_assoc = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch_size];
+
+		// New roots for the two commitment trees.
+		let new_nc_root = crate::contract::hash_to_bytes32(&nc_proof.root_new);
+		let new_ac_root = crate::contract::hash_to_bytes32(&ac_proof.root_new);
+
+		// 3. Build calldata arrays (real leaves only — contract doesn't receive padding).
+		let nc_out: Vec<FixedBytes<32>> =
+			nc_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
+		let nn_in: Vec<FixedBytes<32>> =
+			nn_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
+		let ac_out: Vec<FixedBytes<32>> =
+			ac_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
+		let an_in: Vec<FixedBytes<32>> =
+			an_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
+		let pi_commitments: [FixedBytes<32>; 4] = [
+			FixedBytes::<32>::from(nc_pi),
+			FixedBytes::<32>::from(nn_pi),
+			FixedBytes::<32>::from(ac_pi),
+			FixedBytes::<32>::from(an_pi),
+		];
+
+		// 4. Call registerTransactionBatchUpdate on-chain.
+		let bridge = IDepositsRollupBridge::IDepositsRollupBridgeInstance::new(
+			self.config.bridge_address,
+			provider,
+		);
+		let pending = bridge
+			.registerTransactionBatchUpdate(
+				new_nc_root,
+				nc_out,
+				new_nn_root,
+				nn_in,
+				new_ac_root,
+				ac_out,
+				new_an_root,
+				an_in,
+				pi_commitments,
+			)
+			.send()
+			.await
+			.map_err(|e| {
+				anyhow::anyhow!(
+					"registerTransactionBatchUpdate reverted: {}",
+					humanize_bridge_revert(&e)
+				)
+			})?;
+		let receipt = pending
+			.with_required_confirmations(1)
+			.with_timeout(Some(RECEIPT_TIMEOUT))
+			.get_receipt()
+			.await
+			.map_err(|e| anyhow::anyhow!("register receipt timeout/error: {e}"))?;
+		anyhow::ensure!(
+			receipt.status(),
+			"registerTransactionBatchUpdate reverted on-chain (tx={:?})",
+			receipt.transaction_hash
+		);
+
+		// 5. Extract batchId from the TransactionBatchRegistered event.
+		let batch_id: u64 = receipt
+			.inner
+			.logs()
+			.iter()
+			.find_map(|log| {
+				log.log_decode::<IDepositsRollupBridge::TransactionBatchRegistered>()
+					.ok()
+					.and_then(|d| d.inner.batchId.try_into().ok())
+			})
+			.ok_or_else(|| {
+				anyhow::anyhow!("TransactionBatchRegistered event not found in receipt")
+			})?;
+
+		info!(
+			tx_id = %tx_id,
+			batch_id,
+			nc_root = ?new_nc_root,
+			nn_root = ?new_nn_root,
+			ac_root = ?new_ac_root,
+			an_root = ?new_an_root,
+			"private tx batch registered on-chain"
+		);
+
+		// 6. Apply inserts to real local trees (advance state for subsequent batches).
+		self.notes_commitment_state
+			.tree
+			.insert_batch(nc_hashes.clone())?;
+		self.notes_nullifier_state
+			.tree
+			.insert_chained(nn_hashes.clone())?;
+		self.accounts_commitment_state
+			.tree
+			.insert_batch(ac_hashes.clone())?;
+		self.accounts_nullifier_state
+			.tree
+			.insert_chained(an_hashes.clone())?;
+
+		// 7. Build prove requests (before moving data into TxBatch).
+		let nc_prove = crate::types::ProveRequest::Commitment {
+			batch_id,
+			tree_index: crate::types::TREE_NOTES_COMMITMENT,
+			batch_proof: nc_proof,
+			associated_input_proofs: nc_assoc.clone(),
+		};
+		let nn_prove = crate::types::ProveRequest::Nullifier {
+			batch_id,
+			tree_index: crate::types::TREE_NOTES_NULLIFIER,
+			batch_proof: nn_proof,
+			associated_input_proofs: nn_assoc.clone(),
+		};
+		let ac_prove = crate::types::ProveRequest::Commitment {
+			batch_id,
+			tree_index: crate::types::TREE_ACCOUNTS_COMMITMENT,
+			batch_proof: ac_proof,
+			associated_input_proofs: ac_assoc.clone(),
+		};
+		let an_prove = crate::types::ProveRequest::Nullifier {
+			batch_id,
+			tree_index: crate::types::TREE_ACCOUNTS_NULLIFIER,
+			batch_proof: an_proof,
+			associated_input_proofs: an_assoc.clone(),
+		};
+
+		// 8. Store TxBatch in the pending map.
+		self.registered_pending_batches.insert(
+			batch_id,
+			TxBatch {
+				batch_id,
+				pi_commitments: [nc_pi, nn_pi, ac_pi, an_pi],
+				per_tree: [
+					TxPerTreeBatch {
+						real_commitments_bytes: nc_real,
+						proving_commitments_bytes: nc_padded,
+						proving_commitments_hash: nc_hashes,
+						associated_input_proofs: nc_assoc,
+					},
+					TxPerTreeBatch {
+						real_commitments_bytes: nn_real,
+						proving_commitments_bytes: nn_padded,
+						proving_commitments_hash: nn_hashes,
+						associated_input_proofs: nn_assoc,
+					},
+					TxPerTreeBatch {
+						real_commitments_bytes: ac_real,
+						proving_commitments_bytes: ac_padded,
+						proving_commitments_hash: ac_hashes,
+						associated_input_proofs: ac_assoc,
+					},
+					TxPerTreeBatch {
+						real_commitments_bytes: an_real,
+						proving_commitments_bytes: an_padded,
+						proving_commitments_hash: an_hashes,
+						associated_input_proofs: an_assoc,
+					},
+				],
+				local_confirmed_mask: 0,
+			},
+		);
+
+		// 9. Submit 4 independent prove jobs.
+		self.submit_prove_request_with_retry(nc_prove, TreeJob::NotesCommitment)?;
+		self.submit_prove_request_with_retry(nn_prove, TreeJob::NotesNullifier)?;
+		self.submit_prove_request_with_retry(ac_prove, TreeJob::AccountsCommitment)?;
+		self.submit_prove_request_with_retry(an_prove, TreeJob::AccountsNullifier)?;
+
+		info!(
+			batch_id,
+			queue = self.registered_pending_batches.len(),
+			"4 prove jobs submitted for registered batch"
+		);
+		Ok(())
+	}
+
+	/// Confirm one tree's proof for a registered two-phase batch.
+	///
+	/// On success: calls `confirmTreeUpdate` on-chain, advances `local_confirmed_mask`.
+	/// When all 4 trees are confirmed (`mask == 0xF`), removes the batch from the map.
+	/// On failure: logs the error and leaves the batch in `registered_pending_batches`
+	/// for operator recovery (Slice 6).
+	async fn confirm_tx_batch_tree<P: Provider + Clone>(
+		&mut self,
+		provider: &P,
+		outcome: ProveOutcome,
+	) -> anyhow::Result<()> {
+		match outcome {
+			ProveOutcome::Failure {
+				batch_id,
+				tree_index,
+				error,
+			} => {
+				tracing::error!(
+					batch_id,
+					tree_index,
+					error,
+					"prover failure for two-phase batch; batch stays pending"
+				);
+			},
+			ProveOutcome::Success {
+				batch_id,
+				tree_index,
+				solidity_proof,
+				aggregated_input_solidity_proof,
+				// new_root is not needed: the contract verifies it against the registered root.
+				new_root: _,
+			} => {
+				if !self.registered_pending_batches.contains_key(&batch_id) {
+					warn!(
+						batch_id,
+						tree_index, "proof arrived for unknown/already-confirmed batch; skipping"
+					);
+					return Ok(());
+				}
+
+				let bridge = IDepositsRollupBridge::IDepositsRollupBridgeInstance::new(
+					self.config.bridge_address,
+					provider,
+				);
+				let sol_proof = IDepositsRollupBridge::Proof {
+					proof: solidity_proof.proof,
+					commitments: solidity_proof.commitments,
+					commitmentPok: solidity_proof.commitment_pok,
+				};
+				let inputs_proof = IDepositsRollupBridge::Proof {
+					proof: aggregated_input_solidity_proof.proof,
+					commitments: aggregated_input_solidity_proof.commitments,
+					commitmentPok: aggregated_input_solidity_proof.commitment_pok,
+				};
+
+				let receipt_result = bridge
+					.confirmTreeUpdate(
+						alloy::primitives::U256::from(batch_id),
+						tree_index,
+						sol_proof,
+						inputs_proof,
+					)
+					.send()
+					.await
+					.map_err(|e| {
+						anyhow::anyhow!(
+							"confirmTreeUpdate send failed: {}",
+							humanize_bridge_revert(&e)
+						)
+					})?;
+
+				let receipt = receipt_result
+					.with_required_confirmations(1)
+					.with_timeout(Some(RECEIPT_TIMEOUT))
+					.get_receipt()
+					.await
+					.map_err(|e| anyhow::anyhow!("confirmTreeUpdate receipt timeout/error: {e}"))?;
+
+				anyhow::ensure!(
+					receipt.status(),
+					"confirmTreeUpdate reverted on-chain (batch_id={batch_id}, tree_index={tree_index}, tx={:?})",
+					receipt.transaction_hash
+				);
+
+				info!(
+					batch_id,
+					tree_index,
+					tx_hash = ?receipt.transaction_hash,
+					"tree confirmed on-chain"
+				);
+
+				if let Some(tx_batch) = self.registered_pending_batches.get_mut(&batch_id) {
+					tx_batch.local_confirmed_mask |= 1u8 << tree_index;
+					if tx_batch.local_confirmed_mask == 0xF {
+						info!(batch_id, "all 4 trees confirmed; batch complete");
+						self.registered_pending_batches.remove(&batch_id);
+					}
+				}
+			},
+		}
+		Ok(())
+	}
+}
+
+/// Pack a keccak-256 digest `[u32; 8]` (big-endian word order) into raw bytes.
+fn u32x8_to_bytes32(digest: [u32; 8]) -> [u8; 32] {
+	let mut bytes = [0u8; 32];
+	for (i, word) in digest.iter().enumerate() {
+		bytes[i * 4..(i + 1) * 4].copy_from_slice(&word.to_be_bytes());
+	}
+	bytes
 }

@@ -180,6 +180,11 @@ TESSERA_RUN_INTEGRATION_SCRIPTS=1 \
 cargo test --release -p tessera-server --features integration-tests scripted_chain_recovery_e2e -- --nocapture --test-threads=1
 ```
 
+```bash
+TESSERA_RUN_INTEGRATION_SCRIPTS=1 cargo test --release -p tessera-server \
+  --features integration-tests scripted_full_flow_e2e -- --nocapture --test-threads=1
+```
+
 Notes:
 - This is intentionally opt-in and heavy.
 - It requires `anvil`, `cast`, `forge`, and local Rust/Foundry toolchain availability.

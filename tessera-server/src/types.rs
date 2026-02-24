@@ -53,6 +53,10 @@ pub enum ProveOutcome {
 		aggregated_input_solidity_proof: Box<SolidityProof>,
 	},
 	Failure {
+		/// Echoed from the originating `ProveRequest`; 0 for deposit-only path.
+		batch_id: u64,
+		/// Echoed from the originating `ProveRequest`.
+		tree_index: u8,
 		error: String,
 	},
 }

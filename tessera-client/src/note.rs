@@ -2,17 +2,16 @@ use itertools::Itertools;
 use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64};
 use primitive_types::U256;
-use rand::{
-	CryptoRng, Rng, RngExt,
-	distr::{Uniform},
+use rand::{CryptoRng, Rng, RngExt, distr::Uniform};
+use tessera_trees::F;
+
+use crate::{
+	account::{NullifierKey, PublicIdentifier, StandardAccount, SubpoolId},
+	commitment::Commitment,
 };
 
-use tessera_trees::{F};
-
-use crate::{account::{NullifierKey, PublicIdentifier, StandardAccount, SubpoolId}, commitment::Commitment};
-
-pub type  NoteCommitment = Commitment;
-pub type  NoteNullifier = Commitment;
+pub type NoteCommitment = Commitment;
+pub type NoteNullifier = Commitment;
 
 #[derive(Clone, Copy)]
 pub struct NodeIdentifier([F; 2]);

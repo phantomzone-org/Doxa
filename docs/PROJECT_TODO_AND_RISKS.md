@@ -1,6 +1,6 @@
 # Tessera TODO, Risks, and Current-State Guide
 
-Status date: 2026-02-18
+Status date: 2026-02-24
 Scope: current code + current architecture docs
 
 ## 1. What Is Implemented Today
@@ -8,20 +8,28 @@ Scope: current code + current architecture docs
 - [x] ERC20 deposit escrow flow with `depositAndRegister` / `depositAndRegisterFor`.
 - [x] Pending deposit withdrawal via `withdrawPendingDeposit`.
 - [x] Four-tree sequencing pipeline:
-- `notes_commitment`
-- `notes_nullifier`
-- `accounts_commitment`
-- `accounts_nullifier`
+  - `notes_commitment`
+  - `notes_nullifier`
+  - `accounts_commitment`
+  - `accounts_nullifier`
 - [x] Sequencer API intake for:
-- `/consume-request`
-- `/private-tx`
-- per-tree direct endpoints (`/notes/nullifier`, `/accounts/*`)
-- [x] Batch proving pipeline (Plonky2 -> BN128 -> Groth16) and on-chain finalize calls.
-- [x] Chain recovery from `ValidatedBatchFinalized` logs with local tree-store replay.
+  - `/consume-request` (deposit-only path)
+  - `/private-tx` (optimistic two-phase path)
+  - per-tree direct endpoints (`/notes/nullifier`, `/accounts/*`)
+- [x] **Optimistic two-phase throughput** (all 7 slices complete):
+  - `registerTransactionBatchUpdate` — registers all 4 roots atomically; output notes validated immediately
+  - `confirmTreeUpdate` — confirms each tree independently as its Groth16 proof arrives
+  - `MAX_PENDING_BATCHES = 128` pre-allocated on-chain batch buffer
+  - `TxBatch` / `registered_pending_batches` sequencer state map
+  - 4 independent prove tasks per private TX batch, keyed by `(batch_id, tree_index)`
+  - Two-pass startup recovery: confirmed trees via `ValidatedBatchFinalized`, pending batches via `TransactionBatchRegistered`
+  - `TransactionBatchRegistered`, `TreeUpdateConfirmed`, `TransactionBatchConfirmed` on-chain events
+- [x] Batch proving pipeline (Plonky2 → BN128 → Groth16) for both deposit-only and two-phase paths.
+- [x] Chain recovery from `ValidatedBatchFinalized` logs (deposit-only path) and `TransactionBatchRegistered` logs (two-phase path) with local tree-store replay.
 - [x] Fixed-rate partial-batch flush:
-- pools flush when full or timeout elapses
-- deterministic dummy padding off-chain
-- omitted dummies re-derived on-chain
+  - pools flush when full or timeout elapses
+  - deterministic dummy padding off-chain
+  - omitted dummies re-derived on-chain
 
 ## 2. How To Use Current Implementation Safely (Dev/Test)
 
@@ -29,17 +37,17 @@ Scope: current code + current architecture docs
 - [ ] Configure sequencer timeout explicitly with `TESSERA_BATCH_TIMEOUT_SECS`.
 - [ ] Keep sequencer API private to trusted callers only (network-level ACL).
 - [ ] Use health/log monitoring for:
-- queue depth
-- batch retries
-- receipt timeouts
-- recovery progress
-- [ ] Expect private-tx leaves to finalize non-atomically across trees (different batches/times).
+  - queue depth (`registered_pending_batches.len()`)
+  - batch retries and confirm retries
+  - receipt timeouts
+  - recovery progress
+- [ ] Private-tx output notes are registered (Validated) atomically but confirmed asynchronously per tree; clients should wait for `confirmedNotesCommitmentRoot()` to advance before treating notes as ZK-final.
 
 ## 3. Missing Features / Functional TODO
 
 - [ ] Replace dummy private-tx proof checks (`0x01`) with real cryptographic verification in API path.
 - [ ] Replace dummy associated-input aggregation with real prover-side aggregation and real on-chain verifier.
-- [ ] Implement `recover_pending_requests()` so in-memory pending queue survives restarts.
+- [ ] Persist original `tx_proof` bytes to WAL so recovered two-phase prove jobs use real proofs (currently uses dummy on restart).
 - [ ] Add production-grade sequencer authn/authz for all intake endpoints.
 - [ ] Add rate limiting / anti-spam controls at API boundary.
 - [ ] Add configurable/fair scheduling instead of hardcoded tree priority to avoid starvation.
@@ -51,7 +59,7 @@ Scope: current code + current architecture docs
 - multisig / role separation
 - rotation procedures
 - emergency controls/runbooks
-- [ ] Add private-tx atomicity strategy (or explicit invariants if non-atomic by design).
+- [ ] Expose queue-full (`registered_pending_batches >= MAX_PENDING_BATCHES`) as an HTTP 429 response to `/private-tx` callers rather than silent drop.
 - [ ] Add production observability:
 - metrics
 - tracing standards
@@ -79,7 +87,7 @@ Important security caveats:
 
 ## 5. Operational Pitfalls in Current State
 
-- [ ] One batch in-flight globally across all trees limits throughput and can increase latency.
+- [ ] Deposit-only path (`/consume-request`) still limited to one batch in-flight globally; private-TX path (`/private-tx`) supports up to `MAX_PENDING_BATCHES = 128` concurrent batches.
 - [ ] Prover runtime is effectively single-threaded due to global FFI singleton / mutex model.
 - [ ] Hardcoded tree priority can starve lower-priority pools under sustained load.
 - [ ] Receipt polling timeout causes requeue; without robust tx tracking, duplicate/in-flight ambiguity can occur until recovery reconciles.

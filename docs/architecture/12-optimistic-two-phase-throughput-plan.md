@@ -1,5 +1,8 @@
 # 12. Optimistic Two-Phase Throughput Plan
 
+> **Status: Implemented** — All 7 delivery slices are complete as of 2026-02-24.
+> See [docs/architecture/06-w3-private-transaction.md](architecture/06-w3-private-transaction.md) for the authoritative description of the implemented flow.
+
 ## Objective
 Increase transaction throughput by decoupling state-application from proof generation:
 

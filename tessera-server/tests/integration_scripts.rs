@@ -158,6 +158,55 @@ fn ensure_artifacts(root: &Path) -> anyhow::Result<()> {
 	Ok(())
 }
 
+/// End-to-end scripted integration — full optimistic two-phase flow:
+/// 1) start anvil
+/// 2) ensure artifacts exist (cached by presence on disk)
+/// 3) deploy contracts
+/// 4) run full-flow orchestrator which:
+///    - starts the prover service
+///    - starts the sequencer service
+///    - submits a private-tx covering REQUEST_COUNT deposited notes via `/private-tx`
+///    - waits for Phase A (registerTransactionBatchUpdate on-chain, deposits Validated)
+///    - waits for Phase B (all 4 confirmTreeUpdate calls complete, confirmed roots advance)
+///
+/// This test is opt-in by design.
+#[test]
+fn scripted_full_flow_e2e() -> anyhow::Result<()> {
+	if std::env::var("TESSERA_RUN_INTEGRATION_SCRIPTS")
+		.ok()
+		.as_deref()
+		!= Some("1")
+	{
+		eprintln!(
+			"Skipping integration script test. Set TESSERA_RUN_INTEGRATION_SCRIPTS=1 to enable."
+		);
+		return Ok(());
+	}
+
+	let root = workspace_root();
+	ensure_artifacts(&root)?;
+
+	let _anvil = ChildGuard::spawn_anvil()?;
+	wait_for_rpc("http://127.0.0.1:8545", Duration::from_secs(30))?;
+
+	run_script(
+		"scripts/local_e2e_toy_b_deploy.sh",
+		Duration::from_secs(240),
+	)?;
+	// Timeout budget breakdown:
+	//   wait_for_prover_api  ≤ 300 s  (circuit load blocks server bind)
+	//   wait_for_sequencer   ≤  90 s
+	//   deposit creation     ≤ 200 s  (256 × cast send on anvil)
+	//   Phase A register     ≤ 120 s
+	//   Phase B 4 proofs     ≤ 1800 s (4 sequential Groth16 proofs)
+	run_script(
+		"scripts/local_e2e_toy_full_flow.sh",
+		Duration::from_secs(3600),
+	)?;
+
+	Ok(())
+}
+
 /// End-to-end scripted integration:
 /// 1) start anvil
 /// 2) ensure artifacts exist (cached by presence on disk)

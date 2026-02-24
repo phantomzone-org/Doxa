@@ -38,15 +38,31 @@ graph LR
 
 ## Request / Response Types
 
+### Tree Index Constants
+
+```rust
+pub const TREE_NOTES_COMMITMENT:    u8 = 0;
+pub const TREE_NOTES_NULLIFIER:     u8 = 1;
+pub const TREE_ACCOUNTS_COMMITMENT: u8 = 2;
+pub const TREE_ACCOUNTS_NULLIFIER:  u8 = 3;
+```
+
+These mirror the Solidity `TREE_*` constants in `TesseraRollup.sol`.
+`batch_id = 0` is reserved for the legacy deposit-only prove path.
+
 ### ProveRequest
 
 ```rust
 enum ProveRequest {
     Commitment {
+        batch_id: u64,                              // 0 for deposit-only path
+        tree_index: u8,                             // TREE_NOTES_COMMITMENT or TREE_ACCOUNTS_COMMITMENT
         batch_proof: BatchCommitmentProof<Hash>,
         associated_input_proofs: Vec<Vec<u8>>,
     },
     Nullifier {
+        batch_id: u64,                              // 0 for deposit-only path
+        tree_index: u8,                             // TREE_NOTES_NULLIFIER or TREE_ACCOUNTS_NULLIFIER
         batch_proof: NullifierChainedInsertProof<Hash>,
         associated_input_proofs: Vec<Vec<u8>>,
     },
@@ -58,11 +74,15 @@ enum ProveRequest {
 ```rust
 enum ProveOutcome {
     Success {
+        batch_id: u64,                              // echoed from ProveRequest
+        tree_index: u8,                             // echoed from ProveRequest
         new_root: Hash,
-        solidity_proof: SolidityProof,
-        aggregated_input_solidity_proof: SolidityProof,
+        solidity_proof: Box<SolidityProof>,
+        aggregated_input_solidity_proof: Box<SolidityProof>,
     },
     Failure {
+        batch_id: u64,                              // echoed from ProveRequest
+        tree_index: u8,                             // echoed from ProveRequest
         error: String,
     },
 }
@@ -90,6 +110,10 @@ enum ActiveGroth {
     Nullifier,
 }
 ```
+
+Circuit selection is driven by `tree_index`:
+- `tree_index` ∈ {0, 2} (`TREE_NOTES_COMMITMENT`, `TREE_ACCOUNTS_COMMITMENT`) → `Commitment` circuit
+- `tree_index` ∈ {1, 3} (`TREE_NOTES_NULLIFIER`, `TREE_ACCOUNTS_NULLIFIER`) → `Nullifier` circuit
 
 If the requested circuit type differs from the active one:
 1. Call `Groth16Wrapper::init(plonky2_path, groth16_path)` to load proving key, verifying key, and R1CS
