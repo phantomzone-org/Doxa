@@ -17,6 +17,8 @@ This folder contains auto-generated architecture diagrams and analysis for the T
 | [09-w6-prover-pipeline.md](09-w6-prover-pipeline.md) | W6: Prover proof generation pipeline |
 | [10-concurrency-model.md](10-concurrency-model.md) | Concurrency, orchestration, and the batch state machine |
 | [11-assumptions-and-gaps.md](11-assumptions-and-gaps.md) | Known assumptions, stubs, and gaps |
+| [12-optimistic-two-phase-throughput-plan.md](12-optimistic-two-phase-throughput-plan.md) | Throughput-focused two-phase sequencing plan |
+| [13-generic-proof-aggregator-plan.md](13-generic-proof-aggregator-plan.md) | Implementation plan for a generic `(2^k)^d` proof aggregator with artifact-based fast init |
 
 ## Rendering
 
