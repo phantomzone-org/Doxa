@@ -1,6 +1,6 @@
 # W7: Generic Proof Aggregator Plan
 
-Status date: 2026-02-24  
+Status date: 2026-02-24
 Status: planned
 
 ## Objective
@@ -51,8 +51,8 @@ Re-export from:
 
 ```rust
 pub struct GenericAggregatorConfig {
-    pub arity: usize,      // must be power of two
-    pub depth: usize,      // number of aggregation levels
+    pub arity: usize,    // must be a power of two, >= 2
+    pub depth: usize,    // number of aggregation levels, >= 1
     pub reducer: ReducerKind,
 }
 
@@ -61,25 +61,36 @@ pub enum ReducerKind {
     Poseidon,
 }
 
+/// A root proof produced by GenericAggregator::aggregate.
+/// Wraps a ProofWithPublicInputs whose PI shape matches the reducer output:
+///   Keccak256 → 8 u32 words (256-bit digest, big-endian)
+///   Poseidon  → 4 Goldilocks field elements
+pub struct AggregatedProof<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>, const D: usize> {
+    pub proof: ProofWithPublicInputs<F, C, D>,
+    pub config: GenericAggregatorConfig,
+}
+
 pub struct GenericAggregator<...> { ... }
 
 impl GenericAggregator<...> {
-    pub fn new_from_pair(
+    /// Build all aggregation-level circuits from scratch.
+    /// Only the circuit schema (CommonCircuitData + VerifierOnlyCircuitData)
+    /// of the leaf circuit is required — no concrete proof values.
+    pub fn new(
         config: GenericAggregatorConfig,
-        left: &ProofWithPublicInputs<...>,
-        right: &ProofWithPublicInputs<...>,
-        leaf_common: CommonCircuitData<...>,
-        leaf_verifier: VerifierOnlyCircuitData<...>,
+        leaf_common: CommonCircuitData<F, C, D>,
+        leaf_verifier: VerifierOnlyCircuitData<F, C>,
     ) -> Result<Self>;
 
+    /// Aggregate exactly `config.arity^config.depth` leaf proofs into one root proof.
     pub fn aggregate(
         &self,
-        proofs: Vec<ProofWithPublicInputs<...>>,
-    ) -> Result<AggregatedProof<...>>;
+        proofs: Vec<ProofWithPublicInputs<F, C, D>>,
+    ) -> Result<AggregatedProof<F, C, D>>;
 
     pub fn store_artifacts(&self, path: &Path) -> Result<()>;
     pub fn from_artifacts(path: &Path) -> Result<Self>;
-    pub fn has_full_artifacts(path: &Path) -> bool;
+    pub fn has_full_artifacts(path: &Path) -> Result<bool>;
 }
 ```
 
@@ -90,10 +101,29 @@ impl GenericAggregator<...> {
 - No child-to-child chaining constraints are enforced.
 - Parent public inputs are derived by a reducer over child public inputs.
 
-Planned reducer behavior:
+### PI format contract
 
-- `Keccak256`: commit concatenated child public inputs to 8 `u32` words (same shape as existing on-chain PI handling).
-- `Poseidon`: commit concatenated child public inputs to 4 field elements.
+Every aggregation level outputs the same fixed-length PI regardless of level or arity:
+
+- `Keccak256` reducer: always 8 `u32` words (256-bit digest, big-endian). At each level the
+  circuit Keccak-256-hashes `arity * child_pi_len` `u32` words — the concatenated children's PIs —
+  down to 8 `u32` words.  This matches the on-chain PI shape consumed by `BN128Wrapper` and the
+  Groth16 verifier.
+- `Poseidon` reducer: always 4 Goldilocks field elements.
+
+This means leaf PIs of any length are valid inputs to level-0, and every intermediate level
+outputs the same shape as the root, making the tree homogeneous.
+
+### Reducer / serializer pairing
+
+| Reducer | Generators added to aggregation circuit | Required serializer |
+|---|---|---|
+| `Keccak256` | `Keccak256SingleGenerator`, `Keccak256StarkProofGenerator<F, ConfigNative, D>` | `TesseraGeneratorSerializer` |
+| `Poseidon` | standard plonky2 generators only | default plonky2 serializer |
+
+Every `CircuitData::to_bytes` / `from_bytes` call on a `Keccak256` aggregation circuit **must**
+use `TesseraGeneratorSerializer`.  Omitting it causes the same `IoError` ("serialize native
+circuit failed") documented for the leaf circuit.
 
 ## Artifact Format
 
@@ -102,8 +132,8 @@ Store enough data to avoid rebuilding circuits on restart.
 Planned files under `<path>`:
 
 - `manifest.json`
-- `leaf_common.json`
-- `leaf_verifier.json`
+- `leaf_common.bin`
+- `leaf_verifier.bin`
 - `level_0_circuit_data.bin`
 - `level_1_circuit_data.bin`
 - `...`
@@ -118,10 +148,25 @@ Manifest fields:
 - leaf_pi_len
 - levels
 
-Serialization approach:
+### `from_artifacts` loading order (bottom-up)
 
-- Use `CircuitData::to_bytes` / `from_bytes` with existing serializers (`TesseraGeneratorSerializer` where needed).
-- Reconstruct targets deterministically after load (same pattern as `BN128Wrapper::from_artifacts`).
+Level circuits have a hard dependency on the circuit data of the level below them: the level-N
+circuit embeds the `CommonCircuitData` of level-(N-1) inside its verifier targets.  Targets must
+be reconstructed by re-running the builder in the same bottom-up order used during `new`:
+
+```
+1.  Load leaf_common.bin  → leaf_common: CommonCircuitData<F, C, D>
+2.  Load leaf_verifier.bin → leaf_verifier: VerifierOnlyCircuitData<F, C>
+3.  Re-run level-0 builder(leaf_common, leaf_verifier) → level-0 targets
+4.  Load level_0_circuit_data.bin → level-0 CircuitData
+5.  Extract level-0 CommonCircuitData + VerifierOnlyCircuitData
+6.  Re-run level-1 builder(level-0 data) → level-1 targets
+7.  Load level_1_circuit_data.bin → level-1 CircuitData
+...repeat until level_{depth-1}
+```
+
+Failing to follow this order produces mismatched targets and incorrect witness assignment at
+prove time.
 
 ## Validation Rules
 
@@ -130,6 +175,7 @@ At initialization:
 - `arity >= 2`
 - `arity.is_power_of_two()`
 - `depth >= 1`
+- `arity.pow(depth as u32) <= MAX_AGGREGATION_LEAVES` (v1 cap, to be documented)
 
 At aggregation time:
 
@@ -167,7 +213,10 @@ Unit tests in `tessera-trees`:
 - wrong proof count rejection
 - non-matching leaf circuit rejection
 - deterministic result for fixed fixtures
-- artifact roundtrip (`new_from_pair` vs `from_artifacts`)
+- artifact roundtrip (`new` vs `from_artifacts`)
+- **circuit/native Keccak-256 agreement**: build a minimal aggregation proof from known leaf PIs,
+  compute the expected digest using `keccak256_field_elements_native` (or equivalent concatenated-PI
+  native computation) on the same input, assert the circuit output matches byte-for-byte.
 
 Integration tests:
 
@@ -181,18 +230,20 @@ Performance checks:
 
 ## Risks and Mitigations
 
-- Serializer mismatch across plonky2 revisions  
+- Serializer mismatch across plonky2 revisions
   Mitigation: include manifest version and fail-fast diagnostics.
 
-- Large memory footprint for high `(arity, depth)`  
-  Mitigation: enforce config caps in v1 and document limits.
+- Large memory footprint for high `(arity, depth)`
+  Mitigation: enforce `MAX_AGGREGATION_LEAVES` cap in v1 and document limits.
 
-- PI format drift between reducer implementations and downstream verifier usage  
-  Mitigation: explicit reducer enum in manifest and tests with known vectors.
+- PI format drift between reducer implementations and downstream verifier usage
+  Mitigation: explicit reducer enum in manifest, per-level PI shape contract above, and tests with
+  known vectors (including circuit/native agreement test).
 
 ## Acceptance Criteria
 
 - Generic aggregator can produce one root proof from `(2^k)^d` leaf proofs.
 - Aggregator can be restored from disk without rebuilding circuits.
 - Artifact-loaded aggregator reproduces the same verification behavior as fresh init.
-- Tests cover positive paths, tampering paths, and artifact roundtrip.
+- Tests cover positive paths, tampering paths, artifact roundtrip, and circuit/native Keccak-256
+  output agreement.
