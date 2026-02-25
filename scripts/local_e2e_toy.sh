@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
 TOTAL_DEPOSITS="${1:-256}"
-REQUEST_COUNT="${2:-$TESSERA_BATCH_SIZE}"
+REQUEST_COUNT="${2:-$TESSERA_NOTE_BATCH_SIZE}"
 
 LOG_DIR="$ROOT_DIR/scripts/logs"
 mkdir -p "$LOG_DIR"

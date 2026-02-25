@@ -35,7 +35,8 @@ interface IGroth16Verifier {
 ///        3) `accountsCommitmentRoot` (append-style account outputs)
 ///        4) `accountsNullifierRoot`  (consumed/spent account nullifiers)
 ///      - The operator proves and records root transitions for each tree using the
-///        corresponding verifier (`commitmentVerifier` or `nullifierVerifier`).
+///        tree-specific verifier (`notesCommitmentVerifier`, `notesNullifierVerifier`,
+///        `accountsCommitmentVerifier`, or `accountsNullifierVerifier`).
 ///
 ///      Notes-commitment updates use a single-phase entry point:
 ///      - `recordNotesCommitmentTreeUpdate(newRoot, notes, treeProof, inputsProof)`
@@ -89,12 +90,8 @@ contract DepositsRollupBridge {
     /// @dev Chosen to be stable across deployments of this contract family.
     bytes32 public constant DOMAIN_SEP = sha256("tessera.rollup.v1");
 
-    /// @notice Groth16 verifier for commitment-style circuits (append/commitment tree updates).
-    IGroth16Verifier public immutable commitmentVerifier;
-    /// @notice Groth16 verifier for nullifier-style circuits (chained/consuming updates).
-    IGroth16Verifier public immutable nullifierVerifier;
-    /// @notice Groth16 verifier for aggregated public-input validity checks.
-    IGroth16Verifier public immutable aggregatedInputVerifier;
+    /// @notice Groth16 verifier for the single super-aggregator proof covering all 5 sub-circuits.
+    IGroth16Verifier public immutable superAggregatorVerifier;
 
     /// @notice Governance/operator address for configuration and proof-verification entry points.
     address public operator;
@@ -106,9 +103,12 @@ contract DepositsRollupBridge {
     bytes32 public accountsNullifierRoot;
     /// @notice Accounts commitment tree root (proven by `commitmentVerifier`).
     bytes32 public accountsCommitmentRoot;
-    /// @notice Fixed batch size required by the circuits/verifiers.
-    /// @dev Circuits/verifiers are fixed-width and always bind to `batchSize` leaves.
-    uint256 public immutable batchSize;
+    /// @notice Fixed batch size for note-tree circuits (notesCommitment and notesNullifier).
+    /// @dev Must be a power of two and exactly 8× `accountBatchSize`.
+    uint256 public immutable noteBatchSize;
+    /// @notice Fixed batch size for account-tree circuits (accountsCommitment and accountsNullifier).
+    /// @dev Must be a power of two and exactly 1/8 of `noteBatchSize`.
+    uint256 public immutable accountBatchSize;
     /// @notice Number of leaves committed in notes commitment tree.
     uint256 public notesCommitmentLeafCount;
     /// @notice Number of leaves committed in notes nullifier tree.
@@ -132,35 +132,30 @@ contract DepositsRollupBridge {
     // Two-phase transaction-batch state
     // -------------------------------------------------------------------------
 
-    /// @notice Tree index constants used by registerTransactionBatchUpdate / confirmTreeUpdate.
-    uint8 public constant TREE_NOTES_COMMITMENT    = 0;
-    uint8 public constant TREE_NOTES_NULLIFIER     = 1;
-    uint8 public constant TREE_ACCOUNTS_COMMITMENT = 2;
-    uint8 public constant TREE_ACCOUNTS_NULLIFIER  = 3;
-
     /// @notice Maximum number of simultaneously in-flight transaction batches.
     /// @dev Sized to pre-allocate a fixed-size storage buffer so every register/confirm
     ///      writes into an already-warm slot (2,900 gas) rather than cold (20,000 gas).
     uint256 public constant MAX_PENDING_BATCHES = 128;
 
-    /// @notice On-chain record for a pending transaction batch (registered but not yet fully confirmed).
+    /// @notice On-chain record for a pending transaction batch (registered but not yet confirmed).
     struct PendingBatch {
-        /// @notice 0 = free slot; set on register, cleared on full confirmation.
+        /// @notice 0 = free slot; set on register, cleared on confirmation.
         uint256 batchId;
         bytes32 newNotesCommitmentRoot;
         bytes32 newNotesNullifierRoot;
         bytes32 newAccountsCommitmentRoot;
         bytes32 newAccountsNullifierRoot;
-        /// @notice One PI commitment per tree (index matches TREE_* constants).
-        ///         Each = keccak256 digest of (oldRoot || newRoot || packedLeaves), used as
-        ///         Groth16 public inputs at confirm time.
-        bytes32[4] piCommitments;
-        /// @notice Bit i is set when tree i's proof has been confirmed. Batch complete at 0xF.
-        uint8 confirmedMask;
+        /// @notice keccak256 of the four tree circuits' raw public inputs, concatenated.
+        ///         TX PIs are excluded (enforced in-circuit by the SuperAggregator).
+        ///         Used as the single Groth16 public input for confirmBatch verification.
+        bytes32 superPiCommitment;
+        /// @notice Set to true once confirmBatch has verified the super-aggregator proof.
+        bool confirmed;
     }
 
-    /// @notice Fixed-size pre-warmed pending-batch buffer. Indexed by batchId % MAX_PENDING_BATCHES.
-    PendingBatch[MAX_PENDING_BATCHES] public pendingBatches;
+    /// @notice Pre-warmed pending-batch buffer. Indexed by batchId % MAX_PENDING_BATCHES.
+    mapping(uint256 => PendingBatch) public pendingBatches;
+
     /// @notice Number of currently occupied slots in pendingBatches.
     uint256 private _pendingCount;
     /// @notice Monotonically increasing batch ID counter; 1-based (0 = unset/free).
@@ -191,7 +186,7 @@ contract DepositsRollupBridge {
     ///      tree was updated.
     event ValidatedBatchFinalized(
         TreeType indexed treeType,
-        uint256 batchSize,
+        uint256 effectiveBatchSize,
         bytes32 oldRoot,
         bytes32 newRoot
     );
@@ -204,16 +199,22 @@ contract DepositsRollupBridge {
         bytes32 newNotesNullifierRoot,
         bytes32 newAccountsCommitmentRoot,
         bytes32 newAccountsNullifierRoot,
-        bytes32[4] piCommitments
+        bytes32 superPiCommitment
     );
-    /// @dev Emitted each time one tree's proof is confirmed within a batch.
-    event TreeUpdateConfirmed(uint256 indexed batchId, uint8 treeIndex);
-    /// @dev Emitted once all four trees in a batch are confirmed (confirmedMask == 0xF).
-    event TransactionBatchConfirmed(uint256 indexed batchId);
+    /// @dev Emitted when the super-aggregator proof for a batch is confirmed and all roots advance.
+    event BatchConfirmed(uint256 indexed batchId);
+    /// @dev Debug: per-tree Keccak sub-hashes of the superPiCommitment preimage.
+    ///      Compare ncHash/nnHash/acHash/anHash against the Rust prover INFO log
+    ///      "native Keccak preimage sub-hashes" to pinpoint which tree's data diverges.
+    event SuperPiDebug(bytes32 ncHash, bytes32 nnHash, bytes32 acHash, bytes32 anHash, bytes32 fullHash);
 
     error NotOperator();
     error PausedErr();
     error InvalidProof();
+    /// @dev Emitted (instead of InvalidProof) when the Groth16 verifier rejects a proof.
+    ///      Includes the on-chain commitment and the 8 public inputs derived from it so the
+    ///      caller can compare against the prover's `super_pi_commitment` log output.
+    error ProofVerificationFailed(bytes32 superPiCommitment, uint256[8] pubInputs);
     error NoteNotFound(bytes32 noteCommitment);
     error InvalidDepositState(bytes32 noteCommitment);
     error DuplicateNoteCommitment(bytes32 noteCommitment);
@@ -225,42 +226,41 @@ contract DepositsRollupBridge {
     error NotDepositRecipient();
     error TokenTransferFailed();
     error ZeroAddress();
-    error InvalidinputsProof();
     error PendingQueueFull();
     error SlotConflict(uint256 slotIndex);
     error UnknownBatch(uint256 batchId);
-    error AlreadyConfirmed(uint256 batchId, uint8 treeIndex);
-    error InvalidTreeIndex(uint8 treeIndex);
+    error BatchAlreadyConfirmed(uint256 batchId);
 
-    /// @notice Deploy bridge with verifier addresses, initial roots, and access-control parameters.
+    /// @notice Deploy bridge with verifier address, initial roots, and access-control parameters.
     /// @dev Why these parameters exist:
-    ///      - Verifiers are immutable: the deployed circuit/vk is part of the security boundary.
+    ///      - The super-aggregator verifier is immutable: the deployed circuit/vk is part of
+    ///        the security boundary. It covers all 5 sub-circuits in a single Groth16 proof.
     ///      - Roots are initialized to the agreed genesis values shared with the off-chain prover.
     ///      - `operator` is the only entity allowed to verify proofs on-chain (load/record functions).
     ///
     ///      Usage constraints:
-    ///      - `_batchSize` must match the circuit's expected batch size (immutable once deployed).
+    ///      - `_noteBatchSize` must be a power of two and exactly `_accountBatchSize * 8`.
+    ///      - `_superAggregatorVerifier` must match the deployed super-aggregator circuit artifacts.
     ///      - `_monitoredToken` must be the ERC20 whose balance this bridge escrows.
     constructor(
-        address _commitmentVerifier,
-        address _nullifierVerifier,
-        address _aggregatedInputVerifier,
+        address _superAggregatorVerifier,
         address _operator,
         bytes32 _notesNullifierRoot,
         bytes32 _notesCommitmentRoot,
         bytes32 _accountsNullifierRoot,
         bytes32 _accountsCommitmentRoot,
-        uint256 _batchSize,
+        uint256 _noteBatchSize,
+        uint256 _accountBatchSize,
         address _monitoredToken
     ) {
         if (_operator == address(0)) revert ZeroAddress();
-        if (_batchSize == 0  || _batchSize & (_batchSize - 1) != 0) revert InvalidBatchSize();
+        if (_noteBatchSize == 0 || _noteBatchSize & (_noteBatchSize - 1) != 0) revert InvalidBatchSize();
+        if (_accountBatchSize == 0 || _accountBatchSize & (_accountBatchSize - 1) != 0) revert InvalidBatchSize();
+        if (_noteBatchSize != _accountBatchSize * 8) revert InvalidBatchSize();
         if (_monitoredToken == address(0)) revert InvalidMonitoredToken();
 
-        // Store immutable verifier addresses. These define the circuits that can update roots.
-        commitmentVerifier = IGroth16Verifier(_commitmentVerifier);
-        nullifierVerifier = IGroth16Verifier(_nullifierVerifier);
-        aggregatedInputVerifier = IGroth16Verifier(_aggregatedInputVerifier);
+        // Store immutable verifier address. Defines the single circuit that confirms all roots.
+        superAggregatorVerifier = IGroth16Verifier(_superAggregatorVerifier);
 
         // Initialize roles.
         operator = _operator;
@@ -270,8 +270,9 @@ contract DepositsRollupBridge {
         accountsNullifierRoot = _accountsNullifierRoot;
         accountsCommitmentRoot = _accountsCommitmentRoot;
 
-        // Batch size is circuit-defined and must match the prover configuration.
-        batchSize = _batchSize;
+        // Batch sizes are circuit-defined and must match the prover configuration.
+        noteBatchSize    = _noteBatchSize;
+        accountBatchSize = _accountBatchSize;
         // Commitment trees start empty; nullifier trees start with one sentinel node.
         notesCommitmentLeafCount = 0;
         notesNullifierLeafCount = 1;
@@ -291,11 +292,11 @@ contract DepositsRollupBridge {
         confirmedAccountsNullifierRoot  = _accountsNullifierRoot;
 
         // Pre-warm all pending-batch slots so every future register/confirm is a warm SSTORE.
-        // Write then immediately clear confirmedMask on each slot: cold write (20k gas) done
-        // once here so register/confirm only pay 2,900 gas for warm rewrites.
+        // Write then immediately clear `confirmed` on each slot: cold write (20k gas) done
+        // once here so confirmBatch only pays 2,900 gas for warm rewrites.
         for (uint256 i = 0; i < MAX_PENDING_BATCHES; i++) {
-            pendingBatches[i].confirmedMask = 0xFF;
-            pendingBatches[i].confirmedMask = 0;
+            pendingBatches[i].confirmed = true;
+            pendingBatches[i].confirmed = false;
         }
     }
 
@@ -444,259 +445,6 @@ contract DepositsRollupBridge {
         emit DepositWithdrawn(noteCommitment, value, dep.recipient);
     }
 
-    /// @notice Records a notes-nullifier tree update after proof verification.
-    /// @param newRoot Proposed nullifier tree root after consuming notes.
-    /// @param noteCommitments Note commitments consumed in this batch (proof order).
-    /// @param treeProof Groth16 proof of correct nullifier tree update.
-    /// @param inputsProof Groth16 proof for aggregated public-input validity.
-    /// @dev Why needed:
-    ///      - This is the canonical on-chain state transition for the notes nullifier tree.
-    ///      - The bridge must not accept arbitrary roots; it must enforce ZK correctness.
-    ///
-    ///      How it must be used:
-    ///      - Only operator can call.
-    ///      - `0 < noteCommitments.length <= batchSize`.
-    ///      - `noteCommitments` order MUST match the prover's circuit order.
-    ///      - Missing leaves are deterministically reconstructed on-chain as dummies.
-    ///
-    ///      Step-by-step:
-    ///      1) Snapshot `oldRoot`.
-    ///      2) Pack leaves and hash `(oldRoot, newRoot, packedLeaves)` with keccak256.
-    ///      3) Convert keccak256 digest to the verifier's 8x uint32 public inputs.
-    ///      4) Verify Groth16 proof and, if valid, update the stored root.
-    function recordNotesNullifierTreeUpdate(
-        bytes32 newRoot,
-        bytes32[] calldata noteCommitments,
-        Proof calldata treeProof,
-        Proof calldata inputsProof
-    ) external onlyOperator whenNotPaused {
-        uint256 realLen = noteCommitments.length;
-        if (realLen == 0 || realLen > batchSize) revert InvalidBatchLength(realLen, batchSize);
-
-        bytes32 oldRoot = notesNullifierRoot;
-        bytes32[] memory fullBatch =
-            _reconstructBatchWithDummies(TreeType.NotesNullifier, notesNullifierLeafCount, noteCommitments);
-
-        // Pack leaves into bytes for the commitment hash.
-        bytes memory noteBytes = _packBytes32ArrayMemory(fullBatch);
-
-        // Public input is keccak256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
-        bytes32 keccakCommit = keccak256(abi.encodePacked(oldRoot, newRoot, noteBytes));
-        uint256[8] memory pubInputs = keccakToPublicInputs(keccakCommit);
-
-        try aggregatedInputVerifier.verifyProof(
-            inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
-        ) {
-            // valid
-        } catch {
-            revert InvalidinputsProof();
-        }
-
-        try nullifierVerifier.verifyProof(treeProof.proof, treeProof.commitments, treeProof.commitmentPok, pubInputs) {
-            // valid
-        } catch {
-            revert InvalidProof();
-        }
-
-        // Apply the verified root update (deposit-only path: both latest and confirmed advance).
-        notesNullifierRoot = newRoot;
-        confirmedNotesNullifierRoot = newRoot;
-        notesNullifierLeafCount += batchSize;
-        emit ValidatedBatchFinalized(TreeType.NotesNullifier, batchSize, oldRoot, newRoot);
-    }
-
-    /// @notice Records a notes-commitment tree update after proof verification.
-    /// @param newRoot Proposed commitment tree root after appending notes.
-    /// @param noteCommitments Note commitments appended in this batch (proof order).
-    /// @param treeProof Groth16 proof of correct commitment tree update.
-    /// @param inputsProof Groth16 proof for aggregated public-input validity.
-    /// @dev Why needed:
-    ///      - Unifies notes-commitment updates with the single-phase semantics used by the other tree APIs.
-    ///      - Tracked bridge deposits are validated in the same transaction that updates the root.
-    ///
-    ///      How it must be used:
-    ///      - Only operator can call.
-    ///      - `0 < noteCommitments.length <= batchSize`.
-    ///      - Leaf ordering MUST match the prover's circuit order.
-    ///      - Missing leaves are deterministically reconstructed on-chain as dummies.
-    ///
-    ///      Tracked-note semantics:
-    ///      - If a note exists in bridge storage, it MUST be `Pending`.
-    ///      - If a note is not tracked by this bridge, it is treated as external and allowed.
-    ///      - For tracked notes in the batch, status is switched `Pending -> Validated` after proof succeeds.
-    function recordNotesCommitmentTreeUpdate(
-        bytes32 newRoot,
-        bytes32[] calldata noteCommitments,
-        Proof calldata treeProof,
-        Proof calldata inputsProof
-    ) external onlyOperator whenNotPaused {
-        uint256 realLen = noteCommitments.length;
-        if (realLen == 0 || realLen > batchSize) revert InvalidBatchLength(realLen, batchSize);
-
-        bytes32 oldRoot = notesCommitmentRoot;
-        bytes32[] memory fullBatch = _reconstructBatchWithDummies(
-            TreeType.NotesCommitment, notesCommitmentLeafCount, noteCommitments
-        );
-
-        // Fail fast only for notes tracked by this bridge and no longer pending.
-        for (uint256 i = 0; i < realLen; i++) {
-            bytes32 note = noteCommitments[i];
-            DepositStatus status = deposits[note].status;
-            if (status != DepositStatus.None && status != DepositStatus.Pending) {
-                revert InvalidDepositState(note);
-            }
-        }
-
-        // Pack leaves into bytes for the commitment hash.
-        bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
-
-        // Public input is keccak256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
-        bytes32 keccakCommit = keccak256(abi.encodePacked(oldRoot, newRoot, leafBytes));
-        uint256[8] memory pubInputs = keccakToPublicInputs(keccakCommit);
-
-        try aggregatedInputVerifier.verifyProof(
-            inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
-        ) {
-            // valid
-        } catch {
-            revert InvalidinputsProof();
-        }
-
-        try commitmentVerifier.verifyProof(treeProof.proof, treeProof.commitments, treeProof.commitmentPok, pubInputs) {
-            // valid
-        } catch {
-            revert InvalidProof();
-        }
-
-        // Apply effects for tracked deposits only.
-        for (uint256 i = 0; i < realLen; i++) {
-            bytes32 note = noteCommitments[i];
-            if (deposits[note].status != DepositStatus.None) {
-                deposits[note].status = DepositStatus.Validated;
-                emit DepositValidated(note);
-            }
-        }
-
-        // Apply the verified root update (deposit-only path: both latest and confirmed advance).
-        notesCommitmentRoot = newRoot;
-        confirmedNotesCommitmentRoot = newRoot;
-        notesCommitmentLeafCount += batchSize;
-        emit ValidatedBatchFinalized(TreeType.NotesCommitment, batchSize, oldRoot, newRoot);
-    }
-
-    /// @notice Records an accounts-commitment tree update after proof verification.
-    /// @param newRoot Proposed commitment tree root after appending accounts.
-    /// @param accountCommitments Account commitments consumed in this batch (proof order).
-    /// @param treeProof Groth16 proof of correct commitment tree update.
-    /// @param inputsProof Groth16 proof for aggregated public-input validity.
-    /// @dev Why needed:
-    ///      - Keeps the on-chain commitment root aligned with off-chain state transitions.
-    ///
-    ///      How it must be used:
-    ///      - Only operator can call.
-    ///      - `0 < accountCommitments.length <= batchSize`.
-    ///      - Leaf ordering MUST match the prover's circuit order.
-    ///      - Missing leaves are deterministically reconstructed on-chain as dummies.
-    ///
-    ///      Step-by-step mirrors `recordNotesNullifierTreeUpdate`.
-    function recordAccountsCommitmentTreeUpdate(
-        bytes32 newRoot,
-        bytes32[] calldata accountCommitments,
-        Proof calldata treeProof,
-        Proof calldata inputsProof
-    ) external onlyOperator whenNotPaused {
-        uint256 realLen = accountCommitments.length;
-        if (realLen == 0 || realLen > batchSize) revert InvalidBatchLength(realLen, batchSize);
-
-        bytes32 oldRoot = accountsCommitmentRoot;
-        bytes32[] memory fullBatch = _reconstructBatchWithDummies(
-            TreeType.AccountsCommitment, accountsCommitmentLeafCount, accountCommitments
-        );
-
-        // Pack leaves into bytes for the commitment hash.
-        bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
-
-        // Public input is keccak256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
-        bytes32 keccakCommit = keccak256(abi.encodePacked(oldRoot, newRoot, leafBytes));
-        uint256[8] memory pubInputs = keccakToPublicInputs(keccakCommit);
-
-        try aggregatedInputVerifier.verifyProof(
-            inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
-        ) {
-            // valid
-        } catch {
-            revert InvalidinputsProof();
-        }
-
-        try commitmentVerifier.verifyProof(treeProof.proof, treeProof.commitments, treeProof.commitmentPok, pubInputs) {
-            // valid
-        } catch {
-            revert InvalidProof();
-        }
-
-        // Apply the verified root update (deposit-only path: both latest and confirmed advance).
-        accountsCommitmentRoot = newRoot;
-        confirmedAccountsCommitmentRoot = newRoot;
-        accountsCommitmentLeafCount += batchSize;
-        emit ValidatedBatchFinalized(TreeType.AccountsCommitment, batchSize, oldRoot, newRoot);
-    }
-
-    /// @notice Records an accounts-nullifier tree update after proof verification.
-    /// @param newRoot Proposed nullifier tree root after consuming accounts.
-    /// @param accountCommitments Account commitments consumed in this batch (proof order).
-    /// @param treeProof Groth16 proof of correct nullifier tree update.
-    /// @param inputsProof Groth16 proof for aggregated public-input validity.
-    /// @dev Why needed:
-    ///      - Prevents double-use of account-related leaves by advancing the nullifier root under proof.
-    ///
-    ///      How it must be used:
-    ///      - Only operator can call.
-    ///      - `0 < accountCommitments.length <= batchSize`.
-    ///      - Missing leaves are deterministically reconstructed on-chain as dummies.
-    ///
-    ///      Step-by-step mirrors `recordNotesNullifierTreeUpdate`.
-    function recordAccountsNullifierTreeUpdate(
-        bytes32 newRoot,
-        bytes32[] calldata accountCommitments,
-        Proof calldata treeProof,
-        Proof calldata inputsProof
-    ) external onlyOperator whenNotPaused {
-        uint256 realLen = accountCommitments.length;
-        if (realLen == 0 || realLen > batchSize) revert InvalidBatchLength(realLen, batchSize);
-
-        bytes32 oldRoot = accountsNullifierRoot;
-        bytes32[] memory fullBatch = _reconstructBatchWithDummies(
-            TreeType.AccountsNullifier, accountsNullifierLeafCount, accountCommitments
-        );
-
-        // Pack leaves into bytes for the commitment hash.
-        bytes memory leafBytes = _packBytes32ArrayMemory(fullBatch);
-
-        // Public input is keccak256(oldRoot || newRoot || packedLeaves), split into 8x uint32.
-        bytes32 keccakCommit = keccak256(abi.encodePacked(oldRoot, newRoot, leafBytes));
-        uint256[8] memory pubInputs = keccakToPublicInputs(keccakCommit);
-
-        try aggregatedInputVerifier.verifyProof(
-            inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
-        ) {
-            // valid
-        } catch {
-            revert InvalidinputsProof();
-        }
-
-        try nullifierVerifier.verifyProof(treeProof.proof, treeProof.commitments, treeProof.commitmentPok, pubInputs) {
-            // valid
-        } catch {
-            revert InvalidProof();
-        }
-
-        // Apply the verified root update (deposit-only path: both latest and confirmed advance).
-        accountsNullifierRoot = newRoot;
-        confirmedAccountsNullifierRoot = newRoot;
-        accountsNullifierLeafCount += batchSize;
-        emit ValidatedBatchFinalized(TreeType.AccountsNullifier, batchSize, oldRoot, newRoot);
-    }
-
     // -------------------------------------------------------------------------
     // Two-phase transaction-batch entry points
     // -------------------------------------------------------------------------
@@ -726,8 +474,6 @@ contract DepositsRollupBridge {
     /// @param accountCommitmentsOut   Account commitments added to the commitment tree.
     /// @param newAccountsNullifierRoot  New accounts-nullifier tree root.
     /// @param accountNullifiersIn     Account nullifiers consumed in this batch.
-    /// @param piCommitments           Pre-computed keccak256 PI digest per tree (index = TREE_* constant).
-    ///                                Each is used as-is by confirmTreeUpdate for Groth16 verification.
     /// @return batchId  Unique 1-based ID assigned to this batch.
     function registerTransactionBatchUpdate(
         bytes32 newNotesCommitmentRoot,
@@ -737,22 +483,19 @@ contract DepositsRollupBridge {
         bytes32 newAccountsCommitmentRoot,
         bytes32[] calldata accountCommitmentsOut,
         bytes32 newAccountsNullifierRoot,
-        bytes32[] calldata accountNullifiersIn,
-        bytes32[4] calldata piCommitments
+        bytes32[] calldata accountNullifiersIn
     ) external onlyOperator whenNotPaused returns (uint256 batchId) {
         if (_pendingCount == MAX_PENDING_BATCHES) revert PendingQueueFull();
 
-        // Batch-length checks for all four arrays.
+        // Batch-length checks: arrays may be empty (all-dummy batch for that tree) but must not
+        // exceed the configured batch size.  Zero is valid — _reconstructBatchWithDummies handles it.
         {
-            uint256 bs = batchSize;
-            uint256 lenNC = noteCommitmentsOut.length;
-            uint256 lenNN = noteNullifiersIn.length;
-            uint256 lenAC = accountCommitmentsOut.length;
-            uint256 lenAN = accountNullifiersIn.length;
-            if (lenNC == 0 || lenNC > bs) revert InvalidBatchLength(lenNC, bs);
-            if (lenNN == 0 || lenNN > bs) revert InvalidBatchLength(lenNN, bs);
-            if (lenAC == 0 || lenAC > bs) revert InvalidBatchLength(lenAC, bs);
-            if (lenAN == 0 || lenAN > bs) revert InvalidBatchLength(lenAN, bs);
+            uint256 nbs = noteBatchSize;
+            uint256 abs_ = accountBatchSize;
+            if (noteCommitmentsOut.length  > nbs)  revert InvalidBatchLength(noteCommitmentsOut.length,  nbs);
+            if (noteNullifiersIn.length    > nbs)  revert InvalidBatchLength(noteNullifiersIn.length,    nbs);
+            if (accountCommitmentsOut.length > abs_) revert InvalidBatchLength(accountCommitmentsOut.length, abs_);
+            if (accountNullifiersIn.length   > abs_) revert InvalidBatchLength(accountNullifiersIn.length,   abs_);
         }
 
         // Notes-commitment: check deposit state for tracked notes, then validate them.
@@ -781,6 +524,46 @@ contract DepositsRollupBridge {
         // Defensive: slot should always be free if _pendingCount < MAX_PENDING_BATCHES.
         if (pendingBatches[slotIndex].batchId != 0) revert SlotConflict(slotIndex);
 
+        // Compute the super-PI commitment over the four tree PI vectors only.
+        // TX PIs are enforced in-circuit by the SuperAggregator (TX slot values must equal
+        // the corresponding tree leaf values), so they are excluded from the Keccak preimage.
+        // Full batches are reconstructed with dummies using pre-increment leaf counts so the
+        // on-chain keccak matches the circuit's keccak over the same preimage.
+        bytes32 superPiCommitment;
+        {
+            bytes32[] memory ncFull = _reconstructBatchWithDummies(
+                TreeType.NotesCommitment, notesCommitmentLeafCount, noteCommitmentsOut);
+            bytes32[] memory nnFull = _reconstructBatchWithDummies(
+                TreeType.NotesNullifier, notesNullifierLeafCount, noteNullifiersIn);
+            bytes32[] memory acFull = _reconstructBatchWithDummies(
+                TreeType.AccountsCommitment, accountsCommitmentLeafCount, accountCommitmentsOut);
+            bytes32[] memory anFull = _reconstructBatchWithDummies(
+                TreeType.AccountsNullifier, accountsNullifierLeafCount, accountNullifiersIn);
+            bytes memory ncPacked = _packBytes32ArrayMemory(ncFull);
+            bytes memory nnPacked = _packBytes32ArrayMemory(nnFull);
+            bytes memory acPacked = _packBytes32ArrayMemory(acFull);
+            bytes memory anPacked = _packBytes32ArrayMemory(anFull);
+            // Use latest (optimistic) roots as old_root, NOT confirmed roots.
+            // The prover's tree proofs prove: old_root → new_root. When batches are
+            // pipelined (batch N+1 registered before batch N is confirmed), the
+            // confirmed roots still point to batch N-1, but the prover already
+            // advanced the tree to batch N's new_root. The latest roots (advanced
+            // during each registerTransactionBatchUpdate) track the prover's state.
+            superPiCommitment = keccak256(abi.encodePacked(
+                notesCommitmentRoot,    newNotesCommitmentRoot,    ncPacked,
+                notesNullifierRoot,     newNotesNullifierRoot,     nnPacked,
+                accountsCommitmentRoot, newAccountsCommitmentRoot, acPacked,
+                accountsNullifierRoot,  newAccountsNullifierRoot,  anPacked
+            ));
+            emit SuperPiDebug(
+                keccak256(abi.encodePacked(notesCommitmentRoot,    newNotesCommitmentRoot,    ncPacked)),
+                keccak256(abi.encodePacked(notesNullifierRoot,     newNotesNullifierRoot,     nnPacked)),
+                keccak256(abi.encodePacked(accountsCommitmentRoot, newAccountsCommitmentRoot, acPacked)),
+                keccak256(abi.encodePacked(accountsNullifierRoot,  newAccountsNullifierRoot,  anPacked)),
+                superPiCommitment
+            );
+        }
+
         // Write pending record into the pre-warmed slot.
         PendingBatch storage slot = pendingBatches[slotIndex];
         slot.batchId                   = batchId;
@@ -788,21 +571,18 @@ contract DepositsRollupBridge {
         slot.newNotesNullifierRoot     = newNotesNullifierRoot;
         slot.newAccountsCommitmentRoot = newAccountsCommitmentRoot;
         slot.newAccountsNullifierRoot  = newAccountsNullifierRoot;
-        slot.piCommitments[TREE_NOTES_COMMITMENT]    = piCommitments[TREE_NOTES_COMMITMENT];
-        slot.piCommitments[TREE_NOTES_NULLIFIER]     = piCommitments[TREE_NOTES_NULLIFIER];
-        slot.piCommitments[TREE_ACCOUNTS_COMMITMENT] = piCommitments[TREE_ACCOUNTS_COMMITMENT];
-        slot.piCommitments[TREE_ACCOUNTS_NULLIFIER]  = piCommitments[TREE_ACCOUNTS_NULLIFIER];
-        slot.confirmedMask = 0;
+        slot.superPiCommitment         = superPiCommitment;
+        slot.confirmed                 = false;
 
-        // Advance latest roots and leaf counts for all four trees.
+        // Advance latest roots and leaf counts; note trees use noteBatchSize, account trees use accountBatchSize.
         notesCommitmentRoot    = newNotesCommitmentRoot;
         notesNullifierRoot     = newNotesNullifierRoot;
         accountsCommitmentRoot = newAccountsCommitmentRoot;
         accountsNullifierRoot  = newAccountsNullifierRoot;
-        notesCommitmentLeafCount    += batchSize;
-        notesNullifierLeafCount     += batchSize;
-        accountsCommitmentLeafCount += batchSize;
-        accountsNullifierLeafCount  += batchSize;
+        notesCommitmentLeafCount    += noteBatchSize;
+        notesNullifierLeafCount     += noteBatchSize;
+        accountsCommitmentLeafCount += accountBatchSize;
+        accountsNullifierLeafCount  += accountBatchSize;
 
         _pendingCount++;
 
@@ -812,83 +592,57 @@ contract DepositsRollupBridge {
             newNotesNullifierRoot,
             newAccountsCommitmentRoot,
             newAccountsNullifierRoot,
-            piCommitments
+            superPiCommitment
         );
     }
 
-    /// @notice Confirms a single tree's proof for a previously registered transaction batch.
-    /// @dev Second phase of the two-phase model. Each tree is confirmed independently; the batch
-    ///      is fully finalized only when all four trees are confirmed (confirmedMask == 0xF).
+    /// @notice Confirms a registered transaction batch by verifying the single super-aggregator proof.
+    /// @dev Second phase of the two-phase model. One call per batch replaces the previous five
+    ///      separate confirmation calls (4 tree proofs + 1 inputs proof). The super-aggregator
+    ///      proof covers all 5 inner circuits and commits to all raw public inputs via a single
+    ///      keccak256 digest (`superPiCommitment`) computed at registerTransactionBatchUpdate time.
     ///
-    ///      Proof binding: `piCommitments[treeIndex]` stored at register time is used directly as
-    ///      the 8x uint32 Groth16 public inputs. No leaf data re-submission required.
+    ///      Retry safety: if `slot.batchId != batchId` the slot was already freed (already confirmed
+    ///      or never registered) — call reverts with `UnknownBatch`.
     ///
-    ///      Retry safety: if the transaction lands after a crash the caller can read
-    ///      `pendingBatches[batchId % MAX_PENDING_BATCHES].confirmedMask` to check which trees
-    ///      are already confirmed and skip them (avoiding AlreadyConfirmed revert).
-    ///
-    /// @param batchId    Batch ID returned by registerTransactionBatchUpdate.
-    /// @param treeIndex  TREE_* constant (0-3) identifying which tree to confirm.
-    /// @param treeProof  Groth16 proof for the tree circuit.
-    /// @param inputsProof Groth16 proof for aggregated public-input validity.
-    function confirmTreeUpdate(
+    /// @param batchId  Batch ID returned by registerTransactionBatchUpdate.
+    /// @param proof    Groth16 super-aggregator proof.
+    function confirmBatch(
         uint256 batchId,
-        uint8   treeIndex,
-        Proof calldata treeProof,
-        Proof calldata inputsProof
+        Proof calldata proof
     ) external onlyOperator whenNotPaused {
-        if (treeIndex > 3) revert InvalidTreeIndex(treeIndex);
-
         uint256 slotIndex = batchId % MAX_PENDING_BATCHES;
         PendingBatch storage slot = pendingBatches[slotIndex];
 
         if (slot.batchId != batchId) revert UnknownBatch(batchId);
+        if (slot.confirmed) revert BatchAlreadyConfirmed(batchId);
 
-        uint8 bit = uint8(1 << treeIndex);
-        if (slot.confirmedMask & bit != 0) revert AlreadyConfirmed(batchId, treeIndex);
+        uint256[8] memory pubInputs = keccakToPublicInputs(slot.superPiCommitment);
 
-        // Derive public inputs from the stored PI commitment for this tree.
-        uint256[8] memory pubInputs = keccakToPublicInputs(slot.piCommitments[treeIndex]);
-
-        // Verify aggregated inputs proof.
-        try aggregatedInputVerifier.verifyProof(
-            inputsProof.proof, inputsProof.commitments, inputsProof.commitmentPok, pubInputs
+        try superAggregatorVerifier.verifyProof(
+            proof.proof, proof.commitments, proof.commitmentPok, pubInputs
         ) {
             // valid
         } catch {
-            revert InvalidinputsProof();
+            revert ProofVerificationFailed(slot.superPiCommitment, pubInputs);
         }
 
-        // Verify tree proof using the appropriate verifier circuit.
-        IGroth16Verifier verifier = (treeIndex == TREE_NOTES_COMMITMENT || treeIndex == TREE_ACCOUNTS_COMMITMENT)
-            ? commitmentVerifier
-            : nullifierVerifier;
-        try verifier.verifyProof(treeProof.proof, treeProof.commitments, treeProof.commitmentPok, pubInputs) {
-            // valid
-        } catch {
-            revert InvalidProof();
-        }
+        slot.confirmed = true;
+        _tryFinalizeBatch(slot, batchId);
+    }
 
-        // Mark tree as confirmed and advance the per-tree confirmed root.
-        slot.confirmedMask |= bit;
-        if (treeIndex == TREE_NOTES_COMMITMENT) {
-            confirmedNotesCommitmentRoot = slot.newNotesCommitmentRoot;
-        } else if (treeIndex == TREE_NOTES_NULLIFIER) {
-            confirmedNotesNullifierRoot = slot.newNotesNullifierRoot;
-        } else if (treeIndex == TREE_ACCOUNTS_COMMITMENT) {
-            confirmedAccountsCommitmentRoot = slot.newAccountsCommitmentRoot;
-        } else {
-            confirmedAccountsNullifierRoot = slot.newAccountsNullifierRoot;
-        }
-        emit TreeUpdateConfirmed(batchId, treeIndex);
-
-        // Fully confirmed: free the slot.
-        if (slot.confirmedMask == 0xF) {
-            emit TransactionBatchConfirmed(batchId);
-            slot.batchId       = 0;
-            slot.confirmedMask = 0;
-            _pendingCount--;
-        }
+    /// @dev Advances all confirmed roots and frees the batch slot once the super-aggregator proof
+    ///      has been verified. Called by confirmBatch; roots advance atomically.
+    function _tryFinalizeBatch(PendingBatch storage slot, uint256 batchId) internal {
+        if (!slot.confirmed) return;
+        confirmedNotesCommitmentRoot    = slot.newNotesCommitmentRoot;
+        confirmedNotesNullifierRoot     = slot.newNotesNullifierRoot;
+        confirmedAccountsCommitmentRoot = slot.newAccountsCommitmentRoot;
+        confirmedAccountsNullifierRoot  = slot.newAccountsNullifierRoot;
+        emit BatchConfirmed(batchId);
+        slot.batchId    = 0;
+        slot.confirmed  = false;
+        _pendingCount--;
     }
 
     /// @dev Packs a `bytes32[]` into a contiguous byte array (32 bytes per element, in order).
@@ -920,19 +674,22 @@ contract DepositsRollupBridge {
         uint256 batchStartIndex,
         bytes32[] calldata realLeaves
     ) internal view returns (bytes32[] memory out) {
+        uint256 effectiveSize = (treeType == TreeType.NotesCommitment || treeType == TreeType.NotesNullifier)
+            ? noteBatchSize
+            : accountBatchSize;
         uint256 realLen = realLeaves.length;
-        out = new bytes32[](batchSize);
+        out = new bytes32[](effectiveSize);
         for (uint256 i = 0; i < realLen; i++) {
             out[i] = realLeaves[i];
         }
-        if (realLen == batchSize) {
+        if (realLen == effectiveSize) {
             return out;
         }
 
         bytes32 packedHash = keccak256(
             abi.encodePacked(uint8(treeType), batchStartIndex, _packBytes32Array(realLeaves))
         );
-        for (uint256 i = realLen; i < batchSize; i++) {
+        for (uint256 i = realLen; i < effectiveSize; i++) {
             uint256 leafIndex = batchStartIndex + i;
             bytes32 raw = keccak256(abi.encodePacked(leafIndex, packedHash));
             out[i] = _fieldSafeDigest(raw);
@@ -1008,5 +765,46 @@ contract DepositsRollupBridge {
     ///      Used by off-chain sequencer preflight checks to distinguish tracked vs external leaves.
     function getDepositStatus(bytes32 noteCommitment) external view returns (DepositStatus) {
         return deposits[noteCommitment].status;
+    }
+
+    // -------------------------------------------------------------------------
+    // Debug helpers (not part of the production security surface)
+    // -------------------------------------------------------------------------
+
+    /// @notice Returns the stored superPiCommitment and the 8 Groth16 public inputs that
+    ///         `confirmBatch` will derive from it for the given batch.
+    /// @dev Compare the returned `superPiCommitment` against the Rust prover log line
+    ///      "super_pi_commitment = 0x..." to determine whether there is a preimage mismatch
+    ///      (commitments differ) or a verifying-key mismatch (commitments match but proof fails).
+    function getBatchDebugInfo(uint256 batchId)
+        external view
+        returns (bytes32 superPiCommitment, uint256[8] memory pubInputs)
+    {
+        uint256 slotIndex = batchId % MAX_PENDING_BATCHES;
+        PendingBatch storage slot = pendingBatches[slotIndex];
+        if (slot.batchId != batchId) revert UnknownBatch(batchId);
+        superPiCommitment = slot.superPiCommitment;
+        pubInputs = keccakToPublicInputs(superPiCommitment);
+    }
+
+    /// @notice Dry-runs the Groth16 verifier with an explicit superPiCommitment.
+    /// @dev Allows decoupling the commitment-derivation step from the verifier step.
+    ///      - Call with the on-chain stored commitment (from getBatchDebugInfo or the
+    ///        TransactionBatchRegistered event) to test the verifier with the correct inputs.
+    ///      - Call with the Rust prover's super_pi_commitment to test if the VK accepts
+    ///        the proof when given the prover's own commitment.
+    ///      Returns true if the verifier accepts, false if it reverts.
+    function verifyProofDry(bytes32 superPiCommitment, Proof calldata proof)
+        external view
+        returns (bool)
+    {
+        uint256[8] memory inputs = keccakToPublicInputs(superPiCommitment);
+        try superAggregatorVerifier.verifyProof(
+            proof.proof, proof.commitments, proof.commitmentPok, inputs
+        ) {
+            return true;
+        } catch {
+            return false;
+        }
     }
 }

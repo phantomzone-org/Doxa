@@ -25,6 +25,7 @@ impl Default for CommitmentTreeState {
 }
 
 impl CommitmentTreeState {
+	/// Create a new, empty commitment tree state.
 	pub fn new() -> Self {
 		Self {
 			tree: CommitmentTree::new(TREE_DEPTH),
@@ -56,12 +57,14 @@ impl CommitmentTreeState {
 
 	/// Add a pending consume request by canonical chain order.
 	///
-	/// Returns true when we have at least `batch_size` pending requests.
+	/// Silently deduplicates: if `commitment` is already in `pending_commitments`
+	/// the request is dropped.
+	///
+	/// Returns `true` when the pending queue has reached `batch_size` items.
 	pub fn add_consume_request(
 		&mut self,
 		order_key: EventOrderKey,
 		commitment: [u8; 32],
-		associated_input_proof: Vec<u8>,
 		batch_size: usize,
 	) -> bool {
 		if self.pending_commitments.contains(&commitment) {
@@ -74,12 +77,14 @@ impl CommitmentTreeState {
 			PendingRequest {
 				order_key,
 				commitment,
-				associated_input_proof: Some(associated_input_proof),
 			},
 		);
 		self.pending_requests.len() >= batch_size
 	}
 
+	/// Remove the pending request whose commitment matches `commitment`.
+	///
+	/// No-op if `commitment` is not currently pending.
 	pub fn remove_pending_by_commitment(&mut self, commitment: &[u8; 32]) {
 		if !self.pending_commitments.remove(commitment) {
 			return;
@@ -93,6 +98,10 @@ impl CommitmentTreeState {
 		}
 	}
 
+	/// Pop exactly `batch_size` requests in canonical order.
+	///
+	/// Returns `None` if fewer than `batch_size` requests are pending.
+	/// Also removes the popped entries from `pending_commitments`.
 	pub fn pop_next_batch(&mut self, batch_size: usize) -> Option<Vec<PendingRequest>> {
 		if self.pending_requests.len() < batch_size {
 			return None;
@@ -100,6 +109,11 @@ impl CommitmentTreeState {
 		self.pop_next_up_to(batch_size)
 	}
 
+	/// Pop up to `batch_size` requests in canonical order (partial-batch flush).
+	///
+	/// Unlike [`pop_next_batch`], this succeeds even when fewer than `batch_size`
+	/// items are pending — useful for timeout-driven partial flushes.
+	/// Returns `None` only when the queue is empty.
 	pub fn pop_next_up_to(&mut self, batch_size: usize) -> Option<Vec<PendingRequest>> {
 		if self.pending_requests.is_empty() {
 			return None;
@@ -116,6 +130,9 @@ impl CommitmentTreeState {
 		Some(out)
 	}
 
+	/// Re-enqueue a previously popped batch (used after a prover failure).
+	///
+	/// Restores each request to both `pending_requests` and `pending_commitments`.
 	pub fn reinsert_batch(&mut self, batch: Vec<PendingRequest>) {
 		for req in batch {
 			self.pending_commitments.insert(req.commitment);

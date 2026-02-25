@@ -13,14 +13,6 @@ pub struct SequencerConfig {
 	pub bridge_address: Address,
 	/// Chain ID.
 	pub chain_id: u64,
-	/// Path to plonky2 circuit data directory.
-	pub plonky2_data_path: PathBuf,
-	/// Path to Groth16 trusted setup artifacts directory.
-	pub groth16_artifacts_path: PathBuf,
-	/// Path to plonky2 circuit data directory for the nullifier tree proof.
-	pub nullifier_plonky2_data_path: PathBuf,
-	/// Path to Groth16 trusted setup artifacts directory for the nullifier tree proof.
-	pub nullifier_groth16_artifacts_path: PathBuf,
 	/// Polling interval in seconds for on-chain events (default: 12).
 	pub poll_interval_secs: u64,
 	/// Max time to wait before flushing a partially filled batch (default: 12).
@@ -35,41 +27,101 @@ pub struct SequencerConfig {
 	pub prover_api_url: String,
 	/// Timeout in seconds for one prover request (default: 1800).
 	pub prover_api_timeout_secs: u64,
+	/// Optional path to pre-built `GenericAggregator` artifacts.
+	/// When set, the API layer validates private-tx proof bytes cryptographically.
+	/// Set via `TESSERA_AGGREGATOR_ARTIFACTS_PATH`.
+	pub aggregator_artifacts_path: Option<PathBuf>,
+	/// Optional path to pre-built consume-circuit artifacts.
+	/// When set, the API layer validates /consume-request proof bytes cryptographically.
+	/// Set via `TESSERA_CONSUME_ARTIFACTS_PATH`.
+	pub consume_artifacts_path: Option<PathBuf>,
+	/// Optional path to pre-built account-circuit artifacts.
+	/// When set, the API layer validates /accounts/commitment proof bytes cryptographically.
+	/// Set via `TESSERA_ACCOUNT_ARTIFACTS_PATH`.
+	pub account_artifacts_path: Option<PathBuf>,
 }
 
 /// Configuration for the standalone prover service.
 pub struct ProverConfig {
-	/// Path to plonky2 circuit data directory.
-	pub plonky2_data_path: PathBuf,
-	/// Path to Groth16 trusted setup artifacts directory.
-	pub groth16_artifacts_path: PathBuf,
-	/// Path to plonky2 circuit data directory for the nullifier tree proof.
-	pub nullifier_plonky2_data_path: PathBuf,
-	/// Path to Groth16 trusted setup artifacts directory for the nullifier tree proof.
-	pub nullifier_groth16_artifacts_path: PathBuf,
-	/// Batch size expected by the circuit/prover.
-	pub batch_size: usize,
+	/// Note-tree batch size expected by the note-tree circuits (notes-commitment +
+	/// notes-nullifier).
+	pub note_batch_size: usize,
+	/// Account-tree batch size expected by the account-tree circuits (accounts-commitment +
+	/// accounts-nullifier). Must equal `note_batch_size / 8`.
+	pub account_batch_size: usize,
 	/// HTTP bind address for prover API.
+	pub api_bind_addr: String,
+	/// Path to pre-built SuperAggregator artifacts directory.
+	/// Set via `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH`.
+	pub super_aggregator_artifacts_path: PathBuf,
+	/// Optional path to pre-built `GenericAggregator` artifacts for aggregating
+	/// `PrivateTx` leaf proofs.  When `None` the prover accepts only dummy proofs.
+	/// Set via `TESSERA_AGGREGATOR_ARTIFACTS_PATH`.
+	pub aggregator_artifacts_path: Option<PathBuf>,
+	/// Comma-separated list of remote aggregation prover base URLs.
+	/// When empty (default) the coordinator uses only a local prover.
+	/// Set via `TESSERA_AGGREGATION_PROVER_URLS`.
+	pub aggregation_prover_urls: Vec<String>,
+	/// Per-request HTTP timeout for remote aggregation provers (seconds).
+	/// Set via `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default 300).
+	pub aggregation_prover_timeout_secs: u64,
+}
+
+/// Configuration for the standalone `aggregation_prover` service.
+pub struct AggregatorProverConfig {
+	/// Path to pre-built `GenericAggregator` artifacts.
+	/// Set via `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (required).
+	pub artifacts_path: PathBuf,
+	/// HTTP bind address for the aggregation prover API.
+	/// Set via `TESSERA_AGGREGATION_PROVER_ADDR` (default `0.0.0.0:8092`).
 	pub api_bind_addr: String,
 }
 
-/// Subdirectory names under the pending-deposits artifacts base path.
-pub const PENDING_DEPOSITS_PLONKY2_DIR: &str = "plonky2-proof";
-pub const PENDING_DEPOSITS_GROTH16_DIR: &str = "groth-artifacts";
-
-impl SequencerConfig {
+impl AggregatorProverConfig {
 	/// Load configuration from environment variables.
 	///
-	/// Required:
-	///   TESSERA_RPC_URL, TESSERA_OPERATOR_KEY, TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS,
-	///   TESSERA_CHAIN_ID, TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH,
-	/// TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH
+	/// # Required env vars
+	/// - `TESSERA_AGGREGATOR_ARTIFACTS_PATH`: path to pre-built `GenericAggregator` artifacts.
 	///
-	/// Optional (with defaults):
-	///   TESSERA_POLL_INTERVAL_SECS (default 12)
-	///   TESSERA_SEQUENCER_API_ADDR (default 127.0.0.1:8081)
-	///   TESSERA_TREE_STORE_PATH (default: <crate>/data/trees)
-	///   TESSERA_TREE_SNAPSHOT_EVERY_BATCHES (default: 1)
+	/// # Optional env vars (with defaults)
+	/// - `TESSERA_AGGREGATION_PROVER_ADDR` (default `0.0.0.0:8092`): HTTP listen address.
+	///
+	/// # Errors
+	/// Returns `Err` if any required variable is absent.
+	pub fn from_env() -> anyhow::Result<Self> {
+		let artifacts_path = std::env::var("TESSERA_AGGREGATOR_ARTIFACTS_PATH")
+			.context("TESSERA_AGGREGATOR_ARTIFACTS_PATH not set")?
+			.into();
+		let api_bind_addr = std::env::var("TESSERA_AGGREGATION_PROVER_ADDR")
+			.unwrap_or_else(|_| "0.0.0.0:8092".to_string());
+		Ok(Self {
+			artifacts_path,
+			api_bind_addr,
+		})
+	}
+}
+
+impl SequencerConfig {
+	/// Load sequencer configuration from environment variables.
+	///
+	/// # Required env vars
+	/// - `TESSERA_RPC_URL`: Ethereum JSON-RPC endpoint.
+	/// - `TESSERA_OPERATOR_KEY`: operator private key (hex, with or without `0x`).
+	/// - `TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS`: `DepositsRollupBridge` contract address.
+	/// - `TESSERA_CHAIN_ID`: EVM chain ID.
+	///
+	/// # Optional env vars (with defaults)
+	/// - `TESSERA_POLL_INTERVAL_SECS` (default `12`): polling interval for on-chain events.
+	/// - `TESSERA_BATCH_TIMEOUT_SECS` (default `12`): max wait before flushing a partial batch.
+	/// - `TESSERA_SEQUENCER_API_ADDR` (default `127.0.0.1:8081`): HTTP API listen address.
+	/// - `TESSERA_TREE_STORE_PATH` (default `<crate>/data/trees`): WAL + snapshot directory.
+	/// - `TESSERA_TREE_SNAPSHOT_EVERY_BATCHES` (default `1`): snapshot frequency.
+	/// - `TESSERA_PROVER_API_URL` (default `http://127.0.0.1:8091`): remote prover base URL.
+	/// - `TESSERA_PROVER_API_TIMEOUT_SECS` (default `1800`): prover request timeout.
+	/// - `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): aggregator artifacts path.
+	///
+	/// # Errors
+	/// Returns `Err` if any required variable is absent or any value fails to parse.
 	pub fn from_env() -> Result<Self> {
 		let rpc_url = std::env::var("TESSERA_RPC_URL").context("TESSERA_RPC_URL not set")?;
 
@@ -85,22 +137,6 @@ impl SequencerConfig {
 			.context("TESSERA_CHAIN_ID not set")?
 			.parse()
 			.context("invalid TESSERA_CHAIN_ID")?;
-
-		let artifacts_base: PathBuf = std::env::var("TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH")
-			.context("TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH not set")?
-			.into();
-
-		let plonky2_data_path = artifacts_base.join(PENDING_DEPOSITS_PLONKY2_DIR);
-		let groth16_artifacts_path = artifacts_base.join(PENDING_DEPOSITS_GROTH16_DIR);
-
-		let nullifier_artifacts_base: PathBuf =
-			std::env::var("TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH")
-				.context("TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH not set")?
-				.into();
-		let nullifier_plonky2_data_path =
-			nullifier_artifacts_base.join(PENDING_DEPOSITS_PLONKY2_DIR);
-		let nullifier_groth16_artifacts_path =
-			nullifier_artifacts_base.join(PENDING_DEPOSITS_GROTH16_DIR);
 
 		let poll_interval_secs: u64 = std::env::var("TESSERA_POLL_INTERVAL_SECS")
 			.unwrap_or_else(|_| "12".to_string())
@@ -132,15 +168,23 @@ impl SequencerConfig {
 			.parse()
 			.context("invalid TESSERA_PROVER_API_TIMEOUT_SECS")?;
 
+		let aggregator_artifacts_path = std::env::var("TESSERA_AGGREGATOR_ARTIFACTS_PATH")
+			.ok()
+			.map(PathBuf::from);
+
+		let consume_artifacts_path = std::env::var("TESSERA_CONSUME_ARTIFACTS_PATH")
+			.ok()
+			.map(PathBuf::from);
+
+		let account_artifacts_path = std::env::var("TESSERA_ACCOUNT_ARTIFACTS_PATH")
+			.ok()
+			.map(PathBuf::from);
+
 		Ok(Self {
 			rpc_url,
 			operator_private_key,
 			bridge_address,
 			chain_id,
-			plonky2_data_path,
-			groth16_artifacts_path,
-			nullifier_plonky2_data_path,
-			nullifier_groth16_artifacts_path,
 			poll_interval_secs,
 			batch_timeout_secs,
 			api_bind_addr,
@@ -148,48 +192,76 @@ impl SequencerConfig {
 			snapshot_every_batches,
 			prover_api_url,
 			prover_api_timeout_secs,
+			aggregator_artifacts_path,
+			consume_artifacts_path,
+			account_artifacts_path,
 		})
 	}
 }
 
 impl ProverConfig {
-	/// Load prover configuration from environment variables.
+	/// Load standalone prover configuration from environment variables.
 	///
-	/// Required:
-	///   TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH, TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH
-	/// Optional:
-	///   TESSERA_BATCH_SIZE (default 128)
-	///   TESSERA_PROVER_API_ADDR (default 127.0.0.1:8091)
+	/// # Required env vars
+	/// - `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH`: path to pre-built SuperAggregator artifacts.
+	///
+	/// # Optional env vars (with defaults)
+	/// - `TESSERA_NOTE_BATCH_SIZE` (default `128`): leaf count per note-tree batch.
+	/// - `TESSERA_ACCOUNT_BATCH_SIZE` (default `16`): leaf count per account-tree batch (must be
+	///   1/8 of note size).
+	/// - `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`): HTTP listen address.
+	/// - `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): aggregator artifacts path.
+	/// - `TESSERA_AGGREGATION_PROVER_URLS` (default empty): comma-separated remote prover URLs.
+	/// - `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default `300`): remote prover timeout.
+	///
+	/// # Errors
+	/// Returns `Err` if any required variable is absent or any value fails to parse.
 	pub fn from_env() -> Result<Self> {
-		let artifacts_base: PathBuf = std::env::var("TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH")
-			.context("TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH not set")?
-			.into();
-		let plonky2_data_path = artifacts_base.join(PENDING_DEPOSITS_PLONKY2_DIR);
-		let groth16_artifacts_path = artifacts_base.join(PENDING_DEPOSITS_GROTH16_DIR);
-
-		let nullifier_artifacts_base: PathBuf =
-			std::env::var("TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH")
-				.context("TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH not set")?
+		let super_aggregator_artifacts_path =
+			std::env::var("TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH")
+				.context("TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH not set")?
 				.into();
-		let nullifier_plonky2_data_path =
-			nullifier_artifacts_base.join(PENDING_DEPOSITS_PLONKY2_DIR);
-		let nullifier_groth16_artifacts_path =
-			nullifier_artifacts_base.join(PENDING_DEPOSITS_GROTH16_DIR);
 
-		let batch_size: usize = std::env::var("TESSERA_BATCH_SIZE")
+		let note_batch_size: usize = std::env::var("TESSERA_NOTE_BATCH_SIZE")
 			.unwrap_or_else(|_| "128".to_string())
 			.parse()
-			.context("invalid TESSERA_BATCH_SIZE")?;
+			.context("invalid TESSERA_NOTE_BATCH_SIZE")?;
+		let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
+			.unwrap_or_else(|_| "16".to_string())
+			.parse()
+			.context("invalid TESSERA_ACCOUNT_BATCH_SIZE")?;
+		anyhow::ensure!(
+			note_batch_size == account_batch_size * 8,
+			"TESSERA_NOTE_BATCH_SIZE ({note_batch_size}) must be exactly 8 × TESSERA_ACCOUNT_BATCH_SIZE ({account_batch_size})"
+		);
 		let api_bind_addr = std::env::var("TESSERA_PROVER_API_ADDR")
 			.unwrap_or_else(|_| "127.0.0.1:8091".to_string());
+		let aggregator_artifacts_path = std::env::var("TESSERA_AGGREGATOR_ARTIFACTS_PATH")
+			.ok()
+			.map(PathBuf::from);
+
+		let aggregation_prover_urls: Vec<String> = std::env::var("TESSERA_AGGREGATION_PROVER_URLS")
+			.unwrap_or_default()
+			.split(',')
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+			.map(String::from)
+			.collect();
+
+		let aggregation_prover_timeout_secs: u64 =
+			std::env::var("TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS")
+				.unwrap_or_else(|_| "300".to_string())
+				.parse()
+				.context("invalid TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS")?;
 
 		Ok(Self {
-			plonky2_data_path,
-			groth16_artifacts_path,
-			nullifier_plonky2_data_path,
-			nullifier_groth16_artifacts_path,
-			batch_size,
+			note_batch_size,
+			account_batch_size,
 			api_bind_addr,
+			super_aggregator_artifacts_path,
+			aggregator_artifacts_path,
+			aggregation_prover_urls,
+			aggregation_prover_timeout_secs,
 		})
 	}
 }

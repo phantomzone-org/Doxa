@@ -17,7 +17,7 @@ sequenceDiagram
     participant BR as Bridge Contract
 
     C->>API: POST /private-tx<br/>{input_notes[], output_notes[],<br/>input_account_commitment,<br/>output_account_commitment, tx_proof}
-    API->>API: validate tx_proof (dummy: 0x01)
+    API->>API: validate tx_proof bytes against leaf circuit<br/>(LeafProofVerifier loaded from aggregator artifacts)
     API->>SQ: private_tx_tx ← PrivateTxRequest
 
     Note over SQ: register_tx_batch()
@@ -38,11 +38,17 @@ sequenceDiagram
     SQ->>SQ: Store TxBatch in registered_pending_batches[batchId]
 
     par 4 independent prove tasks (tokio::spawn)
-        SQ->>PRV: ProveRequest::Commitment{batch_id, tree_index=0}
-        SQ->>PRV: ProveRequest::Nullifier{batch_id, tree_index=1}
-        SQ->>PRV: ProveRequest::Commitment{batch_id, tree_index=2}
-        SQ->>PRV: ProveRequest::Nullifier{batch_id, tree_index=3}
+        SQ->>PRV: ProveRequest::Commitment{batch_id, tree_index=0,<br/>associated_input_proofs=[tx_proof×k, 0x01×(B-k)]}
+        SQ->>PRV: ProveRequest::Nullifier{batch_id, tree_index=1,<br/>associated_input_proofs=[tx_proof×m, 0x01×(B-m)]}
+        SQ->>PRV: ProveRequest::Commitment{batch_id, tree_index=2,<br/>associated_input_proofs=[tx_proof×1, 0x01×(B-1)]}
+        SQ->>PRV: ProveRequest::Nullifier{batch_id, tree_index=3,<br/>associated_input_proofs=[tx_proof×1, 0x01×(B-1)]}
     end
+    Note over SQ,PRV: k=output_notes.len(), m=input_notes.len(), B=batchSize
+
+    Note over PRV: For each ProveRequest
+
+    PRV->>PRV: Prove tree circuit (Plonky2 → BN128 → Groth16)<br/>→ solidity_proof
+    PRV->>PRV: verify_and_aggregate_associated_input_proofs()<br/>→ aggregated_input_solidity_proof
 
     Note over SQ,PRV: Phase B: confirm each tree as its proof arrives
 
@@ -81,10 +87,12 @@ The deposit status `Pending → Validated` is triggered atomically by `registerT
   "output_notes": ["0x...", "0x..."],
   "input_account_commitment": "0x...",
   "output_account_commitment": "0x...",
-  "tx_proof": "0x01",
+  "tx_proof": "<hex-encoded ProofWithPublicInputs bytes>",
   "tx_id": "optional-tracking-id"
 }
 ```
+
+`tx_proof` is the hex-encoded byte serialization of a Plonky2 `ProofWithPublicInputs<F, ConfigNative, 2>` for the transaction validity circuit.  All `batchSize` leaves in the Notes Commitment tree receive the same `tx_proof` as their `associated_input_proof`.
 
 ## Leaf Decomposition
 
@@ -98,6 +106,55 @@ Each field maps to one tree by `TREE_*` index constant:
 | `input_account_commitment` | Accounts Nullifier | 3 | `insert_chained` | Nullifies old account state |
 
 All four arrays are padded to exactly `batchSize` with deterministic dummy leaves before on-chain submission. The contract re-derives omitted dummies from `(treeType, batchStartIndex, realLeaves)`.
+
+## Associated Input Proof Aggregation
+
+Each `ProveRequest` carries an `associated_input_proofs: Vec<Vec<u8>>` — one serialized `tx_proof` per leaf in the batch.  The prover aggregates these into a single root proof using `AssociatedInputAggregatorService`, which wraps a `GenericAggregator<F, ConfigNative, D>` loaded from pre-built artifacts.
+
+### Proof assignment per tree
+
+| Tree Index | Real leaf positions | Padding positions |
+|---|---|---|
+| 0 — Notes Commitment | `tx_proof` bytes (one per `output_note`) | `DUMMY` sentinel (`0x01`) |
+| 1 — Notes Nullifier | `tx_proof` bytes (one per `input_note`) | `DUMMY` sentinel (`0x01`) |
+| 2 — Accounts Commitment | `tx_proof` bytes (one, for the output account leaf) | `DUMMY` sentinel (`0x01`) |
+| 3 — Accounts Nullifier | `tx_proof` bytes (one, for the input account leaf) | `DUMMY` sentinel (`0x01`) |
+
+All four `associated_input_proofs` vectors are exactly `batchSize` long.
+
+### Aggregation logic (`aggregate_associated_input_proofs`)
+
+1. **DUMMY expansion**: `DUMMY` sentinel bytes (`0x01`) are replaced with `canonical_padding_proof` — a valid Plonky2 proof of the dummy leaf circuit with all-zero public inputs, pre-computed at prover startup.
+2. **Streaming aggregation**: all `batchSize` proofs (real + canonical padding) are submitted to the `GenericAggregator` via the `NodeProverPool` actor.
+3. **Root verification**: `aggregator.verify_root()` validates the aggregated root proof.
+4. **Groth16 wrapping**: `groth16_wrap_aggregation_root()` wraps the root through BN128 → `Groth16Wrapper::prove()` using the aggregation circuit keys, producing a real `aggregated_input_solidity_proof`.
+
+| Condition | Result |
+|---|---|
+| Aggregator configured (`TESSERA_AGGREGATOR_ARTIFACTS_PATH` set) | Real Groth16 `aggregated_input_solidity_proof` |
+| Aggregator not configured | `ProveOutcome::Failure` — private-tx path requires aggregation |
+
+### GenericAggregator configuration
+
+The aggregator is configured at artifact-build time with:
+
+- **Leaf circuit**: the transaction validity circuit whose `CommonCircuitData` and `VerifierOnlyCircuitData` are stored in `leaf_common.bin` / `leaf_verifier.bin` under the artifact directory.
+- **`arity^depth = batchSize`**: e.g. arity=2, depth=7 for a 128-leaf batch.
+- **Reducer**: `Keccak256` — root PI is 8 Goldilocks field elements (256-bit big-endian digest), matching the on-chain PI shape consumed by `BN128Wrapper` and the Groth16 verifier.
+
+Leaf proof bytes are deserialized via `ProofNative::from_bytes(bytes, aggregator.leaf_common())`.
+
+### Artifact lifecycle
+
+```bash
+# Build aggregator artifacts once (or after any leaf-circuit change).
+cargo run --bin aggregator_artifacts --release
+
+# Point the prover at the artifacts.
+export TESSERA_AGGREGATOR_ARTIFACTS_PATH=tessera-server/artifacts/associated-input-aggregator
+```
+
+When `TESSERA_AGGREGATOR_ARTIFACTS_PATH` is unset the prover starts without an aggregator and accepts only dummy (`0x01`) sentinel proofs.
 
 ## Sequencer State
 
@@ -125,6 +182,9 @@ At most `MAX_PENDING_BATCHES = 128` two-phase batches can be registered simultan
 | `registerTransactionBatchUpdate` reverts | Log error; real trees unchanged (tmp-clone approach) |
 | Prover unreachable for a tree | Retry with 5s backoff per `(batch_id, tree_index)` independently |
 | `confirmTreeUpdate` reverts | Log warning; retried on next prove outcome cycle |
+| Mixed real/dummy associated input proofs | Prover returns `ProveOutcome::Failure`; sequencer retries |
+| Real proofs with no aggregator configured | Prover returns `ProveOutcome::Failure` with actionable error message |
+| Leaf proof deserialization failure | Prover returns `ProveOutcome::Failure`; leaf circuit mismatch likely |
 
 ## Traceability
 
@@ -138,10 +198,16 @@ At most `MAX_PENDING_BATCHES = 128` two-phase batches can be registered simultan
 | `confirmTreeUpdate` | `tessera-server/src/sequencer/pipeline.rs` | inside `confirm_tx_batch_tree()` |
 | `TxBatch` / `registered_pending_batches` | `tessera-server/src/sequencer/mod.rs` | `Sequencer` struct |
 | `keccak256_field_elements_native` | `tessera-trees/src/plonky2_gadgets/keccak256/utils.rs` | PI commitment computation |
+| `AssociatedInputAggregatorService` | `tessera-server/src/prover.rs` | `verify_and_aggregate_associated_input_proofs()` |
+| `GenericAggregator` | `tessera-trees/src/proof_aggregation/generic.rs` | `aggregate()`, `verify_root()`, `leaf_common()` |
+| Aggregator artifacts path | `tessera-server/src/config.rs` | `TESSERA_AGGREGATOR_ARTIFACTS_PATH` env var |
 
 ## Notes
 
-- The `tx_proof` is validated by a dummy verifier (accepts `0x01` only). Real transaction proof verification is a future TODO.
+- The `tx_proof` field is a real Plonky2 `ProofWithPublicInputs` for the transaction validity circuit, serialized to bytes and hex-encoded.  The API validates it against the leaf circuit loaded from `TESSERA_AGGREGATOR_ARTIFACTS_PATH`; invalid bytes are rejected before the request reaches the sequencer loop.
+- All four trees receive real `tx_proof` bytes at their real leaf positions. Padding positions across all four trees always use the `DUMMY` sentinel, which the prover expands to the canonical all-zero padding proof at aggregation time.
+- Each `confirmTreeUpdate` call carries two Groth16 proofs: `solidity_proof` (tree circuit) and `aggregated_input_solidity_proof` (aggregation circuit). Both must verify on-chain.
+- Recovery after a restart loses the original `tx_proof` bytes (not persisted to disk). Recovered batches use `DUMMY` sentinels for all slots, so the prover generates a canonical all-padding aggregated proof. This is mathematically valid but carries no real transaction validity guarantee — see [Assumptions & Gaps](11-assumptions-and-gaps.md) item 2.
 - The `tx_id` field is optional and used for logging only.
 - Individual trees confirm asynchronously; `confirmedMask` tracks partial completion on-chain.
 - The deposit-only path (`/consume-request`) continues to use the per-tree `recordNotesCommitmentTreeUpdate` flow — see [W2](05-w2-consume-batch-prove-finalize.md).

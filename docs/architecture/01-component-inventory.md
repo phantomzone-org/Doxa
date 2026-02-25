@@ -4,9 +4,11 @@
 |---|---|---|---|---|---|
 | **Sequencer** | Long-running server | `src/bin/sequencer.rs` → `main()` | HTTP API (axum) on `:8081` | Prover, Bridge Contract, RPC Node | `tessera-server/src/sequencer/mod.rs`, `tessera-server/src/sequencer/api.rs`, `tessera-server/src/sequencer/pipeline.rs`, `tessera-server/src/sequencer/recovery.rs` |
 | **Prover** | Long-running server | `src/bin/prover.rs` → `main()` | HTTP API (axum) on `:8091`, `POST /prove` | tessera-trees, gnark FFI | `tessera-server/src/prover.rs`, `tessera-server/src/bin/prover.rs` |
-| **DepositsRollupBridge** | Solidity smart contract | Constructor (deployment) | `registerTransactionBatchUpdate()`, `confirmTreeUpdate()`, 4x `recordTree*Update()`, `depositAndRegister()`, `withdrawPendingDeposit()` | VerifierCommitment, VerifierNullifier, DummyVerifier, ERC20 Token | `tessera-solidity/src/TesseraRollup.sol` |
-| **VerifierCommitment** | Solidity smart contract | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/VerifierCommitment.sol` |
-| **VerifierNullifier** | Solidity smart contract | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/VerifierNullifier.sol` |
+| **DepositsRollupBridge** | Solidity smart contract | Constructor (deployment) | `registerTransactionBatchUpdate()`, `confirmTreeUpdate()`, 4x `recordTree*Update()`, `depositAndRegister()`, `withdrawPendingDeposit()` | VerifierNotesCommitment, VerifierNotesNullifier, VerifierAccountsCommitment, VerifierAccountsNullifier, VerifierAggregator, ERC20 Token | `tessera-solidity/src/TesseraRollup.sol` |
+| **VerifierNotesCommitment** | Solidity smart contract | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/VerifierNotesCommitment.sol` |
+| **VerifierNotesNullifier** | Solidity smart contract | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/VerifierNotesNullifier.sol` |
+| **VerifierAccountsCommitment** | Solidity smart contract | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/VerifierAccountsCommitment.sol` |
+| **VerifierAccountsNullifier** | Solidity smart contract | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/VerifierAccountsNullifier.sol` |
 | **DummyVerifier** | Solidity smart contract (dev) | — | `verifyProof()` (IGroth16Verifier) | — | `tessera-solidity/src/DummyVerifier.sol` |
 | **ToyUser** | Solidity adapter (dev) | — | `depositAndRecord()`, `depositAndRecordWithPermit()` | Bridge, ERC20 Token | `tessera-solidity/src/ToyUser.sol` |
 | **ToyUSDT** | ERC20 token (dev) | — | Standard ERC20 + `mint()` + EIP-2612 `permit()` | — | `tessera-solidity/src/ToyUSDT.sol` |
@@ -41,8 +43,10 @@ All routes are `POST`:
 | `TESSERA_OPERATOR_KEY` | *required* | Operator private key (hex) |
 | `TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS` | *required* | Bridge contract address |
 | `TESSERA_CHAIN_ID` | *required* | Chain ID |
-| `TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH` | *required* | Path to commitment tree prover artifacts |
-| `TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH` | *required* | Path to nullifier tree prover artifacts |
+| `TESSERA_NOTES_COMMITMENT_ARTIFACTS_PATH` | *required* | Path to notes-commitment tree prover artifacts |
+| `TESSERA_ACCOUNTS_COMMITMENT_ARTIFACTS_PATH` | *required* | Path to accounts-commitment tree prover artifacts |
+| `TESSERA_NOTES_NULLIFIER_ARTIFACTS_PATH` | *required* | Path to notes-nullifier tree prover artifacts |
+| `TESSERA_ACCOUNTS_NULLIFIER_ARTIFACTS_PATH` | *required* | Path to accounts-nullifier tree prover artifacts |
 | `TESSERA_POLL_INTERVAL_SECS` | `12` | On-chain polling interval |
 | `TESSERA_BATCH_TIMEOUT_SECS` | `12` | Max wait before flushing a partial batch (sequencer pads with deterministic dummies) |
 | `TESSERA_SEQUENCER_API_ADDR` | `127.0.0.1:8081` | Sequencer HTTP bind address |
@@ -55,7 +59,10 @@ All routes are `POST`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH` | *required* | Path to commitment tree artifacts |
-| `TESSERA_NULLIFIER_TREE_ARTIFACTS_PATH` | *required* | Path to nullifier tree artifacts |
-| `TESSERA_BATCH_SIZE` | `128` | Batch size (must match circuit) |
+| `TESSERA_NOTES_COMMITMENT_ARTIFACTS_PATH` | *required* | Path to notes-commitment tree artifacts |
+| `TESSERA_ACCOUNTS_COMMITMENT_ARTIFACTS_PATH` | *required* | Path to accounts-commitment tree artifacts |
+| `TESSERA_NOTES_NULLIFIER_ARTIFACTS_PATH` | *required* | Path to notes-nullifier tree artifacts |
+| `TESSERA_ACCOUNTS_NULLIFIER_ARTIFACTS_PATH` | *required* | Path to accounts-nullifier tree artifacts |
+| `TESSERA_NOTE_BATCH_SIZE` | `128` | Note-tree batch size (must match circuit) |
+| `TESSERA_ACCOUNT_BATCH_SIZE` | `16` | Account-tree batch size (must equal `NOTE_BATCH_SIZE / 8`) |
 | `TESSERA_PROVER_API_ADDR` | `127.0.0.1:8091` | Prover HTTP bind address |

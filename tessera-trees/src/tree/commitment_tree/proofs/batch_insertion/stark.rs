@@ -14,7 +14,7 @@ use plonky2::{
 
 use crate::tree::{
 	BatchCommitmentProof,
-	hasher::{DataCommitment, MerkleHash, MerkleHashCircuit, ToHashOut},
+	hasher::{MerkleHash, MerkleHashCircuit, ToHashOut},
 };
 
 pub struct BatchCommitmentProofTargets {
@@ -33,23 +33,15 @@ impl BatchCommitmentProofTargets {
 	/// * `builder` - The circuit builder
 	/// * `depth` - The Merkle tree depth
 	/// * `batch_size` - Number of leaves in the batch (must be power of two)
-	/// * `commit` - If `Some`, all proof data is private and committed via the provided
-	///   [`DataCommitment`]; if `None`, proof data is exposed directly as public inputs.
 	///
 	/// # Public Inputs
 	///
-	/// When `commit == Some(...)`:
-	/// - Commitment output (size depends on the [`DataCommitment`] implementation)
-	/// - Preimage: `root_old || root_new || leaves[0] || ... || leaves[n-1]`
-	///
-	/// When `commit == None`:
-	/// - root_old, root_new, and all leaves exposed directly
-	/// - Total: (batch_size + 2) * 4 Goldilocks elements
+	/// `root_old`, `root_new`, and all leaves are exposed directly as public inputs.
+	/// Total: `(batch_size + 2) × 4` Goldilocks field elements.
 	pub fn new<F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
 		depth: usize,
 		batch_size: usize,
-		commit: Option<&dyn DataCommitment<F, D>>,
 	) -> Self
 	where
 		F: Field + RichField + Extendable<D>,
@@ -58,34 +50,10 @@ impl BatchCommitmentProofTargets {
 
 		let log_batch: usize = batch_size.trailing_zeros() as usize;
 
-		// Allocate targets - private if committing, public otherwise
-		let (root_old, root_new, leaves) = if let Some(commitment) = commit {
-			let root_old: HashOutTarget = builder.add_virtual_hash();
-			let root_new: HashOutTarget = builder.add_virtual_hash();
-			let leaves: Vec<HashOutTarget> = builder.add_virtual_hashes(batch_size);
-
-			// Compute commitment = H(root_old || root_new || leaves)
-			let mut preimage: Vec<Target> = Vec::with_capacity((batch_size + 2) * 4);
-			preimage.extend_from_slice(&root_old.elements);
-			preimage.extend_from_slice(&root_new.elements);
-			for leaf in &leaves {
-				preimage.extend_from_slice(&leaf.elements);
-			}
-			commitment.commit_public_inputs(builder, preimage);
-
-			(root_old, root_new, leaves)
-		} else {
-			(
-				builder.add_virtual_hash_public_input(),
-				builder.add_virtual_hash_public_input(),
-				builder.add_virtual_hashes_public_input(batch_size),
-			)
-		};
-
 		Self {
-			leaves,
-			root_old,
-			root_new,
+			root_old: builder.add_virtual_hash_public_input(),
+			root_new: builder.add_virtual_hash_public_input(),
+			leaves: builder.add_virtual_hashes_public_input(batch_size),
 			start_index: builder.add_virtual_target(),
 			upper_siblings_old: builder.add_virtual_hashes(depth - log_batch),
 			upper_siblings_new: builder.add_virtual_hashes(depth - log_batch),
@@ -257,14 +225,17 @@ mod test {
 
 	use crate::tree::{
 		BatchCommitmentProofTargets, CommitmentTree,
-		hasher::{DataCommitment, Hash, NewRandom, PoseidonCommitment},
+		hasher::{Hash, NewRandom},
 	};
 
 	const D: usize = 2;
 	pub type C = PoseidonGoldilocksConfig;
 	pub type F = GoldilocksField;
 
-	fn run_batch_insert_test(commit: Option<&dyn DataCommitment<F, D>>) -> Result<()> {
+	#[test]
+	fn test_batch_insert() -> Result<()> {
+		println!("=== Batch Insert Proof (raw PI) ===\n");
+
 		const DEPTH: usize = 32;
 		const BATCH_SIZE: usize = 4096;
 
@@ -292,7 +263,7 @@ mod test {
 		print!("Alloc Targets: ");
 		let now: Instant = Instant::now();
 		let targets: BatchCommitmentProofTargets =
-			BatchCommitmentProofTargets::new(&mut builder, DEPTH, BATCH_SIZE, commit);
+			BatchCommitmentProofTargets::new(&mut builder, DEPTH, BATCH_SIZE);
 		println!("{:?}", now.elapsed());
 
 		print!("Connect: ");
@@ -316,9 +287,15 @@ mod test {
 		let circuit_proof = data.prove(pw)?;
 		println!("{:?}", now.elapsed());
 
-		println!("proof.pi: {}", circuit_proof.public_inputs.len());
+		// Raw PI: (batch_size + 2) × 4 = (4096 + 2) × 4 = 16392 field elements
+		assert_eq!(circuit_proof.public_inputs.len(), (BATCH_SIZE + 2) * 4);
+
 		let bytes = circuit_proof.to_bytes();
-		println!("size: {}KB", bytes.len() >> 10);
+		println!(
+			"proof.pi: {}, size: {}KB",
+			circuit_proof.public_inputs.len(),
+			bytes.len() >> 10
+		);
 
 		let proof_compressed = data.compress(circuit_proof)?;
 		let bytes = proof_compressed.to_bytes();
@@ -331,17 +308,5 @@ mod test {
 		println!("{:?}", now.elapsed());
 
 		Ok(())
-	}
-
-	#[test]
-	fn test_batch_insert_with_commitment() -> Result<()> {
-		println!("=== Batch Insert Proof (with commitment) ===\n");
-		run_batch_insert_test(Some(&PoseidonCommitment))
-	}
-
-	#[test]
-	fn test_batch_insert_without_commitment() -> Result<()> {
-		println!("=== Batch Insert Proof (without commitment) ===\n");
-		run_batch_insert_test(None)
 	}
 }

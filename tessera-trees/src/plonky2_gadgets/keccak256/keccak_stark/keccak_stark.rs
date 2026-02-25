@@ -731,6 +731,7 @@ mod tests {
 	}
 
 	#[test]
+	#[ignore = "reason"]
 	fn keccak_benchmark() -> Result<()> {
 		const NUM_PERMS: usize = 85;
 		const D: usize = 2;

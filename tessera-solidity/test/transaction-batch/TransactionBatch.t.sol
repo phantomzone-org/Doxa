@@ -33,7 +33,10 @@ contract TransactionBatchTest is Test {
     bytes32 public constant GENESIS_COMMITMENT_ROOT  = bytes32(uint256(0x2222));
     bytes32 public constant GENESIS_ACC_NULL_ROOT    = bytes32(uint256(0x3333));
     bytes32 public constant GENESIS_ACC_COMMIT_ROOT  = bytes32(uint256(0x4444));
-    uint256 public constant BATCH_SIZE = 2;
+
+    // noteBatchSize = 8, accountBatchSize = 1 (enforces 8:1 ratio).
+    uint256 public constant NOTE_BATCH_SIZE    = 8;
+    uint256 public constant ACCOUNT_BATCH_SIZE = 1;
 
     // Convenient root progression values.
     bytes32 constant ROOT_NC_1 = bytes32(uint256(0xA1));
@@ -46,43 +49,33 @@ contract TransactionBatchTest is Test {
     bytes32 constant ROOT_AC_2 = bytes32(uint256(0xC2));
     bytes32 constant ROOT_AN_2 = bytes32(uint256(0xD2));
 
-    // Dummy PI commitments (any non-zero bytes32).
-    bytes32[4] public PI_1;
-    bytes32[4] public PI_2;
-
-    // Dummy leaf arrays (length 1 to satisfy 0 < len <= batchSize with BATCH_SIZE=2).
-    bytes32[] public LEAVES_1;
-    bytes32[] public LEAVES_2;
+    // Dummy leaf arrays for note trees (length 1, satisfies 0 < len <= NOTE_BATCH_SIZE).
+    bytes32[] public NOTE_LEAVES_1;
+    bytes32[] public NOTE_LEAVES_2;
+    // Dummy leaf arrays for account trees (length 1, satisfies 0 < len <= ACCOUNT_BATCH_SIZE = 1).
+    bytes32[] public ACCT_LEAVES_1;
+    bytes32[] public ACCT_LEAVES_2;
 
     function setUp() public {
         MockVerifierOk verifierOk = new MockVerifierOk();
         token = new ToyUSDT();
 
         bridge = new DepositsRollupBridge(
-            address(verifierOk),
-            address(verifierOk),
-            address(verifierOk),
+            address(verifierOk),  // superAggregatorVerifier
             operator,
             GENESIS_NULLIFIER_ROOT,
             GENESIS_COMMITMENT_ROOT,
             GENESIS_ACC_NULL_ROOT,
             GENESIS_ACC_COMMIT_ROOT,
-            BATCH_SIZE,
+            NOTE_BATCH_SIZE,
+            ACCOUNT_BATCH_SIZE,
             address(token)
         );
 
-        PI_1[0] = bytes32(uint256(0x11));
-        PI_1[1] = bytes32(uint256(0x12));
-        PI_1[2] = bytes32(uint256(0x13));
-        PI_1[3] = bytes32(uint256(0x14));
-
-        PI_2[0] = bytes32(uint256(0x21));
-        PI_2[1] = bytes32(uint256(0x22));
-        PI_2[2] = bytes32(uint256(0x23));
-        PI_2[3] = bytes32(uint256(0x24));
-
-        LEAVES_1.push(bytes32(uint256(0xF1)));
-        LEAVES_2.push(bytes32(uint256(0xF2)));
+        NOTE_LEAVES_1.push(bytes32(uint256(0xF1)));
+        NOTE_LEAVES_2.push(bytes32(uint256(0xF2)));
+        ACCT_LEAVES_1.push(bytes32(uint256(0xE1)));
+        ACCT_LEAVES_2.push(bytes32(uint256(0xE2)));
     }
 
     // -------------------------------------------------------------------------
@@ -102,25 +95,19 @@ contract TransactionBatchTest is Test {
         bytes32 ncRoot,
         bytes32 nnRoot,
         bytes32 acRoot,
-        bytes32 anRoot,
-        bytes32[4] memory pi
+        bytes32 anRoot
     ) internal returns (uint256) {
         return bridge.registerTransactionBatchUpdate(
-            ncRoot, LEAVES_1,
-            nnRoot, LEAVES_1,
-            acRoot, LEAVES_1,
-            anRoot, LEAVES_1,
-            pi
+            ncRoot, NOTE_LEAVES_1,
+            nnRoot, NOTE_LEAVES_1,
+            acRoot, ACCT_LEAVES_1,
+            anRoot, ACCT_LEAVES_1
         );
     }
 
-    /// Confirm all 4 trees for a batch.
+    /// Confirm a batch (single confirmBatch replaces the previous five confirmation calls).
     function _confirmAll(uint256 batchId) internal {
-        DepositsRollupBridge.Proof memory p = _dummyProof();
-        bridge.confirmTreeUpdate(batchId, bridge.TREE_NOTES_COMMITMENT(),    p, p);
-        bridge.confirmTreeUpdate(batchId, bridge.TREE_NOTES_NULLIFIER(),     p, p);
-        bridge.confirmTreeUpdate(batchId, bridge.TREE_ACCOUNTS_COMMITMENT(), p, p);
-        bridge.confirmTreeUpdate(batchId, bridge.TREE_ACCOUNTS_NULLIFIER(),  p, p);
+        bridge.confirmBatch(batchId, _dummyProof());
     }
 
     // -------------------------------------------------------------------------
@@ -136,8 +123,13 @@ contract TransactionBatchTest is Test {
 
     function testConstruction_NextBatchIdStartsAtOne() public {
         // First register should return batchId = 1.
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         assertEq(id, 1);
+    }
+
+    function testConstruction_BatchSizes() public view {
+        assertEq(bridge.noteBatchSize(),    NOTE_BATCH_SIZE);
+        assertEq(bridge.accountBatchSize(), ACCOUNT_BATCH_SIZE);
     }
 
     // -------------------------------------------------------------------------
@@ -145,15 +137,15 @@ contract TransactionBatchTest is Test {
     // -------------------------------------------------------------------------
 
     function testRegister_ReturnsIncrementingBatchIds() public {
-        uint256 id1 = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        uint256 id1 = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         _confirmAll(id1);
-        uint256 id2 = _registerBatch(ROOT_NC_2, ROOT_NN_2, ROOT_AC_2, ROOT_AN_2, PI_2);
+        uint256 id2 = _registerBatch(ROOT_NC_2, ROOT_NN_2, ROOT_AC_2, ROOT_AN_2);
         assertEq(id1, 1);
         assertEq(id2, 2);
     }
 
     function testRegister_AdvancesLatestRoots() public {
-        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
 
         assertEq(bridge.notesCommitmentRoot(),    ROOT_NC_1);
         assertEq(bridge.notesNullifierRoot(),     ROOT_NN_1);
@@ -161,10 +153,24 @@ contract TransactionBatchTest is Test {
         assertEq(bridge.accountsNullifierRoot(),  ROOT_AN_1);
     }
 
-    function testRegister_DoesNotAdvanceConfirmedRoots() public {
-        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+    function testRegister_AdvancesLeafCountsByTreeWidth() public {
+        uint256 nc0 = bridge.notesCommitmentLeafCount();
+        uint256 nn0 = bridge.notesNullifierLeafCount();
+        uint256 ac0 = bridge.accountsCommitmentLeafCount();
+        uint256 an0 = bridge.accountsNullifierLeafCount();
 
-        // Confirmed roots unchanged until confirmTreeUpdate.
+        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
+
+        assertEq(bridge.notesCommitmentLeafCount(),    nc0 + NOTE_BATCH_SIZE);
+        assertEq(bridge.notesNullifierLeafCount(),     nn0 + NOTE_BATCH_SIZE);
+        assertEq(bridge.accountsCommitmentLeafCount(), ac0 + ACCOUNT_BATCH_SIZE);
+        assertEq(bridge.accountsNullifierLeafCount(),  an0 + ACCOUNT_BATCH_SIZE);
+    }
+
+    function testRegister_DoesNotAdvanceConfirmedRoots() public {
+        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
+
+        // Confirmed roots unchanged until confirmBatch is called.
         assertEq(bridge.confirmedNotesCommitmentRoot(),    GENESIS_COMMITMENT_ROOT);
         assertEq(bridge.confirmedNotesNullifierRoot(),     GENESIS_NULLIFIER_ROOT);
         assertEq(bridge.confirmedAccountsCommitmentRoot(), GENESIS_ACC_COMMIT_ROOT);
@@ -172,7 +178,7 @@ contract TransactionBatchTest is Test {
     }
 
     function testRegister_SlotPopulatedCorrectly() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         uint256 slotIdx = id % bridge.MAX_PENDING_BATCHES();
 
         (
@@ -181,7 +187,8 @@ contract TransactionBatchTest is Test {
             bytes32 nnRoot,
             bytes32 acRoot,
             bytes32 anRoot,
-            uint8 mask
+            ,
+            bool confirmed
         ) = bridge.pendingBatches(slotIdx);
 
         assertEq(storedId, id);
@@ -189,15 +196,16 @@ contract TransactionBatchTest is Test {
         assertEq(nnRoot, ROOT_NN_1);
         assertEq(acRoot, ROOT_AC_1);
         assertEq(anRoot, ROOT_AN_1);
-        assertEq(mask, 0);
+        assertFalse(confirmed);
     }
 
     function testRegister_EmitsEvent() public {
-        vm.expectEmit(true, false, false, true);
+        // Only check the indexed batchId; superPiCommitment is computed inside the contract.
+        vm.expectEmit(true, false, false, false);
         emit DepositsRollupBridge.TransactionBatchRegistered(
-            1, ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1
+            1, ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, bytes32(0)
         );
-        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
     }
 
     function testRegister_MarksTrackedDepositsValidated() public {
@@ -217,10 +225,9 @@ contract TransactionBatchTest is Test {
 
         bridge.registerTransactionBatchUpdate(
             ROOT_NC_1, notesOut,
-            ROOT_NN_1, LEAVES_1,
-            ROOT_AC_1, LEAVES_1,
-            ROOT_AN_1, LEAVES_1,
-            PI_1
+            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_AC_1, ACCT_LEAVES_1,
+            ROOT_AN_1, ACCT_LEAVES_1
         );
 
         assertEq(
@@ -230,30 +237,28 @@ contract TransactionBatchTest is Test {
     }
 
     // -------------------------------------------------------------------------
-    // registerTransactionBatchUpdate — validation errors
+    // registerTransactionBatchUpdate — validation errors (mixed-width)
     // -------------------------------------------------------------------------
 
-    function testRegister_RevertsOnZeroLengthArray() public {
-        bytes32[] memory empty = new bytes32[](0);
-        vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidBatchLength.selector, 0, BATCH_SIZE));
+    function testRegister_RevertsOnOversizedNoteArray() public {
+        bytes32[] memory big = new bytes32[](NOTE_BATCH_SIZE + 1);
+        vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidBatchLength.selector, NOTE_BATCH_SIZE + 1, NOTE_BATCH_SIZE));
         bridge.registerTransactionBatchUpdate(
-            ROOT_NC_1, empty,
-            ROOT_NN_1, LEAVES_1,
-            ROOT_AC_1, LEAVES_1,
-            ROOT_AN_1, LEAVES_1,
-            PI_1
+            ROOT_NC_1, big,
+            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_AC_1, ACCT_LEAVES_1,
+            ROOT_AN_1, ACCT_LEAVES_1
         );
     }
 
-    function testRegister_RevertsOnOversizedArray() public {
-        bytes32[] memory big = new bytes32[](BATCH_SIZE + 1);
-        vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidBatchLength.selector, BATCH_SIZE + 1, BATCH_SIZE));
+    function testRegister_RevertsOnOversizedAccountArray() public {
+        bytes32[] memory big = new bytes32[](ACCOUNT_BATCH_SIZE + 1);
+        vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidBatchLength.selector, ACCOUNT_BATCH_SIZE + 1, ACCOUNT_BATCH_SIZE));
         bridge.registerTransactionBatchUpdate(
-            ROOT_NC_1, big,
-            ROOT_NN_1, LEAVES_1,
-            ROOT_AC_1, LEAVES_1,
-            ROOT_AN_1, LEAVES_1,
-            PI_1
+            ROOT_NC_1, NOTE_LEAVES_1,
+            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_AC_1, big,
+            ROOT_AN_1, ACCT_LEAVES_1
         );
     }
 
@@ -276,17 +281,16 @@ contract TransactionBatchTest is Test {
         vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidDepositState.selector, note));
         bridge.registerTransactionBatchUpdate(
             ROOT_NC_1, notesOut,
-            ROOT_NN_1, LEAVES_1,
-            ROOT_AC_1, LEAVES_1,
-            ROOT_AN_1, LEAVES_1,
-            PI_1
+            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_AC_1, ACCT_LEAVES_1,
+            ROOT_AN_1, ACCT_LEAVES_1
         );
     }
 
     function testRegister_RevertsOnNonOperator() public {
         vm.prank(address(0xDEAD));
         vm.expectRevert(DepositsRollupBridge.NotOperator.selector);
-        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
     }
 
     // -------------------------------------------------------------------------
@@ -298,142 +302,102 @@ contract TransactionBatchTest is Test {
         // Fill the queue.
         for (uint256 i = 0; i < max; i++) {
             bytes32 r = bytes32(i + 1);
-            _registerBatch(r, r, r, r, PI_1);
+            _registerBatch(r, r, r, r);
         }
         vm.expectRevert(DepositsRollupBridge.PendingQueueFull.selector);
-        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
     }
 
     // -------------------------------------------------------------------------
-    // confirmTreeUpdate — happy path
+    // confirmBatch — happy path
     // -------------------------------------------------------------------------
 
-    function testConfirm_AdvancesConfirmedRootPerTree() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+    function testConfirm_ConfirmedRootsAdvanceAtomicallyAfterBatch() public {
+        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         DepositsRollupBridge.Proof memory p = _dummyProof();
 
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_COMMITMENT(), p, p);
-        assertEq(bridge.confirmedNotesCommitmentRoot(), ROOT_NC_1);
-        assertEq(bridge.confirmedNotesNullifierRoot(), GENESIS_NULLIFIER_ROOT); // unchanged
+        // Confirmed roots must NOT advance after register alone.
+        assertEq(bridge.confirmedNotesCommitmentRoot(),    GENESIS_COMMITMENT_ROOT);
+        assertEq(bridge.confirmedNotesNullifierRoot(),     GENESIS_NULLIFIER_ROOT);
+        assertEq(bridge.confirmedAccountsCommitmentRoot(), GENESIS_ACC_COMMIT_ROOT);
+        assertEq(bridge.confirmedAccountsNullifierRoot(),  GENESIS_ACC_NULL_ROOT);
 
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_NULLIFIER(), p, p);
-        assertEq(bridge.confirmedNotesNullifierRoot(), ROOT_NN_1);
-
-        bridge.confirmTreeUpdate(id, bridge.TREE_ACCOUNTS_COMMITMENT(), p, p);
+        // All 4 confirmed roots advance atomically after confirmBatch.
+        bridge.confirmBatch(id, p);
+        assertEq(bridge.confirmedNotesCommitmentRoot(),    ROOT_NC_1);
+        assertEq(bridge.confirmedNotesNullifierRoot(),     ROOT_NN_1);
         assertEq(bridge.confirmedAccountsCommitmentRoot(), ROOT_AC_1);
-
-        bridge.confirmTreeUpdate(id, bridge.TREE_ACCOUNTS_NULLIFIER(), p, p);
-        assertEq(bridge.confirmedAccountsNullifierRoot(), ROOT_AN_1);
+        assertEq(bridge.confirmedAccountsNullifierRoot(),  ROOT_AN_1);
     }
 
-    function testConfirm_EmitsTreeUpdateConfirmedEvents() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
-        DepositsRollupBridge.Proof memory p = _dummyProof();
-
-        vm.expectEmit(true, false, false, true);
-        emit DepositsRollupBridge.TreeUpdateConfirmed(id, bridge.TREE_NOTES_COMMITMENT());
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_COMMITMENT(), p, p);
-    }
-
-    function testConfirm_EmitsTransactionBatchConfirmedOnLastTree() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
-        DepositsRollupBridge.Proof memory p = _dummyProof();
-
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_COMMITMENT(),    p, p);
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_NULLIFIER(),     p, p);
-        bridge.confirmTreeUpdate(id, bridge.TREE_ACCOUNTS_COMMITMENT(), p, p);
+    function testConfirm_EmitsBatchConfirmedEvent() public {
+        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
 
         vm.expectEmit(true, false, false, false);
-        emit DepositsRollupBridge.TransactionBatchConfirmed(id);
-        bridge.confirmTreeUpdate(id, bridge.TREE_ACCOUNTS_NULLIFIER(), p, p);
+        emit DepositsRollupBridge.BatchConfirmed(id);
+        bridge.confirmBatch(id, _dummyProof());
     }
 
-    function testConfirm_FreesSlotAfterAllFourTrees() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+    function testConfirm_FreesSlotAfterConfirm() public {
+        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         _confirmAll(id);
 
         uint256 slotIdx = id % bridge.MAX_PENDING_BATCHES();
-        (uint256 storedId,,,,, uint8 mask) = bridge.pendingBatches(slotIdx);
+        (uint256 storedId,,,,,, bool confirmed) = bridge.pendingBatches(slotIdx);
         assertEq(storedId, 0);
-        assertEq(mask, 0);
+        assertFalse(confirmed);
     }
 
-    function testConfirm_DecrementsCountOnlyAfterAllFourTrees() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
-        DepositsRollupBridge.Proof memory p = _dummyProof();
-
-        // After 3 confirms the slot is still occupied.
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_COMMITMENT(),    p, p);
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_NULLIFIER(),     p, p);
-        bridge.confirmTreeUpdate(id, bridge.TREE_ACCOUNTS_COMMITMENT(), p, p);
-
-        // Register another batch — if count hadn't decremented yet this is fine (count = 2).
-        _registerBatch(ROOT_NC_2, ROOT_NN_2, ROOT_AC_2, ROOT_AN_2, PI_2);
-
-        // Complete batch 1.
-        bridge.confirmTreeUpdate(id, bridge.TREE_ACCOUNTS_NULLIFIER(), p, p);
-        // Slot freed — batchId 1 slot is now available for recycling.
+    function testConfirm_FreesSlotAllowsNextBatch() public {
+        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         uint256 slotIdx = id % bridge.MAX_PENDING_BATCHES();
-        (uint256 storedId,,,,,) = bridge.pendingBatches(slotIdx);
+
+        // Slot occupied after register.
+        (uint256 storedIdBefore,,,,,,) = bridge.pendingBatches(slotIdx);
+        assertEq(storedIdBefore, id);
+
+        // Register another batch — count is 2, queue not full.
+        _registerBatch(ROOT_NC_2, ROOT_NN_2, ROOT_AC_2, ROOT_AN_2);
+
+        // Confirm batch 1 — slot freed.
+        bridge.confirmBatch(id, _dummyProof());
+
+        // Slot freed.
+        (uint256 storedId,,,,,,) = bridge.pendingBatches(slotIdx);
         assertEq(storedId, 0);
     }
 
     // -------------------------------------------------------------------------
-    // confirmTreeUpdate — out-of-order
+    // confirmBatch — error cases
     // -------------------------------------------------------------------------
-
-    function testConfirm_OutOfOrder_TreesCompleteInAnyOrder() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
-        DepositsRollupBridge.Proof memory p = _dummyProof();
-
-        // Confirm in reverse order: 3, 2, 1, 0.
-        bridge.confirmTreeUpdate(id, bridge.TREE_ACCOUNTS_NULLIFIER(),  p, p);
-        bridge.confirmTreeUpdate(id, bridge.TREE_ACCOUNTS_COMMITMENT(), p, p);
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_NULLIFIER(),     p, p);
-        bridge.confirmTreeUpdate(id, bridge.TREE_NOTES_COMMITMENT(),    p, p);
-
-        uint256 slotIdx = id % bridge.MAX_PENDING_BATCHES();
-        (uint256 storedId,,,,,) = bridge.pendingBatches(slotIdx);
-        assertEq(storedId, 0);
-    }
-
-    // -------------------------------------------------------------------------
-    // confirmTreeUpdate — error cases
-    // -------------------------------------------------------------------------
-
-    function testConfirm_RevertsOnInvalidTreeIndex() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
-        DepositsRollupBridge.Proof memory p = _dummyProof();
-        vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidTreeIndex.selector, 4));
-        bridge.confirmTreeUpdate(id, 4, p, p);
-    }
 
     function testConfirm_RevertsOnUnknownBatch() public {
         DepositsRollupBridge.Proof memory p = _dummyProof();
         // batchId 999 was never registered.
         vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.UnknownBatch.selector, 999));
-        bridge.confirmTreeUpdate(999, 0, p, p);
+        bridge.confirmBatch(999, p);
     }
 
     function testConfirm_RevertsOnAlreadyConfirmed() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         DepositsRollupBridge.Proof memory p = _dummyProof();
 
-        uint8 treeIdx = bridge.TREE_NOTES_COMMITMENT(); // cache before expectRevert trap is set
-        bridge.confirmTreeUpdate(id, treeIdx, p, p);
+        bridge.confirmBatch(id, p);
 
+        // After finalization the slot is freed (batchId reset to 0), so a second call
+        // cannot find the batch and reverts with UnknownBatch.
         vm.expectRevert(
-            abi.encodeWithSelector(DepositsRollupBridge.AlreadyConfirmed.selector, id, treeIdx)
+            abi.encodeWithSelector(DepositsRollupBridge.UnknownBatch.selector, id)
         );
-        bridge.confirmTreeUpdate(id, treeIdx, p, p);
+        bridge.confirmBatch(id, p);
     }
 
     function testConfirm_RevertsOnNonOperator() public {
-        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        uint256 id = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         DepositsRollupBridge.Proof memory p = _dummyProof();
         vm.prank(address(0xDEAD));
         vm.expectRevert(DepositsRollupBridge.NotOperator.selector);
-        bridge.confirmTreeUpdate(id, 0, p, p);
+        bridge.confirmBatch(id, p);
     }
 
     // -------------------------------------------------------------------------
@@ -441,7 +405,7 @@ contract TransactionBatchTest is Test {
     // -------------------------------------------------------------------------
 
     function testSlotRecycling_ReusedAfterFullConfirmation() public {
-        uint256 id1 = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1, PI_1);
+        uint256 id1 = _registerBatch(ROOT_NC_1, ROOT_NN_1, ROOT_AC_1, ROOT_AN_1);
         _confirmAll(id1);
 
         // MAX_PENDING_BATCHES = 128; batchId 129 maps to slot 129 % 128 = 1 (same as batchId 1).
@@ -449,83 +413,52 @@ contract TransactionBatchTest is Test {
         uint256 max = bridge.MAX_PENDING_BATCHES();
         for (uint256 i = 1; i < max; i++) {
             bytes32 r = bytes32(i + 100);
-            _registerBatch(r, r, r, r, PI_1);
+            _registerBatch(r, r, r, r);
         }
-        // All 128 slots (slots 2..128 + 1 recycled slot 1) now occupied — except slot 1 was freed.
-        // Actually slots 2..128 are occupied (127 batches), slot 1 is free.
         // batchId is now 129; slotIndex = 129 % 128 = 1 — the freed slot.
-        uint256 id129 = _registerBatch(ROOT_NC_2, ROOT_NN_2, ROOT_AC_2, ROOT_AN_2, PI_2);
-        assertEq(id129, max + 1); // batchId = 128 + 1
-        assertEq(id129 % max, 1); // same slot as batch 1
-        (uint256 storedId,,,,,) = bridge.pendingBatches(1);
+        uint256 id129 = _registerBatch(ROOT_NC_2, ROOT_NN_2, ROOT_AC_2, ROOT_AN_2);
+        assertEq(id129, max + 1);
+        assertEq(id129 % max, 1);
+        (uint256 storedId,,,,,,) = bridge.pendingBatches(1);
         assertEq(storedId, id129);
     }
 
     // -------------------------------------------------------------------------
-    // Proof failure via MockVerifierRevert (requires deploying a new bridge)
+    // Proof failure via MockVerifierRevert
     // -------------------------------------------------------------------------
 
-    function testConfirm_RevertsOnBadInputsProof() public {
-        // Deploy bridge where aggregatedInputVerifier always reverts.
-        MockVerifierOk verifierOk = new MockVerifierOk();
+    function testConfirm_RevertsOnBadProof() public {
         MockVerifierRevert verifierBad = new MockVerifierRevert();
 
         DepositsRollupBridge badBridge = new DepositsRollupBridge(
-            address(verifierOk),
-            address(verifierOk),
-            address(verifierBad), // aggregatedInputVerifier always reverts
+            address(verifierBad), // superAggregatorVerifier always reverts
             operator,
             GENESIS_NULLIFIER_ROOT,
             GENESIS_COMMITMENT_ROOT,
             GENESIS_ACC_NULL_ROOT,
             GENESIS_ACC_COMMIT_ROOT,
-            BATCH_SIZE,
+            NOTE_BATCH_SIZE,
+            ACCOUNT_BATCH_SIZE,
             address(token)
         );
 
         uint256 id = badBridge.registerTransactionBatchUpdate(
-            ROOT_NC_1, LEAVES_1,
-            ROOT_NN_1, LEAVES_1,
-            ROOT_AC_1, LEAVES_1,
-            ROOT_AN_1, LEAVES_1,
-            PI_1
+            ROOT_NC_1, NOTE_LEAVES_1,
+            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_AC_1, ACCT_LEAVES_1,
+            ROOT_AN_1, ACCT_LEAVES_1
         );
+
+        // Read the exact commitment stored for this batch so the expected revert data matches.
+        (bytes32 commitment, uint256[8] memory pubInputs) = badBridge.getBatchDebugInfo(id);
 
         DepositsRollupBridge.Proof memory p = _dummyProof();
-        vm.expectRevert(DepositsRollupBridge.InvalidinputsProof.selector);
-        badBridge.confirmTreeUpdate(id, 0, p, p);
-    }
-
-    function testConfirm_RevertsOnBadTreeProof() public {
-        MockVerifierOk verifierOk = new MockVerifierOk();
-        MockVerifierRevert verifierBad = new MockVerifierRevert();
-
-        // Commitment verifier reverts; nullifier OK.
-        DepositsRollupBridge badBridge = new DepositsRollupBridge(
-            address(verifierBad), // commitmentVerifier always reverts
-            address(verifierOk),
-            address(verifierOk),
-            operator,
-            GENESIS_NULLIFIER_ROOT,
-            GENESIS_COMMITMENT_ROOT,
-            GENESIS_ACC_NULL_ROOT,
-            GENESIS_ACC_COMMIT_ROOT,
-            BATCH_SIZE,
-            address(token)
-        );
-
-        uint256 id = badBridge.registerTransactionBatchUpdate(
-            ROOT_NC_1, LEAVES_1,
-            ROOT_NN_1, LEAVES_1,
-            ROOT_AC_1, LEAVES_1,
-            ROOT_AN_1, LEAVES_1,
-            PI_1
-        );
-
-        DepositsRollupBridge.Proof memory p = _dummyProof();
-        // Confirming a commitment tree (index 0) should fail on tree proof.
-        vm.expectRevert(DepositsRollupBridge.InvalidProof.selector);
-        badBridge.confirmTreeUpdate(id, 0, p, p);
+        vm.expectRevert(abi.encodeWithSelector(
+            DepositsRollupBridge.ProofVerificationFailed.selector,
+            commitment,
+            pubInputs
+        ));
+        badBridge.confirmBatch(id, p);
     }
 
     // -------------------------------------------------------------------------
@@ -548,10 +481,9 @@ contract TransactionBatchTest is Test {
         notesOut[0] = note;
         bridge.registerTransactionBatchUpdate(
             ROOT_NC_1, notesOut,
-            ROOT_NN_1, LEAVES_1,
-            ROOT_AC_1, LEAVES_1,
-            ROOT_AN_1, LEAVES_1,
-            PI_1
+            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_AC_1, ACCT_LEAVES_1,
+            ROOT_AN_1, ACCT_LEAVES_1
         );
 
         // Deposit is now Validated; withdrawal should revert.

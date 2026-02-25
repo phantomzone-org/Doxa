@@ -4,9 +4,16 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 
-import {Verifier as ArtifactCommitmentVerifier} from "../fixtures/VerifierCommitmentArtifact.sol";
-import {Verifier as ArtifactNullifierVerifier} from "../fixtures/VerifierNullifierArtifact.sol";
+import {Verifier as ArtifactSuperAggregatorVerifier} from "../fixtures/VerifierSuperAggregatorArtifact.sol";
 
+/// @notice Verifies the super-aggregator Groth16 proof artifact produced by
+///         `cargo run --bin super_aggregator_artifacts --release` (Step 18).
+/// @dev These tests require Step 18 artifacts to be built first. Run:
+///      cargo run --bin super_aggregator_artifacts --release
+///      cp tessera-server/artifacts/super-aggregator/groth-artifacts/VerifierSuperAggregator.sol \
+///         tessera-solidity/src/VerifierSuperAggregator.sol
+///      cp tessera-server/artifacts/super-aggregator/groth-artifacts/VerifierSuperAggregator.sol \
+///         tessera-solidity/test/fixtures/VerifierSuperAggregatorArtifact.sol
 contract Groth16VerifierTest is Test {
     using stdJson for string;
 
@@ -17,10 +24,10 @@ contract Groth16VerifierTest is Test {
         uint256[8] publicInputs;
     }
 
-    function testCommitmentVerifier_AcceptsArtifactProof() public {
-        ArtifactCommitmentVerifier verifier = new ArtifactCommitmentVerifier();
+    function testSuperAggregatorVerifier_AcceptsArtifactProof() public {
+        ArtifactSuperAggregatorVerifier verifier = new ArtifactSuperAggregatorVerifier();
         ProofFixture memory fixture =
-            _loadFixture("../tessera-server/artifacts/commitment-tree/groth-artifacts/proof_solidity.json");
+            _loadFixture("../tessera-server/artifacts/super-aggregator/groth-artifacts/proof_solidity.json");
 
         verifier.verifyProof(
             fixture.proof,
@@ -30,23 +37,10 @@ contract Groth16VerifierTest is Test {
         );
     }
 
-    function testNullifierVerifier_AcceptsArtifactProof() public {
-        ArtifactNullifierVerifier verifier = new ArtifactNullifierVerifier();
+    function testSuperAggregatorVerifier_RejectsTamperedPublicInput() public {
+        ArtifactSuperAggregatorVerifier verifier = new ArtifactSuperAggregatorVerifier();
         ProofFixture memory fixture =
-            _loadFixture("../tessera-server/artifacts/nullifier-tree/groth-artifacts/proof_solidity.json");
-
-        verifier.verifyProof(
-            fixture.proof,
-            fixture.commitments,
-            fixture.commitmentPok,
-            fixture.publicInputs
-        );
-    }
-
-    function testCommitmentVerifier_RejectsTamperedPublicInput() public {
-        ArtifactCommitmentVerifier verifier = new ArtifactCommitmentVerifier();
-        ProofFixture memory fixture =
-            _loadFixture("../tessera-server/artifacts/commitment-tree/groth-artifacts/proof_solidity.json");
+            _loadFixture("../tessera-server/artifacts/super-aggregator/groth-artifacts/proof_solidity.json");
 
         fixture.publicInputs[0] = fixture.publicInputs[0] + 1;
 

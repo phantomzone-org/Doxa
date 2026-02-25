@@ -8,7 +8,7 @@
 | **W4** | [Withdrawal of Pending Deposit](07-w4-withdrawal.md) | User reclaims escrowed tokens before their note is included in a finalized batch. Status: `Pending → Withdrawn`. | `TesseraRollup.sol` |
 | **W5** | [Sequencer Recovery from Chain](08-w5-sequencer-recovery.md) | Two-pass recovery: (1) replays `ValidatedBatchFinalized` events to rebuild confirmed tree roots; (2) replays `TransactionBatchRegistered` events to rebuild pending two-phase batches and re-queue unconfirmed prove jobs. | `recovery.rs`, `tree_store/mod.rs` |
 | **W6** | [Prover Proof Generation](09-w6-prover-pipeline.md) | Prover receives a `ProveRequest` (with `batch_id` and `tree_index`), runs the Plonky2 → BN128 → Groth16 pipeline, and returns a `ProveOutcome`. Circuit selected by `tree_index`. | `prover.rs`, `wrapper.rs` |
-| **W7** | [Generic Proof Aggregator (Plan)](13-generic-proof-aggregator-plan.md) | Planned generic recursive aggregator for independent proofs: configurable arity `2^k`, depth `d`, outputs one aggregated proof from `(2^k)^d` leaves with artifact-based fast initialization. | `tessera-trees/proof_aggregation/*` |
+| **W7** | [Streaming Aggregation Pipeline](12-streaming-aggregation-pipeline.md) | Streaming recursive aggregator: leaf proofs are dispatched bottom-up as children arrive, proved by a pool of local or remote workers (`NodeProverPool`), and produce a single aggregated root proof. Configurable arity and depth; artifact-based initialization. The `aggregation_prover` binary exposes a stateless HTTP server for distributed node proving. | `tessera-trees/proof_aggregation/*`, `tessera-server/src/aggregation_pipeline/*`, `tessera-server/src/bin/aggregation_prover.rs` |
 
 ## Deposit Lifecycle State Machine
 

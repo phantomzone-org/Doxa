@@ -5,8 +5,12 @@
 
 mod artifacts;
 pub mod generic;
+pub mod node_prover;
+pub mod super_aggregator;
 
 pub use generic::{
-	AggregatedProof, GenericAggregator, GenericAggregatorConfig, MAX_AGGREGATION_LEAVES,
-	ReducerKind,
+	AggregatedProof, GenericAggregator, GenericAggregatorConfig, LevelCircuit,
+	MAX_AGGREGATION_LEAVES, ReducerKind,
 };
+pub use node_prover::{LocalNodeProver, NodeProver};
+pub use super_aggregator::{SuperAggregator, SuperAggregatorCircuitData};

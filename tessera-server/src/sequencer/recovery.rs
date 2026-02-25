@@ -260,9 +260,9 @@ impl Sequencer {
 				decoded.inner.newRoot,
 				decoded
 					.inner
-					.batchSize
+					.effectiveBatchSize
 					.try_into()
-					.map_err(|_| anyhow::anyhow!("batchSize too large in event"))?,
+					.map_err(|_| anyhow::anyhow!("effectiveBatchSize too large in event"))?,
 				commitments_bytes,
 				key,
 			)?;
@@ -641,7 +641,8 @@ impl Sequencer {
 	pub(super) async fn recover_pending_requests<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
-		batch_size: usize,
+		note_batch_size: usize,
+		account_batch_size: usize,
 	) -> anyhow::Result<()> {
 		let to_block = provider.get_block_number().await?;
 
@@ -691,24 +692,12 @@ impl Sequencer {
 					anyhow::anyhow!("batchId overflow in TransactionBatchRegistered")
 				})?;
 
-			// Query the on-chain slot to get the current confirmedMask.
-			// If slot.batchId != batch_id the slot was freed (all 4 trees confirmed).
+			// Query the on-chain slot to check if the batch is already confirmed.
+			// If slot.batchId != batch_id the slot was freed (batch already confirmed).
 			let slot_index = U256::from(batch_id % MAX_PENDING_BATCHES as u64);
 			let slot = bridge.pendingBatches(slot_index).call().await?;
 			let slot_batch_id: u64 = slot.batchId.try_into().unwrap_or(0);
-			let confirmed_mask: u8 = if slot_batch_id != batch_id {
-				0xF
-			} else {
-				slot.confirmedMask
-			};
-
-			// Get piCommitments from the event (excluded from the Solidity auto-getter).
-			let pi_commitments: [[u8; 32]; 4] = [
-				event.inner.piCommitments[0].into(),
-				event.inner.piCommitments[1].into(),
-				event.inner.piCommitments[2].into(),
-				event.inner.piCommitments[3].into(),
-			];
+			let confirmed: bool = slot_batch_id != batch_id || slot.confirmed;
 
 			// Decode the registerTransactionBatchUpdate calldata to recover leaf data.
 			let tx_hash = log.transaction_hash.ok_or_else(|| {
@@ -750,21 +739,18 @@ impl Sequencer {
 			// subsequent pending batches build on the correct tree state.
 			let is_pending = self.apply_and_requeue_pending_batch(
 				batch_id,
-				confirmed_mask,
-				pi_commitments,
+				confirmed,
 				nc_real,
 				nn_real,
 				ac_real,
 				an_real,
-				batch_size,
+				note_batch_size,
+				account_batch_size,
 			)?;
 
 			if is_pending {
 				recovered_pending += 1;
-				info!(
-					batch_id,
-					confirmed_mask, "recovered pending two-phase batch"
-				);
+				info!(batch_id, confirmed, "recovered pending two-phase batch");
 			} else {
 				recovered_confirmed += 1;
 				debug!(
@@ -784,39 +770,32 @@ impl Sequencer {
 	/// Apply the four trees' leaves for a registered two-phase batch to the local
 	/// in-memory trees, advancing their roots.
 	///
-	/// If `confirmed_mask != 0xF` the batch is still pending: stores a `TxBatch`
-	/// entry and submits prove jobs for each unconfirmed tree.  Returns `true` when
-	/// the batch is pending, `false` when it was already fully confirmed.
+	/// If `confirmed` is `false` the batch is still pending: stores a `TxBatch`
+	/// entry and submits a single [`ProveRequest`] covering all four trees.
+	/// Returns `true` when the batch is pending, `false` when already fully confirmed.
 	///
-	/// **Note on associated_input_proofs**: the original transaction proofs are not
-	/// persisted across restarts.  Recovered prove jobs use a dummy proof for all
-	/// leaves.  For the notes-commitment tree this means the aggregated-input proof
-	/// produced by the prover will not verify on-chain; the other three trees (which
-	/// already used dummy proofs during normal operation) will confirm correctly.
-	/// Slice 7 can address this by persisting the original proofs to the WAL.
+	/// **Note**: the original transaction proofs are not persisted across restarts.
+	/// Recovered prove jobs use dummy proofs for all associated-input leaf slots.
 	#[allow(clippy::too_many_arguments)]
 	fn apply_and_requeue_pending_batch(
 		&mut self,
 		batch_id: u64,
-		confirmed_mask: u8,
-		pi_commitments: [[u8; 32]; 4],
+		confirmed: bool,
 		nc_real: Vec<[u8; 32]>,
 		nn_real: Vec<[u8; 32]>,
 		ac_real: Vec<[u8; 32]>,
 		an_real: Vec<[u8; 32]>,
-		batch_size: usize,
+		note_batch_size: usize,
+		account_batch_size: usize,
 	) -> anyhow::Result<bool> {
-		use crate::types::{
-			ProveRequest, TREE_ACCOUNTS_COMMITMENT, TREE_ACCOUNTS_NULLIFIER, TREE_NOTES_COMMITMENT,
-			TREE_NOTES_NULLIFIER,
-		};
+		use crate::types::ProveRequest;
 
 		// --- Notes commitment (tree 0) ---
 		let nc_start = self.notes_commitment_state.tree.num_leaves();
 		let nc_padded = dummy::pad_leaves(
 			DummyTreeType::NotesCommitment,
 			nc_start,
-			batch_size,
+			note_batch_size,
 			&nc_real,
 		)?;
 		let nc_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nc_padded)?;
@@ -834,7 +813,7 @@ impl Sequencer {
 		let nn_padded = dummy::pad_leaves(
 			DummyTreeType::NotesNullifier,
 			nn_start,
-			batch_size,
+			note_batch_size,
 			&nn_real,
 		)?;
 		let nn_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nn_padded)?;
@@ -852,7 +831,7 @@ impl Sequencer {
 		let ac_padded = dummy::pad_leaves(
 			DummyTreeType::AccountsCommitment,
 			ac_start,
-			batch_size,
+			account_batch_size,
 			&ac_real,
 		)?;
 		let ac_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&ac_padded)?;
@@ -870,7 +849,7 @@ impl Sequencer {
 		let an_padded = dummy::pad_leaves(
 			DummyTreeType::AccountsNullifier,
 			an_start,
-			batch_size,
+			account_batch_size,
 			&an_real,
 		)?;
 		let an_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&an_padded)?;
@@ -884,94 +863,53 @@ impl Sequencer {
 		);
 
 		// Fully confirmed — trees advanced; no prove jobs needed.
-		if confirmed_mask == 0xF {
+		if confirmed {
 			return Ok(false);
 		}
 
-		// Use dummy associated-input proofs for all trees.
-		// The originals (tx_proof bytes) are not persisted across restarts.
-		let assoc = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch_size];
-
+		// Store TxBatch with the new flat per-tree fields.
 		self.registered_pending_batches.insert(
 			batch_id,
 			TxBatch {
 				batch_id,
-				pi_commitments,
-				per_tree: [
-					TxPerTreeBatch {
-						real_commitments_bytes: nc_real,
-						proving_commitments_bytes: nc_padded,
-						proving_commitments_hash: nc_hashes,
-						associated_input_proofs: assoc.clone(),
-					},
-					TxPerTreeBatch {
-						real_commitments_bytes: nn_real,
-						proving_commitments_bytes: nn_padded,
-						proving_commitments_hash: nn_hashes,
-						associated_input_proofs: assoc.clone(),
-					},
-					TxPerTreeBatch {
-						real_commitments_bytes: ac_real,
-						proving_commitments_bytes: ac_padded,
-						proving_commitments_hash: ac_hashes,
-						associated_input_proofs: assoc.clone(),
-					},
-					TxPerTreeBatch {
-						real_commitments_bytes: an_real,
-						proving_commitments_bytes: an_padded,
-						proving_commitments_hash: an_hashes,
-						associated_input_proofs: assoc.clone(),
-					},
-				],
-				local_confirmed_mask: confirmed_mask,
+				nc_requests: vec![],
+				nn_requests: vec![],
+				ac_requests: vec![],
+				an_requests: vec![],
+				nc_batch: TxPerTreeBatch {
+					real_commitments_bytes: nc_real,
+					proving_commitments_bytes: nc_padded,
+					proving_commitments_hash: nc_hashes,
+				},
+				nn_batch: TxPerTreeBatch {
+					real_commitments_bytes: nn_real,
+					proving_commitments_bytes: nn_padded,
+					proving_commitments_hash: nn_hashes,
+				},
+				ac_batch: TxPerTreeBatch {
+					real_commitments_bytes: ac_real,
+					proving_commitments_bytes: ac_padded,
+					proving_commitments_hash: ac_hashes,
+				},
+				an_batch: TxPerTreeBatch {
+					real_commitments_bytes: an_real,
+					proving_commitments_bytes: an_padded,
+					proving_commitments_hash: an_hashes,
+				},
 			},
 		);
 
-		// Submit prove jobs only for unconfirmed trees.
-		if confirmed_mask & (1 << TREE_NOTES_COMMITMENT) == 0 {
-			self.submit_prove_request_with_retry(
-				ProveRequest::Commitment {
-					batch_id,
-					tree_index: TREE_NOTES_COMMITMENT,
-					batch_proof: nc_proof,
-					associated_input_proofs: assoc.clone(),
-				},
-				TreeJob::NotesCommitment,
-			)?;
-		}
-		if confirmed_mask & (1 << TREE_NOTES_NULLIFIER) == 0 {
-			self.submit_prove_request_with_retry(
-				ProveRequest::Nullifier {
-					batch_id,
-					tree_index: TREE_NOTES_NULLIFIER,
-					batch_proof: nn_proof,
-					associated_input_proofs: assoc.clone(),
-				},
-				TreeJob::NotesNullifier,
-			)?;
-		}
-		if confirmed_mask & (1 << TREE_ACCOUNTS_COMMITMENT) == 0 {
-			self.submit_prove_request_with_retry(
-				ProveRequest::Commitment {
-					batch_id,
-					tree_index: TREE_ACCOUNTS_COMMITMENT,
-					batch_proof: ac_proof,
-					associated_input_proofs: assoc.clone(),
-				},
-				TreeJob::AccountsCommitment,
-			)?;
-		}
-		if confirmed_mask & (1 << TREE_ACCOUNTS_NULLIFIER) == 0 {
-			self.submit_prove_request_with_retry(
-				ProveRequest::Nullifier {
-					batch_id,
-					tree_index: TREE_ACCOUNTS_NULLIFIER,
-					batch_proof: an_proof,
-					associated_input_proofs: assoc,
-				},
-				TreeJob::AccountsNullifier,
-			)?;
-		}
+		// Submit a single ProveRequest covering all four trees.
+		// The original tx_proof bytes are not persisted; use dummy proofs for all slots.
+		let associated_tx_proofs = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); account_batch_size];
+		self.submit_prove_request_with_retry(ProveRequest {
+			batch_id,
+			notes_commitment_proof: nc_proof,
+			notes_nullifier_proof: nn_proof,
+			accounts_commitment_proof: ac_proof,
+			accounts_nullifier_proof: an_proof,
+			associated_tx_proofs,
+		})?;
 
 		Ok(true)
 	}

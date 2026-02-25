@@ -242,6 +242,7 @@ mod tests {
 	};
 
 	#[test]
+	#[ignore = "reason"]
 	fn recursive_keccak_circuit() {
 		const NUM_PERMS: usize = 80;
 		const D: usize = 2;

@@ -11,8 +11,7 @@ optimizer_runs = 200
 
 # Allow tests to read proof/calldata JSON from the groth-artifacts directory
 fs_permissions = [
-  { access = "read", path = "../tessera-server/artifacts/commitment-tree/groth-artifacts" },
-  { access = "read", path = "../tessera-server/artifacts/nullifier-tree/groth-artifacts" },
+  { access = "read", path = "../tessera-server/artifacts/super-aggregator/groth-artifacts" },
   { access = "read", path = "src/pending-deposit" }
 ]
 

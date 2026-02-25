@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::{
 	network::EthereumWallet,
@@ -33,36 +33,33 @@ const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Mirror of `MAX_PENDING_BATCHES` in `TesseraRollup.sol`.
 const MAX_PENDING_BATCHES: usize = 128;
 
-struct InFlightBatch {
-	job: TreeJob,
-	requests: Vec<PendingRequest>,
-	real_commitments_bytes: Vec<[u8; 32]>,
-	proving_commitments_bytes: Vec<[u8; 32]>,
-	proving_commitments_hash: Vec<Hash>,
-}
-
-/// Per-tree witness data stored for one slot in an in-flight two-phase batch.
-/// Fields are read by Slice 5 (confirm pipeline) and Slice 6 (recovery).
+/// Per-tree batch data stored in a pending two-phase batch.
+/// Used for WAL commits after on-chain `confirmBatch` succeeds.
 #[allow(dead_code)]
 struct TxPerTreeBatch {
 	real_commitments_bytes: Vec<[u8; 32]>,
 	proving_commitments_bytes: Vec<[u8; 32]>,
 	proving_commitments_hash: Vec<Hash>,
-	associated_input_proofs: Vec<Vec<u8>>,
 }
 
-/// A batch registered on-chain but not yet fully confirmed (all 4 trees).
-/// Fields are read by Slice 5 (confirm pipeline) and Slice 6 (recovery).
+/// A batch registered on-chain and awaiting a single SuperAggregator proof
+/// via `confirmBatch`.  Stored in `registered_pending_batches` until confirmed.
 #[allow(dead_code)]
 struct TxBatch {
 	batch_id: u64,
-	/// The PI commitments submitted at register time (one `bytes32` per tree,
-	/// index matches TREE_* constants).
-	pi_commitments: [[u8; 32]; 4],
-	/// Per-tree batch data indexed by `TREE_*` constants.
-	per_tree: [TxPerTreeBatch; 4],
-	/// Mirrors the on-chain `confirmedMask`; complete when `== 0xF`.
-	local_confirmed_mask: u8,
+	/// Pending queue requests popped for notes-commitment tree (for requeue on failure).
+	nc_requests: Vec<PendingRequest>,
+	/// Pending queue requests popped for notes-nullifier tree (for requeue on failure).
+	nn_requests: Vec<PendingRequest>,
+	/// Pending queue requests popped for accounts-commitment tree (for requeue on failure).
+	ac_requests: Vec<PendingRequest>,
+	/// Pending queue requests popped for accounts-nullifier tree (for requeue on failure).
+	an_requests: Vec<PendingRequest>,
+	/// Batch data for WAL commit after confirmation.
+	nc_batch: TxPerTreeBatch,
+	nn_batch: TxPerTreeBatch,
+	ac_batch: TxPerTreeBatch,
+	an_batch: TxPerTreeBatch,
 }
 
 /// A decoded private transaction forwarded from the API to the sequencer's
@@ -81,8 +78,10 @@ pub(super) struct PrivateTxRequest {
 	pub tx_proof: Vec<u8>,
 }
 
+/// Tree discriminant kept for `recovery.rs` compatibility (Step 12 will remove it).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TreeJob {
+pub(super) enum TreeJob {
 	NotesCommitment,
 	NotesNullifier,
 	AccountsCommitment,
@@ -92,7 +91,6 @@ enum TreeJob {
 #[derive(Debug, Clone)]
 pub(super) struct NotesCommitmentRequest {
 	pub note: [u8; 32],
-	pub associated_input_proof: Vec<u8>,
 }
 
 /// The main sequencer: watches note availability, batches by chain order, proves and finalizes.
@@ -129,6 +127,38 @@ pub struct Sequencer {
 }
 
 impl Sequencer {
+	/// Attempt to start the next proving batch when the pending-batch queue is not full.
+	///
+	/// Convenience wrapper called at the tail of every leaf-accept arm in the main event
+	/// loop, so that a newly enqueued leaf can immediately trigger a batch flush without
+	/// waiting for the next poll-interval tick.
+	///
+	/// # Parameters
+	/// - `provider`: Ethereum provider forwarded to `maybe_start_next_batch`.
+	/// - `note_batch_size`: circuit batch width for note trees.
+	/// - `account_batch_size`: circuit batch width for account trees.
+	/// - `batch_timeout`: maximum idle time before flushing a partial batch.
+	///
+	/// # Errors
+	/// Returns `Err` if `maybe_start_next_batch` fails (fatal: caller should `break` the loop).
+	///
+	/// # Side effects
+	/// May submit an async prove request and register a batch on-chain.
+	async fn try_start_batch_if_idle<P: Provider + Clone>(
+		&mut self,
+		provider: &P,
+		note_batch_size: usize,
+		account_batch_size: usize,
+		batch_timeout: std::time::Duration,
+	) -> anyhow::Result<()> {
+		self.maybe_start_next_batch(provider, note_batch_size, account_batch_size, batch_timeout)
+			.await
+	}
+
+	/// Emit a `debug!` log showing the current pending-request count for all four trees.
+	///
+	/// Called at key decision points (batch scheduling, batch completion, leaf acceptance)
+	/// to provide an operational snapshot of queue depth.
 	pub(super) fn log_pool_status(&self, reason: &str) {
 		debug!(
 			reason,
@@ -140,6 +170,12 @@ impl Sequencer {
 		);
 	}
 
+	/// Update a single `pending_since` timer slot.
+	///
+	/// - If `pending_len == 0`: clear the slot (`None`), resetting the timeout clock.
+	/// - If `pending_len > 0` and the slot is `None`: record the current instant as the start of
+	///   the non-empty window.
+	/// - If `pending_len > 0` and the slot is already `Some`: no-op (clock keeps running).
 	fn refresh_pending_since(slot: &mut Option<std::time::Instant>, pending_len: usize) {
 		if pending_len == 0 {
 			*slot = None;
@@ -148,6 +184,11 @@ impl Sequencer {
 		}
 	}
 
+	/// Refresh the `pending_since` timer slots for all four trees.
+	///
+	/// Calls [`refresh_pending_since`] for each tree using the current pending-queue length.
+	/// Should be called whenever the queue lengths may have changed (leaf acceptance,
+	/// batch start, batch completion).
 	fn refresh_pending_timers(&mut self) {
 		Self::refresh_pending_since(
 			&mut self.notes_commitment_pending_since,
@@ -223,21 +264,32 @@ impl Sequencer {
 		let on_chain_notes_nullifier_root = bridge.notesNullifierRoot().call().await?;
 		let on_chain_accounts_commitment_root = bridge.accountsCommitmentRoot().call().await?;
 		let on_chain_accounts_nullifier_root = bridge.accountsNullifierRoot().call().await?;
-		let batch_size: usize = bridge
-			.batchSize()
+		let note_batch_size: usize = bridge
+			.noteBatchSize()
 			.call()
 			.await?
 			.try_into()
-			.unwrap_or(0usize);
+			.context("noteBatchSize overflow")?;
+		let account_batch_size: usize = bridge
+			.accountBatchSize()
+			.call()
+			.await?
+			.try_into()
+			.context("accountBatchSize overflow")?;
 		info!(
 			notes_commitment_root = ?on_chain_notes_commitment_root,
 			notes_nullifier_root = ?on_chain_notes_nullifier_root,
 			accounts_commitment_root = ?on_chain_accounts_commitment_root,
 			accounts_nullifier_root = ?on_chain_accounts_nullifier_root,
-			batch_size,
+			note_batch_size,
+			account_batch_size,
 			"synced on-chain roots"
 		);
-		anyhow::ensure!(batch_size > 0, "on-chain batchSize must be > 0");
+		anyhow::ensure!(note_batch_size > 0, "on-chain noteBatchSize must be > 0");
+		anyhow::ensure!(
+			note_batch_size == account_batch_size * 8,
+			"on-chain noteBatchSize ({note_batch_size}) != accountBatchSize ({account_batch_size}) × 8"
+		);
 
 		// Step 1: load local persisted trees (snapshot + WAL). This is fast-path startup.
 		// These local stores are treated as cache and may be behind chain head.
@@ -320,7 +372,8 @@ impl Sequencer {
 		self.result_tx = Some(result_tx);
 		self.result_rx = Some(result_rx);
 
-		self.recover_pending_requests(&provider, batch_size).await?;
+		self.recover_pending_requests(&provider, note_batch_size, account_batch_size)
+			.await?;
 		info!(
 			local_root = ?contract::hash_to_bytes32(&self.notes_commitment_state.current_root()),
 			pending_requests = self.notes_commitment_state.pending_requests.len(),
@@ -349,12 +402,36 @@ impl Sequencer {
 			.api_bind_addr
 			.parse()
 			.map_err(|e| anyhow::anyhow!("invalid TESSERA_SEQUENCER_API_ADDR: {e}"))?;
+		let consume_proof_verifier = self
+			.config
+			.consume_artifacts_path
+			.as_deref()
+			.map(|path| api::LeafProofVerifier::from_artifacts(path).map(Arc::new))
+			.transpose()
+			.context("failed to load consume proof verifier from consume artifacts")?;
+		let tx_proof_verifier = self
+			.config
+			.aggregator_artifacts_path
+			.as_deref()
+			.map(|path| api::LeafProofVerifier::from_artifacts(path).map(Arc::new))
+			.transpose()
+			.context("failed to load tx proof verifier from aggregator artifacts")?;
+		let account_proof_verifier = self
+			.config
+			.account_artifacts_path
+			.as_deref()
+			.map(|path| api::LeafProofVerifier::from_artifacts(path).map(Arc::new))
+			.transpose()
+			.context("failed to load account proof verifier from account artifacts")?;
 		let api_state = api::ApiState {
 			notes_commitment_tx,
 			notes_nullifier_tx,
 			accounts_commitment_tx,
 			accounts_nullifier_tx,
 			private_tx_tx: Some(private_tx_tx),
+			consume_proof_verifier,
+			tx_proof_verifier,
+			account_proof_verifier,
 		};
 		let app = api::build_router(api_state);
 		tokio::spawn(async move {
@@ -374,18 +451,15 @@ impl Sequencer {
 		let poll_interval = Duration::from_secs(self.config.poll_interval_secs);
 		let batch_timeout = Duration::from_secs(self.config.batch_timeout_secs);
 		let mut interval = tokio::time::interval(poll_interval);
-		let mut in_flight: Option<InFlightBatch> = None;
 
 		info!("sequencer running");
 
 		loop {
 			tokio::select! {
 				_ = interval.tick() => {
-					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
-							error!("failed to start next batch: {e}");
-							break;
-						}
+					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
+						error!("failed to start next batch: {e}");
+						break;
 					}
 				}
 
@@ -410,17 +484,12 @@ impl Sequencer {
 					self.notes_commitment_state.add_consume_request(
 						order_key,
 						note,
-						req.associated_input_proof,
-						batch_size,
+						note_batch_size,
 					);
-					self.refresh_pending_timers();
 					self.log_pool_status("accepted notes commitment leaf");
-
-					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
-							error!("failed to start next batch: {e}");
-							break;
-						}
+					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
+						error!("failed to start next batch: {e}");
+						break;
 					}
 				}
 
@@ -452,15 +521,11 @@ impl Sequencer {
 						log_index: self.api_order_counter,
 					};
 					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.notes_nullifier_state.add_consume_request(order_key, note, batch_size);
-					self.refresh_pending_timers();
+					self.notes_nullifier_state.add_consume_request(order_key, note, note_batch_size);
 					self.log_pool_status("accepted notes nullifier leaf");
-
-					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
-							error!("failed to start next batch: {e}");
-							break;
-						}
+					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
+						error!("failed to start next batch: {e}");
+						break;
 					}
 				}
 
@@ -480,17 +545,12 @@ impl Sequencer {
 					self.accounts_commitment_state.add_consume_request(
 						order_key,
 						leaf,
-						DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(),
-						batch_size,
+						account_batch_size,
 					);
-					self.refresh_pending_timers();
 					self.log_pool_status("accepted accounts commitment leaf");
-
-					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
-							error!("failed to start next batch: {e}");
-							break;
-						}
+					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
+						error!("failed to start next batch: {e}");
+						break;
 					}
 				}
 
@@ -518,15 +578,11 @@ impl Sequencer {
 						log_index: self.api_order_counter,
 					};
 					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.accounts_nullifier_state.add_consume_request(order_key, leaf, batch_size);
-					self.refresh_pending_timers();
+					self.accounts_nullifier_state.add_consume_request(order_key, leaf, account_batch_size);
 					self.log_pool_status("accepted accounts nullifier leaf");
-
-					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
-							error!("failed to start next batch: {e}");
-							break;
-						}
+					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
+						error!("failed to start next batch: {e}");
+						break;
 					}
 				}
 
@@ -537,17 +593,13 @@ impl Sequencer {
 						None
 					}
 				} => {
-					if let Err(e) = self.handle_prove_outcome(&provider, outcome, &mut in_flight).await {
+					if let Err(e) = self.handle_prove_outcome(&provider, outcome).await {
 						error!("fatal sequencer error while finalizing batch: {e}");
 						break;
 					}
-					self.refresh_pending_timers();
-
-					if in_flight.is_none() {
-						if let Err(e) = self.maybe_start_next_batch(&provider, batch_size, batch_timeout, &mut in_flight).await {
-							error!("failed to start next batch: {e}");
-							break;
-						}
+					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
+						error!("failed to start next batch: {e}");
+						break;
 					}
 				}
 
@@ -559,7 +611,7 @@ impl Sequencer {
 						None
 					}
 				} => {
-					if let Err(e) = self.register_tx_batch(&provider, tx_req, batch_size).await {
+					if let Err(e) = self.register_tx_batch(&provider, tx_req, note_batch_size, account_batch_size).await {
 						error!("failed to register private tx batch: {e}");
 						// Non-fatal: log and continue processing other requests.
 					}

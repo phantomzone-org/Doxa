@@ -25,6 +25,7 @@ impl Default for NullifierTreeState {
 }
 
 impl NullifierTreeState {
+	/// Create a new, empty nullifier tree state.
 	pub fn new() -> Self {
 		Self {
 			tree: NullifierTree::new(TREE_DEPTH),
@@ -77,12 +78,14 @@ impl NullifierTreeState {
 			PendingRequest {
 				order_key,
 				commitment,
-				associated_input_proof: None,
 			},
 		);
 		self.pending_requests.len() >= batch_size
 	}
 
+	/// Remove the pending request whose commitment matches `commitment`.
+	///
+	/// No-op if `commitment` is not currently pending.
 	pub fn remove_pending_by_commitment(&mut self, commitment: &[u8; 32]) {
 		if !self.pending_commitments.remove(commitment) {
 			return;
@@ -96,6 +99,10 @@ impl NullifierTreeState {
 		}
 	}
 
+	/// Pop exactly `batch_size` requests in canonical order.
+	///
+	/// Returns `None` if fewer than `batch_size` requests are pending.
+	/// Also removes the popped entries from `pending_commitments`.
 	pub fn pop_next_batch(&mut self, batch_size: usize) -> Option<Vec<PendingRequest>> {
 		if self.pending_requests.len() < batch_size {
 			return None;
@@ -103,6 +110,11 @@ impl NullifierTreeState {
 		self.pop_next_up_to(batch_size)
 	}
 
+	/// Pop up to `batch_size` requests in canonical order (partial-batch flush).
+	///
+	/// Unlike [`pop_next_batch`], this succeeds even when fewer than `batch_size`
+	/// items are pending — useful for timeout-driven partial flushes.
+	/// Returns `None` only when the queue is empty.
 	pub fn pop_next_up_to(&mut self, batch_size: usize) -> Option<Vec<PendingRequest>> {
 		if self.pending_requests.is_empty() {
 			return None;
@@ -119,6 +131,9 @@ impl NullifierTreeState {
 		Some(out)
 	}
 
+	/// Re-enqueue a previously popped batch (used after a prover failure).
+	///
+	/// Restores each request to both `pending_requests` and `pending_commitments`.
 	pub fn reinsert_batch(&mut self, batch: Vec<PendingRequest>) {
 		for req in batch {
 			self.pending_commitments.insert(req.commitment);

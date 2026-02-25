@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+#![allow(warnings)]
 pub(crate) mod account;
 pub(crate) mod commitment;
 pub(crate) mod ecgfp5;

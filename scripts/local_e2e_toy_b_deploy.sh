@@ -46,7 +46,8 @@ echo "Deploying Verifier + Bridge..."
 export TESSERA_MONITORED_TOKEN="$TOKEN"
 export TESSERA_NOTES_NULLIFIER_ROOT="$TESSERA_NOTES_NULLIFIER_ROOT"
 export TESSERA_NOTES_COMMITMENT_ROOT="$TESSERA_NOTES_COMMITMENT_ROOT"
-export TESSERA_BATCH_SIZE="$TESSERA_BATCH_SIZE"
+export TESSERA_NOTE_BATCH_SIZE="$TESSERA_NOTE_BATCH_SIZE"
+export TESSERA_ACCOUNT_BATCH_SIZE="$TESSERA_ACCOUNT_BATCH_SIZE"
 DEPLOY_OUT=$(forge script script/pending-deposit/Deploy.s.sol \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" \
@@ -94,13 +95,18 @@ echo "TOY_USER=$TOY_USER"
 
 popd >/dev/null
 
-# Persist bridge for sequencer convenience.
+# Persist bridge and token into tessera-server/.env for sequencer and client convenience.
 SERVER_ENV="$ROOT_DIR/tessera-server/.env"
 if [[ -f "$SERVER_ENV" ]]; then
   if grep -q '^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=' "$SERVER_ENV"; then
     sed -i "s/^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=.*/TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$BRIDGE/" "$SERVER_ENV"
   else
     echo "TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$BRIDGE" >> "$SERVER_ENV"
+  fi
+  if grep -q '^TESSERA_MONITORED_TOKEN=' "$SERVER_ENV"; then
+    sed -i "s/^TESSERA_MONITORED_TOKEN=.*/TESSERA_MONITORED_TOKEN=$TOKEN/" "$SERVER_ENV"
+  else
+    echo "TESSERA_MONITORED_TOKEN=$TOKEN" >> "$SERVER_ENV"
   fi
 fi
 

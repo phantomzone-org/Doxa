@@ -106,14 +106,54 @@ fn run_cmd_with_timeout(mut cmd: Command, timeout: Duration, context: &str) -> a
 
 fn artifacts_ready(root: &Path) -> bool {
 	let required = [
-		"tessera-server/artifacts/commitment-tree/plonky2-proof/bn128_circuit_data.bin",
-		"tessera-server/artifacts/commitment-tree/groth-artifacts/Verifier.sol",
-		"tessera-server/artifacts/commitment-tree/groth-artifacts/proving.key",
-		"tessera-server/artifacts/nullifier-tree/plonky2-proof/bn128_circuit_data.bin",
-		"tessera-server/artifacts/nullifier-tree/groth-artifacts/Verifier.sol",
-		"tessera-server/artifacts/nullifier-tree/groth-artifacts/proving.key",
+		"tessera-server/artifacts/note-commitment-tree/plonky2-proof/bn128_circuit_data.bin",
+		"tessera-server/artifacts/note-commitment-tree/groth-artifacts/Verifier.sol",
+		"tessera-server/artifacts/note-commitment-tree/groth-artifacts/proving.key",
+		"tessera-server/artifacts/account-commitment-tree/plonky2-proof/bn128_circuit_data.bin",
+		"tessera-server/artifacts/account-commitment-tree/groth-artifacts/Verifier.sol",
+		"tessera-server/artifacts/account-commitment-tree/groth-artifacts/proving.key",
+		"tessera-server/artifacts/note-nullifier-tree/plonky2-proof/bn128_circuit_data.bin",
+		"tessera-server/artifacts/note-nullifier-tree/groth-artifacts/Verifier.sol",
+		"tessera-server/artifacts/note-nullifier-tree/groth-artifacts/proving.key",
+		"tessera-server/artifacts/account-nullifier-tree/plonky2-proof/bn128_circuit_data.bin",
+		"tessera-server/artifacts/account-nullifier-tree/groth-artifacts/Verifier.sol",
+		"tessera-server/artifacts/account-nullifier-tree/groth-artifacts/proving.key",
 	];
 	required.iter().all(|p| root.join(p).is_file())
+}
+
+fn aggregator_artifacts_ready(root: &Path) -> bool {
+	// leaf_proofs/ must contain at least the proof for note 0x01
+	root.join(
+		"tessera-server/artifacts/associated-input-aggregator/leaf_proofs/\
+		 0x0000000000000000000000000000000000000000000000000000000000000001.hex",
+	)
+	.is_file()
+}
+
+fn ensure_aggregator_artifacts(root: &Path) -> anyhow::Result<()> {
+	let force = std::env::var("TESSERA_REBUILD_ARTIFACTS").ok().as_deref() == Some("1");
+	if aggregator_artifacts_ready(root) && !force {
+		eprintln!("Aggregator artifacts already present; skipping regeneration.");
+		return Ok(());
+	}
+	eprintln!("Generating aggregator artifacts...");
+	let mut cmd = Command::new("cargo");
+	cmd.arg("run")
+		.arg("--bin")
+		.arg("aggregator_artifacts")
+		.arg("--release")
+		.current_dir(root.join("tessera-server"));
+	run_cmd_with_timeout(
+		cmd,
+		Duration::from_secs(60 * 60),
+		"aggregator_artifacts generation",
+	)?;
+	anyhow::ensure!(
+		aggregator_artifacts_ready(root),
+		"aggregator artifact generation completed but required files are still missing"
+	);
+	Ok(())
 }
 
 fn ensure_artifacts(root: &Path) -> anyhow::Result<()> {
@@ -130,6 +170,8 @@ fn ensure_artifacts(root: &Path) -> anyhow::Result<()> {
 		.arg("--bin")
 		.arg("commitment_tree_artifacts")
 		.arg("--release")
+		.env("TESSERA_NOTE_BATCH_SIZE", "128")
+		.env("TESSERA_ACCOUNT_BATCH_SIZE", "16")
 		.current_dir(root.join("tessera-server"));
 	run_cmd_with_timeout(
 		commitment_cmd,
@@ -144,6 +186,8 @@ fn ensure_artifacts(root: &Path) -> anyhow::Result<()> {
 		.arg("--bin")
 		.arg("nullifier_tree_artifacts")
 		.arg("--release")
+		.env("TESSERA_NOTE_BATCH_SIZE", "128")
+		.env("TESSERA_ACCOUNT_BATCH_SIZE", "16")
 		.current_dir(root.join("tessera-server"));
 	run_cmd_with_timeout(
 		nullifier_cmd,
@@ -185,6 +229,7 @@ fn scripted_full_flow_e2e() -> anyhow::Result<()> {
 
 	let root = workspace_root();
 	ensure_artifacts(&root)?;
+	ensure_aggregator_artifacts(&root)?;
 
 	let _anvil = ChildGuard::spawn_anvil()?;
 	wait_for_rpc("http://127.0.0.1:8545", Duration::from_secs(30))?;

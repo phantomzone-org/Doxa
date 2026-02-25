@@ -1,104 +1,77 @@
-//! Generate Groth16 artifacts for the CommitmentTree.
+//! Generate native Plonky2 artifacts for the commitment trees.
 //!
-//! Outputs (in artifacts/commitment-tree/):
-//!   - plonky2-proof/    (plonky2 circuit data for R1CS)
-//!   - groth-artifacts/  (Groth16 proving/verifying keys)
+//! Produces two sets of native circuit data (no BN128/Groth16 wrapping):
+//!   - `artifacts/commitment-tree/notes/native_circuit_data.bin`   (notes,
+//!     `TESSERA_NOTE_BATCH_SIZE` leaves)
+//!   - `artifacts/commitment-tree/accounts/native_circuit_data.bin` (accounts,
+//!     `TESSERA_ACCOUNT_BATCH_SIZE` leaves)
+//!
+//! The SuperAggregator artifact builder loads these files to embed the inner
+//! circuit's `CommonCircuitData` and `VerifierOnlyCircuitData` as constants.
 //!
 //! Usage:
+//!   TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 \
 //!   cargo run --bin commitment_tree_artifacts --release
 
-use std::{fs, path::PathBuf, time::Instant};
+use std::{fs, path::PathBuf};
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
+use plonky2::util::serialization::DefaultGateSerializer;
 use tessera_server::sample_batch_commitment_tree_proof;
-use tessera_trees::{
-	groth::{BN128Wrapper, Groth16Wrapper},
-	tree::{hasher::Hash, BatchCommitmentProof},
-	CircuitDataNative, ProofBN128, ProofNative,
-};
+use tessera_trees::groth::TesseraGeneratorSerializer;
 
-fn debug_enabled() -> bool {
-	std::env::var("TESSERA_DEBUG")
-		.map(|v| v == "1")
-		.unwrap_or(false)
-}
+fn generate_commitment_artifacts(dir_name: &str, batch_size: usize) -> Result<()> {
+	let artifacts_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("artifacts");
+	let out_dir = artifacts_root.join(dir_name);
+	fs::create_dir_all(&out_dir)?;
 
-fn debug_log(msg: &str) {
-	if debug_enabled() {
-		println!("{msg}");
-	}
+	println!("{dir_name}: batch_size={batch_size}");
+
+	let (circuit_data, proof, _, _) = sample_batch_commitment_tree_proof([0u8; 32], batch_size)?;
+
+	// Verify the proof to confirm the circuit is sound.
+	circuit_data.verify(proof)?;
+
+	// Serialize native circuit data — loaded by super_aggregator_artifacts to bake
+	// inner CommonCircuitData / VerifierOnlyCircuitData into the SuperAggregator.
+	let gate_ser = DefaultGateSerializer;
+	let native_bytes = circuit_data
+		.to_bytes(&gate_ser, &TesseraGeneratorSerializer)
+		.map_err(|_| {
+			anyhow::anyhow!(
+				"serialize native circuit failed for {dir_name}. \
+				 If a new custom generator was added, register it in \
+				 tessera-trees/src/groth/serializer.rs."
+			)
+		})?;
+
+	let out_path = out_dir.join("native_circuit_data.bin");
+	fs::write(&out_path, native_bytes)?;
+	println!("  wrote: {}", out_path.display());
+
+	Ok(())
 }
 
 fn main() -> Result<()> {
-	let tmp_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-		.join("artifacts")
-		.join("commitment-tree");
+	let note_batch_size: usize = std::env::var("TESSERA_NOTE_BATCH_SIZE")
+		.unwrap_or_else(|_| "128".to_string())
+		.parse()
+		.expect("TESSERA_NOTE_BATCH_SIZE must be a valid usize");
+	let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
+		.unwrap_or_else(|_| "16".to_string())
+		.parse()
+		.expect("TESSERA_ACCOUNT_BATCH_SIZE must be a valid usize");
 
-	fs::create_dir_all(&tmp_dir)?;
+	ensure!(
+		note_batch_size == account_batch_size * 8,
+		"TESSERA_NOTE_BATCH_SIZE ({note_batch_size}) must be exactly 8 × TESSERA_ACCOUNT_BATCH_SIZE ({account_batch_size})"
+	);
 
-	let input_path: PathBuf = tmp_dir.join("plonky2-proof");
-	let output_path: PathBuf = tmp_dir.join("groth-artifacts");
+	println!("=== notes-commitment-tree (batch_size={note_batch_size}) ===");
+	generate_commitment_artifacts("commitment-tree/notes", note_batch_size)?;
 
-	println!("commitment-tree artifacts: {}", tmp_dir.display());
-	println!("plonky2 data: {}", input_path.display());
-	println!("groth16 artifacts: {}", output_path.display());
-
-	debug_log("Instantiate BN128Wrapper");
-	let (circuit_data, proof_with_pis, _, _): (
-		CircuitDataNative,
-		ProofNative,
-		BatchCommitmentProof<Hash>,
-		Vec<Hash>,
-	) = sample_batch_commitment_tree_proof([0u8; 32])?;
-	let bn128_wrapper: BN128Wrapper = BN128Wrapper::new(circuit_data, proof_with_pis)?;
-
-	if !BN128Wrapper::has_full_artifacts(&input_path) {
-		println!("writing plonky2 circuit data");
-		fs::create_dir_all(&input_path)?;
-		bn128_wrapper.store_full_circuit_data(&input_path)?;
-	}
-
-	if !output_path.is_dir() {
-		println!("generating groth16 trusted setup");
-		let result = Groth16Wrapper::trusted_setup(&input_path, &output_path);
-		debug_log(&format!("trusted_setup result: {result}"));
-	}
-
-	let result: String = Groth16Wrapper::init(&input_path, &output_path)?;
-	debug_log(&format!("init result: {result}"));
-
-	let result: String = Groth16Wrapper::check_init();
-	debug_log(&format!("check_init result: {result}"));
-
-	let (_, proof_with_pis, _, _): (
-		CircuitDataNative,
-		ProofNative,
-		BatchCommitmentProof<Hash>,
-		Vec<Hash>,
-	) = sample_batch_commitment_tree_proof([1u8; 32])?;
-
-	println!("wrapping proof to bn128");
-	let start = Instant::now();
-	let proof_with_public_inputs_bn128: ProofBN128 =
-		bn128_wrapper.wrap_proof_to_bn128(proof_with_pis)?;
-	debug_log(&format!("[TIME] bn128 wrapper took: {:?}", start.elapsed()));
-
-	println!("generating groth16 proof");
-	let start = Instant::now();
-	let (g16_proof, g16_pub_inp) = Groth16Wrapper::prove(proof_with_public_inputs_bn128.clone())?;
-	debug_log(&format!("[TIME] groth16_prove took: {:?}", start.elapsed()));
-	debug_log(&format!("{:?} {:?}", g16_proof, g16_pub_inp));
-
-	Groth16Wrapper::verify(g16_proof.clone(), g16_pub_inp.clone())?;
-
-	let solidity_json = Groth16Wrapper::proof_to_solidity_json(&g16_proof, &g16_pub_inp)?;
-	let json_path = output_path.join("proof_solidity.json");
-	fs::write(&json_path, &solidity_json)?;
-	println!("wrote proof: {}", json_path.display());
-	debug_log(&format!(
-		"\n(rust) Solidity proof JSON written to {:?}\n{}",
-		json_path, solidity_json
-	));
+	println!("\n=== accounts-commitment-tree (batch_size={account_batch_size}) ===");
+	generate_commitment_artifacts("commitment-tree/accounts", account_batch_size)?;
 
 	Ok(())
 }

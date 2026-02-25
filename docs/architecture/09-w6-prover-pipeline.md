@@ -2,7 +2,7 @@
 
 ## Overview
 
-The prover is a standalone HTTP service that receives a `ProveRequest` from the sequencer, runs the full Plonky2 → BN128 → Groth16 proving pipeline, and returns a `ProveOutcome` with a Solidity-formatted proof ready for on-chain verification.
+The prover is a standalone HTTP service that receives a `ProveRequest` from the sequencer, runs the full Plonky2 → BN128 → Groth16 proving pipeline for the tree circuit, and in parallel aggregates the associated input (transaction validity) proofs through a streaming session before wrapping the root through BN128 → Groth16. It returns a `ProveOutcome` with two Solidity-formatted proofs ready for on-chain verification.
 
 ## Pipeline Diagram
 
@@ -19,21 +19,32 @@ graph LR
         E --> F["Plonky2 prove()<br/>(GoldilocksField)"]
         F --> G["Plonky2 verify()"]
         G --> H["BN128Wrapper<br/>.wrap_proof_to_bn128()"]
-        H --> I["Groth16Wrapper<br/>.prove() (Go FFI)"]
-        I --> J["Groth16Wrapper<br/>.verify()"]
-        J --> K["proof_to_solidity_json()"]
-        K --> L["parse_solidity_proof_json()<br/>→ SolidityProof"]
-        L --> M["ProveOutcome::Success"]
+        H --> I["Groth16Wrapper::prove()<br/>(Go FFI) — tree circuit"]
+        I --> J["Groth16Wrapper::verify()"]
+        J --> K["proof_to_solidity_json()<br/>→ solidity_proof"]
+
+        A --> L["aggregate_associated_input_proofs():<br/>expand DUMMY → canonical padding proof<br/>stream all batchSize bytes through<br/>GenericAggregator session"]
+        L --> M["aggregator.verify_root()"]
+        M --> N["BN128Wrapper<br/>.wrap_proof_to_bn128()<br/>(aggregation root)"]
+        N --> O["Groth16Wrapper::prove()<br/>(Go FFI) — aggregation circuit"]
+        O --> P["Groth16Wrapper::verify()"]
+        P --> Q["proof_to_solidity_json()<br/>→ aggregated_input_solidity_proof"]
+
+        K --> R["ProveOutcome::Success"]
+        Q --> R
     end
 
-    subgraph "Circuit Switching"
-        N["ActiveGroth state"] -.->|"if type changed"| O["Groth16Wrapper::init()<br/>load PK, VK, R1CS"]
-        O -.-> I
+    subgraph "Circuit Switching (Groth16 FFI singleton)"
+        S["ActiveGroth state<br/>{Commitment, Nullifier, Aggregation}"] -.->|"ensure_groth16_active()"| T["Groth16Wrapper::init()<br/>load PK, VK, R1CS"]
+        T -.-> I
+        S -.->|"groth16_wrap_aggregation_root()"| U["Groth16Wrapper::init()<br/>(aggregation keys)"]
+        U -.-> O
     end
 
     style A fill:#4a9eff,color:#fff
-    style M fill:#6bcb77,color:#fff
+    style R fill:#6bcb77,color:#fff
     style I fill:#ff6b6b,color:#fff
+    style O fill:#ff6b6b,color:#fff
 ```
 
 ## Request / Response Types
@@ -58,16 +69,18 @@ enum ProveRequest {
         batch_id: u64,                              // 0 for deposit-only path
         tree_index: u8,                             // TREE_NOTES_COMMITMENT or TREE_ACCOUNTS_COMMITMENT
         batch_proof: BatchCommitmentProof<Hash>,
-        associated_input_proofs: Vec<Vec<u8>>,
+        associated_input_proofs: Vec<Vec<u8>>,      // batchSize entries: real tx_proof or DUMMY sentinel
     },
     Nullifier {
         batch_id: u64,                              // 0 for deposit-only path
         tree_index: u8,                             // TREE_NOTES_NULLIFIER or TREE_ACCOUNTS_NULLIFIER
         batch_proof: NullifierChainedInsertProof<Hash>,
-        associated_input_proofs: Vec<Vec<u8>>,
+        associated_input_proofs: Vec<Vec<u8>>,      // batchSize entries: real tx_proof or DUMMY sentinel
     },
 }
 ```
+
+`associated_input_proofs` contains exactly `batchSize` entries. Real leaf positions carry serialized `ProofWithPublicInputs` bytes; padding positions carry the sentinel `[0x01]` which the prover expands to the canonical all-zero padding proof before aggregation.
 
 ### ProveOutcome
 
@@ -77,12 +90,12 @@ enum ProveOutcome {
         batch_id: u64,                              // echoed from ProveRequest
         tree_index: u8,                             // echoed from ProveRequest
         new_root: Hash,
-        solidity_proof: Box<SolidityProof>,
-        aggregated_input_solidity_proof: Box<SolidityProof>,
+        solidity_proof: Box<SolidityProof>,                     // tree circuit Groth16 proof
+        aggregated_input_solidity_proof: Box<SolidityProof>,    // aggregation circuit Groth16 proof
     },
     Failure {
-        batch_id: u64,                              // echoed from ProveRequest
-        tree_index: u8,                             // echoed from ProveRequest
+        batch_id: u64,
+        tree_index: u8,
         error: String,
     },
 }
@@ -100,79 +113,131 @@ struct SolidityProof {
 
 ## Pipeline Steps
 
-### 1. Circuit Selection
+### 1. Circuit Selection (tree proof)
 
-The `ProverRuntime` tracks which Groth16 circuit is currently loaded via `active: Option<ActiveGroth>`:
+`ProverRuntime` tracks which Groth16 circuit is loaded via `active: Option<ActiveGroth>`:
 
 ```rust
 enum ActiveGroth {
-    Commitment,
-    Nullifier,
+    Commitment,   // notes/accounts commitment tree circuit
+    Nullifier,    // notes/accounts nullifier tree circuit
+    Aggregation,  // associated-input aggregator circuit
 }
 ```
 
-Circuit selection is driven by `tree_index`:
-- `tree_index` ∈ {0, 2} (`TREE_NOTES_COMMITMENT`, `TREE_ACCOUNTS_COMMITMENT`) → `Commitment` circuit
-- `tree_index` ∈ {1, 3} (`TREE_NOTES_NULLIFIER`, `TREE_ACCOUNTS_NULLIFIER`) → `Nullifier` circuit
+Circuit selection for the tree proof is driven by `tree_index`:
+- `tree_index` ∈ {0, 2} → `Commitment` circuit
+- `tree_index` ∈ {1, 3} → `Nullifier` circuit
 
-If the requested circuit type differs from the active one:
-1. Call `Groth16Wrapper::init(plonky2_path, groth16_path)` to load proving key, verifying key, and R1CS
-2. Verify initialization via `Groth16Wrapper::check_init()`
-3. Update `self.active`
+`ensure_groth16_active(target)` reinitializes the FFI singleton only when the requested circuit differs from the active one. It must not be called with `Aggregation`; that variant is managed exclusively inside `groth16_wrap_aggregation_root`.
 
-This switching is necessary because `Groth16Wrapper` is a **global FFI singleton** backed by a Go library.
+### 2. Plonky2 Proof Generation (tree)
 
-### 2. Plonky2 Proof Generation
+- Set circuit witness from `batch_proof` via `targets.set()`
+- `circuit_data.prove(pw)` → native Plonky2 proof over GoldilocksField
+- `circuit_data.verify(proof)` — fail-fast sanity check
 
-- Set circuit witness from the batch proof data
-- Call `circuit_data.prove(pw)` to generate a native Plonky2 proof over GoldilocksField
-- Immediately verify: `circuit_data.verify(proof)` (fail-fast sanity check)
+### 3. BN128 Wrapping (tree)
 
-### 3. BN128 Wrapping
+`BN128Wrapper::wrap_proof_to_bn128(plonky2_proof)` recursively wraps the Goldilocks proof into BN254-compatible form for Groth16.
 
-- `BN128Wrapper::wrap_proof_to_bn128(plonky2_proof)` recursively wraps the native proof into a BN128-compatible proof
-- This is required because Groth16 operates over BN254/BN128 curves, while Plonky2 uses Goldilocks
+### 4. Groth16 Proof Generation — tree circuit (Go FFI)
 
-### 4. Groth16 Proof Generation (Go FFI)
+`Groth16Wrapper::prove(bn128_proof)` → `(proof_bytes, public_input_bytes)`, then `Groth16Wrapper::verify(proof, pub_inputs)`.
 
-- `Groth16Wrapper::prove(bn128_proof)` serializes the BN128 proof and calls into the Go gnark library via FFI
-- Returns `(proof_bytes, public_input_bytes)`
-- Immediately verify: `Groth16Wrapper::verify(proof, pub_inputs)`
+### 5. Solidity Formatting (tree proof)
 
-### 5. Solidity Formatting
+`proof_to_solidity_json()` + `parse_solidity_proof_json()` → `SolidityProof` stored as `solidity_proof` in the outcome.
 
-- `Groth16Wrapper::proof_to_solidity_json()` formats the Groth16 proof as JSON
-- `parse_solidity_proof_json()` parses into the `SolidityProof` struct with `[U256; 8]` proof and `[U256; 2]` commitments
+### 6. Associated Input Proof Aggregation
 
-### 6. Input Proof Aggregation (Stub)
+`aggregate_associated_input_proofs(aggregator, associated_input_proofs, batch_size)`:
 
-- `dummy_verify_and_aggregate_associated_input_proofs()` validates each associated proof is `[0x01]`
-- Returns a placeholder `SolidityProof` with all zeros
-- The on-chain `DummyVerifier` accepts this; real aggregation is Phase A TODO
+1. **DUMMY expansion**: each `[0x01]` sentinel is replaced with `canonical_padding_proof` — a pre-generated, serialized Plonky2 proof of the dummy leaf circuit with all-zero public inputs. This proof is computed once at `AssociatedInputAggregatorService` startup.
+2. **Streaming aggregation**: all `batchSize` proof bytes are submitted to a `start_aggregation_session` actor backed by the `NodeProverPool`. The actor fires node-prove tasks bottom-up as each node's children are ready.
+3. **Root verification**: `aggregator.verify_root(&root_proof)` verifies the aggregated root plonky2 proof.
+
+Requires `TESSERA_AGGREGATOR_ARTIFACTS_PATH` to be set; the prover fails to start if this path is configured but the artifacts are absent.
+
+### 7. BN128 + Groth16 Wrapping — aggregation circuit
+
+`groth16_wrap_aggregation_root(root_proof)`:
+
+1. Reinitializes the Groth16 FFI singleton for the aggregation circuit (paths stored inside `AssociatedInputAggregatorService`).
+2. `agg.bn128_wrapper.wrap_proof_to_bn128(root_proof)` → BN128 proof.
+3. `Groth16Wrapper::prove(bn128_proof)` → `aggregated_input_solidity_proof`.
+4. `Groth16Wrapper::verify()` — immediate check.
+
+The Groth16 singleton is left in `ActiveGroth::Aggregation` state after this step; the next request that needs the tree circuit will trigger a reinitialization.
+
+## Groth16 Singleton Sequencing
+
+Within a single `prove_request` call the singleton is used twice with a mandatory circuit switch in between:
+
+```
+ensure_groth16_active(Commitment or Nullifier)
+  → tree plonky2 → BN128 → Groth16::prove   [active = Commitment|Nullifier]
+
+aggregate_associated_input_proofs()           [pure plonky2, no FFI]
+
+groth16_wrap_aggregation_root()
+  → Groth16Wrapper::init(aggregation keys)
+  → aggregation BN128 → Groth16::prove       [active = Aggregation]
+```
 
 ## Concurrency Model
 
-- The prover handler uses `tokio::task::spawn_blocking()` for CPU-intensive work
-- `ProverRuntime` is behind `Arc<Mutex<...>>` — only **one proof at a time**
-- The Groth16 FFI to Go uses global state — cannot be parallelized
+- The prover handler uses `tokio::task::spawn_blocking()` for CPU-intensive work.
+- `ProverRuntime` is behind `Arc<Mutex<...>>` — only **one proof at a time**.
+- The Groth16 FFI to Go uses global state — cannot be parallelized.
+- Async aggregation (`aggregate_bytes`) is driven synchronously via `Handle::current().block_on()` inside the blocking context.
+
+## Canonical Padding Proof
+
+At startup, `AssociatedInputAggregatorService::from_artifacts_and_pool()` rebuilds the dummy leaf circuit from `aggregator.leaf_common().num_public_inputs` unconstrained targets, proves it with all-zero witnesses, and serializes the result to `canonical_padding_proof: Vec<u8>`. This proof is cloned into every padding slot before aggregation — it is a valid leaf proof for the aggregator's leaf circuit and aggregates correctly.
 
 ## Artifact Layout
 
 ```
 tessera-server/artifacts/
-├── commitment-tree/
-│   ├── plonky2-proof/
-│   │   ├── common_circuit_data.json
-│   │   ├── verifier_only_circuit_data.json
-│   │   └── proof_with_public_inputs.json
+├── note-commitment-tree/
+│   ├── plonky2-proof/         # BN128 wrapper artifacts
 │   └── groth-artifacts/
 │       ├── r1cs.bin
 │       ├── pk.bin
 │       ├── vk.bin
-│       └── Verifier.sol
-└── nullifier-tree/
-    ├── plonky2-proof/
+│       └── Verifier.sol       → tessera-solidity/src/VerifierNotesCommitment.sol
+├── account-commitment-tree/
+│   ├── plonky2-proof/
+│   └── groth-artifacts/
+│       └── Verifier.sol       → tessera-solidity/src/VerifierAccountsCommitment.sol
+├── note-nullifier-tree/
+│   ├── plonky2-proof/
+│   └── groth-artifacts/
+│       └── Verifier.sol       → tessera-solidity/src/VerifierNotesNullifier.sol
+├── account-nullifier-tree/
+│   ├── plonky2-proof/
+│   └── groth-artifacts/
+│       └── Verifier.sol       → tessera-solidity/src/VerifierAccountsNullifier.sol
+└── associated-input-aggregator/
+    ├── leaf_common.bin        # CommonCircuitData for the leaf (tx validity) circuit
+    ├── leaf_verifier.bin      # VerifierOnlyCircuitData
+    ├── level_*.bin            # Per-level aggregation circuit data
+    ├── plonky2-proof/         # BN128 wrapper for the aggregation root circuit
     └── groth-artifacts/
+        ├── r1cs.bin
+        ├── pk.bin
+        ├── vk.bin
+        └── Verifier.sol       → tessera-solidity/src/VerifierAggregator.sol
+```
+
+Artifact generation commands:
+
+```bash
+cargo run --bin commitment_tree_artifacts --release
+cargo run --bin nullifier_tree_artifacts  --release
+cargo run --bin aggregator_artifacts      --release
+scripts/sync_verifiers_from_artifacts.sh
 ```
 
 ## Traceability
@@ -181,14 +246,20 @@ tessera-server/artifacts/
 |---|---|---|
 | `prove_handler` | `tessera-server/src/bin/prover.rs` | `prove_handler()` |
 | `prove_request` | `tessera-server/src/prover.rs` | `ProverRuntime::prove_request()` |
+| `ensure_groth16_active` | `tessera-server/src/prover.rs` | `ProverRuntime::ensure_groth16_active()` |
 | `CommitmentProverService::prove` | `tessera-server/src/prover.rs` | `CommitmentProverService::prove()` |
 | `NullifierProverService::prove` | `tessera-server/src/prover.rs` | `NullifierProverService::prove()` |
+| `aggregate_associated_input_proofs` | `tessera-server/src/prover.rs` | `ProverRuntime::aggregate_associated_input_proofs()` |
+| `groth16_wrap_aggregation_root` | `tessera-server/src/prover.rs` | `ProverRuntime::groth16_wrap_aggregation_root()` |
+| `canonical_padding_proof` generation | `tessera-server/src/prover.rs` | `AssociatedInputAggregatorService::from_artifacts_and_pool()` |
+| `aggregate_bytes` | `tessera-server/src/prover.rs` | `AssociatedInputAggregatorService::aggregate_bytes()` |
+| `start_aggregation_session` | `tessera-server/src/aggregation_pipeline/session.rs` | `start_aggregation_session()` |
+| `NodeProverPool::prove_node` | `tessera-server/src/aggregation_pipeline/pool.rs` | `NodeProverPool::prove_node()` |
 | `wrap_proof_to_bn128` | `tessera-trees/src/groth/wrapper.rs` | `BN128Wrapper::wrap_proof_to_bn128()` |
 | `Groth16Wrapper::prove` | `tessera-trees/src/groth/wrapper.rs` | `Groth16Wrapper::prove()` (Go FFI) |
 | `Groth16Wrapper::verify` | `tessera-trees/src/groth/wrapper.rs` | `Groth16Wrapper::verify()` |
 | `proof_to_solidity_json` | `tessera-trees/src/groth/wrapper.rs` | `Groth16Wrapper::proof_to_solidity_json()` |
 | `parse_solidity_proof_json` | `tessera-server/src/prover.rs` | `parse_solidity_proof_json()` |
-| `dummy_verify_and_aggregate` | `tessera-server/src/prover.rs` | `dummy_verify_and_aggregate_associated_input_proofs()` |
 
 ## Timeouts
 
@@ -196,3 +267,4 @@ tessera-server/artifacts/
 |---|---|---|
 | Prover HTTP timeout | 1800s (30 min) | `TESSERA_PROVER_API_TIMEOUT_SECS` |
 | Sequencer retry backoff | 5s between attempts | Hardcoded in `submit_prove_request_with_retry()` |
+| Remote aggregation-prover HTTP timeout | configurable | `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` |
