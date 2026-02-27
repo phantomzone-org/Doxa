@@ -297,7 +297,7 @@ mod test {
 	use super::ChainedInsertProofGenerator;
 	use crate::tree::{
 		NullifierChainedInsertProof, NullifierTree,
-		hasher::{DataCommitment, Hash, NewFromU64, PoseidonCommitment},
+		hasher::{DataCommitment, HashOutput, NewFromU64, PoseidonCommitment},
 	};
 
 	const D: usize = 2;
@@ -307,13 +307,13 @@ mod test {
 	fn run_chained_insert_test<const DEPTH: usize, const BATCH_SIZE: usize>(
 		commit: Option<&dyn DataCommitment<F, D>>,
 	) -> Result<()> {
-		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
 
 		print!("Generating {} insertion proofs: ", BATCH_SIZE);
 		let now = Instant::now();
 		let mut proofs = Vec::with_capacity(BATCH_SIZE);
 		for i in 0..BATCH_SIZE {
-			let value = Hash::new_from_u64((i + 1) as u64 * 1000);
+			let value = HashOutput::new_from_u64((i + 1) as u64 * 1000);
 			let proof = tree.insert(value)?;
 			proofs.push(proof);
 		}
@@ -329,7 +329,7 @@ mod test {
 		print!("Build circuit: ");
 		let now = Instant::now();
 		let generator =
-			ChainedInsertProofGenerator::<Hash, F, C, D, DEPTH, BATCH_SIZE>::new(commit);
+			ChainedInsertProofGenerator::<HashOutput, F, C, D, DEPTH, BATCH_SIZE>::new(commit);
 		println!("{:?}", now.elapsed());
 
 		print!("Generate STARK proof: ");

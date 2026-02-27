@@ -1,10 +1,17 @@
+use std::marker::PhantomData;
+
 use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64};
 use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt};
-use tessera_trees::{F, tree::hasher::Hash};
+use tessera_trees::{F, tree::hasher::HashOutput};
 
-use crate::{DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, commitment::Commitment, schnorr::PublicKey};
+use crate::{
+	AST_DEFAULT_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER,
+	commitment::Commitment,
+	schnorr::PublicKey,
+	tree::{GenericNode, Leaf},
+};
 
 pub type AccountCommitment = Commitment;
 pub type AccountNullifier = Commitment;
@@ -23,7 +30,7 @@ impl PrivateIdentifier {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct PublicIdentifier(pub Hash);
+pub struct PublicIdentifier(pub HashOutput);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SubpoolId(pub F);
@@ -34,6 +41,35 @@ pub struct Nonce(pub F);
 #[derive(Debug, Clone, Default)]
 pub struct Auth {
 	pub nspend_pk: Option<PublicKey<F>>,
+}
+
+pub struct AccountStateTreeLeaf {
+	pub asset_id: F,
+	pub amount: U256,
+}
+
+impl Leaf for AccountStateTreeLeaf {
+	type Node = GenericNode<Self>;
+
+	fn empty() -> Self::Node {
+		GenericNode {
+			inner: AST_DEFAULT_LEAF,
+			_phantom: PhantomData,
+		}
+	}
+}
+
+impl From<AccountStateTreeLeaf> for GenericNode<AccountStateTreeLeaf> {
+    fn from(value: AccountStateTreeLeaf) -> Self {
+       	let mut input = [F::ZERO; HASH_SIZE * 2 + 1];
+		input[0..HASH_SIZE].copy_from_slice(lhs.inner().0.as_ref());
+		input[HASH_SIZE..2 * HASH_SIZE].copy_from_slice(rhs.inner().0.as_ref());
+		// TODO: do we need domain separator here?
+       
+		Self::from(HashOutput(
+			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
+		))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -96,7 +132,7 @@ mod tests {
 
 	#[test]
 	fn testtest() {
-		let mut tree = CommitmentTree::<Hash>::new(32);
+		let mut tree = CommitmentTree::<HashOutput>::new(32);
 
 		let mut rng = rng();
 		let sbpoolid = SubpoolId(F::ONE);

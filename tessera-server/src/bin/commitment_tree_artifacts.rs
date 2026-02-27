@@ -13,7 +13,7 @@ use anyhow::Result;
 use tessera_server::sample_batch_commitment_tree_proof;
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
-	tree::{hasher::Hash, BatchCommitmentProof},
+	tree::{hasher::HashOutput, BatchCommitmentProof},
 	CircuitDataNative, ProofBN128, ProofNative,
 };
 
@@ -47,8 +47,8 @@ fn main() -> Result<()> {
 	let (circuit_data, proof_with_pis, _, _): (
 		CircuitDataNative,
 		ProofNative,
-		BatchCommitmentProof<Hash>,
-		Vec<Hash>,
+		BatchCommitmentProof<HashOutput>,
+		Vec<HashOutput>,
 	) = sample_batch_commitment_tree_proof([0u8; 32])?;
 	let bn128_wrapper: BN128Wrapper = BN128Wrapper::new(circuit_data, proof_with_pis)?;
 
@@ -73,8 +73,8 @@ fn main() -> Result<()> {
 	let (_, proof_with_pis, _, _): (
 		CircuitDataNative,
 		ProofNative,
-		BatchCommitmentProof<Hash>,
-		Vec<Hash>,
+		BatchCommitmentProof<HashOutput>,
+		Vec<HashOutput>,
 	) = sample_batch_commitment_tree_proof([1u8; 32])?;
 
 	println!("wrapping proof to bn128");

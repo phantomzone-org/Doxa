@@ -354,15 +354,15 @@ pub trait ToHashOut<F: Field> {
 pub(crate) const HASH_SIZE: usize = 4;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub struct Hash(pub [F; HASH_SIZE]);
+pub struct HashOutput(pub [F; HASH_SIZE]);
 
-impl From<[F; HASH_SIZE]> for Hash {
+impl From<[F; HASH_SIZE]> for HashOutput {
 	fn from(value: [F; HASH_SIZE]) -> Self {
 		Self(value)
 	}
 }
 
-impl Hash {
+impl HashOutput {
 	pub const fn new(value: [F; HASH_SIZE]) -> Self {
 		Self(value)
 	}
@@ -394,19 +394,19 @@ impl Hash {
 	}
 }
 
-impl PartialOrd for Hash {
+impl PartialOrd for HashOutput {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
 		Some(self.cmp(other))
 	}
 }
 
-impl Ord for Hash {
+impl Ord for HashOutput {
 	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
 		self.to_u64().cmp(&other.to_u64())
 	}
 }
 
-impl Display for Hash {
+impl Display for HashOutput {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(
 			f,
@@ -426,7 +426,7 @@ pub trait NewRandom {
 }
 
 #[cfg(test)]
-impl NewFromU64 for Hash {
+impl NewFromU64 for HashOutput {
 	fn new_from_u64(value: u64) -> Self {
 		use crate::F;
 
@@ -434,7 +434,7 @@ impl NewFromU64 for Hash {
 	}
 }
 
-impl NewRandom for Hash {
+impl NewRandom for HashOutput {
 	fn new_random<R: Rng + ?Sized>(rng: &mut R) -> Self {
 		Self([
 			F::from_canonical_u64(rng.next_u64()),
@@ -445,7 +445,7 @@ impl NewRandom for Hash {
 	}
 }
 
-impl ToHashOut<F> for Hash {
+impl ToHashOut<F> for HashOutput {
 	fn to_hash_out(&self) -> HashOut<F> {
 		HashOut {
 			elements: self.0,
@@ -453,8 +453,8 @@ impl ToHashOut<F> for Hash {
 	}
 }
 
-impl MerkleHash for Hash {
-	type Digest = Hash;
+impl MerkleHash for HashOutput {
+	type Digest = HashOutput;
 
 	const HEAD: Self::Digest = Self::Digest::new([F::ZERO; HASH_SIZE]);
 	const TAIL: Self::Digest = Self::Digest::new([F::NEG_ONE; HASH_SIZE]);
@@ -512,8 +512,8 @@ impl MerkleHash for Hash {
 	}
 }
 
-impl MerkleHashCircuit<F, 2> for Hash {
-	type Digest = Hash;
+impl MerkleHashCircuit<F, 2> for HashOutput {
+	type Digest = HashOutput;
 
 	const HEAD: HashOut<F> = HashOut {
 		elements: [F::ZERO; 4],
@@ -596,7 +596,7 @@ mod test {
 
 	use crate::{
 		ConfigNative, D, F, ProofNative,
-		tree::hasher::{Hash, MerkleHash, MerkleHashCircuit, NewFromU64},
+		tree::hasher::{HashOutput, MerkleHash, MerkleHashCircuit, NewFromU64},
 	};
 
 	#[test]
@@ -604,20 +604,20 @@ mod test {
 		let config: CircuitConfig = CircuitConfig::standard_recursion_config();
 		let mut builder: CircuitBuilder<F, D> = CircuitBuilder::<F, D>::new(config);
 
-		let left: Hash = Hash::new_from_u64(42);
-		let right: Hash = Hash::new_from_u64(1337);
+		let left: HashOutput = HashOutput::new_from_u64(42);
+		let right: HashOutput = HashOutput::new_from_u64(1337);
 
 		let dir_target: BoolTarget = builder.add_virtual_bool_target_safe();
 		let left_target: HashOutTarget = builder.add_virtual_hash_public_input();
 		let right_target: HashOutTarget = builder.add_virtual_hash_public_input();
 		let out_target: HashOutTarget = builder.add_virtual_hash_public_input();
 		let have_target: HashOutTarget =
-			Hash::hash_2_to_1_circuit(&mut builder, left_target, right_target, dir_target);
+			HashOutput::hash_2_to_1_circuit(&mut builder, left_target, right_target, dir_target);
 		builder.connect_hashes(have_target, out_target);
 		let data = builder.build::<ConfigNative>();
 
 		for dir in [false, true] {
-			let out: Hash = Hash::hash_2_to_1(&left, &right, dir);
+			let out: HashOutput = HashOutput::hash_2_to_1(&left, &right, dir);
 			let mut pw: PartialWitness<F> = PartialWitness::new();
 			pw.set_hash_target(left_target, left.as_hash_out())?;
 			pw.set_hash_target(right_target, right.as_hash_out())?;
@@ -635,19 +635,19 @@ mod test {
 		let mut builder: CircuitBuilder<F, D> = CircuitBuilder::<F, D>::new(config);
 
 		let next_index: usize = 42;
-		let value: Hash = Hash::new_from_u64(1337);
-		let next_value: Hash = Hash::new_from_u64(432);
+		let value: HashOutput = HashOutput::new_from_u64(1337);
+		let next_value: HashOutput = HashOutput::new_from_u64(432);
 
 		let next_index_t: Target = builder.add_virtual_target();
 		let value_t: HashOutTarget = builder.add_virtual_hash_public_input();
 		let next_value_t: HashOutTarget = builder.add_virtual_hash_public_input();
 		let comm_want_t: HashOutTarget = builder.add_virtual_hash_public_input();
 		let comm_have_t: HashOutTarget =
-			Hash::commit_node_circuit(&mut builder, value_t, next_index_t, next_value_t);
+			HashOutput::commit_node_circuit(&mut builder, value_t, next_index_t, next_value_t);
 		builder.connect_hashes(comm_have_t, comm_want_t);
 		let data = builder.build::<ConfigNative>();
 
-		let out: Hash = Hash::commit_node(&value, next_index, &next_value);
+		let out: HashOutput = HashOutput::commit_node(&value, next_index, &next_value);
 		let mut pw: PartialWitness<F> = PartialWitness::new();
 
 		pw.set_target(next_index_t, F::from_canonical_u64(next_index as u64))?;

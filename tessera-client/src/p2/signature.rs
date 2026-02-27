@@ -1324,10 +1324,11 @@ pub(crate) struct PubkeyTarget<F>(pub(crate) LocalQuinticExtension<F>);
 /// Build a Schnorr signature verification circuit.
 ///
 /// Verifies `R = sG + eQ` where `e = DropTop2Bits(H(w_R || w_Q || m))`.
-pub(crate) fn schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize>(
+pub(crate) fn conditional_schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize>(
 	builder: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
 	message: HashOutTarget,
 	pubkey: PubkeyTarget<Target>,
+	apply_check: BoolTarget,
 ) -> SchnorrTargets {
 	use plonky2::{hash::poseidon::PoseidonHash, iop::target::BoolTarget};
 
@@ -1470,7 +1471,7 @@ pub(crate) fn schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize
 		let reconstructed = builder.mul_add(two_pow_32, hi, lo);
 
 		if k < 4 {
-			builder.connect(reconstructed, e_hash[k]);
+			builder.conditional_assert_eq(apply_check.target, reconstructed, e_hash[k]);
 		} else {
 			// Limb 4: e_hash[4] may have top 2 bits set.
 			// Constrain (e_hash[4] - reconstructed) * (e_hash[4] - reconstructed
@@ -1494,7 +1495,8 @@ pub(crate) fn schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize
 			//     }
 			//     _ => {}
 			// }
-			builder.assert_zero(product);
+			let cond = builder.mul(apply_check.target, product);
+			builder.assert_zero(cond);
 		}
 	}
 
@@ -1528,7 +1530,7 @@ pub(crate) fn verify_16_messages_gadget<F: RichField + Extendable<D>, const D: u
 
 	// Verify the Schnorr signature for each message.
 	let schnorr: Box<[SchnorrTargets; 16]> = Box::new(std::array::from_fn(|i| {
-		schnorr_verify_gadget(builder, messages[i], pubkey)
+		conditional_schnorr_verify_gadget(builder, messages[i], pubkey)
 	}));
 
 	// Hash all message elements via Poseidon.
@@ -1998,7 +2000,8 @@ mod tests {
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let message_target = builder.add_virtual_hash();
 		let pubkey_target = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
-		let targets = schnorr_verify_gadget(&mut builder, message_target, pubkey_target);
+		let targets =
+			conditional_schnorr_verify_gadget(&mut builder, message_target, pubkey_target);
 		let inner_data = time!("inner build", builder.build::<C>());
 		print_common_data(&inner_data.common, "inner common data");
 

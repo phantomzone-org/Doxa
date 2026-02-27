@@ -257,7 +257,7 @@ mod test {
 
 	use crate::tree::{
 		BatchCommitmentProofTargets, CommitmentTree,
-		hasher::{DataCommitment, Hash, NewRandom, PoseidonCommitment},
+		hasher::{DataCommitment, HashOutput, NewRandom, PoseidonCommitment},
 	};
 
 	const D: usize = 2;
@@ -270,16 +270,16 @@ mod test {
 
 		print!("Alloc tree 2^{DEPTH}: ");
 		let now = Instant::now();
-		let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let mut tree: CommitmentTree<HashOutput> = CommitmentTree::<HashOutput>::new(DEPTH);
 		println!("{:?}", now.elapsed());
 
 		let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
 		print!("Insert batch: ");
 		let now = Instant::now();
-		let mut leaves: Vec<Hash> = Vec::with_capacity(BATCH_SIZE);
+		let mut leaves: Vec<HashOutput> = Vec::with_capacity(BATCH_SIZE);
 		for _ in 0..BATCH_SIZE {
-			leaves.push(Hash::new_random(&mut rng));
+			leaves.push(HashOutput::new_random(&mut rng));
 		}
 		let proof = tree.insert_batch(leaves)?;
 		assert!(proof.verify());
@@ -297,13 +297,13 @@ mod test {
 
 		print!("Connect: ");
 		let now: Instant = Instant::now();
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		println!("{:?}", now.elapsed());
 
 		print!("Set Witnesses: ");
 		let now: Instant = Instant::now();
 		let mut pw: PartialWitness<GoldilocksField> = PartialWitness::new();
-		targets.set::<Hash, F, DEPTH>(&mut pw, &proof)?;
+		targets.set::<HashOutput, F, DEPTH>(&mut pw, &proof)?;
 		println!("{:?}", now.elapsed());
 
 		print!("Build: ");

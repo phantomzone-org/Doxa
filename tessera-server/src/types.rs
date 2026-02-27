@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
-use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof, NullifierChainedInsertProof};
+use tessera_trees::tree::{hasher::HashOutput, BatchCommitmentProof, NullifierChainedInsertProof};
 
 /// Tree-index constants mirroring the Solidity `TREE_*` constants in `TesseraRollup.sol`.
 /// Used in `ProveRequest` and `ProveOutcome` to identify which of the four trees a job targets.
@@ -20,7 +20,7 @@ pub enum ProveRequest {
 		/// TREE_ACCOUNTS_COMMITMENT).
 		tree_index: u8,
 		/// The append-only commitment batch insertion proof (native witness).
-		batch_proof: BatchCommitmentProof<Hash>,
+		batch_proof: BatchCommitmentProof<HashOutput>,
 		/// One note-validity proof per leaf in `batch_proof.leaves` order.
 		associated_input_proofs: Vec<Vec<u8>>,
 	},
@@ -31,7 +31,7 @@ pub enum ProveRequest {
 		/// TREE_ACCOUNTS_NULLIFIER).
 		tree_index: u8,
 		/// The chained nullifier insertion proof (native witness).
-		batch_proof: NullifierChainedInsertProof<Hash>,
+		batch_proof: NullifierChainedInsertProof<HashOutput>,
 		/// One associated input proof per leaf order for this batch.
 		associated_input_proofs: Vec<Vec<u8>>,
 	},
@@ -46,7 +46,7 @@ pub enum ProveOutcome {
 		/// Echoed from the originating `ProveRequest`.
 		tree_index: u8,
 		/// The new consumed root after insertion.
-		new_root: Hash,
+		new_root: HashOutput,
 		/// Groth16 proof formatted for the Solidity contract.
 		solidity_proof: Box<SolidityProof>,
 		/// Aggregated validity proof for the public inputs in the batch.

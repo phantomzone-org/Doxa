@@ -6,7 +6,7 @@ use alloy::{
 	signers::{local::PrivateKeySigner, Signer},
 };
 use anyhow::Context;
-use tessera_trees::tree::{hasher::Hash, CommitmentTree, NullifierTree};
+use tessera_trees::tree::{hasher::HashOutput, CommitmentTree, NullifierTree};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -38,7 +38,7 @@ struct InFlightBatch {
 	requests: Vec<PendingRequest>,
 	real_commitments_bytes: Vec<[u8; 32]>,
 	proving_commitments_bytes: Vec<[u8; 32]>,
-	proving_commitments_hash: Vec<Hash>,
+	proving_commitments_hash: Vec<HashOutput>,
 }
 
 /// Per-tree witness data stored for one slot in an in-flight two-phase batch.
@@ -47,7 +47,7 @@ struct InFlightBatch {
 struct TxPerTreeBatch {
 	real_commitments_bytes: Vec<[u8; 32]>,
 	proving_commitments_bytes: Vec<[u8; 32]>,
-	proving_commitments_hash: Vec<Hash>,
+	proving_commitments_hash: Vec<HashOutput>,
 	associated_input_proofs: Vec<Vec<u8>>,
 }
 
@@ -102,13 +102,13 @@ pub struct Sequencer {
 	pub notes_nullifier_state: NullifierTreeState,
 	pub accounts_commitment_state: CommitmentTreeState,
 	pub accounts_nullifier_state: NullifierTreeState,
-	notes_commitment_store: Option<TreeStore<CommitmentTree<Hash>>>,
+	notes_commitment_store: Option<TreeStore<CommitmentTree<HashOutput>>>,
 	notes_commitment_meta: Option<StoreMeta>,
-	notes_nullifier_store: Option<TreeStore<NullifierTree<Hash>>>,
+	notes_nullifier_store: Option<TreeStore<NullifierTree<HashOutput>>>,
 	notes_nullifier_meta: Option<StoreMeta>,
-	accounts_commitment_store: Option<TreeStore<CommitmentTree<Hash>>>,
+	accounts_commitment_store: Option<TreeStore<CommitmentTree<HashOutput>>>,
 	accounts_commitment_meta: Option<StoreMeta>,
-	accounts_nullifier_store: Option<TreeStore<NullifierTree<Hash>>>,
+	accounts_nullifier_store: Option<TreeStore<NullifierTree<HashOutput>>>,
 	accounts_nullifier_meta: Option<StoreMeta>,
 	prover_client: Option<HttpProverClient>,
 	result_tx: Option<mpsc::Sender<ProveOutcome>>,
@@ -241,7 +241,7 @@ impl Sequencer {
 
 		// Step 1: load local persisted trees (snapshot + WAL). This is fast-path startup.
 		// These local stores are treated as cache and may be behind chain head.
-		let mut store = TreeStore::<CommitmentTree<Hash>>::open(
+		let mut store = TreeStore::<CommitmentTree<HashOutput>>::open(
 			&self.config.tree_store_path,
 			TreeId::NotesCommitment,
 			self.config.snapshot_every_batches,
@@ -249,7 +249,7 @@ impl Sequencer {
 		let (mut tree, meta0) = store.load_or_init(|| CommitmentTree::new(TREE_DEPTH))?;
 		let (wal_pos, replayed) =
 			store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-				let leaves: Vec<Hash> = vals
+				let leaves: Vec<HashOutput> = vals
 					.into_iter()
 					.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(b)))
 					.collect::<anyhow::Result<Vec<_>>>()?;

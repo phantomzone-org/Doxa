@@ -1,5 +1,6 @@
 pub(crate) mod merkle;
 pub(crate) mod signature;
+pub(crate) mod u256;
 
 mod tests {
 	use plonky2::{hash::hash_types::RichField, plonk::circuit_data::CircuitConfig};

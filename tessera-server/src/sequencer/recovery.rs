@@ -16,7 +16,7 @@ impl Sequencer {
 
 	pub(super) fn load_other_trees(&mut self) -> anyhow::Result<()> {
 		{
-			let mut store = TreeStore::<NullifierTree<Hash>>::open(
+			let mut store = TreeStore::<NullifierTree<HashOutput>>::open(
 				&self.config.tree_store_path,
 				TreeId::NotesNullifier,
 				self.config.snapshot_every_batches,
@@ -24,7 +24,7 @@ impl Sequencer {
 			let (mut tree, meta0) = store.load_or_init(|| NullifierTree::new(TREE_DEPTH))?;
 			let (wal_pos, replayed) =
 				store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-					let values: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
+					let values: Vec<HashOutput> = contract::bytes_slice_to_hashes(&vals)?;
 					let proof = t.insert_chained(values)?;
 					anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
 					Ok(())
@@ -48,7 +48,7 @@ impl Sequencer {
 		}
 
 		{
-			let mut store = TreeStore::<CommitmentTree<Hash>>::open(
+			let mut store = TreeStore::<CommitmentTree<HashOutput>>::open(
 				&self.config.tree_store_path,
 				TreeId::AccountsCommitment,
 				self.config.snapshot_every_batches,
@@ -56,7 +56,7 @@ impl Sequencer {
 			let (mut tree, meta0) = store.load_or_init(|| CommitmentTree::new(TREE_DEPTH))?;
 			let (wal_pos, replayed) =
 				store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-					let leaves: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
+					let leaves: Vec<HashOutput> = contract::bytes_slice_to_hashes(&vals)?;
 					let proof = t.insert_batch(leaves)?;
 					anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
 					Ok(())
@@ -84,7 +84,7 @@ impl Sequencer {
 		}
 
 		{
-			let mut store = TreeStore::<NullifierTree<Hash>>::open(
+			let mut store = TreeStore::<NullifierTree<HashOutput>>::open(
 				&self.config.tree_store_path,
 				TreeId::AccountsNullifier,
 				self.config.snapshot_every_batches,
@@ -92,7 +92,7 @@ impl Sequencer {
 			let (mut tree, meta0) = store.load_or_init(|| NullifierTree::new(TREE_DEPTH))?;
 			let (wal_pos, replayed) =
 				store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-					let values: Vec<Hash> = contract::bytes_slice_to_hashes(&vals)?;
+					let values: Vec<HashOutput> = contract::bytes_slice_to_hashes(&vals)?;
 					let proof = t.insert_chained(values)?;
 					anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
 					Ok(())
@@ -430,7 +430,7 @@ impl Sequencer {
 						batch_size,
 						&real_commitments_bytes,
 					)?;
-					let commitments_hash: Vec<Hash> =
+					let commitments_hash: Vec<HashOutput> =
 						contract::bytes_slice_to_hashes(&commitments_bytes)?;
 					let proof = self
 						.notes_commitment_state
@@ -486,7 +486,7 @@ impl Sequencer {
 						batch_size,
 						&real_commitments_bytes,
 					)?;
-					let commitments_hash: Vec<Hash> =
+					let commitments_hash: Vec<HashOutput> =
 						contract::bytes_slice_to_hashes(&commitments_bytes)?;
 					let proof = self
 						.notes_nullifier_state
@@ -545,7 +545,7 @@ impl Sequencer {
 						batch_size,
 						&real_commitments_bytes,
 					)?;
-					let commitments_hash: Vec<Hash> =
+					let commitments_hash: Vec<HashOutput> =
 						contract::bytes_slice_to_hashes(&commitments_bytes)?;
 					let proof = self
 						.accounts_commitment_state
@@ -603,7 +603,7 @@ impl Sequencer {
 						batch_size,
 						&real_commitments_bytes,
 					)?;
-					let commitments_hash: Vec<Hash> =
+					let commitments_hash: Vec<HashOutput> =
 						contract::bytes_slice_to_hashes(&commitments_bytes)?;
 					let proof = self
 						.accounts_nullifier_state
@@ -819,7 +819,7 @@ impl Sequencer {
 			batch_size,
 			&nc_real,
 		)?;
-		let nc_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nc_padded)?;
+		let nc_hashes: Vec<HashOutput> = crate::contract::bytes_slice_to_hashes(&nc_padded)?;
 		let nc_proof = self
 			.notes_commitment_state
 			.tree
@@ -837,7 +837,7 @@ impl Sequencer {
 			batch_size,
 			&nn_real,
 		)?;
-		let nn_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nn_padded)?;
+		let nn_hashes: Vec<HashOutput> = crate::contract::bytes_slice_to_hashes(&nn_padded)?;
 		let nn_proof = self
 			.notes_nullifier_state
 			.tree
@@ -855,7 +855,7 @@ impl Sequencer {
 			batch_size,
 			&ac_real,
 		)?;
-		let ac_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&ac_padded)?;
+		let ac_hashes: Vec<HashOutput> = crate::contract::bytes_slice_to_hashes(&ac_padded)?;
 		let ac_proof = self
 			.accounts_commitment_state
 			.tree
@@ -873,7 +873,7 @@ impl Sequencer {
 			batch_size,
 			&an_real,
 		)?;
-		let an_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&an_padded)?;
+		let an_hashes: Vec<HashOutput> = crate::contract::bytes_slice_to_hashes(&an_padded)?;
 		let an_proof = self
 			.accounts_nullifier_state
 			.tree

@@ -238,7 +238,7 @@ impl Sequencer {
 			batch_size,
 			&real_commitments_bytes,
 		)?;
-		let proving_commitments_hash: Vec<Hash> =
+		let proving_commitments_hash: Vec<HashOutput> =
 			contract::bytes_slice_to_hashes(&proving_commitments_bytes)?;
 		let mut associated_input_proofs: Vec<Vec<u8>> = batch
 			.iter()
@@ -344,7 +344,7 @@ impl Sequencer {
 			batch_size,
 			&real_commitments_bytes,
 		)?;
-		let proving_commitments_hash: Vec<Hash> =
+		let proving_commitments_hash: Vec<HashOutput> =
 			contract::bytes_slice_to_hashes(&proving_commitments_bytes)?;
 		let associated_input_proofs = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch_size];
 
@@ -424,7 +424,7 @@ impl Sequencer {
 			batch_size,
 			&real_commitments_bytes,
 		)?;
-		let proving_commitments_hash: Vec<Hash> =
+		let proving_commitments_hash: Vec<HashOutput> =
 			contract::bytes_slice_to_hashes(&proving_commitments_bytes)?;
 		let associated_input_proofs = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch_size];
 
@@ -516,7 +516,7 @@ impl Sequencer {
 			batch_size,
 			&real_commitments_bytes,
 		)?;
-		let proving_commitments_hash: Vec<Hash> =
+		let proving_commitments_hash: Vec<HashOutput> =
 			contract::bytes_slice_to_hashes(&proving_commitments_bytes)?;
 		let associated_input_proofs = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); batch_size];
 
@@ -901,7 +901,7 @@ impl Sequencer {
 			batch_size,
 			&nc_real,
 		)?;
-		let nc_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nc_padded)?;
+		let nc_hashes: Vec<HashOutput> = crate::contract::bytes_slice_to_hashes(&nc_padded)?;
 		let mut nc_tmp = self.notes_commitment_state.tree.clone();
 		let nc_proof = nc_tmp.insert_batch(nc_hashes.clone())?;
 		anyhow::ensure!(nc_proof.verify(), "NC native proof failed (private tx)");
@@ -922,7 +922,7 @@ impl Sequencer {
 			batch_size,
 			&nn_real,
 		)?;
-		let nn_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nn_padded)?;
+		let nn_hashes: Vec<HashOutput> = crate::contract::bytes_slice_to_hashes(&nn_padded)?;
 		let mut nn_tmp = self.notes_nullifier_state.tree.clone();
 		let nn_proof = nn_tmp.insert_chained(nn_hashes.clone())?;
 		anyhow::ensure!(nn_proof.verify(), "NN native proof failed (private tx)");
@@ -949,7 +949,7 @@ impl Sequencer {
 			batch_size,
 			&ac_real,
 		)?;
-		let ac_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&ac_padded)?;
+		let ac_hashes: Vec<HashOutput> = crate::contract::bytes_slice_to_hashes(&ac_padded)?;
 		let mut ac_tmp = self.accounts_commitment_state.tree.clone();
 		let ac_proof = ac_tmp.insert_batch(ac_hashes.clone())?;
 		anyhow::ensure!(ac_proof.verify(), "AC native proof failed (private tx)");
@@ -969,7 +969,7 @@ impl Sequencer {
 			batch_size,
 			&an_real,
 		)?;
-		let an_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&an_padded)?;
+		let an_hashes: Vec<HashOutput> = crate::contract::bytes_slice_to_hashes(&an_padded)?;
 		let mut an_tmp = self.accounts_nullifier_state.tree.clone();
 		let an_proof = an_tmp.insert_chained(an_hashes.clone())?;
 		anyhow::ensure!(an_proof.verify(), "AN native proof failed (private tx)");

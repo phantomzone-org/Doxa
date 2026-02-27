@@ -644,7 +644,7 @@ fn apply_reducer<
 mod tests {
 	use anyhow::Result;
 	use plonky2::{
-		field::types::Field,
+		field::types::{Field, PrimeField64},
 		iop::{
 			target::Target,
 			witness::{PartialWitness, WitnessWrite},

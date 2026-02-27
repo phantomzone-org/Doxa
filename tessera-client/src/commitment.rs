@@ -3,7 +3,7 @@ use plonky2_field::types::{Field, PrimeField64};
 use serde::{Deserialize, Serialize};
 use tessera_trees::{
 	F,
-	tree::{HASH_SIZE, hasher::Hash},
+	tree::{HASH_SIZE, hasher::HashOutput},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +55,7 @@ impl Commitment {
 		elems
 	}
 
-	pub fn as_field_hash(&self) -> Hash {
-		Hash(self.as_field_elems())
+	pub fn as_field_hash(&self) -> HashOutput {
+		HashOutput(self.as_field_elems())
 	}
 }

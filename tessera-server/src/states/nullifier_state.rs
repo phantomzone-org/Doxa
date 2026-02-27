@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use tessera_trees::tree::{hasher::Hash, NullifierTree};
+use tessera_trees::tree::{hasher::HashOutput, NullifierTree};
 
 use crate::{
 	states::{EventOrderKey, PendingRequest},
@@ -11,7 +11,7 @@ use crate::{
 /// Sequencer in-memory state for nullifier-request processing.
 pub struct NullifierTreeState {
 	/// Local nullifier tree mirror.
-	pub tree: NullifierTree<Hash>,
+	pub tree: NullifierTree<HashOutput>,
 	/// Pending consume requests keyed by canonical chain order.
 	pub pending_requests: BTreeMap<EventOrderKey, PendingRequest>,
 	/// Fast duplicate guard for requests currently in the pending queue.
@@ -34,18 +34,18 @@ impl NullifierTreeState {
 	}
 
 	/// Return the consumed-tree genesis root (empty append tree root).
-	pub fn genesis_root() -> Hash {
-		let tree: NullifierTree<Hash> = NullifierTree::new(TREE_DEPTH);
+	pub fn genesis_root() -> HashOutput {
+		let tree: NullifierTree<HashOutput> = NullifierTree::new(TREE_DEPTH);
 		tree.get_root()
 	}
 
 	/// Return current local consumed root.
-	pub fn current_root(&self) -> Hash {
+	pub fn current_root(&self) -> HashOutput {
 		self.tree.get_root()
 	}
 
 	/// Replay one consumed commitment into the local consumed append tree.
-	pub fn replay_consumed_commitment(&mut self, commitment: Hash) -> Result<()> {
+	pub fn replay_consumed_commitment(&mut self, commitment: HashOutput) -> Result<()> {
 		let proof = self.tree.insert_chained(vec![commitment])?;
 		anyhow::ensure!(
 			proof.verify(),

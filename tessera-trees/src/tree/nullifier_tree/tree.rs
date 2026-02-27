@@ -324,7 +324,7 @@ mod tests {
 
 	use crate::tree::{
 		NullifierInsertProof,
-		hasher::{Hash, MerkleHash, NewRandom},
+		hasher::{HashOutput, MerkleHash, NewRandom},
 		nullifier_tree::NullifierTree,
 	};
 
@@ -333,20 +333,20 @@ mod tests {
 
 	#[test]
 	fn test_new() {
-		let tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
-		assert!(matches!(tree.get_root(), Hash(_)));
+		let tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
+		assert!(matches!(tree.get_root(), HashOutput(_)));
 		assert_eq!(tree.nodes.len(), 1);
 	}
 
 	#[test]
 	fn test_insert_leaf_and_invariants() {
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
 		let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
 		for _ in 0..NUM_INSERTS as u64 {
-			let leaf: Hash = Hash::new_random(&mut rng);
-			let insert_proof: NullifierInsertProof<Hash> = tree.insert(leaf).unwrap();
+			let leaf: HashOutput = HashOutput::new_random(&mut rng);
+			let insert_proof: NullifierInsertProof<HashOutput> = tree.insert(leaf).unwrap();
 			assert!(insert_proof.verify());
 			// The tree should contain the inserted node.
 			let found_node = tree.find_node_by_label(&leaf);
@@ -361,14 +361,14 @@ mod tests {
 
 	#[test]
 	fn test_insert_and_find_node_by_label() {
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
 		let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
 		for _ in 0..NUM_INSERTS as u64 {
-			let leaf: Hash = Hash::new_random(&mut rng);
+			let leaf: HashOutput = HashOutput::new_random(&mut rng);
 
-			let proof: NullifierInsertProof<Hash> = tree.insert(leaf).unwrap();
+			let proof: NullifierInsertProof<HashOutput> = tree.insert(leaf).unwrap();
 			assert!(proof.verify());
 
 			// find_node_by_label must find the inserted node
@@ -381,11 +381,11 @@ mod tests {
 	/// Duplicate labels must be rejected (uniqueness).
 	#[test]
 	fn test_duplicate_label_rejected() {
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
 		let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
-		let value: Hash = Hash::new_random(&mut rng);
+		let value: HashOutput = HashOutput::new_random(&mut rng);
 
 		assert!(tree.insert(value).unwrap().verify());
 		assert!(tree.insert(value).is_err());
@@ -395,11 +395,11 @@ mod tests {
 	/// depending on your strict-inequality policy.
 	#[test]
 	fn test_non_membership_rejects_equal_boundary() {
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
 		let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
-		let value: Hash = Hash::new_random(&mut rng);
+		let value: HashOutput = HashOutput::new_random(&mut rng);
 
 		assert!(tree.insert(value).unwrap().verify());
 
@@ -414,9 +414,9 @@ mod tests {
 	/// Very large labels should still behave correctly (ordering comparisons on Hash bytes).
 	#[test]
 	fn test_label_boundary() {
-		let mut tree = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree = NullifierTree::<HashOutput>::new(DEPTH);
 
-		let mut label: Hash = Hash::TAIL;
+		let mut label: HashOutput = HashOutput::TAIL;
 		label.0[3] -= GoldilocksField::ONE;
 
 		let p = tree.insert(label).unwrap();
@@ -432,12 +432,12 @@ mod tests {
 		const N: usize = 200;
 		let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
-		let mut values: Vec<Hash> = Vec::with_capacity(N);
+		let mut values: Vec<HashOutput> = Vec::with_capacity(N);
 
 		for _ in 0..N {
-			let value: Hash = Hash::new_random(&mut rng);
+			let value: HashOutput = HashOutput::new_random(&mut rng);
 			values.push(value);
 			let p = tree.insert(value).unwrap();
 			assert!(p.verify());

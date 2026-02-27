@@ -8,7 +8,7 @@ use plonky2::{
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	tree::{
-		hasher::{Hash, Keccak256Commitment},
+		hasher::{HashOutput, Keccak256Commitment},
 		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
 		NullifierChainedInsertProof,
 	},
@@ -88,7 +88,7 @@ impl CommitmentProverService {
 			batch_size,
 			Some(&keccak_com),
 		);
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		let circuit_data = builder.build::<ConfigNative>();
 
 		info!(batch_size, "prover initialized");
@@ -101,9 +101,10 @@ impl CommitmentProverService {
 	}
 
 	/// Generate a complete Groth16 proof for the given consume batch.
-	pub fn prove(&self, batch_proof: &BatchCommitmentProof<Hash>) -> Result<SolidityProof> {
+	pub fn prove(&self, batch_proof: &BatchCommitmentProof<HashOutput>) -> Result<SolidityProof> {
 		let mut pw = PartialWitness::new();
-		self.targets.set::<Hash, F, 32>(&mut pw, batch_proof)?;
+		self.targets
+			.set::<HashOutput, F, 32>(&mut pw, batch_proof)?;
 
 		let plonky2_proof = self.circuit_data.prove(pw)?;
 		self.circuit_data.verify(plonky2_proof.clone())?;
@@ -146,7 +147,7 @@ impl NullifierProverService {
 		let keccak_com = Keccak256Commitment::<ConfigNative, D>::new(&mut builder);
 		let targets =
 			ChainedInsertProofTargets::new::<F, D>(&mut builder, 32, batch_size, Some(&keccak_com));
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		let circuit_data = builder.build::<ConfigNative>();
 
 		info!(batch_size, "nullifier prover initialized");
@@ -158,9 +159,13 @@ impl NullifierProverService {
 		})
 	}
 
-	pub fn prove(&self, batch_proof: &NullifierChainedInsertProof<Hash>) -> Result<SolidityProof> {
+	pub fn prove(
+		&self,
+		batch_proof: &NullifierChainedInsertProof<HashOutput>,
+	) -> Result<SolidityProof> {
 		let mut pw = PartialWitness::new();
-		self.targets.set::<Hash, F, 32>(&mut pw, batch_proof)?;
+		self.targets
+			.set::<HashOutput, F, 32>(&mut pw, batch_proof)?;
 
 		let plonky2_proof = self.circuit_data.prove(pw)?;
 		self.circuit_data.verify(plonky2_proof.clone())?;

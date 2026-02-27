@@ -241,7 +241,7 @@ mod test {
 
 	use crate::tree::{
 		NullifierTree,
-		hasher::{Hash, NewFromU64, NewRandom},
+		hasher::{HashOutput, NewFromU64, NewRandom},
 		nullifier_tree::proofs::chained_insertion::NullifierChainedInsertProof,
 	};
 
@@ -252,13 +252,13 @@ mod test {
 
 		println!("=== Chained Insert Proof Native Test ===\n");
 
-		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
 
 		// Collect individual insertion proofs
 		let mut proofs = Vec::with_capacity(NUM_INSERTIONS);
 
 		for i in 0..NUM_INSERTIONS {
-			let value = Hash::new_from_u64((i + 1) as u64 * 1000);
+			let value = HashOutput::new_from_u64((i + 1) as u64 * 1000);
 			let proof = tree.insert(value)?;
 
 			println!("Insertion {}: value={}", i, value);
@@ -300,25 +300,25 @@ mod test {
 
 		println!("=== Chained Insert Proof Random Test ===\n");
 
-		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
 		let mut rng = StdRng::from_seed([42u8; 32]);
 
 		// Pre-populate tree
 		for _ in 0..100 {
-			tree.insert(Hash::new_random(&mut rng))?;
+			tree.insert(HashOutput::new_random(&mut rng))?;
 		}
 
 		// Collect random insertion proofs
 		let mut proofs = Vec::with_capacity(NUM_INSERTIONS);
 
 		for _ in 0..NUM_INSERTIONS {
-			let value = Hash::new_random(&mut rng);
+			let value = HashOutput::new_random(&mut rng);
 			let proof = tree.insert(value)?;
 			proofs.push(proof);
 		}
 
 		// Create and verify chained proof
-		let chained_proof: NullifierChainedInsertProof<Hash> =
+		let chained_proof: NullifierChainedInsertProof<HashOutput> =
 			NullifierChainedInsertProof::new(proofs);
 		assert!(
 			chained_proof.verify(),

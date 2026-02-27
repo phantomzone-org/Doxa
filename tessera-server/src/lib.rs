@@ -21,7 +21,7 @@ use plonky2::{
 use rand::{rngs::StdRng, SeedableRng};
 use tessera_trees::{
 	tree::{
-		hasher::{Hash, Keccak256Commitment, NewRandom},
+		hasher::{HashOutput, Keccak256Commitment, NewRandom},
 		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
 		CommitmentTree, NullifierChainedInsertProof, NullifierTree,
 	},
@@ -45,24 +45,24 @@ pub fn sample_batch_commitment_tree_proof(
 ) -> Result<(
 	CircuitDataNative,
 	ProofNative,
-	BatchCommitmentProof<Hash>,
-	Vec<Hash>,
+	BatchCommitmentProof<HashOutput>,
+	Vec<HashOutput>,
 )> {
 	const DEPTH: usize = 32;
 	const BATCH_SIZE: usize = 128;
 
 	print!("Alloc tree 2^{DEPTH}: ");
 	let now = Instant::now();
-	let mut tree: CommitmentTree<Hash> = CommitmentTree::new(TREE_DEPTH);
+	let mut tree: CommitmentTree<HashOutput> = CommitmentTree::new(TREE_DEPTH);
 	println!("{:?}", now.elapsed());
 
 	let mut rng: StdRng = StdRng::from_seed(seed);
 
 	print!("Insert batch: ");
 	let now: Instant = Instant::now();
-	let mut batch: Vec<Hash> = Vec::with_capacity(BATCH_SIZE);
+	let mut batch: Vec<HashOutput> = Vec::with_capacity(BATCH_SIZE);
 	for _ in 0..BATCH_SIZE {
-		batch.push(Hash::new_random(&mut rng));
+		batch.push(HashOutput::new_random(&mut rng));
 	}
 	let batch_proof = tree.insert_batch(batch.clone())?;
 	assert!(batch_proof.verify());
@@ -88,13 +88,13 @@ pub fn sample_batch_commitment_tree_proof(
 
 	print!("Connect: ");
 	let now: Instant = Instant::now();
-	targets.connect::<Hash, F, D>(&mut builder);
+	targets.connect::<HashOutput, F, D>(&mut builder);
 	println!("{:?}", now.elapsed());
 
 	print!("Set Witnesses: ");
 	let now: Instant = Instant::now();
 	let mut pw: PartialWitness<F> = PartialWitness::new();
-	targets.set::<Hash, F, DEPTH>(&mut pw, &batch_proof)?;
+	targets.set::<HashOutput, F, DEPTH>(&mut pw, &batch_proof)?;
 	println!("{:?}", now.elapsed());
 
 	print!("Build: ");
@@ -137,8 +137,8 @@ pub fn sample_batch_nullifier_tree_proof(
 ) -> Result<(
 	CircuitDataNative,
 	ProofNative,
-	NullifierChainedInsertProof<Hash>,
-	Vec<Hash>,
+	NullifierChainedInsertProof<HashOutput>,
+	Vec<HashOutput>,
 )> {
 	const DEPTH: usize = 32;
 	const BATCH_SIZE: usize = 128;
@@ -152,9 +152,9 @@ pub fn sample_batch_nullifier_tree_proof(
 
 	print!("Insert batch: ");
 	let now = Instant::now();
-	let mut batch: Vec<Hash> = Vec::with_capacity(BATCH_SIZE);
+	let mut batch: Vec<HashOutput> = Vec::with_capacity(BATCH_SIZE);
 	for _ in 0..BATCH_SIZE {
-		batch.push(Hash::new_random(&mut rng));
+		batch.push(HashOutput::new_random(&mut rng));
 	}
 	let batch_proof = tree.insert_chained(batch.clone())?;
 	assert!(batch_proof.verify());
@@ -176,13 +176,13 @@ pub fn sample_batch_nullifier_tree_proof(
 
 	print!("Connect: ");
 	let now: Instant = Instant::now();
-	targets.connect::<Hash, F, D>(&mut builder);
+	targets.connect::<HashOutput, F, D>(&mut builder);
 	println!("{:?}", now.elapsed());
 
 	print!("Set Witnesses: ");
 	let now: Instant = Instant::now();
 	let mut pw: PartialWitness<F> = PartialWitness::new();
-	targets.set::<Hash, F, DEPTH>(&mut pw, &batch_proof)?;
+	targets.set::<HashOutput, F, DEPTH>(&mut pw, &batch_proof)?;
 	println!("{:?}", now.elapsed());
 
 	print!("Build: ");
