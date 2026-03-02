@@ -3,15 +3,15 @@ use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64};
 use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt, distr::Uniform};
-use tessera_trees::F;
+use tessera_trees::{F, tree::hasher::HashOutput};
 
 use crate::{
 	account::{NullifierKey, PublicIdentifier, StandardAccount, SubpoolId},
 	commitment::Commitment,
 };
 
-pub type NoteCommitment = Commitment;
-pub type NoteNullifier = Commitment;
+pub struct NoteCommitment(pub HashOutput);
+pub struct NoteNullifier(pub HashOutput);
 
 #[derive(Clone, Copy)]
 pub struct NodeIdentifier([F; 2]);
@@ -77,8 +77,10 @@ impl StandardNote {
 		// sender condition
 		input[15] = self.sender.subpool_id.0;
 		input[16..20].copy_from_slice(self.sender.public_id.0.0.as_slice());
-		let note_comm = <PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements;
-		NoteCommitment::new_from_field_elements(note_comm)
+
+		NoteCommitment(HashOutput(
+			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
+		))
 	}
 }
 
@@ -99,11 +101,13 @@ impl PositionedStandardNode {
 
 	pub fn nullifier(&self, nk: &NullifierKey) -> NoteNullifier {
 		let mut input = [F::ZERO; 9];
-		input[..4].copy_from_slice(&self.note.commitment().as_field_elems());
+		input[..4].copy_from_slice(&self.note.commitment().0.0);
 		input[4..8].copy_from_slice(nk.0.as_slice());
 		input[8] = self.position;
-		let nullifier = <PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements;
-		NoteNullifier::new_from_field_elements(nullifier)
+
+		NoteNullifier(HashOutput(
+			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
+		))
 	}
 }
 

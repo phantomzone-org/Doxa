@@ -1,4 +1,7 @@
-use std::ops::{Add, Mul, Neg};
+use std::{
+	hash::Hash,
+	ops::{Add, Mul, Neg},
+};
 
 use plonky2_field::{
 	extension::{Extendable, FieldExtension, Frobenius, quintic::QuinticExtension},
@@ -12,6 +15,14 @@ use crate::{p2::signature::LocalPointEw, schnorr::Scalar};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompressedPoint<F: Extendable<5>> {
 	pub(crate) w: QuinticExtension<F>,
+}
+
+impl<F: PrimeField64 + Extendable<5>> Hash for CompressedPoint<F> {
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		for f in &self.w.0 {
+			f.to_canonical_u64().hash(state);
+		}
+	}
 }
 
 impl<F: Field + Extendable<5>> From<[u64; 5]> for CompressedPoint<F> {

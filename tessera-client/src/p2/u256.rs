@@ -16,7 +16,6 @@ use plonky2::{
 	util::serialization::{Buffer, IoResult, Read, Write},
 };
 use plonky2_field::extension::Extendable;
-use primitive_types::U256;
 use tessera_trees::plonky2_gadgets::u32::{CircuitBuilderU32, U32Target};
 
 /// A 256-bit unsigned integer in a Plonky2 circuit, stored as 8 × [`U32Target`].

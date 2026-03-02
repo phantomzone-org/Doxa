@@ -15,7 +15,7 @@ use plonky2::{
 		generator::SimpleGenerator,
 		target::{BoolTarget, Target},
 		wire::Wire,
-		witness::{Witness, WitnessWrite},
+		witness::{PartialWitness, Witness, WitnessWrite},
 	},
 	plonk::circuit_data::{CircuitConfig, CommonCircuitData},
 	util::serialization::{IoResult, Read, Write},
@@ -27,7 +27,10 @@ use plonky2_field::{
 	types::Field,
 };
 
-use crate::ecgfp5::{CompressedPoint, GENERATOR_X, GENERATOR_Y, PointEw};
+use crate::{
+	ecgfp5::{CompressedPoint, GENERATOR_X, GENERATOR_Y, Legendre, PointEw},
+	schnorr::Scalar,
+};
 
 /// [x,y] coordinates of the offset point O added to the accumulator at the
 /// start of the chain
@@ -1319,6 +1322,7 @@ pub(crate) struct SchnorrTargets {
 }
 
 #[derive(Clone, Copy)]
+// TODO: why this is abstract over F, when F always equals Target
 pub(crate) struct PubkeyTarget<F>(pub(crate) LocalQuinticExtension<F>);
 
 /// Build a Schnorr signature verification circuit.
@@ -1529,8 +1533,9 @@ pub(crate) fn verify_16_messages_gadget<F: RichField + Extendable<D>, const D: u
 	let messages: [HashOutTarget; 16] = std::array::from_fn(|_| builder.add_virtual_hash());
 
 	// Verify the Schnorr signature for each message.
+	let tr = builder._true();
 	let schnorr: Box<[SchnorrTargets; 16]> = Box::new(std::array::from_fn(|i| {
-		conditional_schnorr_verify_gadget(builder, messages[i], pubkey)
+		conditional_schnorr_verify_gadget(builder, messages[i], pubkey, tr)
 	}));
 
 	// Hash all message elements via Poseidon.
@@ -1548,6 +1553,171 @@ pub(crate) fn verify_16_messages_gadget<F: RichField + Extendable<D>, const D: u
 		schnorr,
 		messages,
 	}
+}
+
+pub(crate) fn set_gfp5_target<F: Field>(
+	pw: &mut PartialWitness<F>,
+	targets: [Target; 5],
+	v: LocalQuinticExtension<F>,
+) {
+	izip!(targets.into_iter(), v.0.into_iter()).for_each(|(t0, v0)| {
+		pw.set_target(t0, v0).unwrap();
+	});
+}
+
+struct GateWitness<F: RichField + Extendable<5>> {
+	accdblin: PointEw<F>,
+	acco1: PointEw<F>,
+	accdblo1: PointEw<F>,
+	acco2: PointEw<F>,
+	accdblo2: PointEw<F>,
+	acco3: PointEw<F>,
+	accdblo3: PointEw<F>,
+	acco4: PointEw<F>,
+	lambda1: QuinticExtension<F>,
+	lambda2: QuinticExtension<F>,
+	lambda3: QuinticExtension<F>,
+	lambda4: QuinticExtension<F>,
+}
+
+fn compute_gate_witness<F: RichField + Extendable<5>>(
+	sp: [F; 4],
+	sg: [F; 4],
+	p: PointEw<F>,
+	accin: PointEw<F>,
+	is_last: bool,
+) -> GateWitness<F> {
+	let g = PointEw::generator();
+	let neg_off = PointEw::from(OFFSET_NEG_319);
+	if is_last {
+		assert!(sp[3] == F::ZERO && sg[3] == F::ONE);
+	}
+
+	let step = |acc: PointEw<F>,
+	            spi: F,
+	            sgi: F,
+	            index: usize|
+	 -> (PointEw<F>, PointEw<F>, QuinticExtension<F>) {
+		let accdbl = if is_last && index == 3 {
+			acc
+		} else {
+			acc.double()
+		};
+		let p2 = if is_last && index == 3 { neg_off } else { g };
+		let lambda = accdbl.tangent(&p);
+
+		let acco = match (spi.is_one(), sgi.is_one()) {
+			(false, false) => accdbl,
+			(true, false) => accdbl.add(&p),
+			(false, true) => accdbl.add(&p2),
+			(true, true) => accdbl.add(&p).add(&p2),
+		};
+
+		(accdbl, acco, lambda)
+	};
+
+	let (accdbl, acco1, lambda1) = step(accin, sp[0], sg[0], 0);
+	let (accdblo1, acco2, lambda2) = step(acco1, sp[1], sg[1], 1);
+	let (accdblo2, acco3, lambda3) = step(acco2, sp[2], sg[2], 2);
+	let (accdblo3, acco4, lambda4) = step(acco3, sp[3], sg[3], 3);
+
+	GateWitness {
+		accdblin: accdbl,
+		acco1,
+		accdblo1,
+		acco2,
+		accdblo2,
+		acco3,
+		accdblo3,
+		acco4,
+		lambda1,
+		lambda2,
+		lambda3,
+		lambda4,
+	}
+}
+
+pub(crate) fn set_schnorr_witness<F: RichField + Legendre + Extendable<5>>(
+	pw: &mut PartialWitness<F>,
+	targets: &SchnorrTargets,
+	q: PointEw<F>,
+	cr: CompressedPoint<F>,
+	e: Scalar,
+	s: Scalar,
+) {
+	set_gfp5_target(pw, targets.cr, cr.w.into());
+
+	let mut e_bits = e.to_bit_arr();
+	let mut s_bits = s.to_bit_arr();
+	e_bits.reverse();
+	s_bits.reverse();
+
+	let mut accin: PointEw<F> = OFFSET.into();
+	for gate_idx in 0..80usize {
+		let gate_targets = &targets.da4x[gate_idx];
+
+		let sp: [F; 4] = array::from_fn(|k| {
+			let bit_idx = 4 * gate_idx + k;
+			if bit_idx < 319 {
+				if e_bits[bit_idx] { F::ONE } else { F::ZERO }
+			} else {
+				F::ZERO
+			}
+		});
+		let sg: [F; 4] = array::from_fn(|k| {
+			let bit_idx = 4 * gate_idx + k;
+			if bit_idx < 319 {
+				if s_bits[bit_idx] { F::ONE } else { F::ZERO }
+			} else {
+				F::ONE
+			}
+		});
+
+		let w = compute_gate_witness(sp, sg, q, accin, gate_idx == 79);
+		set_dbladd4x_gate_witness(pw, gate_targets, q, accin, sp, sg, gate_idx == 79, &w);
+		accin = w.acco4;
+	}
+	assert_eq!(accin.encode(), cr);
+}
+
+fn set_dbladd4x_gate_witness<F: RichField + Extendable<5>>(
+	pw: &mut PartialWitness<F>,
+	t: &DoubleAdd4xTargets,
+	p: PointEw<F>,
+	accin: PointEw<F>,
+	sp: [F; 4],
+	sg: [F; 4],
+	lgs: bool,
+	w: &GateWitness<F>,
+) {
+	let lgs = if lgs { F::ONE } else { F::ZERO };
+	set_gfp5_target(pw, t.p.x.0, p.x.into());
+	set_gfp5_target(pw, t.p.y.0, p.y.into());
+	set_gfp5_target(pw, t.accin.x.0, accin.x.into());
+	set_gfp5_target(pw, t.accin.y.0, accin.y.into());
+	set_gfp5_target(pw, t.acco4.x.0, w.acco4.x.into());
+	set_gfp5_target(pw, t.acco4.y.0, w.acco4.y.into());
+	izip!(t.sp.iter(), sp.iter()).for_each(|(&tgt, &v)| pw.set_target(tgt, v).unwrap());
+	izip!(t.sg.iter(), sg.iter()).for_each(|(&tgt, &v)| pw.set_target(tgt, v).unwrap());
+	pw.set_target(t.lgs, lgs).unwrap();
+	set_gfp5_target(pw, t.acco1.x.0, w.acco1.x.into());
+	set_gfp5_target(pw, t.acco1.y.0, w.acco1.y.into());
+	set_gfp5_target(pw, t.acco2.x.0, w.acco2.x.into());
+	set_gfp5_target(pw, t.acco2.y.0, w.acco2.y.into());
+	set_gfp5_target(pw, t.acco3.x.0, w.acco3.x.into());
+	set_gfp5_target(pw, t.acco3.y.0, w.acco3.y.into());
+	set_gfp5_target(pw, t.accdblin.x.0, w.accdblin.x.into());
+	set_gfp5_target(pw, t.accdblin.y.0, w.accdblin.y.into());
+	set_gfp5_target(pw, t.accdblo1.x.0, w.accdblo1.x.into());
+	set_gfp5_target(pw, t.accdblo1.y.0, w.accdblo1.y.into());
+	set_gfp5_target(pw, t.accdblo2.x.0, w.accdblo2.x.into());
+	set_gfp5_target(pw, t.accdblo2.y.0, w.accdblo2.y.into());
+	set_gfp5_target(pw, t.accdblo3.x.0, w.accdblo3.x.into());
+	set_gfp5_target(pw, t.accdblo3.y.0, w.accdblo3.y.into());
+	set_gfp5_target(pw, t.lambda1.0, w.lambda1.into());
+	set_gfp5_target(pw, t.lambda2.0, w.lambda2.into());
+	set_gfp5_target(pw, t.lambda3.0, w.lambda3.into());
+	set_gfp5_target(pw, t.lambda4.0, w.lambda4.into());
 }
 
 #[cfg(test)]
@@ -1650,46 +1820,6 @@ mod tests {
 		}
 	}
 
-	fn set_signle_gate_witness<F: RichField + Extendable<5>>(
-		pw: &mut PartialWitness<F>,
-		t: &DoubleAdd4xTargets,
-		p: PointEw<F>,
-		accin: PointEw<F>,
-		sp: [F; 4],
-		sg: [F; 4],
-		lgs: bool,
-		w: &GateWitness<F>,
-	) {
-		let lgs = if lgs { F::ONE } else { F::ZERO };
-		set_gfp5_target(pw, t.p.x.0, p.x.into());
-		set_gfp5_target(pw, t.p.y.0, p.y.into());
-		set_gfp5_target(pw, t.accin.x.0, accin.x.into());
-		set_gfp5_target(pw, t.accin.y.0, accin.y.into());
-		set_gfp5_target(pw, t.acco4.x.0, w.acco4.x.into());
-		set_gfp5_target(pw, t.acco4.y.0, w.acco4.y.into());
-		izip!(t.sp.iter(), sp.iter()).for_each(|(&tgt, &v)| pw.set_target(tgt, v).unwrap());
-		izip!(t.sg.iter(), sg.iter()).for_each(|(&tgt, &v)| pw.set_target(tgt, v).unwrap());
-		pw.set_target(t.lgs, lgs).unwrap();
-		set_gfp5_target(pw, t.acco1.x.0, w.acco1.x.into());
-		set_gfp5_target(pw, t.acco1.y.0, w.acco1.y.into());
-		set_gfp5_target(pw, t.acco2.x.0, w.acco2.x.into());
-		set_gfp5_target(pw, t.acco2.y.0, w.acco2.y.into());
-		set_gfp5_target(pw, t.acco3.x.0, w.acco3.x.into());
-		set_gfp5_target(pw, t.acco3.y.0, w.acco3.y.into());
-		set_gfp5_target(pw, t.accdblin.x.0, w.accdblin.x.into());
-		set_gfp5_target(pw, t.accdblin.y.0, w.accdblin.y.into());
-		set_gfp5_target(pw, t.accdblo1.x.0, w.accdblo1.x.into());
-		set_gfp5_target(pw, t.accdblo1.y.0, w.accdblo1.y.into());
-		set_gfp5_target(pw, t.accdblo2.x.0, w.accdblo2.x.into());
-		set_gfp5_target(pw, t.accdblo2.y.0, w.accdblo2.y.into());
-		set_gfp5_target(pw, t.accdblo3.x.0, w.accdblo3.x.into());
-		set_gfp5_target(pw, t.accdblo3.y.0, w.accdblo3.y.into());
-		set_gfp5_target(pw, t.lambda1.0, w.lambda1.into());
-		set_gfp5_target(pw, t.lambda2.0, w.lambda2.into());
-		set_gfp5_target(pw, t.lambda3.0, w.lambda3.into());
-		set_gfp5_target(pw, t.lambda4.0, w.lambda4.into());
-	}
-
 	/// Helper to build and prove a single SigGate1 with given selector bits for
 	/// fixed P
 	fn prove_single_gate(sp: [GoldilocksField; 4], sg: [GoldilocksField; 4]) {
@@ -1725,7 +1855,7 @@ mod tests {
 		let data = builder.build::<C>();
 
 		let mut pw = PartialWitness::new();
-		set_signle_gate_witness(&mut pw, &gate_targets, p1, accin, sp, sg, false, &w);
+		set_dbladd4x_gate_witness(&mut pw, &gate_targets, p1, accin, sp, sg, false, &w);
 
 		let proof = data.prove(pw).expect("proof generation failed");
 		data.verify(proof).expect("verification failed");
@@ -1797,7 +1927,7 @@ mod tests {
 		let w = compute_gate_witness(sp, sg, p1, accin, false);
 
 		let mut inner_pw = PartialWitness::new();
-		set_signle_gate_witness(&mut inner_pw, &gate_targets, p1, accin, sp, sg, false, &w);
+		set_dbladd4x_gate_witness(&mut inner_pw, &gate_targets, p1, accin, sp, sg, false, &w);
 		let inner_proof = time!(
 			"inner prove",
 			inner_data.prove(inner_pw).expect("inner proof failed")
@@ -1845,78 +1975,6 @@ mod tests {
 			"rec verify",
 			rec_data.verify(rec_proof).expect("recursive verify failed")
 		);
-	}
-
-	struct GateWitness<F: RichField + Extendable<5>> {
-		accdblin: PointEw<F>,
-		acco1: PointEw<F>,
-		accdblo1: PointEw<F>,
-		acco2: PointEw<F>,
-		accdblo2: PointEw<F>,
-		acco3: PointEw<F>,
-		accdblo3: PointEw<F>,
-		acco4: PointEw<F>,
-		lambda1: QuinticExtension<F>,
-		lambda2: QuinticExtension<F>,
-		lambda3: QuinticExtension<F>,
-		lambda4: QuinticExtension<F>,
-	}
-
-	fn compute_gate_witness<F: RichField + Extendable<5>>(
-		sp: [F; 4],
-		sg: [F; 4],
-		p: PointEw<F>,
-		accin: PointEw<F>,
-		is_last: bool,
-	) -> GateWitness<F> {
-		let g = PointEw::generator();
-		let neg_off = PointEw::from(OFFSET_NEG_319);
-		if is_last {
-			assert!(sp[3] == F::ZERO && sg[3] == F::ONE);
-		}
-
-		let step = |acc: PointEw<F>,
-		            spi: F,
-		            sgi: F,
-		            index: usize|
-		 -> (PointEw<F>, PointEw<F>, QuinticExtension<F>) {
-			let accdbl = if is_last && index == 3 {
-				acc
-			} else {
-				acc.double()
-			};
-			let p2 = if is_last && index == 3 { neg_off } else { g };
-			let lambda = accdbl.tangent(&p);
-
-			let acco = match (spi.is_one(), sgi.is_one()) {
-				(false, false) => accdbl,
-				(true, false) => accdbl.add(&p),
-				(false, true) => accdbl.add(&p2),
-				(true, true) => accdbl.add(&p).add(&p2),
-			};
-
-			(accdbl, acco, lambda)
-		};
-
-		let (accdbl, acco1, lambda1) = step(accin, sp[0], sg[0], 0);
-		let (accdblo1, acco2, lambda2) = step(acco1, sp[1], sg[1], 1);
-		let (accdblo2, acco3, lambda3) = step(acco2, sp[2], sg[2], 2);
-		let (accdblo3, acco4, lambda4) = step(acco3, sp[3], sg[3], 3);
-
-		GateWitness {
-			accdblin: accdbl,
-			acco1,
-			accdblo1,
-			acco2,
-			accdblo2,
-			acco3,
-			accdblo3,
-			acco4,
-			lambda1,
-			lambda2,
-			lambda3,
-			lambda4,
-		}
 	}
 
 	#[test]
@@ -1998,10 +2056,11 @@ mod tests {
 		let config = CircuitConfig::standard_recursion_config();
 		// print_circuit_config(&config, "inner verifier config");
 		let mut builder = CircuitBuilder::<F, D>::new(config);
+		let tr = builder._true();
 		let message_target = builder.add_virtual_hash();
 		let pubkey_target = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
 		let targets =
-			conditional_schnorr_verify_gadget(&mut builder, message_target, pubkey_target);
+			conditional_schnorr_verify_gadget(&mut builder, message_target, pubkey_target, tr);
 		let inner_data = time!("inner build", builder.build::<C>());
 		print_common_data(&inner_data.common, "inner common data");
 
@@ -2018,58 +2077,8 @@ mod tests {
 					.unwrap();
 			}
 
-			let mut accin: PointEw<GoldilocksField> = OFFSET.into();
-
-			for gate_idx in 0..80usize {
-				let gate_targets = &targets.da4x[gate_idx];
-
-				// p selectors (e bits)
-				let sp: [F; 4] = array::from_fn(|k| {
-					let bit_idx = 4 * gate_idx + k;
-					// Scalar only has 319 bits
-					if bit_idx < 319 {
-						if e_bits[bit_idx] { F::ONE } else { F::ZERO }
-					} else {
-						F::ZERO
-					}
-				});
-
-				// g selectors (s bits)
-				let sg: [F; 4] = array::from_fn(|k| {
-					let bit_idx = 4 * gate_idx + k;
-					if bit_idx < 319 {
-						if s_bits[bit_idx] { F::ONE } else { F::ZERO }
-					} else {
-						// set to 1 to cancel offset
-						F::ONE
-					}
-				});
-
-				// let sp: [F; 4] = [F::ZERO; 4];
-				// let sg: [F; 4] = [F::ZERO; 4];
-
-				let w = compute_gate_witness(sp, sg, q, accin, gate_idx == 79);
-				set_signle_gate_witness(
-					&mut pw,
-					gate_targets,
-					q,
-					accin,
-					sp,
-					sg,
-					gate_idx == 79,
-					&w,
-				);
-
-				accin = w.acco4
-			}
-
+			set_schnorr_witness(&mut pw, &targets, q, cr, e, s);
 			// println!("for R w = {:?}, x = {:?}, y = {:?}", r.encode().w, r.x, r.y,);
-
-			assert_eq!(
-				accin.encode(),
-				r.encode(),
-				"accumulated result should equal R"
-			);
 		}
 
 		// Inner prove and verify
@@ -2122,6 +2131,81 @@ mod tests {
 		);
 	}
 
+	/// Demonstrates that `conditional_schnorr_verify_gadget` with `apply_check = false` accepts
+	/// an arbitrary (fake) signature.  We pick e, s freely, compute R = s·G + e·Q so that the
+	/// EC arithmetic in the DoubleAdd4x gates is satisfied, then prove without the hash check.
+	#[test]
+	fn test_conditional_schnorr_verify_apply_check_false() {
+		use plonky2_field::types::Field;
+
+		const D: usize = 2;
+		type C = PoseidonGoldilocksConfig;
+		type F = <C as GenericConfig<D>>::F;
+
+		// Use a known private key to get a valid curve point Q.
+		let d = Scalar::from_raw([
+			5400142491657709732,
+			15846706413025839610,
+			1661266468596303141,
+			17577886881415715269,
+			7270009582106593884,
+		]);
+		let privkey = PrivateKey::new(d);
+		let pubkey = privkey.public_key::<F>();
+		let q = pubkey.as_point();
+		let cq = q.encode();
+
+		// Arbitrary scalars — NOT derived from hashing any message.
+		let e = Scalar::from_raw([42, 0, 0, 0, 0]);
+		let s = Scalar::from_raw([7, 0, 0, 0, 0]);
+
+		// Compute R = s·G + e·Q natively.  This is exactly what the 80 DoubleAdd4x
+		// gates evaluate, so the EC-arithmetic witness will be consistent.
+		let g = PointEw::<F>::generator();
+		let sg = g.scalar_mul(&s);
+		let eq = q.scalar_mul(&e);
+		let r = sg.add(&eq);
+		let cr = r.encode();
+
+		// Build circuit with a virtual apply_check target.
+		let config = CircuitConfig::standard_recursion_config();
+		let mut builder = CircuitBuilder::<F, D>::new(config);
+		let apply_check = builder.add_virtual_bool_target_safe();
+		let message_target = builder.add_virtual_hash();
+		let pubkey_target = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
+		let targets = conditional_schnorr_verify_gadget(
+			&mut builder,
+			message_target,
+			pubkey_target,
+			apply_check,
+		);
+		let data = builder.build::<C>();
+
+		// Fill witness.
+		let mut pw = PartialWitness::new();
+
+		// Disable the hash check.
+		pw.set_bool_target(apply_check, false).unwrap();
+
+		// Public key Q and compressed R.
+		set_gfp5_target(&mut pw, pubkey_target.0.0, cq.into());
+		set_gfp5_target(&mut pw, targets.cr, cr.into());
+
+		// Message can be anything: it will not be hash-checked.
+		for j in 0..4 {
+			pw.set_target(message_target.elements[j], F::TWO).unwrap();
+		}
+
+		// Fill the 80 DoubleAdd4x gate witnesses.  Internally this verifies that the
+		// accumulated EC result encodes to `cr`, so R = s·G + e·Q must hold natively.
+		set_schnorr_witness(&mut pw, &targets, q, cr, e, s);
+
+		let proof = data
+			.prove(pw)
+			.expect("proof must succeed: apply_check=false skips hash check");
+		data.verify(proof).expect("verification failed");
+	}
+
 	// #[test]
 	// fn generate_offset_neg_320() {
 	//     let p = PointEw::<GoldilocksField>::from(OFFSET);
@@ -2133,52 +2217,6 @@ mod tests {
 
 	//     println!("2^319*P = {:?}", -p319);
 	// }
-
-	/// Helper: fill the witness for one `SchnorrTargets` given the native
-	/// signature data for a single message.
-	fn set_schnorr_witness<F: RichField + Legendre + Extendable<5>>(
-		pw: &mut PartialWitness<F>,
-		targets: &SchnorrTargets,
-		q: PointEw<F>,
-		cr: CompressedPoint<F>,
-		e: Scalar,
-		s: Scalar,
-	) {
-		set_gfp5_target(pw, targets.cr, cr.w.into());
-
-		let mut e_bits = e.to_bit_arr();
-		let mut s_bits = s.to_bit_arr();
-		e_bits.reverse();
-		s_bits.reverse();
-
-		let mut accin: PointEw<F> = OFFSET.into();
-		for gate_idx in 0..80usize {
-			let gate_targets = &targets.da4x[gate_idx];
-
-			let sp: [F; 4] = array::from_fn(|k| {
-				let bit_idx = 4 * gate_idx + k;
-				if bit_idx < 319 {
-					if e_bits[bit_idx] { F::ONE } else { F::ZERO }
-				} else {
-					F::ZERO
-				}
-			});
-			let sg: [F; 4] = array::from_fn(|k| {
-				let bit_idx = 4 * gate_idx + k;
-				if bit_idx < 319 {
-					if s_bits[bit_idx] { F::ONE } else { F::ZERO }
-				} else {
-					F::ONE
-				}
-			});
-
-			let w = compute_gate_witness(sp, sg, q, accin, gate_idx == 79);
-			set_signle_gate_witness(pw, gate_targets, q, accin, sp, sg, gate_idx == 79, &w);
-			accin = w.acco4;
-		}
-		// Sanity: the accumulated point must equal R (cr decoded).
-		assert_eq!(accin.encode(), cr);
-	}
 
 	#[test]
 	// TODO: This is here only temporarily

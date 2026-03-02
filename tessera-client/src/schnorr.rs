@@ -2,12 +2,12 @@ use std::ops::{Add, Mul, Neg};
 
 use plonky2::hash::hashing::hash_n_to_m_no_pad;
 use plonky2_field::{
-	extension::Extendable,
+	extension::{Extendable, quintic::QuinticExtension},
 	goldilocks_field::GoldilocksField,
 	types::{Field, PrimeField64},
 };
 
-use crate::ecgfp5::PointEw;
+use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 
 /// A scalar (integer modulo the prime group order n).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +214,15 @@ impl PrivateKey {
 	// }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct CompressedPublicKey<F: Extendable<5>>(pub(crate) CompressedPoint<F>);
+
+impl<F: PrimeField64 + Legendre + Extendable<5>> From<PublicKey<F>> for CompressedPublicKey<F> {
+	fn from(value: PublicKey<F>) -> Self {
+		CompressedPublicKey(value.0.encode())
+	}
+}
+
 /// A public key for Schnorr signatures.
 ///
 /// This is a point on the curve that corresponds to a private key.
@@ -237,7 +246,7 @@ pub(crate) struct Signature {
 	pub(crate) s: Scalar,
 }
 
-fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar {
+pub(crate) fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar {
 	use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 
 	let mut out = [GoldilocksField::ZERO; 5];

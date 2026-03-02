@@ -21,15 +21,12 @@ pub trait Node: Sized + From<HashOutput> {
 	fn inner(&self) -> HashOutput;
 
 	fn compress_two(lhs: &Self, rhs: &Self) -> Self {
-		// Hashing two nodes is compression function from 512+64 bits -> 256 bits
-		let mut input = [F::ZERO; HASH_SIZE * 2 + 1];
-		input[0..HASH_SIZE].copy_from_slice(lhs.inner().0.as_ref());
-		input[HASH_SIZE..2 * HASH_SIZE].copy_from_slice(rhs.inner().0.as_ref());
-		// TODO: do we need domain separator here?
-
-		Self::from(HashOutput(
-			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
-		))
+		// Use two_to_one so the native hash matches the circuit's PoseidonPermutation gadget.
+		use plonky2::hash::hash_types::HashOut;
+		let left = HashOut { elements: lhs.inner().0 };
+		let right = HashOut { elements: rhs.inner().0 };
+		let result = <PoseidonHash as Hasher<F>>::two_to_one(left, right);
+		Self::from(HashOutput(result.elements))
 	}
 }
 
@@ -183,6 +180,7 @@ where
 	}
 
 	pub fn set_leaf(&mut self, at_index: usize, to_leaf: NType::Leaf) {
+		self.leaf_index_map.insert(to_leaf.clone(), at_index);
 		let node: NType = to_leaf.into();
 		let mut index = at_index;
 
@@ -195,6 +193,7 @@ where
 			self.tree[i + 1][index] = NType::compress_two(left_child, right_child);
 			index >>= 1;
 		}
+		self.root = self.tree[D][0].inner();
 	}
 
 	pub fn merkle_proof(&self, leaf: NType::Leaf) -> Option<MerkleProof<NType>> {
