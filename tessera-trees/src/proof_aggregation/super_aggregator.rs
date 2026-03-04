@@ -829,10 +829,10 @@ mod tests {
 	//   PI[tx_base + 1 + 68 + k]       = account_commitment[k]  (AC)
 	//
 	// Tree offsets (N_TX_SLOTS=2, NOTES_PER_SLOT=8, note_batch_size=16, account_batch_size=2):
-	//   NN (test): build_leaf(72) → values[0..14] at PI[5 + leaf_idx*4]; value[15] at PI[nn_len-4]=PI[68]
-	//   NC: leaves at PI[8 + leaf_idx*4]  (simple sequential layout)
-	//   AN (test): build_leaf(16) → value[0] at PI[5]; value[1] (last, s=1=N-1) at PI[an_len-4]=PI[12]
-	//   AC: leaves at PI[8 + s*4]  (simple sequential layout)
+	//   NN (test): build_leaf(72) → values[0..14] at PI[5 + leaf_idx*4]; value[15] at
+	// PI[nn_len-4]=PI[68]   NC: leaves at PI[8 + leaf_idx*4]  (simple sequential layout)
+	//   AN (test): build_leaf(16) → value[0] at PI[5]; value[1] (last, s=1=N-1) at
+	// PI[an_len-4]=PI[12]   AC: leaves at PI[8 + s*4]  (simple sequential layout)
 
 	#[test]
 	fn test_full_tx_nonzero_values_match() {

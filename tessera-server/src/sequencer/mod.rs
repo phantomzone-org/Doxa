@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
 	config::SequencerConfig,
 	contract::{self, IDepositsRollupBridge},
+	dummy::DummyTreeType,
 	prover_client::HttpProverClient,
 	states::{CommitmentTreeState, EventOrderKey, NullifierTreeState, PendingRequest},
 	tree_store::{StoreMeta, TreeId, TreeStore},
@@ -91,6 +92,20 @@ pub(super) enum TreeJob {
 #[derive(Debug, Clone)]
 pub(super) struct NotesCommitmentRequest {
 	pub note: [u8; 32],
+}
+
+/// Pad `real_bytes` to `batch_size` with deterministic dummy leaves, then convert
+/// the result to the native `Hash` type expected by the plonky2 circuit.
+fn build_proving_commitments(
+	dummy_type: DummyTreeType,
+	batch_start_index: usize,
+	batch_size: usize,
+	real_bytes: &[[u8; 32]],
+) -> anyhow::Result<(Vec<[u8; 32]>, Vec<Hash>)> {
+	let proving_bytes =
+		crate::dummy::pad_leaves(dummy_type, batch_start_index, batch_size, real_bytes)?;
+	let proving_hashes = contract::bytes_slice_to_hashes(&proving_bytes)?;
+	Ok((proving_bytes, proving_hashes))
 }
 
 /// The main sequencer: watches note availability, batches by chain order, proves and finalizes.
@@ -291,46 +306,16 @@ impl Sequencer {
 			"on-chain noteBatchSize ({note_batch_size}) != accountBatchSize ({account_batch_size}) × 8"
 		);
 
-		// Step 1: load local persisted trees (snapshot + WAL). This is fast-path startup.
-		// These local stores are treated as cache and may be behind chain head.
-		let mut store = TreeStore::<CommitmentTree<Hash>>::open(
+		// Load all four persisted trees (snapshot + WAL). Treated as cache; may be behind chain.
+		let (tree, store, meta) = recovery::load_tree_from_store::<CommitmentTree<Hash>>(
 			&self.config.tree_store_path,
 			TreeId::NotesCommitment,
+			"notes_commitment",
 			self.config.snapshot_every_batches,
 		)?;
-		let (mut tree, meta0) = store.load_or_init(|| CommitmentTree::new(TREE_DEPTH))?;
-		let (wal_pos, replayed) =
-			store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
-				let leaves: Vec<Hash> = vals
-					.into_iter()
-					.map(|b| contract::bytes32_to_hash(&alloy::primitives::B256::from(b)))
-					.collect::<anyhow::Result<Vec<_>>>()?;
-				let proof = t.insert_batch(leaves)?;
-				anyhow::ensure!(proof.verify(), "WAL replay produced invalid proof");
-				Ok(())
-			})?;
-		// Backward compatibility for legacy snapshots that predate CommitmentTree::leaf_counts.
-		if meta0.snapshot_version < 2 {
-			tree.rebuild_leaf_counts();
-		}
-		let mut meta = meta0.clone();
-		meta.wal_pos = wal_pos;
-		meta.committed_batches = meta.committed_batches.saturating_add(replayed);
-		info!(
-			tree = "notes_commitment",
-			replayed_batches = replayed,
-			wal_pos,
-			last_block = meta.last_block,
-			last_tx_index = meta.last_tx_index,
-			last_log_index = meta.last_log_index,
-			"loaded local tree state from snapshot/WAL"
-		);
-
 		self.notes_commitment_state.tree = tree;
 		self.notes_commitment_store = Some(store);
 		self.notes_commitment_meta = Some(meta);
-
-		// Step 2: load the three other persisted trees from disk cache.
 		self.load_other_trees()?;
 
 		// Step 3: reconcile local cache with chain by replaying only missing batches.

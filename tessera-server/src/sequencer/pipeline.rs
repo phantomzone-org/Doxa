@@ -2,32 +2,7 @@ use alloy::primitives::FixedBytes;
 use tracing::{debug, info, warn};
 
 use super::*;
-use crate::{
-	dummy::{self, DummyTreeType},
-	sequencer::revert::humanize_bridge_revert,
-};
-
-/// Pad `real_bytes` to `batch_size` with deterministic dummy leaves, then convert
-/// the result to the native `Hash` type expected by the plonky2 circuit.
-///
-/// # Parameters
-/// - `dummy_type`: tree-type discriminant used to derive deterministic dummy leaf values.
-/// - `batch_start_index`: index of the first leaf in this batch (for deterministic padding).
-/// - `batch_size`: target width; the returned vectors always have this length.
-/// - `real_bytes`: the real (non-padded) commitment bytes.
-///
-/// # Returns
-/// `(proving_commitments_bytes, proving_commitments_hash)` — both of length `batch_size`.
-fn build_proving_commitments(
-	dummy_type: DummyTreeType,
-	batch_start_index: usize,
-	batch_size: usize,
-	real_bytes: &[[u8; 32]],
-) -> anyhow::Result<(Vec<[u8; 32]>, Vec<Hash>)> {
-	let proving_bytes = dummy::pad_leaves(dummy_type, batch_start_index, batch_size, real_bytes)?;
-	let proving_hashes = contract::bytes_slice_to_hashes(&proving_bytes)?;
-	Ok((proving_bytes, proving_hashes))
-}
+use crate::sequencer::{recovery::commit_tree_batch, revert::humanize_bridge_revert};
 
 impl Sequencer {
 	/// Submit a prove request to the remote prover with unlimited exponential-backoff retries.
@@ -739,46 +714,30 @@ impl Sequencer {
 				// Commit all four trees' WAL entries now that on-chain confirmation succeeded.
 				// Note: the trees were already advanced (insert_batch / insert_chained) at
 				// registration time; here we only persist to the WAL/snapshot store.
-				if let (Some(store), Some(meta)) = (
-					self.notes_commitment_store.as_mut(),
-					self.notes_commitment_meta.as_mut(),
-				) {
-					store.commit_batch(
-						&self.notes_commitment_state.tree,
-						meta,
-						batch.nc_batch.proving_commitments_bytes,
-					)?;
-				}
-				if let (Some(store), Some(meta)) = (
-					self.notes_nullifier_store.as_mut(),
-					self.notes_nullifier_meta.as_mut(),
-				) {
-					store.commit_batch(
-						&self.notes_nullifier_state.tree,
-						meta,
-						batch.nn_batch.proving_commitments_bytes,
-					)?;
-				}
-				if let (Some(store), Some(meta)) = (
-					self.accounts_commitment_store.as_mut(),
-					self.accounts_commitment_meta.as_mut(),
-				) {
-					store.commit_batch(
-						&self.accounts_commitment_state.tree,
-						meta,
-						batch.ac_batch.proving_commitments_bytes,
-					)?;
-				}
-				if let (Some(store), Some(meta)) = (
-					self.accounts_nullifier_store.as_mut(),
-					self.accounts_nullifier_meta.as_mut(),
-				) {
-					store.commit_batch(
-						&self.accounts_nullifier_state.tree,
-						meta,
-						batch.an_batch.proving_commitments_bytes,
-					)?;
-				}
+				commit_tree_batch(
+					&self.notes_commitment_state,
+					&mut self.notes_commitment_store,
+					&mut self.notes_commitment_meta,
+					batch.nc_batch.proving_commitments_bytes,
+				)?;
+				commit_tree_batch(
+					&self.notes_nullifier_state,
+					&mut self.notes_nullifier_store,
+					&mut self.notes_nullifier_meta,
+					batch.nn_batch.proving_commitments_bytes,
+				)?;
+				commit_tree_batch(
+					&self.accounts_commitment_state,
+					&mut self.accounts_commitment_store,
+					&mut self.accounts_commitment_meta,
+					batch.ac_batch.proving_commitments_bytes,
+				)?;
+				commit_tree_batch(
+					&self.accounts_nullifier_state,
+					&mut self.accounts_nullifier_store,
+					&mut self.accounts_nullifier_meta,
+					batch.an_batch.proving_commitments_bytes,
+				)?;
 
 				self.log_pool_status("batch confirmed and committed locally");
 			},
@@ -816,32 +775,28 @@ impl Sequencer {
 
 		// --- Notes Commitment ---
 		let nc_real = request.output_notes;
-		let nc_start = self.notes_commitment_state.tree.num_leaves();
-		let nc_padded = dummy::pad_leaves(
+		let (nc_padded, nc_hashes) = build_proving_commitments(
 			DummyTreeType::NotesCommitment,
-			nc_start,
+			self.notes_commitment_state.tree.num_leaves(),
 			note_batch_size,
 			&nc_real,
 		)?;
-		let nc_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nc_padded)?;
 		let mut nc_tmp = self.notes_commitment_state.tree.clone();
 		let nc_proof = nc_tmp.insert_batch(nc_hashes.clone())?;
 		anyhow::ensure!(nc_proof.verify(), "NC native proof failed (private tx)");
 
 		// --- Notes Nullifier ---
 		let nn_real = request.input_notes;
-		let nn_start = self.notes_nullifier_state.tree.num_leaves();
-		let nn_padded = dummy::pad_leaves(
+		let (nn_padded, nn_hashes) = build_proving_commitments(
 			DummyTreeType::NotesNullifier,
-			nn_start,
+			self.notes_nullifier_state.tree.num_leaves(),
 			note_batch_size,
 			&nn_real,
 		)?;
-		let nn_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&nn_padded)?;
 		let mut nn_tmp = self.notes_nullifier_state.tree.clone();
 		let nn_proof = nn_tmp.insert_chained(nn_hashes.clone())?;
 		anyhow::ensure!(nn_proof.verify(), "NN native proof failed (private tx)");
-		let new_nn_root = crate::contract::hash_to_bytes32(
+		let new_nn_root = contract::hash_to_bytes32(
 			&nn_proof
 				.proofs
 				.last()
@@ -851,32 +806,28 @@ impl Sequencer {
 
 		// --- Accounts Commitment ---
 		let ac_real = vec![request.output_account_leaf];
-		let ac_start = self.accounts_commitment_state.tree.num_leaves();
-		let ac_padded = dummy::pad_leaves(
+		let (ac_padded, ac_hashes) = build_proving_commitments(
 			DummyTreeType::AccountsCommitment,
-			ac_start,
+			self.accounts_commitment_state.tree.num_leaves(),
 			account_batch_size,
 			&ac_real,
 		)?;
-		let ac_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&ac_padded)?;
 		let mut ac_tmp = self.accounts_commitment_state.tree.clone();
 		let ac_proof = ac_tmp.insert_batch(ac_hashes.clone())?;
 		anyhow::ensure!(ac_proof.verify(), "AC native proof failed (private tx)");
 
 		// --- Accounts Nullifier ---
 		let an_real = vec![request.input_account_leaf];
-		let an_start = self.accounts_nullifier_state.tree.num_leaves();
-		let an_padded = dummy::pad_leaves(
+		let (an_padded, an_hashes) = build_proving_commitments(
 			DummyTreeType::AccountsNullifier,
-			an_start,
+			self.accounts_nullifier_state.tree.num_leaves(),
 			account_batch_size,
 			&an_real,
 		)?;
-		let an_hashes: Vec<Hash> = crate::contract::bytes_slice_to_hashes(&an_padded)?;
 		let mut an_tmp = self.accounts_nullifier_state.tree.clone();
 		let an_proof = an_tmp.insert_chained(an_hashes.clone())?;
 		anyhow::ensure!(an_proof.verify(), "AN native proof failed (private tx)");
-		let new_an_root = crate::contract::hash_to_bytes32(
+		let new_an_root = contract::hash_to_bytes32(
 			&an_proof
 				.proofs
 				.last()
@@ -884,8 +835,8 @@ impl Sequencer {
 				.new_root,
 		);
 
-		let new_nc_root = crate::contract::hash_to_bytes32(&nc_proof.root_new);
-		let new_ac_root = crate::contract::hash_to_bytes32(&ac_proof.root_new);
+		let new_nc_root = contract::hash_to_bytes32(&nc_proof.root_new);
+		let new_ac_root = contract::hash_to_bytes32(&ac_proof.root_new);
 
 		// Build calldata arrays.
 		let nc_out: Vec<FixedBytes<32>> =

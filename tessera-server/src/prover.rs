@@ -451,145 +451,87 @@ impl ProverRuntime {
 	/// 3. Pass all 5 native proofs to [`SuperAggregatorService::prove`] for the single BN128 →
 	///    Groth16 wrapping step.
 	/// 4. Return `ProveOutcome::Success` or `ProveOutcome::Failure`.
-	///
-	/// # Side effects
-	/// Drives the async aggregation pipeline via `Handle::current().block_on(...)`.
 	pub fn prove_request(&mut self, request: ProveRequest) -> ProveOutcome {
 		let batch_id = request.batch_id;
-
-		// Extract new roots up-front (before the request fields are consumed).
-		let notes_new_root = request.notes_commitment_proof.root_new;
-		let nullifier_notes_new_root = match request.notes_nullifier_proof.proofs.last() {
-			Some(p) => p.new_root,
-			None => {
-				return ProveOutcome::Failure {
-					batch_id,
-					error: "notes nullifier proof contains no insertions".to_string(),
-				};
-			},
-		};
-		let accounts_new_root = request.accounts_commitment_proof.root_new;
-		let nullifier_accounts_new_root = match request.accounts_nullifier_proof.proofs.last() {
-			Some(p) => p.new_root,
-			None => {
-				return ProveOutcome::Failure {
-					batch_id,
-					error: "accounts nullifier proof contains no insertions".to_string(),
-				};
-			},
-		};
-
-		// a. Notes commitment tree
-		info!(batch_id, "proving notes commitment tree");
-		let nc_proof = match self
-			.note_commitment_prover
-			.prove(&request.notes_commitment_proof)
-		{
-			Ok(p) => p,
+		match self.try_prove_request(request) {
+			Ok(outcome) => outcome,
 			Err(e) => {
-				error!("notes commitment proof failed: {e}");
-				return ProveOutcome::Failure {
-					batch_id,
-					error: e.to_string(),
-				};
-			},
-		};
-
-		// b. Notes nullifier tree
-		info!(batch_id, "proving notes nullifier tree");
-		let nn_proof = match self
-			.note_nullifier_prover
-			.prove(&request.notes_nullifier_proof)
-		{
-			Ok(p) => p,
-			Err(e) => {
-				error!("notes nullifier proof failed: {e}");
-				return ProveOutcome::Failure {
-					batch_id,
-					error: e.to_string(),
-				};
-			},
-		};
-
-		// c. Accounts commitment tree
-		info!(batch_id, "proving accounts commitment tree");
-		let ac_proof = match self
-			.account_commitment_prover
-			.prove(&request.accounts_commitment_proof)
-		{
-			Ok(p) => p,
-			Err(e) => {
-				error!("accounts commitment proof failed: {e}");
-				return ProveOutcome::Failure {
-					batch_id,
-					error: e.to_string(),
-				};
-			},
-		};
-
-		// d. Accounts nullifier tree
-		info!(batch_id, "proving accounts nullifier tree");
-		let an_proof = match self
-			.account_nullifier_prover
-			.prove(&request.accounts_nullifier_proof)
-		{
-			Ok(p) => p,
-			Err(e) => {
-				error!("accounts nullifier proof failed: {e}");
-				return ProveOutcome::Failure {
-					batch_id,
-					error: e.to_string(),
-				};
-			},
-		};
-
-		// e. Aggregate 16 TX leaf proofs → single native root proof
-		info!(batch_id, "aggregating TX leaf proofs");
-		let tx_agg_root = match Self::aggregate_associated_input_proofs(
-			&self.aggregator,
-			&request.associated_tx_proofs,
-		) {
-			Ok(p) => p,
-			Err(e) => {
-				error!("TX leaf aggregation failed: {e}");
-				return ProveOutcome::Failure {
-					batch_id,
-					error: e.to_string(),
-				};
-			},
-		};
-
-		// f. SuperAggregator: combines all 5 proofs → BN128 → Groth16
-		info!(batch_id, "running SuperAggregator (BN128 + Groth16)");
-		log_super_pi_preimage_debug(batch_id, &nc_proof, &nn_proof, &ac_proof, &an_proof);
-		match self
-			.super_aggregator
-			.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_agg_root)
-		{
-			Ok((solidity_proof, super_pi_commitment)) => {
-				info!(
-					batch_id,
-					super_pi_commitment = hex::encode(super_pi_commitment),
-					"SuperAggregator commitment (compare with on-chain TransactionBatchRegistered.superPiCommitment)"
-				);
-				ProveOutcome::Success {
-					batch_id,
-					notes_new_root,
-					nullifier_notes_new_root,
-					accounts_new_root,
-					nullifier_accounts_new_root,
-					solidity_proof: Box::new(solidity_proof),
-					super_pi_commitment,
-				}
-			},
-			Err(e) => {
-				error!("SuperAggregator prove failed: {e}");
+				error!(batch_id, error = %e, "prove request failed");
 				ProveOutcome::Failure {
 					batch_id,
 					error: e.to_string(),
 				}
 			},
 		}
+	}
+
+	/// Inner proving pipeline that uses `?` for error propagation.
+	fn try_prove_request(&mut self, request: ProveRequest) -> Result<ProveOutcome> {
+		let batch_id = request.batch_id;
+
+		// Extract new roots up-front (before the request fields are consumed).
+		let notes_new_root = request.notes_commitment_proof.root_new;
+		let nullifier_notes_new_root = request
+			.notes_nullifier_proof
+			.proofs
+			.last()
+			.ok_or_else(|| anyhow::anyhow!("notes nullifier proof contains no insertions"))?
+			.new_root;
+		let accounts_new_root = request.accounts_commitment_proof.root_new;
+		let nullifier_accounts_new_root = request
+			.accounts_nullifier_proof
+			.proofs
+			.last()
+			.ok_or_else(|| anyhow::anyhow!("accounts nullifier proof contains no insertions"))?
+			.new_root;
+
+		info!(batch_id, "proving notes commitment tree");
+		let nc_proof = self
+			.note_commitment_prover
+			.prove(&request.notes_commitment_proof)?;
+
+		info!(batch_id, "proving notes nullifier tree");
+		let nn_proof = self
+			.note_nullifier_prover
+			.prove(&request.notes_nullifier_proof)?;
+
+		info!(batch_id, "proving accounts commitment tree");
+		let ac_proof = self
+			.account_commitment_prover
+			.prove(&request.accounts_commitment_proof)?;
+
+		info!(batch_id, "proving accounts nullifier tree");
+		let an_proof = self
+			.account_nullifier_prover
+			.prove(&request.accounts_nullifier_proof)?;
+
+		info!(batch_id, "aggregating TX leaf proofs");
+		let tx_agg_root = Self::aggregate_associated_input_proofs(
+			&self.aggregator,
+			&request.associated_tx_proofs,
+		)?;
+
+		info!(batch_id, "running SuperAggregator (BN128 + Groth16)");
+		log_super_pi_preimage_debug(batch_id, &nc_proof, &nn_proof, &ac_proof, &an_proof);
+		let (solidity_proof, super_pi_commitment) =
+			self.super_aggregator
+				.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_agg_root)?;
+
+		info!(
+			batch_id,
+			super_pi_commitment = hex::encode(super_pi_commitment),
+			"SuperAggregator done"
+		);
+
+		Ok(ProveOutcome::Success {
+			batch_id,
+			notes_new_root,
+			nullifier_notes_new_root,
+			accounts_new_root,
+			nullifier_accounts_new_root,
+			solidity_proof: Box::new(solidity_proof),
+			super_pi_commitment,
+		})
 	}
 }
 
