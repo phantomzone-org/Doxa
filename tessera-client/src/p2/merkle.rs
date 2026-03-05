@@ -179,9 +179,9 @@ pub(crate) struct NoteCommitmentTarget(pub(crate) HashOutTarget);
 struct TxHashTarget(HashOutTarget);
 
 pub(crate) struct TxSignatureTargets {
-	pub(crate) spend: SchnorrTargets,
-	pub(crate) spend_dummy_pk: PubkeyTarget<Target>,
-	pub(crate) consume: SchnorrTargets,
+	// pub(crate) spend: SchnorrTargets,
+	// pub(crate) spend_dummy_pk: PubkeyTarget<Target>,
+	// pub(crate) consume: SchnorrTargets,
 	pub(crate) approval: SchnorrTargets,
 }
 
@@ -838,42 +838,42 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		approval_key: PubkeyTarget<Target>,
 	) -> TxSignatureTargets {
 		// spend sig: required when any onote is active
-		let mut is_spend_req = onotes_isactive[0];
-		for sel in onotes_isactive.iter().skip(1) {
-			is_spend_req = self.or(*sel, is_spend_req);
-		}
-		let spend_dummy_pk = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
-		let effective_spend_pk = PubkeyTarget(LocalQuinticExtension(array::from_fn(|i| {
-			self._if(is_spend_req, accin.spend_auth.0.0[i], spend_dummy_pk.0.0[i])
-		})));
-		let spend =
-			conditional_schnorr_verify_gadget(self, tx_hash.0, effective_spend_pk, is_spend_req);
+		// let mut is_spend_req = onotes_isactive[0];
+		// for sel in onotes_isactive.iter().skip(1) {
+		// 	is_spend_req = self.or(*sel, is_spend_req);
+		// }
+		// let spend_dummy_pk = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
+		// let effective_spend_pk = PubkeyTarget(LocalQuinticExtension(array::from_fn(|i| {
+		// 	self._if(is_spend_req, accin.spend_auth.0.0[i], spend_dummy_pk.0.0[i])
+		// })));
+		// let spend =
+		// 	conditional_schnorr_verify_gadget(self, tx_hash.0, effective_spend_pk, is_spend_req);
 
 		// consume sig: required when any inote is active AND no onote is active
-		let mut has_inotes = inotes_isactive[0];
-		for sel in inotes_isactive.iter().skip(1) {
-			has_inotes = self.or(*sel, has_inotes);
-		}
-		let not_is_spend_req = self.not(is_spend_req);
-		let is_consume_req = self.and(has_inotes, not_is_spend_req);
-		let consume_key = PubkeyTarget(LocalQuinticExtension(array::from_fn(|i| {
-			self._if(
-				accin.consume_auth.config,
-				accin.consume_auth.pk.0.0[i],
-				subpool_consume_key.0.0[i],
-			)
-		})));
-		let consume =
-			conditional_schnorr_verify_gadget(self, tx_hash.0, consume_key, is_consume_req);
+		// let mut has_inotes = inotes_isactive[0];
+		// for sel in inotes_isactive.iter().skip(1) {
+		// 	has_inotes = self.or(*sel, has_inotes);
+		// }
+		// let not_is_spend_req = self.not(is_spend_req);
+		// let is_consume_req = self.and(has_inotes, not_is_spend_req);
+		// let consume_key = PubkeyTarget(LocalQuinticExtension(array::from_fn(|i| {
+		// 	self._if(
+		// 		accin.consume_auth.config,
+		// 		accin.consume_auth.pk.0.0[i],
+		// 		subpool_consume_key.0.0[i],
+		// 	)
+		// })));
+		// let consume =
+		// 	conditional_schnorr_verify_gadget(self, tx_hash.0, consume_key, is_consume_req);
 
 		// approval sig: always required
 		let tr = self._true();
 		let approval = conditional_schnorr_verify_gadget(self, tx_hash.0, approval_key, tr);
 
 		TxSignatureTargets {
-			spend,
-			spend_dummy_pk,
-			consume,
+			// spend,
+			// spend_dummy_pk,
+			// consume,
 			approval,
 		}
 	}
@@ -926,7 +926,7 @@ pub(crate) struct TxCircuitTargets {
 	// subpool proof
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	// signature targets
-	// pub(crate) sig_targets: TxSignatureTargets,
+	pub(crate) sig_targets: TxSignatureTargets,
 }
 
 pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
@@ -967,10 +967,10 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 		let pubid = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input);
 		PublicIdentifierTaregt(pubid)
 	};
-	// let nk = builder.derive_nullifier_key(accin.private_identifier);
+	let nk = builder.derive_nullifier_key(accin.private_identifier);
 
 	let accin_comm = builder.derive_account_commitment(accin, private_identifier, subpool_id);
-	// let accout_comm = builder.derive_account_commitment(accout, private_identifier, subpool_id);
+	let accout_comm = builder.derive_account_commitment(accout, private_identifier, subpool_id);
 
 	// Assert AccIn matches FreshAccount defaults when is_fresh_acc
 	builder.assert_fresh_account(accin, is_fresh_acc);
@@ -989,17 +989,17 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	);
 
 	// AccIn nullifier — select fresh vs regular based on is_fresh_acc
-	// let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
-	// let accin_null_fresh = builder.derive_fresh_account_nullifier(accin_comm, nk);
-	// let accin_null = AccountNullifierTarget(HashOutTarget {
-	// 	elements: array::from_fn(|i| {
-	// 		builder._if(
-	// 			is_fresh_acc,
-	// 			accin_null_fresh.0.elements[i],
-	// 			accin_null_regular.0.elements[i],
-	// 		)
-	// 	}),
-	// });
+	let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
+	let accin_null_fresh = builder.derive_fresh_account_nullifier(accin_comm, nk);
+	let accin_null = AccountNullifierTarget(HashOutTarget {
+		elements: array::from_fn(|i| {
+			builder._if(
+				is_fresh_acc,
+				accin_null_fresh.0.elements[i],
+				accin_null_regular.0.elements[i],
+			)
+		}),
+	});
 
 	// Verify asset/amt proofs in AccIn and AccOut ASTs; enforce same leaf position was updated
 	let (accin_ast_merkle, accout_ast_merkle) = builder.assert_ast_update(
@@ -1020,23 +1020,23 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	let inotes_isactive: [BoolTarget; NOTE_BATCH] =
 		array::from_fn(|_| builder.add_virtual_bool_target_safe());
 	let inotes_comm = array::from_fn(|i| builder.derive_note_commitment(inotes[i]));
-	// let inotes_null: [NoteNullifierTarget; NOTE_BATCH] =
-	// 	array::from_fn(|i| builder.derive_note_nullifier(inotes_comm[i], inotes_pos[i], nk));
+	let inotes_null: [NoteNullifierTarget; NOTE_BATCH] =
+		array::from_fn(|i| builder.derive_note_nullifier(inotes_comm[i], inotes_pos[i], nk));
 
 	let onotes: [NoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_note_target());
 	let onotes_isactive: [BoolTarget; NOTE_BATCH] =
 		array::from_fn(|_| builder.add_virtual_bool_target_safe());
-	// let onotes_comm = onotes.map(|n| builder.derive_note_commitment(n));
+	let onotes_comm = onotes.map(|n| builder.derive_note_commitment(n));
 
 	let dinotes: [DummyNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
-	// let dinotes_null: [NoteNullifierTarget; NOTE_BATCH] =
-	// array::from_fn(|i| builder.derive_dummy_note_nullifier(dinotes[i]));
+	let dinotes_null: [NoteNullifierTarget; NOTE_BATCH] =
+		array::from_fn(|i| builder.derive_dummy_note_nullifier(dinotes[i]));
 
 	let donotes: [DummyNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
-	// let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
+	let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
 
 	// All inotes and onotes share the same asset_id
 	for note in inotes.iter().chain(onotes.iter()) {
@@ -1064,16 +1064,16 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	);
 
 	// Derive tx hash //
-	// let tx_hash = builder.derive_tx_hash(
-	// 	inotes_isactive,
-	// 	inotes_null,
-	// 	dinotes_null,
-	// 	onotes_isactive,
-	// 	onotes_comm,
-	// 	donotes_comm,
-	// 	accin_null,
-	// 	accout_comm,
-	// );
+	let tx_hash = builder.derive_tx_hash(
+		inotes_isactive,
+		inotes_null,
+		dinotes_null,
+		onotes_isactive,
+		onotes_comm,
+		donotes_comm,
+		accin_null,
+		accout_comm,
+	);
 
 	// Validate authorization //
 
@@ -1085,14 +1085,14 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 		subpool_consume_key,
 	);
 
-	// let sig_targets = builder.assert_tx_signatures(
-	// 	tx_hash,
-	// 	inotes_isactive,
-	// 	onotes_isactive,
-	// 	accin,
-	// 	subpool_consume_key,
-	// 	approval_key,
-	// );
+	let sig_targets = builder.assert_tx_signatures(
+		tx_hash,
+		inotes_isactive,
+		onotes_isactive,
+		accin,
+		subpool_consume_key,
+		approval_key,
+	);
 
 	TxCircuitTargets {
 		is_rjct,
@@ -1125,7 +1125,7 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 		dinotes,
 		donotes,
 		subpool_proof_targets,
-		// sig_targets,
+		sig_targets,
 		inotes_nct_merkle: inotes_mrkltrgt,
 	}
 }
@@ -1136,16 +1136,30 @@ pub(crate) trait MerkleSiblingsBits<const DEPTH: usize> {
 }
 
 impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for ConditionalMerkleTarget<DEPTH> {
-	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH] { &self.siblings }
-	fn bits(&self) -> &[Target; DEPTH] { &self.bits }
+	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH] {
+		&self.siblings
+	}
+
+	fn bits(&self) -> &[Target; DEPTH] {
+		&self.bits
+	}
 }
 
 impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for MerkleTarget<DEPTH> {
-	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH] { &self.siblings }
-	fn bits(&self) -> &[Target; DEPTH] { &self.bits }
+	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH] {
+		&self.siblings
+	}
+
+	fn bits(&self) -> &[Target; DEPTH] {
+		&self.bits
+	}
 }
 
-pub(crate) fn set_merkle_siblings_and_bits<F: Field, T: MerkleSiblingsBits<DEPTH>, const DEPTH: usize>(
+pub(crate) fn set_merkle_siblings_and_bits<
+	F: Field,
+	T: MerkleSiblingsBits<DEPTH>,
+	const DEPTH: usize,
+>(
 	pw: &mut PartialWitness<F>,
 	t: &T,
 	siblings: [[F; 4]; DEPTH],
@@ -1153,7 +1167,8 @@ pub(crate) fn set_merkle_siblings_and_bits<F: Field, T: MerkleSiblingsBits<DEPTH
 ) {
 	for lvl in 0..DEPTH {
 		for i in 0..4 {
-			pw.set_target(t.siblings()[lvl][i], siblings[lvl][i]).unwrap();
+			pw.set_target(t.siblings()[lvl][i], siblings[lvl][i])
+				.unwrap();
 		}
 		pw.set_bool_target(BoolTarget::new_unsafe(t.bits()[lvl]), bits[lvl])
 			.unwrap();

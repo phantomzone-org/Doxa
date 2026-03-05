@@ -3,12 +3,12 @@ mod tests {
 	use std::array;
 
 	use plonky2::{
-		hash::poseidon::PoseidonHash,
+		hash::{hashing::hash_n_to_m_no_pad, poseidon::PoseidonHash},
 		iop::witness::{PartialWitness, WitnessWrite},
 		plonk::{
 			circuit_builder::CircuitBuilder,
 			circuit_data::CircuitConfig,
-			config::{GenericConfig, PoseidonGoldilocksConfig},
+			config::{GenericConfig, Hasher, PoseidonGoldilocksConfig},
 		},
 	};
 	use plonky2_field::{
@@ -222,8 +222,8 @@ mod tests {
 		// dinotes / donotes: all zero field elements
 		for i in 0..crate::NOTE_BATCH {
 			for j in 0..4 {
-				pw.set_target(t.dinotes[i].0[j], F::ZERO).unwrap();
-				pw.set_target(t.donotes[i].0[j], F::ZERO).unwrap();
+				pw.set_target(t.dinotes[i].0[j], dinotes[i][j]).unwrap();
+				pw.set_target(t.donotes[i].0[j], donotes[i][j]).unwrap();
 			}
 		}
 
@@ -274,9 +274,10 @@ mod tests {
 		// 	spend_s,
 		// );
 
-		// // Consume (fake): is_consume_req = false → apply_check = false.
-		// // consume_auth.config = false → circuit uses subpool_consume_key (already a valid
-		// point). let consume_e = Scalar::from_raw([13, 13, 5, 6, 7]);
+		// Consume (fake): is_consume_req = false → apply_check = false.
+		// consume_auth.config = false → circuit uses subpool_consume_key (already a valid
+		// point).
+		// let consume_e = Scalar::from_raw([13, 13, 5, 6, 7]);
 		// let consume_s = Scalar::from_raw([17, 19, 12, 13, 16]);
 		// let consume_r: PointEw<F> = PointEw::generator()
 		// 	.scalar_mul(&consume_s)
@@ -291,24 +292,32 @@ mod tests {
 		// 	consume_s,
 		// );
 
-		// // Approval (real): always required (apply_check = true).
-		// let approval_pub = approval_sk.public_key::<F>();
-		// let k = Scalar::from_raw([1, 2, 3, 4, 5]);
-		// let sig = schnorr_sign(&approval_sk, &approval_pub, &tx_hash, k);
-		// let approval_cr = sig.r.encode();
-		// let approval_cq = approval_q.encode();
-		// let mut h_inp: Vec<F> = approval_cr.w.0.to_vec();
-		// h_inp.extend_from_slice(&approval_cq.w.0);
-		// h_inp.extend_from_slice(&tx_hash);
-		// let approval_e = poseidon_hash_to_scalar(&h_inp);
-		// set_schnorr_witness(
-		// 	&mut pw,
-		// 	&t.sig_targets.approval,
-		// 	approval_q,
-		// 	approval_cr,
-		// 	approval_e,
-		// 	sig.s,
-		// );
+		// Approval (real): always required (apply_check = true).
+		let approval_pub = approval_sk.public_key::<F>();
+		let k = Scalar::from_raw([1, 2, 3, 4, 5]);
+		let sig = schnorr_sign(&approval_sk, &approval_pub, &tx_hash, k);
+		let approval_cr = sig.r.encode();
+		let approval_cq = approval_q.encode();
+		let mut h_inp: Vec<F> = approval_cr.w.0.to_vec();
+		h_inp.extend_from_slice(&approval_cq.w.0);
+		h_inp.extend_from_slice(&tx_hash);
+		let h_out = hash_n_to_m_no_pad::<F, <PoseidonHash as Hasher<F>>::Permutation>(&h_inp, 5);
+		let approval_e = Scalar::from_hash(array::from_fn(|i| h_out[i]));
+		{
+			let g = PointEw::generator();
+			let sg = g.scalar_mul(&sig.s);
+			let eq = approval_q.scalar_mul(&approval_e);
+			let result = sg.add(&eq);
+			assert_eq!(result.encode(), approval_cr);
+		}
+		set_schnorr_witness(
+			&mut pw,
+			&t.sig_targets.approval,
+			approval_q,
+			approval_cr,
+			approval_e,
+			sig.s,
+		);
 
 		// ── Prove & verify ────────────────────────────────────────────────────
 		let proof = data.prove(pw).expect("prove failed");

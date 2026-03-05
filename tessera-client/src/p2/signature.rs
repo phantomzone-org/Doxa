@@ -2059,11 +2059,6 @@ mod tests {
 		let result = sg.add(&eq);
 		assert_eq!(result.encode(), r.encode(), "native verification failed");
 
-		let mut e_bits = e.to_bit_arr(); // 319 bits
-		e_bits.reverse();
-		let mut s_bits = s.to_bit_arr(); // 319 bits
-		s_bits.reverse();
-
 		// Build inner circuit
 		let config = CircuitConfig::standard_recursion_config();
 		// print_circuit_config(&config, "inner verifier config");

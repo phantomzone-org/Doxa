@@ -40,10 +40,4 @@ pub use note::*;
 use tessera_trees::tree::HASH_SIZE;
 
 #[cfg(test)]
-mod tests {
-	use plonky2::hash::poseidon::PoseidonHash;
-	use plonky2_field::types::{Field, PrimeField64};
-	use tessera_trees::F;
-
-	use super::*;
-}
+mod tests {}
