@@ -117,7 +117,7 @@ source scripts/local_env.sh
 # Register N deposits on-chain (requires TESSERA_RPC_URL, TESSERA_OPERATOR_KEY,
 # TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS, TESSERA_MONITORED_TOKEN)
 cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
-  deposit --count 16 --start-index 1 --amount 1
+  deposit --count 256 --start-index 1 --amount 1
 
 # Submit N ordered consume-request proofs (requires TESSERA_CONSUME_ARTIFACTS_PATH,
 # TESSERA_SEQUENCER_API_URL)
@@ -137,7 +137,7 @@ cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
 cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
   private-tx \
   --input-notes 0x01,0x02 \
-  --account-commitment 0x<commitment-from-register> \
+  --account-commitment 0x31bf45cf6f5b386aa7a4d226030c9afbeb8f17ad565c377b9f6eae96bbdd7f6f \
   --private-key 0xdeadbeef
 ```
 

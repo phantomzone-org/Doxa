@@ -15,7 +15,7 @@ use crate::tree::{
 /// The tree is left->right append only and has a
 /// sparse representation (only active [Node] and
 /// siblings are stored).
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound(
 	serialize = "H::Digest: Serialize",
 	deserialize = "H::Digest: Deserialize<'de>"

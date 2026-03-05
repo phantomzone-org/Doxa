@@ -9,7 +9,7 @@ use crate::tree::{
 	hasher::MerkleHash,
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound(
 	serialize = "H::Digest: Serialize",
 	deserialize = "H::Digest: Deserialize<'de>"
@@ -263,6 +263,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 
 		self.find_node_by_label(&prev_node.value)
 			.ok_or(anyhow!(MerkleTreeError::LeafHashMismatch(0)))?;
+
 		for _ in 1..self.nodes.len() {
 			let node: Node<H> = self.nodes[prev_node.next_index];
 
