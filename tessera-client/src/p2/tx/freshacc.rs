@@ -15,7 +15,8 @@ mod tests {
 		packed::PackedField,
 		types::{Field, PrimeField64},
 	};
-	use rand::rng;
+	use rand::SeedableRng;
+	use rand_chacha::ChaCha8Rng;
 
 	use crate::{
 		MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier,
@@ -57,7 +58,7 @@ mod tests {
 		let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
 
 		let rejection_sk = PrivateKey::from_raw([5, 6, 7, 8, 0]);
-		let rejection_q: PointEw<F> = PointEw::generator().scalar_mul(&rejection_sk.as_scalar());
+		// let rejection_q: PointEw<F> = PointEw::generator().scalar_mul(&rejection_sk.as_scalar());
 		let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
 
 		let consume_sk = PrivateKey::from_raw([9, 10, 11, 12, 0]);
@@ -72,7 +73,7 @@ mod tests {
 		main_pool.set_subpool(0, subpool_id, subpool.root());
 
 		// ── Account setup ─────────────────────────────────────────────────────
-		let mut rng = rng();
+		let mut rng = ChaCha8Rng::seed_from_u64(0);
 		let accin = StandardAccount::sample(&mut rng, subpool_id);
 
 		let pubid = accin.public_id();
@@ -91,6 +92,9 @@ mod tests {
 		accout.spend_auth = SpendAuth {
 			spend_pk: Some(spend_cpk),
 		};
+
+		dbg!(&accin.commitment());
+		dbg!(&accout.commitment());
 
 		// ── Native computation ────────────────────────────────────────────────
 
@@ -123,15 +127,8 @@ mod tests {
 		pw.set_bool_target(t.is_update_auth, false).unwrap();
 		pw.set_target(t.is_priv_tx, F::ZERO).unwrap();
 
-		// Main pool root (act_root and nct_root are auto-filled via circuit connections)
-		set_hash(
-			&mut pw,
-			t.main_pool_root.0,
-			main_pool
-				.root()
-				.0
-				.map(|f| F::from_canonical_u64(f.to_canonical_u64())),
-		);
+		// Main pool root
+		set_hash(&mut pw, t.main_pool_root.0, main_pool.root().0);
 
 		// Authority keys
 		t.approval_key.set_witness(&mut pw, approval_cpk);
@@ -152,9 +149,6 @@ mod tests {
 		pw.set_bool_target(t.asset_exists_in_accout, false).unwrap();
 		pw.set_target(t.accin_pos, F::ZERO).unwrap();
 
-		// ACT Merkle: selector = not_is_fresh_acc = false → root check not enforced.
-		// act_root is auto-filled via connect(accin_act_merkle.computed_root, act_root).
-		// We only need to set siblings and bits.
 		set_merkle_siblings_and_bits(
 			&mut pw,
 			&t.accin_act_merkle.0,
@@ -206,9 +200,9 @@ mod tests {
 		// onotes: all zero / inactive
 		let zero_cond = crate::note::SenderCond {
 			subpool_id: SubpoolId(F::ZERO),
-			public_id: crate::account::PublicIdentifier(
-				tessera_trees::tree::hasher::HashOutput([F::ZERO; 4]),
-			),
+			public_id: crate::account::PublicIdentifier(tessera_trees::tree::hasher::HashOutput(
+				[F::ZERO; 4],
+			)),
 		};
 		let onote = crate::note::StandardNote {
 			identifier: crate::note::NodeIdentifier([F::ZERO; 2]),
@@ -258,10 +252,10 @@ mod tests {
 
 		// Spend (fake): is_spend_req = false → apply_check = false.
 		// Must set spend_dummy_pk to a valid EC point so DoubleAdd4x gate is satisfied.
-		let spend_fake_sk = PrivateKey::from_raw([111, 222, 333, 444, 0]);
+		let spend_fake_sk = PrivateKey::from_raw([111, 222, 333, 444, 555]);
 		let spend_q: PointEw<F> = PointEw::generator().scalar_mul(&spend_fake_sk.as_scalar());
-		let spend_e = Scalar::from_raw([42, 0, 0, 0, 0]);
-		let spend_s = Scalar::from_raw([7, 0, 0, 0, 0]);
+		let spend_e = Scalar::from_raw([42, 8, 2, 5, 1]);
+		let spend_s = Scalar::from_raw([7, 12, 13, 14, 14]);
 		let spend_r: PointEw<F> = PointEw::generator()
 			.scalar_mul(&spend_s)
 			.add(&spend_q.scalar_mul(&spend_e));
@@ -282,8 +276,8 @@ mod tests {
 
 		// Consume (fake): is_consume_req = false → apply_check = false.
 		// consume_auth.config = false → circuit uses subpool_consume_key (already a valid point).
-		let consume_e = Scalar::from_raw([13, 0, 0, 0, 0]);
-		let consume_s = Scalar::from_raw([17, 0, 0, 0, 0]);
+		let consume_e = Scalar::from_raw([13, 13, 5, 6, 7]);
+		let consume_s = Scalar::from_raw([17, 19, 12, 13, 16]);
 		let consume_r: PointEw<F> = PointEw::generator()
 			.scalar_mul(&consume_s)
 			.add(&consume_q.scalar_mul(&consume_e));
@@ -299,7 +293,7 @@ mod tests {
 
 		// Approval (real): always required (apply_check = true).
 		let approval_pub = approval_sk.public_key::<F>();
-		let k = Scalar::from_raw([1, 0, 0, 0, 0]);
+		let k = Scalar::from_raw([1, 2, 3, 4, 5]);
 		let sig = schnorr_sign(&approval_sk, &approval_pub, &tx_hash, k);
 		let approval_cr = sig.r.encode();
 		let approval_cq = approval_q.encode();

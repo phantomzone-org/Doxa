@@ -12,7 +12,6 @@ use plonky2::{
 		poseidon::{Poseidon, PoseidonHash, PoseidonPermutation},
 	},
 	iop::{
-		generator::{GeneratedValues, SimpleGenerator},
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, PartitionWitness, Witness, WitnessWrite},
 	},
@@ -447,17 +446,8 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		act_root: ActRootTarget,
 		condition: BoolTarget,
 	) -> ActMerkleTarget {
-		let merkletargets = merkle_verify_gadget::<F, D, ACT_DEPTH>(self, act_root.0, condition);
-
-		// leaf is acc_comm
-		izip!(merkletargets.leaf, acc_comm.0.elements).for_each(|(l, r)| {
-			self.connect(l, r);
-		});
-
-		// root is acc_root
-		izip!(merkletargets.computed_root, act_root.0.elements).for_each(|(l, r)| {
-			self.connect(l, r);
-		});
+		let merkletargets =
+			merkle_verify_gadget::<F, D, ACT_DEPTH>(self, acc_comm.0, act_root.0, condition);
 
 		ActMerkleTarget(merkletargets)
 	}
@@ -596,8 +586,6 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		selector: BoolTarget,
 	) -> AstMerkleTargets {
 		let tr = self._true();
-		let merkletargets = merkle_verify_gadget::<F, D, ACC_AST_DEPTH>(self, acc_ast_root, tr);
-
 		// derive asset leaf
 		let leaf = {
 			let mut inputs: [Target; 10] = self.add_virtual_target_arr();
@@ -610,9 +598,14 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 			array::from_fn(|i| self.constant(F::from_canonical_u64(AST_DEFAULT_LEAF[i])));
 		let exists_or_default: [Target; HASH_SIZE] =
 			array::from_fn(|i| self._if(selector, leaf.elements[i], default_leaf[i]));
-		izip!(merkletargets.leaf.iter(), exists_or_default.iter()).for_each(|(a, b)| {
-			self.connect(*a, *b);
-		});
+		let merkletargets = merkle_verify_gadget::<F, D, ACC_AST_DEPTH>(
+			self,
+			HashOutTarget {
+				elements: exists_or_default,
+			},
+			acc_ast_root,
+			tr,
+		);
 
 		// if selector == 0 then amt must be 0
 		let not_sel = self.not(selector);
@@ -643,16 +636,9 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 				let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
 				let mt = merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(
 					self,
+					leaf_hash,
 					subpool_config_root,
 					tr,
-				);
-				izip!(mt.leaf.iter(), leaf_hash.elements.iter()).for_each(|(l, r)| {
-					self.connect(*l, *r);
-				});
-				izip!(mt.computed_root.iter(), subpool_config_root.elements.iter()).for_each(
-					|(l, r)| {
-						self.connect(*l, *r);
-					},
 				);
 				mt
 			};
@@ -667,22 +653,12 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 			inputs.push(subpool_id.0);
 			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs)
 		};
-		let main_pool_mt =
-			merkle_verify_gadget::<F, D, MAIN_POOL_CONFIG_DEPTH>(self, main_pool_root.0, tr);
-		izip!(
-			main_pool_mt.leaf.iter(),
-			main_pool_leaf_hash.elements.iter()
-		)
-		.for_each(|(l, r)| {
-			self.connect(*l, *r);
-		});
-		izip!(
-			main_pool_mt.computed_root.iter(),
-			main_pool_root.0.elements.iter()
-		)
-		.for_each(|(l, r)| {
-			self.connect(*l, *r);
-		});
+		let main_pool_mt = merkle_verify_gadget::<F, D, MAIN_POOL_CONFIG_DEPTH>(
+			self,
+			main_pool_leaf_hash,
+			main_pool_root.0,
+			tr,
+		);
 
 		SubpoolFullProofTargets {
 			approval_proof,
@@ -736,16 +712,9 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
 	) -> [MerkleTargets<NCT_DEPTH>; NOTE_BATCH] {
-		let merkle_proofs: [MerkleTargets<NCT_DEPTH>; NOTE_BATCH] =
-			array::from_fn(|i| merkle_verify_gadget(self, nct_root.0, inote_isactive[i]));
-
-		// for each merkle proof, leaf is note comm and root is NCT root
-		for (proof, comm) in izip!(merkle_proofs.iter(), inotes_comm.iter()) {
-			for i in 0..HASH_SIZE {
-				self.connect(proof.leaf[i], comm.0.elements[i]);
-				self.connect(proof.computed_root[i], nct_root.0.elements[i]);
-			}
-		}
+		let merkle_proofs: [MerkleTargets<NCT_DEPTH>; NOTE_BATCH] = array::from_fn(|i| {
+			merkle_verify_gadget(self, inotes_comm[i].0, nct_root.0, inote_isactive[i])
+		});
 
 		// each note must be spendable by the account
 		for note in inotes.iter() {
@@ -1054,10 +1023,6 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 		}),
 	});
 
-	// Dummy Acc commitment, nullifier
-	// let daccin = DummyAccountTarget(builder.add_virtual_target_arr());
-	// let daccout = DummyAccountTarget(builder.add_virtual_target_arr());
-
 	// Verify asset/amt proofs in AccIn and AccOut ASTs; enforce same leaf position was updated
 	let (accin_ast_merkle, accout_ast_merkle) = builder.assert_ast_update(
 		asset_id,
@@ -1222,10 +1187,8 @@ pub(crate) fn proof_siblings_bits<F: Field, N: Node, const DEPTH: usize>(
 
 #[derive(Clone, Copy)]
 pub struct MerkleTargets<const DEPTH: usize> {
-	pub leaf: [Target; HASH_SIZE],
 	pub siblings: [[Target; HASH_SIZE]; DEPTH],
 	pub bits: [Target; DEPTH],
-	pub computed_root: [Target; 4],
 }
 
 /// Builds a depth-32 Merkle path verification gadget using the existing
@@ -1244,12 +1207,11 @@ pub fn merkle_verify_gadget<
 	const DEPTH: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
+	leaf: HashOutTarget,
 	expected_root: HashOutTarget,
 	selector: BoolTarget,
 ) -> MerkleTargets<DEPTH> {
-	let leaf: [Target; HASH_SIZE] = core::array::from_fn(|_| builder.add_virtual_target());
-
-	let mut current: [Target; HASH_SIZE] = leaf;
+	let mut current: [Target; HASH_SIZE] = leaf.elements;
 	let mut siblings: [[Target; HASH_SIZE]; DEPTH] = [[builder.zero(); 4]; DEPTH];
 	let mut bits: [Target; DEPTH] = [builder.zero(); DEPTH];
 
@@ -1291,10 +1253,8 @@ pub fn merkle_verify_gadget<
 	}
 
 	MerkleTargets {
-		leaf,
 		siblings,
 		bits,
-		computed_root,
 	}
 }
 
@@ -1365,8 +1325,13 @@ mod tests {
 
 		let expected_root_targets = builder.add_virtual_hash();
 		let selector = builder.add_virtual_bool_target_safe();
-		let targets =
-			merkle_verify_gadget::<F, D, 32>(&mut builder, expected_root_targets, selector);
+		let leaf_target = builder.add_virtual_hash();
+		let targets = merkle_verify_gadget::<F, D, 32>(
+			&mut builder,
+			leaf_target,
+			expected_root_targets,
+			selector,
+		);
 
 		let data = builder.build::<C>();
 
@@ -1374,7 +1339,8 @@ mod tests {
 
 		// Set leaf
 		for i in 0..4 {
-			pw.set_target(targets.leaf[i], leaf_elements[i]).unwrap();
+			pw.set_target(leaf_target.elements[i], leaf_elements[i])
+				.unwrap();
 		}
 		// Set siblings and bits
 		for level in 0..32 {
@@ -1414,14 +1380,20 @@ mod tests {
 
 		let expected_root_targets = builder.add_virtual_hash();
 		let selector = builder.add_virtual_bool_target_safe();
-		let targets =
-			merkle_verify_gadget::<F, D, 32>(&mut builder, expected_root_targets, selector);
+		let leaf_target = builder.add_virtual_hash();
+		let targets = merkle_verify_gadget::<F, D, 32>(
+			&mut builder,
+			leaf_target,
+			expected_root_targets,
+			selector,
+		);
 
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 
 		for i in 0..4 {
-			pw.set_target(targets.leaf[i], leaf_elements[i]).unwrap();
+			pw.set_target(leaf_target.elements[i], leaf_elements[i])
+				.unwrap();
 		}
 		for level in 0..32 {
 			for i in 0..4 {
@@ -1467,14 +1439,20 @@ mod tests {
 
 		let expected_root_targets = builder.add_virtual_hash();
 		let selector = builder.add_virtual_bool_target_safe();
-		let targets =
-			merkle_verify_gadget::<F, D, 32>(&mut builder, expected_root_targets, selector);
+		let leaf_target = builder.add_virtual_hash();
+		let targets = merkle_verify_gadget::<F, D, 32>(
+			&mut builder,
+			leaf_target,
+			expected_root_targets,
+			selector,
+		);
 
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 
 		for i in 0..4 {
-			pw.set_target(targets.leaf[i], leaf_elements[i]).unwrap();
+			pw.set_target(leaf_target.elements[i], leaf_elements[i])
+				.unwrap();
 		}
 		for level in 0..32 {
 			for i in 0..4 {

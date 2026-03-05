@@ -126,6 +126,7 @@ mod tests {
 			let mut rng = rng();
 			StandardNote {
 				identifier: NodeIdentifier::from_rng(&mut rng),
+				asset_id: AssetId(F::ZERO),
 				amt,
 				recipient,
 				sender,

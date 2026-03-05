@@ -21,7 +21,10 @@ use crate::{
 	tree::{GenericNode, Leaf, MerkleTree},
 };
 
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct AccountCommitment(HashOutput);
+
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct AccountNullifier(HashOutput);
 
 #[derive(PartialEq, Eq, Clone, Debug)]
