@@ -76,7 +76,6 @@ mod tests {
 		let accin = StandardAccount::sample(&mut rng, subpool_id);
 
 		let pubid = accin.public_id();
-		let nk = accin.nk();
 
 		let spend_cpk_default: [F; 5] =
 			crate::DEFAULT_SPEND_AUTH_INVALID_PK.map(F::from_canonical_u64);
@@ -135,9 +134,9 @@ mod tests {
 		);
 
 		// Authority keys
-		set_gfp5(&mut pw, t.approval_key.0.0, approval_cpk.0.w.0);
-		set_gfp5(&mut pw, t.rejection_key.0.0, rejection_cpk.0.w.0);
-		set_gfp5(&mut pw, t.subpool_consume_key.0.0, consume_cpk.0.w.0);
+		t.approval_key.set_witness(&mut pw, approval_cpk);
+		t.rejection_key.set_witness(&mut pw, rejection_cpk);
+		t.subpool_consume_key.set_witness(&mut pw, consume_cpk);
 
 		// accin
 		t.accin.set_witness(&mut pw, &accin);
@@ -174,31 +173,27 @@ mod tests {
 		);
 		// accout_ast_merkle siblings + bits are auto-filled via connect_array
 
-		// inotes: all identical (→ identical commitments → consistent NCT computed_root)
+		// inotes: all identical
+		// spend_cond = accin's recipient; reject_cond = zeroed sender
+		let inote = crate::note::StandardNote {
+			identifier: crate::note::NodeIdentifier([F::ZERO; 2]),
+			asset_id: crate::note::AssetId(F::ZERO),
+			amt: primitive_types::U256::zero(),
+			recipient: crate::note::RecipientCond::from_acc(&accin),
+			sender: crate::note::SenderCond {
+				subpool_id: SubpoolId(F::ZERO),
+				public_id: crate::account::PublicIdentifier(
+					tessera_trees::tree::hasher::HashOutput([F::ZERO; 4]),
+				),
+			},
+		};
 		for i in 0..crate::NOTE_BATCH {
-			let nt = t.inotes[i];
-			pw.set_target(nt.identifier[0], F::ZERO).unwrap();
-			pw.set_target(nt.identifier[1], F::ZERO).unwrap();
-			set_u256_zero(&mut pw, nt.amount);
-			// asset_id is auto-filled via connect(note.asset_id, asset_id)
-			pw.set_target(nt.spend_cond.subpool_id.0, subpool_id.0)
-				.unwrap();
-			for j in 0..4 {
-				pw.set_target(nt.spend_cond.public_identifier.0.elements[j], pubid.0.0[j])
-					.unwrap();
-			}
-			pw.set_target(nt.reject_cond.subpool_id.0, F::ZERO).unwrap();
-			for j in 0..4 {
-				pw.set_target(nt.reject_cond.public_identifier.0.elements[j], F::ZERO)
-					.unwrap();
-			}
+			t.inotes[i].set_witness(&mut pw, &inote);
 			pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 			pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
 		}
 
 		// NCT Merkle proofs: selector = false → root check not enforced.
-		// All 8 notes are identical → all 8 computed_roots are identical → consistent nct_root.
-		// nct_root is auto-filled via connect(computed_root, nct_root).
 		for i in 0..crate::NOTE_BATCH {
 			set_merkle_siblings_and_bits(
 				&mut pw,
@@ -209,21 +204,24 @@ mod tests {
 		}
 
 		// onotes: all zero / inactive
+		let zero_cond = crate::note::SenderCond {
+			subpool_id: SubpoolId(F::ZERO),
+			public_id: crate::account::PublicIdentifier(
+				tessera_trees::tree::hasher::HashOutput([F::ZERO; 4]),
+			),
+		};
+		let onote = crate::note::StandardNote {
+			identifier: crate::note::NodeIdentifier([F::ZERO; 2]),
+			asset_id: crate::note::AssetId(F::ZERO),
+			amt: primitive_types::U256::zero(),
+			recipient: crate::note::RecipientCond {
+				subpool_id: SubpoolId(F::ZERO),
+				public_id: zero_cond.public_id,
+			},
+			sender: zero_cond,
+		};
 		for i in 0..crate::NOTE_BATCH {
-			let nt = t.onotes[i];
-			pw.set_target(nt.identifier[0], F::ZERO).unwrap();
-			pw.set_target(nt.identifier[1], F::ZERO).unwrap();
-			set_u256_zero(&mut pw, nt.amount);
-			pw.set_target(nt.spend_cond.subpool_id.0, F::ZERO).unwrap();
-			for j in 0..4 {
-				pw.set_target(nt.spend_cond.public_identifier.0.elements[j], F::ZERO)
-					.unwrap();
-			}
-			pw.set_target(nt.reject_cond.subpool_id.0, F::ZERO).unwrap();
-			for j in 0..4 {
-				pw.set_target(nt.reject_cond.public_identifier.0.elements[j], F::ZERO)
-					.unwrap();
-			}
+			t.onotes[i].set_witness(&mut pw, &onote);
 			pw.set_bool_target(t.onotes_isactive[i], false).unwrap();
 		}
 

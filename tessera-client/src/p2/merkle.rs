@@ -24,6 +24,7 @@ use plonky2::{
 use plonky2_field::{extension::Extendable, goldilocks_field::GoldilocksField, types::Field};
 use rand::seq::index::IndexVecIntoIter;
 use tessera_trees::{
+	F,
 	plonky2_gadgets::u32::gadgets::{
 		CircuitBuilderU32, CircuitBuilderU32Arithmetic, U32Target, add_u8_range_check_lookup_table,
 	},
@@ -130,6 +131,38 @@ pub(crate) struct NoteTarget {
 	pub(crate) asset_id: AssetIdTarget,
 	pub(crate) spend_cond: ConsumeCondTarget,
 	pub(crate) reject_cond: RejectCondTarget,
+}
+
+impl NoteTarget {
+	pub(crate) fn set_witness(&self, pw: &mut PartialWitness<F>, note: &crate::note::StandardNote) {
+		pw.set_target(self.identifier[0], note.identifier.0[0])
+			.unwrap();
+		pw.set_target(self.identifier[1], note.identifier.0[1])
+			.unwrap();
+		// amount: U256.0 is [u64; 4] little-endian words, split into lo/hi u32 limbs
+		for (i, word) in note.amt.0.iter().enumerate() {
+			pw.set_target(self.amount.0[2 * i].0, F::from_canonical_u32(*word as u32))
+				.unwrap();
+			pw.set_target(
+				self.amount.0[2 * i + 1].0,
+				F::from_canonical_u32((*word >> 32) as u32),
+			)
+			.unwrap();
+		}
+		pw.set_target(self.asset_id.0, note.asset_id.0).unwrap();
+		pw.set_target(self.spend_cond.subpool_id.0, note.recipient.subpool_id.0)
+			.unwrap();
+		for (j, &x) in note.recipient.public_id.0.0.iter().enumerate() {
+			pw.set_target(self.spend_cond.public_identifier.0.elements[j], x)
+				.unwrap();
+		}
+		pw.set_target(self.reject_cond.subpool_id.0, note.sender.subpool_id.0)
+			.unwrap();
+		for (j, &x) in note.sender.public_id.0.0.iter().enumerate() {
+			pw.set_target(self.reject_cond.public_identifier.0.elements[j], x)
+				.unwrap();
+		}
+	}
 }
 
 #[derive(Clone, Copy)]
@@ -706,7 +739,7 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		let merkle_proofs: [MerkleTargets<NCT_DEPTH>; NOTE_BATCH] =
 			array::from_fn(|i| merkle_verify_gadget(self, nct_root.0, inote_isactive[i]));
 
-		// for each merkle proof, leaf is note comm root is NCT root
+		// for each merkle proof, leaf is note comm and root is NCT root
 		for (proof, comm) in izip!(merkle_proofs.iter(), inotes_comm.iter()) {
 			for i in 0..HASH_SIZE {
 				self.connect(proof.leaf[i], comm.0.elements[i]);
@@ -931,6 +964,9 @@ pub(crate) struct TxCircuitTargets {
 	pub(crate) accin_act_merkle: ActMerkleTarget,
 	pub(crate) accin_ast_merkle: AstMerkleTargets,
 	pub(crate) accout_ast_merkle: AstMerkleTargets,
+	pub(crate) inotes_nct_merkle: [MerkleTargets<NCT_DEPTH>; NOTE_BATCH], /* inotes NCT merkle
+	                                                                       * proofs (one per
+	                                                                       * inote) */
 	// notes
 	pub(crate) inotes: [NoteTarget; NOTE_BATCH],
 	pub(crate) inotes_pos: [Target; NOTE_BATCH],
@@ -944,8 +980,6 @@ pub(crate) struct TxCircuitTargets {
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	// signature targets
 	pub(crate) sig_targets: TxSignatureTargets,
-	// inotes NCT merkle proofs (one per inote)
-	pub(crate) inotes_nct_merkle: [MerkleTargets<NCT_DEPTH>; NOTE_BATCH],
 }
 
 pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(

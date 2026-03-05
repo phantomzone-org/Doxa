@@ -14,7 +14,7 @@ pub struct NoteCommitment(pub HashOutput);
 pub struct NoteNullifier(pub HashOutput);
 
 #[derive(Clone, Copy)]
-pub struct NodeIdentifier([F; 2]);
+pub struct NodeIdentifier(pub(crate) [F; 2]);
 
 impl NodeIdentifier {
 	pub fn from_rng<R: CryptoRng + Rng>(rng: &mut R) -> Self {
@@ -31,7 +31,7 @@ impl NodeIdentifier {
 #[derive(Clone, Copy)]
 pub struct RecipientCond {
 	pub subpool_id: SubpoolId,
-	public_id: PublicIdentifier,
+	pub(crate) public_id: PublicIdentifier,
 }
 
 impl RecipientCond {
@@ -45,8 +45,8 @@ impl RecipientCond {
 
 #[derive(Clone, Copy)]
 pub struct SenderCond {
-	subpool_id: SubpoolId,
-	public_id: PublicIdentifier,
+	pub(crate) subpool_id: SubpoolId,
+	pub(crate) public_id: PublicIdentifier,
 }
 
 impl SenderCond {
@@ -59,11 +59,15 @@ impl SenderCond {
 }
 
 #[derive(Clone, Copy)]
+pub struct AssetId(pub(crate) F);
+
+#[derive(Clone, Copy)]
 pub struct StandardNote {
-	identifier: NodeIdentifier,
-	amt: U256,
-	recipient: RecipientCond,
-	sender: SenderCond,
+	pub(crate) identifier: NodeIdentifier,
+	pub(crate) asset_id: AssetId,
+	pub(crate) amt: U256,
+	pub(crate) recipient: RecipientCond,
+	pub(crate) sender: SenderCond,
 }
 
 impl StandardNote {

@@ -1325,6 +1325,18 @@ pub(crate) struct SchnorrTargets {
 // TODO: why this is abstract over F, when F always equals Target
 pub(crate) struct PubkeyTarget<F>(pub(crate) LocalQuinticExtension<F>);
 
+impl PubkeyTarget<Target> {
+	pub(crate) fn set_witness<F: Field + Extendable<5>>(
+		&self,
+		pw: &mut PartialWitness<F>,
+		cpk: crate::schnorr::CompressedPublicKey<F>,
+	) {
+		for (t, v) in self.0.0.iter().zip(cpk.0.w.0.iter()) {
+			pw.set_target(*t, *v).unwrap();
+		}
+	}
+}
+
 /// Build a Schnorr signature verification circuit.
 ///
 /// Verifies `R = sG + eQ` where `e = DropTop2Bits(H(w_R || w_Q || m))`.
