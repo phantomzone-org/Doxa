@@ -31,9 +31,9 @@ use tessera_trees::{
 };
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT, DEFAULT_CONSUME_INVALID_PK,
-	DEFAULT_SPEND_AUTH_INVALID_PK, DS_ACC_AST, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER,
-	MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH,
+	ACC_AST_DEPTH, ACT_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT,
+	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, DS_ACC_AST, DS_NULLIFIER_KEY,
+	DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH,
 	account::{NullifierKey, StandardAccount},
 	p2::{
 		signature::{
@@ -98,7 +98,7 @@ impl AccountTarget {
 			pw.set_target(self.acc_ast_root.elements[i], x).unwrap();
 		}
 		let spend_cpk: [GoldilocksField; 5] = acc.spend_auth.spend_pk.map_or_else(
-			|| DEFAULT_SPEND_AUTH_INVALID_PK.map(GoldilocksField::from_canonical_u64),
+			|| DEFAULT_SPEND_AUTH_PK.map(GoldilocksField::from_canonical_u64),
 			|pk| pk.0.w.0,
 		);
 		for (t, v) in self.spend_auth.0.0.iter().zip(spend_cpk.iter()) {
@@ -107,7 +107,7 @@ impl AccountTarget {
 		pw.set_bool_target(self.consume_auth.config, acc.consume_auth.config)
 			.unwrap();
 		let consume_cpk: [GoldilocksField; 5] = acc.consume_auth.pk.map_or_else(
-			|| DEFAULT_CONSUME_INVALID_PK.map(GoldilocksField::from_canonical_u64),
+			|| DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER.map(GoldilocksField::from_canonical_u64),
 			|pk| pk.0.w.0,
 		);
 		for (t, v) in self.consume_auth.pk.0.0.iter().zip(consume_cpk.iter()) {
@@ -179,9 +179,8 @@ pub(crate) struct NoteCommitmentTarget(pub(crate) HashOutTarget);
 struct TxHashTarget(HashOutTarget);
 
 pub(crate) struct TxSignatureTargets {
-	// pub(crate) spend: SchnorrTargets,
-	// pub(crate) spend_dummy_pk: PubkeyTarget<Target>,
-	// pub(crate) consume: SchnorrTargets,
+	pub(crate) spend: SchnorrTargets,
+	pub(crate) consume: SchnorrTargets,
 	pub(crate) approval: SchnorrTargets,
 }
 
@@ -810,15 +809,15 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		self.conditional_assert_eq(condition.target, acc.nonce, zero);
 
 		let default_spend: [Target; 5] =
-			DEFAULT_SPEND_AUTH_INVALID_PK.map(|v| self.constant(F::from_canonical_u64(v)));
+			DEFAULT_SPEND_AUTH_PK.map(|v| self.constant(F::from_canonical_u64(v)));
 		for i in 0..5 {
 			self.conditional_assert_eq(condition.target, acc.spend_auth.0.0[i], default_spend[i]);
 		}
 
 		self.conditional_assert_eq(condition.target, acc.consume_auth.config.target, zero);
 
-		let default_consume: [Target; 5] =
-			DEFAULT_CONSUME_INVALID_PK.map(|v| self.constant(F::from_canonical_u64(v)));
+		let default_consume: [Target; 5] = DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER
+			.map(|v| self.constant(F::from_canonical_u64(v)));
 		for i in 0..5 {
 			self.conditional_assert_eq(
 				condition.target,
@@ -838,42 +837,38 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		approval_key: PubkeyTarget<Target>,
 	) -> TxSignatureTargets {
 		// spend sig: required when any onote is active
-		// let mut is_spend_req = onotes_isactive[0];
-		// for sel in onotes_isactive.iter().skip(1) {
-		// 	is_spend_req = self.or(*sel, is_spend_req);
-		// }
-		// let spend_dummy_pk = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
-		// let effective_spend_pk = PubkeyTarget(LocalQuinticExtension(array::from_fn(|i| {
-		// 	self._if(is_spend_req, accin.spend_auth.0.0[i], spend_dummy_pk.0.0[i])
-		// })));
-		// let spend =
-		// 	conditional_schnorr_verify_gadget(self, tx_hash.0, effective_spend_pk, is_spend_req);
+		let mut is_spend_req = onotes_isactive[0];
+		for sel in onotes_isactive.iter().skip(1) {
+			is_spend_req = self.or(*sel, is_spend_req);
+		}
+
+		let spend =
+			conditional_schnorr_verify_gadget(self, tx_hash.0, accin.spend_auth, is_spend_req);
 
 		// consume sig: required when any inote is active AND no onote is active
-		// let mut has_inotes = inotes_isactive[0];
-		// for sel in inotes_isactive.iter().skip(1) {
-		// 	has_inotes = self.or(*sel, has_inotes);
-		// }
-		// let not_is_spend_req = self.not(is_spend_req);
-		// let is_consume_req = self.and(has_inotes, not_is_spend_req);
-		// let consume_key = PubkeyTarget(LocalQuinticExtension(array::from_fn(|i| {
-		// 	self._if(
-		// 		accin.consume_auth.config,
-		// 		accin.consume_auth.pk.0.0[i],
-		// 		subpool_consume_key.0.0[i],
-		// 	)
-		// })));
-		// let consume =
-		// 	conditional_schnorr_verify_gadget(self, tx_hash.0, consume_key, is_consume_req);
+		let mut has_inotes = inotes_isactive[0];
+		for sel in inotes_isactive.iter().skip(1) {
+			has_inotes = self.or(*sel, has_inotes);
+		}
+		let not_is_spend_req = self.not(is_spend_req);
+		let is_consume_req = self.and(has_inotes, not_is_spend_req);
+		let consume_key = PubkeyTarget(LocalQuinticExtension(array::from_fn(|i| {
+			self._if(
+				accin.consume_auth.config,
+				accin.consume_auth.pk.0.0[i],
+				subpool_consume_key.0.0[i],
+			)
+		})));
+		let consume =
+			conditional_schnorr_verify_gadget(self, tx_hash.0, consume_key, is_consume_req);
 
 		// approval sig: always required
 		let tr = self._true();
 		let approval = conditional_schnorr_verify_gadget(self, tx_hash.0, approval_key, tr);
 
 		TxSignatureTargets {
-			// spend,
-			// spend_dummy_pk,
-			// consume,
+			spend,
+			consume,
 			approval,
 		}
 	}

@@ -19,10 +19,10 @@ mod tests {
 	use rand_chacha::ChaCha8Rng;
 
 	use crate::{
-		MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier,
-		SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId, default_ast_siblings,
-		derive_tx_hash,
-		ecgfp5::PointEw,
+		DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment,
+		NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId,
+		default_ast_siblings, derive_tx_hash,
+		ecgfp5::{CompressedPoint, PointEw},
 		p2::{
 			merkle::{
 				AccountTarget, proof_siblings_bits, set_merkle_siblings_and_bits, tx_circuit,
@@ -53,7 +53,7 @@ mod tests {
 	#[test]
 	fn test_prove_fresh_acc_tx() {
 		// ── Keys for one subpool ──────────────────────────────────────────────
-		let approval_sk = PrivateKey::from_raw([1, 2, 3, 4, 0]);
+		let approval_sk = PrivateKey::from_raw([2, 3, 4, 5, 6]);
 		let approval_q: PointEw<F> = PointEw::generator().scalar_mul(&approval_sk.as_scalar());
 		let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
 
@@ -75,14 +75,6 @@ mod tests {
 		// ── Account setup ─────────────────────────────────────────────────────
 		let mut rng = ChaCha8Rng::seed_from_u64(0);
 		let accin = StandardAccount::sample(&mut rng, subpool_id);
-		dbg!(accin.ast.root());
-
-		let pubid = accin.public_id();
-
-		let spend_cpk_default: [F; 5] =
-			crate::DEFAULT_SPEND_AUTH_INVALID_PK.map(F::from_canonical_u64);
-		let consume_cpk_default: [F; 5] =
-			crate::DEFAULT_CONSUME_INVALID_PK.map(F::from_canonical_u64);
 
 		// Setup AccOut
 		let nspend_sk = PrivateKey::from_raw([999, 1000, 1001, 1002, 0]);
@@ -252,45 +244,40 @@ mod tests {
 
 		// Spend (fake): is_spend_req = false → apply_check = false.
 		// Must set spend_dummy_pk to a valid EC point so DoubleAdd4x gate is satisfied.
-		// let spend_fake_sk = PrivateKey::from_raw([111, 222, 333, 444, 555]);
-		// let spend_q: PointEw<F> = PointEw::generator().scalar_mul(&spend_fake_sk.as_scalar());
-		// let spend_e = Scalar::from_raw([42, 8, 2, 5, 1]);
-		// let spend_s = Scalar::from_raw([7, 12, 13, 14, 14]);
-		// let spend_r: PointEw<F> = PointEw::generator()
-		// 	.scalar_mul(&spend_s)
-		// 	.add(&spend_q.scalar_mul(&spend_e));
-		// let spend_cr = spend_r.encode();
-		// set_gfp5(
-		// 	&mut pw,
-		// 	t.sig_targets.spend_dummy_pk.0.0,
-		// 	spend_q.encode().w.0,
-		// );
-		// set_schnorr_witness(
-		// 	&mut pw,
-		// 	&t.sig_targets.spend,
-		// 	spend_q,
-		// 	spend_cr,
-		// 	spend_e,
-		// 	spend_s,
-		// );
+		let spend_q: PointEw<F> =
+			PointEw::decode(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)).unwrap();
+		let spend_e = Scalar::from_raw([42, 8, 2, 5, 1]);
+		let spend_s = Scalar::from_raw([7, 12, 13, 14, 14]);
+		let spend_r: PointEw<F> = PointEw::generator()
+			.scalar_mul(&spend_s)
+			.add(&spend_q.scalar_mul(&spend_e));
+		let spend_cr = spend_r.encode();
+		set_schnorr_witness(
+			&mut pw,
+			&t.sig_targets.spend,
+			spend_q,
+			spend_cr,
+			spend_e,
+			spend_s,
+		);
 
 		// Consume (fake): is_consume_req = false → apply_check = false.
 		// consume_auth.config = false → circuit uses subpool_consume_key (already a valid
 		// point).
-		// let consume_e = Scalar::from_raw([13, 13, 5, 6, 7]);
-		// let consume_s = Scalar::from_raw([17, 19, 12, 13, 16]);
-		// let consume_r: PointEw<F> = PointEw::generator()
-		// 	.scalar_mul(&consume_s)
-		// 	.add(&consume_q.scalar_mul(&consume_e));
-		// let consume_cr = consume_r.encode();
-		// set_schnorr_witness(
-		// 	&mut pw,
-		// 	&t.sig_targets.consume,
-		// 	consume_q,
-		// 	consume_cr,
-		// 	consume_e,
-		// 	consume_s,
-		// );
+		let consume_e = Scalar::from_raw([13, 13, 5, 6, 7]);
+		let consume_s = Scalar::from_raw([17, 19, 12, 13, 16]);
+		let consume_r: PointEw<F> = PointEw::generator()
+			.scalar_mul(&consume_s)
+			.add(&consume_q.scalar_mul(&consume_e));
+		let consume_cr = consume_r.encode();
+		set_schnorr_witness(
+			&mut pw,
+			&t.sig_targets.consume,
+			consume_q,
+			consume_cr,
+			consume_e,
+			consume_s,
+		);
 
 		// Approval (real): always required (apply_check = true).
 		let approval_pub = approval_sk.public_key::<F>();

@@ -13,8 +13,9 @@ use tessera_trees::{
 };
 
 use crate::{
-	ACC_AST_DEPTH, AST_DEFAULT_LEAF, DEFAULT_CONSUME_INVALID_PK, DEFAULT_SPEND_AUTH_INVALID_PK,
-	DS_ACC_AST, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, NOTE_BATCH, NoteCommitment, NoteNullifier,
+	ACC_AST_DEPTH, AST_DEFAULT_LEAF, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
+	NoteCommitment, NoteNullifier,
 	commitment::Commitment,
 	ecgfp5::CompressedPoint,
 	schnorr::{CompressedPublicKey, PublicKey},
@@ -158,19 +159,16 @@ impl StandardAccount {
 		if let Some(spend_pk) = self.spend_auth.spend_pk {
 			inp.extend_from_slice(&spend_pk.0.w.0);
 		} else {
-			inp.extend_from_slice(&DEFAULT_SPEND_AUTH_INVALID_PK.map(F::from_canonical_u64));
+			inp.extend_from_slice(&DEFAULT_SPEND_AUTH_PK.map(F::from_canonical_u64));
 		}
 
-		let (ca_config, ca_pk) = if self.consume_auth.config {
-			(F::ONE, self.consume_auth.pk.unwrap())
+		if self.consume_auth.config {
+			inp.push(F::ONE);
+			inp.extend(self.consume_auth.pk.unwrap().0.w.0);
 		} else {
-			(
-				F::ZERO,
-				CompressedPublicKey(CompressedPoint::from(DEFAULT_CONSUME_INVALID_PK)),
-			)
+			inp.push(F::ZERO);
+			inp.extend(DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER.map(F::from_canonical_u64));
 		};
-		inp.push(ca_config);
-		inp.extend_from_slice(&ca_pk.0.w.0);
 
 		AccountCommitment(HashOutput(
 			<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements,
