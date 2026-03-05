@@ -68,10 +68,11 @@ impl<H: MerkleHash> NullifierTree<H> {
 		let (pred_paths, pred_values, pred_old_next_indexes, pred_old_next_values, mask) =
 			self.sort_leaves(start_index, &mut leaves)?;
 
+
 		// 1. Anchors the emptiness of the batch to old_root
-		let new_node_upper_siblings_before_pred_update: Vec<H::Digest> = self
-			.tree
-			.generate_siblings_array(start_index, log_batch_size, self.depth())?;
+		let new_node_upper_siblings_before_pred_update: Vec<H::Digest> =
+			self.tree
+				.merkle_path(start_index, log_batch_size, self.depth())?;
 
 		// 2. Updates predecessors & commits old_root -> mid_root
 		let mut pred_in_tree_paths = Vec::new();
@@ -82,12 +83,10 @@ impl<H: MerkleHash> NullifierTree<H> {
 				self.nodes[pred_paths[i]] = Node::new(pred_values[i], start_index + i, leaves[i]);
 				pred_in_tree_paths.push(pred_paths[i]);
 				let siblings: Vec<H::Digest> =
-					self.tree
-						.generate_siblings_array(pred_paths[i], 0, self.depth())?;
+					self.tree.merkle_path(pred_paths[i], 0, self.depth())?;
 				pred_old_siblings.push(siblings);
 			} else {
-				let siblings: Vec<H::Digest> =
-					self.tree.generate_siblings_array(0, 0, self.depth())?;
+				let siblings: Vec<H::Digest> = self.tree.merkle_path(0, 0, self.depth())?;
 				pred_old_siblings.push(siblings);
 			}
 		}
@@ -95,9 +94,9 @@ impl<H: MerkleHash> NullifierTree<H> {
 		self.tree.update_sparse_paths(&pred_in_tree_paths);
 
 		// 3. Anchors the emptiness of batch to mid_root
-		let new_node_upper_siblings_after_pred_update: Vec<H::Digest> = self
-			.tree
-			.generate_siblings_array(start_index, log_batch_size, self.depth())?;
+		let new_node_upper_siblings_after_pred_update: Vec<H::Digest> =
+			self.tree
+				.merkle_path(start_index, log_batch_size, self.depth())?;
 
 		for i in 0..batch_size {
 			self.nodes.push(Node::new(
@@ -290,6 +289,8 @@ impl<H: MerkleHash> BatchInsertProof<H> {
 
 		// Authenticates true predecessors against old_root
 		for i in 0..batch_size {
+			println!("pred_value: {}", self.pred_values[i]);
+
 			// If mask == true, the current value is the true
 			// predecessor and must be propagated until the next
 			// mask == true (i.e. these values do not change if
@@ -452,19 +453,18 @@ pub mod test {
 		NullifierInsertProof, NullifierTree,
 		hasher::{Hash, NewFromU64},
 	};
-	#[allow(dead_code)]
-	const DEPTH: usize = 10;
+
+	const DEPTH: usize = 4;
 	// const STARTING_LEAVES: usize = 1 << (DEPTH - 1);
 	// const BATCH_SIZE: usize = 1 << (DEPTH - 2);
 
-	//#[test]
-	#[allow(dead_code)]
+	#[test]
 	fn batch_insert_native() -> Result<()> {
 		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
 
 		// let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
-		let input_leaves = [1, 3, 5, 9, 10, 11, 12];
+		let input_leaves = [5, 15, 12, 30, 7, 13, 25];
 
 		for i in 0..7 {
 			let leaf: Hash = Hash::new_from_u64(input_leaves[i]);
@@ -473,16 +473,16 @@ pub mod test {
 		}
 		println!();
 
-		// for i in 0..tree.nodes.len(){
-		//  print!("node[{i}]:\n {}\n", tree.nodes[i]);
-		//}
+		for i in 0..tree.nodes.len() {
+			print!("node[{i}]:\n {}\n", tree.nodes[i]);
+		}
 
 		tree.verify()?;
 
-		let new_leaves = [2, 4, 6, 7, 8, 13, 14, 15];
+		let new_leaves = [8, 14, 9, 10];
 
 		let mut leaves = Vec::with_capacity(8);
-		for i in 0..8 {
+		for i in 0..new_leaves.len() {
 			let leaf = Hash::new_from_u64(new_leaves[i]);
 			leaves.push(leaf);
 		}
