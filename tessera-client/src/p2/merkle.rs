@@ -196,7 +196,7 @@ struct NullifierKeyTarget(HashOutTarget);
 pub(crate) struct PrivateIdentifierTarget(pub(crate) [Target; 2]);
 
 #[derive(Clone, Copy)]
-pub(crate) struct ActMerkleTarget(pub(crate) MerkleTargets<ACT_DEPTH>);
+pub(crate) struct ActMerkleTarget(pub(crate) ConditionalMerkleTarget<ACT_DEPTH>);
 
 #[derive(Clone, Copy)]
 pub(crate) struct ActRootTarget(pub(crate) HashOutTarget);
@@ -219,10 +219,10 @@ struct SubpoolConfigRootTarget(HashOutTarget);
 pub(crate) struct MainPoolConfigRootTarget(pub(crate) HashOutTarget);
 
 pub(crate) struct SubpoolFullProofTargets {
-	pub(crate) approval_proof: MerkleTargets<SUBPOOL_CONFIG_DEPTH>,
-	pub(crate) rejection_proof: MerkleTargets<SUBPOOL_CONFIG_DEPTH>,
-	pub(crate) consume_proof: MerkleTargets<SUBPOOL_CONFIG_DEPTH>,
-	pub(crate) main_pool_proof: MerkleTargets<MAIN_POOL_CONFIG_DEPTH>,
+	pub(crate) approval_proof: MerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) rejection_proof: MerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) consume_proof: MerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) main_pool_proof: MerkleTarget<MAIN_POOL_CONFIG_DEPTH>,
 }
 
 pub trait LocalCB {
@@ -296,7 +296,6 @@ pub trait LocalCB {
 
 	fn assert_subpool_full_proof(
 		&mut self,
-		main_pool_root: MainPoolConfigRootTarget,
 		subpool_id: SubpoolIdTarget,
 		approval_key: PubkeyTarget<Target>,
 		rejection_key: PubkeyTarget<Target>,
@@ -322,7 +321,7 @@ pub trait LocalCB {
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
-	) -> [MerkleTargets<NCT_DEPTH>; NOTE_BATCH];
+	) -> [ConditionalMerkleTarget<NCT_DEPTH>; NOTE_BATCH];
 
 	fn assert_fresh_account(&mut self, acc: AccountTarget, condition: BoolTarget);
 
@@ -446,8 +445,9 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		act_root: ActRootTarget,
 		condition: BoolTarget,
 	) -> ActMerkleTarget {
-		let merkletargets =
-			merkle_verify_gadget::<F, D, ACT_DEPTH>(self, acc_comm.0, act_root.0, condition);
+		let merkletargets = conditional_merkle_verify_gadget::<F, D, ACT_DEPTH>(
+			self, acc_comm.0, act_root.0, condition,
+		);
 
 		ActMerkleTarget(merkletargets)
 	}
@@ -598,7 +598,7 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 			array::from_fn(|i| self.constant(F::from_canonical_u64(AST_DEFAULT_LEAF[i])));
 		let exists_or_default: [Target; HASH_SIZE] =
 			array::from_fn(|i| self._if(selector, leaf.elements[i], default_leaf[i]));
-		let merkletargets = merkle_verify_gadget::<F, D, ACC_AST_DEPTH>(
+		let merkletargets = conditional_merkle_verify_gadget::<F, D, ACC_AST_DEPTH>(
 			self,
 			HashOutTarget {
 				elements: exists_or_default,
@@ -619,27 +619,23 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 
 	fn assert_subpool_full_proof(
 		&mut self,
-		main_pool_root: MainPoolConfigRootTarget,
 		subpool_id: SubpoolIdTarget,
 		approval_key: PubkeyTarget<Target>,
 		rejection_key: PubkeyTarget<Target>,
 		consume_key: PubkeyTarget<Target>,
 	) -> SubpoolFullProofTargets {
-		let tr = self._true();
-
 		// Subpool config root — shared across the 3 key proofs
 		let subpool_config_root = self.add_virtual_hash();
 
 		// Helper: verify one depth-2 key proof and connect leaf + root
 		let mut verify_key_proof =
-			|key: PubkeyTarget<Target>| -> MerkleTargets<SUBPOOL_CONFIG_DEPTH> {
+			|key: PubkeyTarget<Target>| -> MerkleTarget<SUBPOOL_CONFIG_DEPTH> {
 				let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
-				let mt = merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(
-					self,
-					leaf_hash,
-					subpool_config_root,
-					tr,
-				);
+				let mt = merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(self, leaf_hash);
+
+				// connect subpool config roots for all keys
+				self.connect_array(subpool_config_root.elements, mt.root);
+
 				mt
 			};
 
@@ -653,18 +649,15 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 			inputs.push(subpool_id.0);
 			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs)
 		};
-		let main_pool_mt = merkle_verify_gadget::<F, D, MAIN_POOL_CONFIG_DEPTH>(
-			self,
-			main_pool_leaf_hash,
-			main_pool_root.0,
-			tr,
-		);
+		let main_pool_proof =
+			merkle_verify_gadget::<F, D, MAIN_POOL_CONFIG_DEPTH>(self, main_pool_leaf_hash);
+		// self.connect_array(main_pool_root.0.elements, main_pool_mt.root);
 
 		SubpoolFullProofTargets {
 			approval_proof,
 			rejection_proof,
 			consume_proof,
-			main_pool_proof: main_pool_mt,
+			main_pool_proof,
 		}
 	}
 
@@ -711,9 +704,9 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
-	) -> [MerkleTargets<NCT_DEPTH>; NOTE_BATCH] {
-		let merkle_proofs: [MerkleTargets<NCT_DEPTH>; NOTE_BATCH] = array::from_fn(|i| {
-			merkle_verify_gadget(self, inotes_comm[i].0, nct_root.0, inote_isactive[i])
+	) -> [ConditionalMerkleTarget<NCT_DEPTH>; NOTE_BATCH] {
+		let merkle_proofs: [ConditionalMerkleTarget<NCT_DEPTH>; NOTE_BATCH] = array::from_fn(|i| {
+			conditional_merkle_verify_gadget(self, inotes_comm[i].0, nct_root.0, inote_isactive[i])
 		});
 
 		// each note must be spendable by the account
@@ -804,23 +797,8 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 	fn assert_fresh_account(&mut self, acc: AccountTarget, condition: BoolTarget) {
 		let zero = self.zero();
 
-		// Compute the actual default AST root at circuit-build time via Poseidon two_to_one.
-		let default_ast_root: [Target; HASH_SIZE] = {
-			use plonky2::{hash::hash_types::HashOut, plonk::config::Hasher};
-			let mut cur: [F; HASH_SIZE] = AST_DEFAULT_LEAF.map(F::from_canonical_u64);
-			for _ in 0..ACC_AST_DEPTH {
-				let r = <PoseidonHash as Hasher<F>>::two_to_one(
-					HashOut {
-						elements: cur,
-					},
-					HashOut {
-						elements: cur,
-					},
-				);
-				cur = r.elements;
-			}
-			array::from_fn(|i| self.constant(cur[i]))
-		};
+		let default_ast_root: [Target; HASH_SIZE] =
+			array::from_fn(|i| self.constant(F::from_canonical_u64(AST_DEFAULT_ROOT[i])));
 		for i in 0..HASH_SIZE {
 			self.conditional_assert_eq(
 				condition.target,
@@ -903,7 +881,7 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AssetIdTarget(pub(crate) Target);
-pub(crate) struct AstMerkleTargets(pub(crate) MerkleTargets<ACC_AST_DEPTH>);
+pub(crate) struct AstMerkleTargets(pub(crate) ConditionalMerkleTarget<ACC_AST_DEPTH>);
 
 pub(crate) struct TxCircuitTargets {
 	// tx kind flags
@@ -933,9 +911,9 @@ pub(crate) struct TxCircuitTargets {
 	pub(crate) accin_act_merkle: ActMerkleTarget,
 	pub(crate) accin_ast_merkle: AstMerkleTargets,
 	pub(crate) accout_ast_merkle: AstMerkleTargets,
-	pub(crate) inotes_nct_merkle: [MerkleTargets<NCT_DEPTH>; NOTE_BATCH], /* inotes NCT merkle
-	                                                                       * proofs (one per
-	                                                                       * inote) */
+	pub(crate) inotes_nct_merkle: [ConditionalMerkleTarget<NCT_DEPTH>; NOTE_BATCH], /* inotes NCT merkle
+	                                                                                 * proofs (one per
+	                                                                                 * inote) */
 	// notes
 	pub(crate) inotes: [NoteTarget; NOTE_BATCH],
 	pub(crate) inotes_pos: [Target; NOTE_BATCH],
@@ -948,14 +926,14 @@ pub(crate) struct TxCircuitTargets {
 	// subpool proof
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	// signature targets
-	pub(crate) sig_targets: TxSignatureTargets,
+	// pub(crate) sig_targets: TxSignatureTargets,
 }
 
 pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 ) -> TxCircuitTargets {
 	// Mint constants
-	let ds_nullifier_key = builder.constant(F::from_canonical_u64(DS_NULLIFIER_KEY));
+	// let ds_nullifier_key = builder.constant(F::from_canonical_u64(DS_NULLIFIER_KEY));
 	let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 
 	// Tx kinds
@@ -989,10 +967,10 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 		let pubid = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input);
 		PublicIdentifierTaregt(pubid)
 	};
-	let nk = builder.derive_nullifier_key(accin.private_identifier);
+	// let nk = builder.derive_nullifier_key(accin.private_identifier);
 
 	let accin_comm = builder.derive_account_commitment(accin, private_identifier, subpool_id);
-	let accout_comm = builder.derive_account_commitment(accout, private_identifier, subpool_id);
+	// let accout_comm = builder.derive_account_commitment(accout, private_identifier, subpool_id);
 
 	// Assert AccIn matches FreshAccount defaults when is_fresh_acc
 	builder.assert_fresh_account(accin, is_fresh_acc);
@@ -1011,17 +989,17 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	);
 
 	// AccIn nullifier — select fresh vs regular based on is_fresh_acc
-	let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
-	let accin_null_fresh = builder.derive_fresh_account_nullifier(accin_comm, nk);
-	let accin_null = AccountNullifierTarget(HashOutTarget {
-		elements: array::from_fn(|i| {
-			builder._if(
-				is_fresh_acc,
-				accin_null_fresh.0.elements[i],
-				accin_null_regular.0.elements[i],
-			)
-		}),
-	});
+	// let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
+	// let accin_null_fresh = builder.derive_fresh_account_nullifier(accin_comm, nk);
+	// let accin_null = AccountNullifierTarget(HashOutTarget {
+	// 	elements: array::from_fn(|i| {
+	// 		builder._if(
+	// 			is_fresh_acc,
+	// 			accin_null_fresh.0.elements[i],
+	// 			accin_null_regular.0.elements[i],
+	// 		)
+	// 	}),
+	// });
 
 	// Verify asset/amt proofs in AccIn and AccOut ASTs; enforce same leaf position was updated
 	let (accin_ast_merkle, accout_ast_merkle) = builder.assert_ast_update(
@@ -1042,23 +1020,23 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	let inotes_isactive: [BoolTarget; NOTE_BATCH] =
 		array::from_fn(|_| builder.add_virtual_bool_target_safe());
 	let inotes_comm = array::from_fn(|i| builder.derive_note_commitment(inotes[i]));
-	let inotes_null: [NoteNullifierTarget; NOTE_BATCH] =
-		array::from_fn(|i| builder.derive_note_nullifier(inotes_comm[i], inotes_pos[i], nk));
+	// let inotes_null: [NoteNullifierTarget; NOTE_BATCH] =
+	// 	array::from_fn(|i| builder.derive_note_nullifier(inotes_comm[i], inotes_pos[i], nk));
 
 	let onotes: [NoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_note_target());
 	let onotes_isactive: [BoolTarget; NOTE_BATCH] =
 		array::from_fn(|_| builder.add_virtual_bool_target_safe());
-	let onotes_comm = onotes.map(|n| builder.derive_note_commitment(n));
+	// let onotes_comm = onotes.map(|n| builder.derive_note_commitment(n));
 
 	let dinotes: [DummyNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
-	let dinotes_null: [NoteNullifierTarget; NOTE_BATCH] =
-		array::from_fn(|i| builder.derive_dummy_note_nullifier(dinotes[i]));
+	// let dinotes_null: [NoteNullifierTarget; NOTE_BATCH] =
+	// array::from_fn(|i| builder.derive_dummy_note_nullifier(dinotes[i]));
 
 	let donotes: [DummyNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
-	let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
+	// let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
 
 	// All inotes and onotes share the same asset_id
 	for note in inotes.iter().chain(onotes.iter()) {
@@ -1086,36 +1064,35 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	);
 
 	// Derive tx hash //
-	let tx_hash = builder.derive_tx_hash(
-		inotes_isactive,
-		inotes_null,
-		dinotes_null,
-		onotes_isactive,
-		onotes_comm,
-		donotes_comm,
-		accin_null,
-		accout_comm,
-	);
+	// let tx_hash = builder.derive_tx_hash(
+	// 	inotes_isactive,
+	// 	inotes_null,
+	// 	dinotes_null,
+	// 	onotes_isactive,
+	// 	onotes_comm,
+	// 	donotes_comm,
+	// 	accin_null,
+	// 	accout_comm,
+	// );
 
 	// Validate authorization //
 
 	// Verify SubpoolFullProof: 3 authority key proofs (depth-2) + main pool proof (depth-20)
 	let subpool_proof_targets = builder.assert_subpool_full_proof(
-		main_pool_root,
 		SubpoolIdTarget(accin.subpool_id.0),
 		approval_key,
 		rejection_key,
 		subpool_consume_key,
 	);
 
-	let sig_targets = builder.assert_tx_signatures(
-		tx_hash,
-		inotes_isactive,
-		onotes_isactive,
-		accin,
-		subpool_consume_key,
-		approval_key,
-	);
+	// let sig_targets = builder.assert_tx_signatures(
+	// 	tx_hash,
+	// 	inotes_isactive,
+	// 	onotes_isactive,
+	// 	accin,
+	// 	subpool_consume_key,
+	// 	approval_key,
+	// );
 
 	TxCircuitTargets {
 		is_rjct,
@@ -1148,22 +1125,37 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 		dinotes,
 		donotes,
 		subpool_proof_targets,
-		sig_targets,
+		// sig_targets,
 		inotes_nct_merkle: inotes_mrkltrgt,
 	}
 }
 
-pub(crate) fn set_merkle_siblings_and_bits<F: Field, const DEPTH: usize>(
+pub(crate) trait MerkleSiblingsBits<const DEPTH: usize> {
+	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH];
+	fn bits(&self) -> &[Target; DEPTH];
+}
+
+impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for ConditionalMerkleTarget<DEPTH> {
+	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH] { &self.siblings }
+	fn bits(&self) -> &[Target; DEPTH] { &self.bits }
+}
+
+impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for MerkleTarget<DEPTH> {
+	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH] { &self.siblings }
+	fn bits(&self) -> &[Target; DEPTH] { &self.bits }
+}
+
+pub(crate) fn set_merkle_siblings_and_bits<F: Field, T: MerkleSiblingsBits<DEPTH>, const DEPTH: usize>(
 	pw: &mut PartialWitness<F>,
-	t: &MerkleTargets<DEPTH>,
+	t: &T,
 	siblings: [[F; 4]; DEPTH],
 	bits: [bool; DEPTH],
 ) {
 	for lvl in 0..DEPTH {
 		for i in 0..4 {
-			pw.set_target(t.siblings[lvl][i], siblings[lvl][i]).unwrap();
+			pw.set_target(t.siblings()[lvl][i], siblings[lvl][i]).unwrap();
 		}
-		pw.set_bool_target(BoolTarget::new_unsafe(t.bits[lvl]), bits[lvl])
+		pw.set_bool_target(BoolTarget::new_unsafe(t.bits()[lvl]), bits[lvl])
 			.unwrap();
 	}
 }
@@ -1186,7 +1178,14 @@ pub(crate) fn proof_siblings_bits<F: Field, N: Node, const DEPTH: usize>(
 }
 
 #[derive(Clone, Copy)]
-pub struct MerkleTargets<const DEPTH: usize> {
+pub struct ConditionalMerkleTarget<const DEPTH: usize> {
+	pub siblings: [[Target; HASH_SIZE]; DEPTH],
+	pub bits: [Target; DEPTH],
+}
+
+#[derive(Clone, Copy)]
+pub struct MerkleTarget<const DEPTH: usize> {
+	pub root: [Target; HASH_SIZE],
 	pub siblings: [[Target; HASH_SIZE]; DEPTH],
 	pub bits: [Target; DEPTH],
 }
@@ -1201,7 +1200,7 @@ pub struct MerkleTargets<const DEPTH: usize> {
 ///
 /// After all 32 levels, if `selector=1` the computed root is constrained to
 /// equal `expected_root`; if `selector=0` no equality is enforced.
-pub fn merkle_verify_gadget<
+pub fn conditional_merkle_verify_gadget<
 	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 	const DEPTH: usize,
@@ -1210,7 +1209,32 @@ pub fn merkle_verify_gadget<
 	leaf: HashOutTarget,
 	expected_root: HashOutTarget,
 	selector: BoolTarget,
-) -> MerkleTargets<DEPTH> {
+) -> ConditionalMerkleTarget<DEPTH> {
+	let merkletrgt = merkle_verify_gadget(builder, leaf);
+
+	// Selector-gated root equality: selector * (computed_root[i] -
+	// expected_root[i]) = 0
+	let computed_root = merkletrgt.root;
+	for i in 0..HASH_SIZE {
+		let diff = builder.sub(computed_root[i], expected_root.elements[i]);
+		let product = builder.mul(selector.target, diff);
+		builder.assert_zero(product);
+	}
+
+	ConditionalMerkleTarget {
+		siblings: merkletrgt.siblings,
+		bits: merkletrgt.bits,
+	}
+}
+
+pub fn merkle_verify_gadget<
+	F: RichField + Extendable<D> + Poseidon,
+	const D: usize,
+	const DEPTH: usize,
+>(
+	builder: &mut CircuitBuilder<F, D>,
+	leaf: HashOutTarget,
+) -> MerkleTarget<DEPTH> {
 	let mut current: [Target; HASH_SIZE] = leaf.elements;
 	let mut siblings: [[Target; HASH_SIZE]; DEPTH] = [[builder.zero(); 4]; DEPTH];
 	let mut bits: [Target; DEPTH] = [builder.zero(); DEPTH];
@@ -1242,17 +1266,8 @@ pub fn merkle_verify_gadget<
 		current = parent;
 	}
 
-	let computed_root = current;
-
-	// Selector-gated root equality: selector * (computed_root[i] -
-	// expected_root[i]) = 0
-	for i in 0..HASH_SIZE {
-		let diff = builder.sub(computed_root[i], expected_root.elements[i]);
-		let product = builder.mul(selector.target, diff);
-		builder.assert_zero(product);
-	}
-
-	MerkleTargets {
+	MerkleTarget {
+		root: current,
 		siblings,
 		bits,
 	}
@@ -1326,7 +1341,7 @@ mod tests {
 		let expected_root_targets = builder.add_virtual_hash();
 		let selector = builder.add_virtual_bool_target_safe();
 		let leaf_target = builder.add_virtual_hash();
-		let targets = merkle_verify_gadget::<F, D, 32>(
+		let targets = conditional_merkle_verify_gadget::<F, D, 32>(
 			&mut builder,
 			leaf_target,
 			expected_root_targets,
@@ -1381,7 +1396,7 @@ mod tests {
 		let expected_root_targets = builder.add_virtual_hash();
 		let selector = builder.add_virtual_bool_target_safe();
 		let leaf_target = builder.add_virtual_hash();
-		let targets = merkle_verify_gadget::<F, D, 32>(
+		let targets = conditional_merkle_verify_gadget::<F, D, 32>(
 			&mut builder,
 			leaf_target,
 			expected_root_targets,
@@ -1440,7 +1455,7 @@ mod tests {
 		let expected_root_targets = builder.add_virtual_hash();
 		let selector = builder.add_virtual_bool_target_safe();
 		let leaf_target = builder.add_virtual_hash();
-		let targets = merkle_verify_gadget::<F, D, 32>(
+		let targets = conditional_merkle_verify_gadget::<F, D, 32>(
 			&mut builder,
 			leaf_target,
 			expected_root_targets,

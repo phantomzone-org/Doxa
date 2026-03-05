@@ -234,6 +234,7 @@ mod tests {
 	/// Returns the circuit data.
 	fn build_u256_sum_circuit() -> (
 		plonky2::plonk::circuit_data::CircuitData<F, C, D>,
+		U256Target,
 		[U256Target; 9],
 		U256Target,
 	) {
@@ -241,29 +242,31 @@ mod tests {
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let range_lut = add_u8_range_check_lookup_table(&mut builder);
 
-		let inputs: [U256Target; 9] = core::array::from_fn(|_| builder.add_virtual_u256_target());
+		let input = builder.add_virtual_u256_target();
+		let chain: [U256Target; 9] = core::array::from_fn(|_| builder.add_virtual_u256_target());
 		let expected = builder.add_virtual_u256_target();
 
-		// builder.assert_u256_nine_sum(&inputs, &expected, range_lut);
+		builder.u256_addition_chain(&input, &chain, range_lut);
 
 		let data = builder.build::<C>();
-		(data, inputs, expected)
+		(data, input, chain, expected)
 	}
 
-	// #[test]
-	// fn test_u256_nine_sum_no_carry() {
-	// 	// 9 small values, no inter-limb carry.
-	// 	// Each input = [0, 0, 0, 0, 0, 0, 0, 1]  (value = 1)
-	// 	// Expected   = [0, 0, 0, 0, 0, 0, 0, 9]  (value = 9)
-	// 	let (data, inputs, expected) = build_u256_sum_circuit();
-	// 	let mut pw = PartialWitness::new();
-	// 	for input in &inputs {
-	// 		set_u256(&mut pw, input, [0, 0, 0, 0, 0, 0, 0, 1]);
-	// 	}
-	// 	set_u256(&mut pw, &expected, [0, 0, 0, 0, 0, 0, 0, 9]);
-	// 	let proof = data.prove(pw).expect("prove failed");
-	// 	data.verify(proof).expect("verify failed");
-	// }
+	#[test]
+	fn test_u256_nine_sum_no_carry() {
+		// 9 small values, no inter-limb carry.
+		// Each input = [0, 0, 0, 0, 0, 0, 0, 1]  (value = 1)
+		// Expected   = [0, 0, 0, 0, 0, 0, 0, 9]  (value = 9)
+		let (data, input, chain, expected) = build_u256_sum_circuit();
+		let mut pw = PartialWitness::new();
+		set_u256(&mut pw, &input, [0, 0, 0, 0, 0, 0, 0, 1]);
+		for v in &chain {
+			set_u256(&mut pw, v, [0, 0, 0, 0, 0, 0, 0, 1]);
+		}
+		set_u256(&mut pw, &expected, [0, 0, 0, 0, 0, 0, 0, 10]);
+		let proof = data.prove(pw).expect("prove failed");
+		data.verify(proof).expect("verify failed");
+	}
 
 	// #[test]
 	// fn test_u256_nine_sum_with_carry() {

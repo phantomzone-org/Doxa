@@ -15,7 +15,12 @@ pub const DS_ACC_AST: u64 = 1312;
 pub const AST_DEFAULT_LEAF: [u64; HASH_SIZE] = [0u64; HASH_SIZE];
 // TODO: set this to root of merkle tree with depth `ACC_AST_DEPTH` with leafs set to
 // `AST_DEFAULT_LEAF`
-pub const AST_DEFAULT_ROOT: [u64; HASH_SIZE] = [0u64; HASH_SIZE];
+pub const AST_DEFAULT_ROOT: [u64; HASH_SIZE] = [
+	14769473886748754115,
+	10513963056908986963,
+	8105478726930894327,
+	14014796621245524545,
+];
 // this is set to H("tesseta::account::consume::invalidPubKey"). It's not a valid point on the curve
 pub const DEFAULT_CONSUME_INVALID_PK: [u64; 5] = [0u64; 5];
 // this is set to H("tesseta::account::spend::invalidPubKey"). It's not a valid point on the curve
