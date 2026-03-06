@@ -24,9 +24,8 @@ pub const AST_DEFAULT_ROOT: [u64; HASH_SIZE] = [
 // this is set to H("tesseta::account::commitment::consumePk::placeholder"). It's not a valid point
 // on the curve
 pub const DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER: [u64; 5] = [1u64; 5];
-// this is set to sk.pk() where sk=H("tesseta::account::spend::defaultSpendKey"). A valid point the
-// curve. It must be replaced with a different valid spend key in FreshAcc tx.
-// TODO: Set this as a random point on the curve, not what is in the line above.
+// this is set to random point on the curve with seed H("tesseta::account::spend::defaultSpendKey").
+// TODO: atm the point is a random point but not
 pub const DEFAULT_SPEND_AUTH_PK: [u64; 5] = [
 	7613690455422068269,
 	12930951591626745075,

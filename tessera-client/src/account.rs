@@ -23,10 +23,10 @@ use crate::{
 };
 
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub struct AccountCommitment(HashOutput);
+pub struct AccountCommitment(pub HashOutput);
 
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub struct AccountNullifier(HashOutput);
+pub struct AccountNullifier(pub HashOutput);
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct NullifierKey(pub [F; 4]);
@@ -99,8 +99,8 @@ impl From<AccountStateTreeLeaf> for GenericNode<AccountStateTreeLeaf> {
 		input[0] = F::from_canonical_u64(DS_ACC_AST);
 		input[1] = value.asset_id;
 		for (i, word) in value.amount.0.iter().enumerate() {
-			input[1 + i * 2] = F::from_canonical_u32(*word as u32);
-			input[1 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
+			input[2 + i * 2] = F::from_canonical_u32(*word as u32);
+			input[2 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
 		}
 		Self::from(HashOutput(
 			<PoseidonHash as Hasher<F>>::hash_no_pad(&input).elements,
@@ -207,8 +207,8 @@ impl StandardAccount {
 
 		let mut inp = Vec::with_capacity(4 + 1 + 4);
 		inp.extend(self.commitment().0.0);
-		inp.push(pos);
 		inp.extend(self.nk().0);
+		inp.push(pos);
 
 		AccountNullifier(HashOutput(
 			<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements,

@@ -74,7 +74,11 @@ impl StandardNote {
 	pub fn commitment(&self) -> NoteCommitment {
 		let mut input = [F::ZERO; 20];
 		input[..2].copy_from_slice(self.identifier.0.as_slice());
-		// TODO: add amount here
+		// amount: U256.0 is [u64; 4] little-endian words, split into lo/hi u32 limbs
+		for (i, word) in self.amt.0.iter().enumerate() {
+			input[2 + i * 2] = F::from_canonical_u32(*word as u32);
+			input[2 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
+		}
 		// recipient condition
 		input[10] = self.recipient.subpool_id.0;
 		input[11..15].copy_from_slice(self.recipient.public_id.0.0.as_slice());
@@ -106,8 +110,8 @@ impl PositionedStandardNode {
 	pub fn nullifier(&self, nk: &NullifierKey) -> NoteNullifier {
 		let mut input = [F::ZERO; 9];
 		input[..4].copy_from_slice(&self.note.commitment().0.0);
-		input[4..8].copy_from_slice(nk.0.as_slice());
-		input[8] = self.position;
+		input[4] = self.position;
+		input[5..9].copy_from_slice(nk.0.as_slice());
 
 		NoteNullifier(HashOutput(
 			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,

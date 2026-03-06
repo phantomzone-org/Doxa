@@ -11,10 +11,7 @@ mod tests {
 			config::{GenericConfig, Hasher, PoseidonGoldilocksConfig},
 		},
 	};
-	use plonky2_field::{
-		packed::PackedField,
-		types::{Field, PrimeField64},
-	};
+	use plonky2_field::types::Field;
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
 

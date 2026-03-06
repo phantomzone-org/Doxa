@@ -24,9 +24,7 @@ use plonky2_field::{extension::Extendable, goldilocks_field::GoldilocksField, ty
 use rand::seq::index::IndexVecIntoIter;
 use tessera_trees::{
 	F,
-	plonky2_gadgets::u32::gadgets::{
-		CircuitBuilderU32, CircuitBuilderU32Arithmetic, U32Target, add_u8_range_check_lookup_table,
-	},
+	plonky2_gadgets::u32::gadgets::{U32Target, add_u8_range_check_lookup_table},
 	tree::{HASH_SIZE, hasher::HashOutput},
 };
 
@@ -128,6 +126,7 @@ pub(crate) struct NoteTarget {
 	pub(crate) identifier: [Target; 2],
 	pub(crate) amount: U256Target,
 	pub(crate) asset_id: AssetIdTarget,
+	// TODO: change the naming to match of StandardNote
 	pub(crate) spend_cond: ConsumeCondTarget,
 	pub(crate) reject_cond: RejectCondTarget,
 }
@@ -977,11 +976,20 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 
 	let accin_pos = builder.add_virtual_target();
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
+
 	let accin_merkletrgts = builder.conditionally_assert_account_commitment_exists_in_act(
 		accin_comm,
 		act_root,
 		not_is_fresh_acc,
 	);
+	// match accin_merkletrgts.0.siblings[0][0] {
+	// 	Target::Wire(w) => {
+	// 		dbg!(w.row);
+	// 	},
+	// 	_ => {
+	// 		dbg!("No use");
+	// 	},
+	// }
 
 	// AccIn nullifier — select fresh vs regular based on is_fresh_acc
 	let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
@@ -1251,6 +1259,7 @@ pub fn merkle_verify_gadget<
 
 	for level in 0..DEPTH {
 		let sibling: [Target; 4] = core::array::from_fn(|_| builder.add_virtual_target());
+
 		let bit = builder.add_virtual_bool_target_safe();
 
 		// Build the 12-element Poseidon input:
