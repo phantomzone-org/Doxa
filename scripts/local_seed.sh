@@ -10,6 +10,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
+# Directory of pre-generated leaf proofs (produced by `cargo run --bin aggregator_artifacts`).
+# Scripts look up "$NOTE.hex" here; falls back to "0x01" when artifacts are absent.
+LEAF_PROOFS_DIR="${TESSERA_AGGREGATOR_ARTIFACTS_PATH:-}/leaf_proofs"
+
 TOTAL_DEPOSITS="${1:-256}"
 REQUEST_COUNT="${2:-128}"
 START_NOTE="${3:-}"
@@ -105,9 +109,15 @@ done
 echo "Submitting $REQUEST_COUNT consume requests to sequencer API ($TESSERA_SEQUENCER_API_URL)..."
 submitted=0
 while read -r NOTE; do
-  resp=$(curl -sS -X POST "$TESSERA_SEQUENCER_API_URL/consume-request" \
+  if [[ -f "$LEAF_PROOFS_DIR/$NOTE.hex" ]]; then
+    INPUT_PROOF="$(cat "$LEAF_PROOFS_DIR/$NOTE.hex")"
+  else
+    INPUT_PROOF="0x01"
+  fi
+  resp=$(printf '{"note_commitment":"%s","input_proof":"%s"}' "$NOTE" "$INPUT_PROOF" | \
+    curl -sS -X POST "$TESSERA_SEQUENCER_API_URL/consume-request" \
     -H 'content-type: application/json' \
-    -d "{\"note_commitment\":\"$NOTE\",\"input_proof\":\"0x01\"}")
+    --data-binary @-)
   if echo "$resp" | grep -Eq '"accepted"[[:space:]]*:[[:space:]]*true'; then
     submitted=$((submitted + 1))
   else

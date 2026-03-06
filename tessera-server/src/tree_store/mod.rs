@@ -84,6 +84,16 @@ impl WalRecord {
 	}
 }
 
+/// Persistent WAL-backed tree storage with periodic snapshots.
+///
+/// Layout on disk under `<base_dir>/<tree_id>/`:
+/// - `wal.bin`: append-only write-ahead log (4-byte LE length prefix + bincode record).
+/// - `snapshot.bin`: latest full state snapshot, written atomically via `rename(2)`.
+///
+/// # Crash safety
+/// WAL records are `fsync`'d before the in-memory position counter is advanced.
+/// On restart, [`replay_wal_since_snapshot`] re-applies only the records written
+/// after the last successful snapshot.
 pub struct TreeStore<T> {
 	tree_id: TreeId,
 	dir: PathBuf,
@@ -137,10 +147,24 @@ where
 		})
 	}
 
+	/// Return `true` if a snapshot or WAL file exists on disk for this tree.
 	pub fn exists(&self) -> bool {
 		self.snapshot_path.is_file() || self.wal_path.is_file()
 	}
 
+	/// Load the tree state from the latest snapshot, or call `init` to create a fresh state.
+	///
+	/// # Returns
+	/// `(state, meta)` — the deserialized tree state and the associated [`StoreMeta`].
+	/// When no snapshot exists, `meta` is zeroed and `state` is the value returned by
+	/// `init`.
+	///
+	/// # Errors
+	/// Propagates deserialization errors from [`read_snapshot`].
+	///
+	/// # Note
+	/// This method does **not** replay the WAL.  Call [`replay_wal_since_snapshot`]
+	/// immediately after to bring `state` fully up-to-date.
 	pub fn load_or_init<F>(&mut self, init: F) -> Result<(T, StoreMeta)>
 	where
 		F: FnOnce() -> T,
@@ -166,6 +190,26 @@ where
 		Ok((state, meta))
 	}
 
+	/// Replay WAL records written after the snapshot captured in `meta.wal_pos`.
+	///
+	/// Reads each length-prefixed [`WalRecord`] at positions `[meta.wal_pos, wal_end)`,
+	/// verifies the CRC32 checksum, and calls `apply(state, record.values)` in order.
+	///
+	/// # Parameters
+	/// - `state`: mutable reference to the tree; mutated in-place by `apply`.
+	/// - `meta`: snapshot metadata; `meta.wal_pos` is the first byte to replay from.
+	/// - `apply`: closure that inserts `values` into `state` and returns `Err` on failure.
+	///
+	/// # Returns
+	/// `(new_wal_pos, replayed_count)` — the byte position at the end of the last
+	/// successfully applied record, and the number of records replayed.
+	///
+	/// # Errors
+	/// Returns `Err` if `meta.wal_pos > wal_end`, a record fails to deserialize, the
+	/// checksum does not match, or `apply` returns an error.
+	///
+	/// # Side effects
+	/// Seeks the WAL file handle.
 	pub fn replay_wal_since_snapshot<A>(
 		&mut self,
 		state: &mut T,
@@ -205,6 +249,18 @@ where
 		Ok((pos, replayed))
 	}
 
+	/// Append one WAL record and fsync it to disk.
+	///
+	/// Serializes `values` into a [`WalRecord`] with a CRC32 checksum, writes a
+	/// 4-byte little-endian length prefix followed by the bincode payload, then
+	/// calls `sync_data()` to ensure durability before advancing `wal_end`.
+	///
+	/// # Returns
+	/// The byte offset of the record's start in the WAL (useful as a rollback marker).
+	///
+	/// # Errors
+	/// Returns `Err` on serialization failure, I/O error, or if the record exceeds
+	/// the 4 GiB size limit (u32 overflow).
 	pub fn append_wal(&mut self, values: Vec<[u8; 32]>) -> Result<u64> {
 		let rec = WalRecord::new(values);
 		let pos_before = self.wal_end;
@@ -220,10 +276,21 @@ where
 		Ok(pos_before)
 	}
 
+	/// Return the current WAL size in bytes (in-memory counter, no syscall).
 	pub fn wal_len(&self) -> u64 {
 		self.wal_end
 	}
 
+	/// Persist one committed batch: append WAL, advance metadata, optionally snapshot.
+	///
+	/// Steps:
+	/// 1. Append `values` to the WAL and fsync (durable before `meta` is advanced).
+	/// 2. Advance `meta.wal_pos` and `meta.committed_batches`.
+	/// 3. Call [`maybe_checkpoint`] — writes a snapshot when `committed_batches` is a multiple of
+	///    `snapshot_every_batches`.
+	///
+	/// # Errors
+	/// Propagates errors from WAL append or snapshot write.
 	pub fn commit_batch(
 		&mut self,
 		state: &T,
@@ -239,6 +306,9 @@ where
 		Ok(())
 	}
 
+	/// Write a snapshot only if `committed_batches` is a multiple of `snapshot_every_batches`.
+	///
+	/// No-op when the frequency condition is not met.
 	pub fn maybe_checkpoint(&self, state: &T, meta: &StoreMeta) -> Result<()> {
 		if !meta
 			.committed_batches
@@ -249,10 +319,22 @@ where
 		self.write_snapshot(state, meta)
 	}
 
+	/// Unconditionally write a snapshot regardless of the batch-frequency setting.
+	///
+	/// Useful at shutdown or after a WAL truncation to ensure the on-disk snapshot
+	/// reflects the current state.
 	pub fn force_checkpoint(&self, state: &T, meta: &StoreMeta) -> Result<()> {
 		self.write_snapshot(state, meta)
 	}
 
+	/// Truncate the WAL to zero and delete the snapshot.
+	///
+	/// Used by the chain-recovery path when the local state is known to be wrong and
+	/// must be rebuilt from scratch.
+	///
+	/// # Side effects
+	/// Truncates the WAL file handle in-place; deletes `snapshot.bin` if present.
+	/// Resets `wal_end` to 0.
 	pub fn truncate(&mut self) -> Result<()> {
 		self.wal.flush().ok();
 		// Truncate the existing append-mode handle to zero; no need to reopen.
@@ -328,6 +410,13 @@ pub struct StoreMeta {
 	pub last_log_index: u64,
 }
 
+/// Read a 4-byte LE length-prefixed bincode record from `f` starting at `pos`.
+///
+/// # Returns
+/// `(value, next_pos)` — the deserialized value and the byte offset of the next record.
+///
+/// # Errors
+/// Returns `Err` on I/O failure or bincode deserialization error.
 fn read_len_prefixed<T: for<'de> Deserialize<'de>>(f: &mut File, pos: u64) -> Result<(T, u64)> {
 	let mut len_buf = [0u8; 4];
 	f.read_exact(&mut len_buf)?;

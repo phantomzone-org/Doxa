@@ -12,9 +12,9 @@
 //!
 //! ## Public Inputs
 //!
-//! Two modes controlled by the `commit` parameter:
-//! - `commit == Some(...)`: commitment output (size depends on implementation)
-//! - `commit == None`: initial_root, final_root, all inserted_values
+//! `old_root`, `new_node_path` (starting index), all inserted values, and
+//! `new_root` are exposed directly.
+//! Total: `4 × batch_size + 9` Goldilocks field elements.
 //!
 //! ## Complexity
 //!
@@ -42,7 +42,7 @@ use plonky2::{
 use crate::tree::{
 	NullifierChainedInsertProof, NullifierInsertProofTargets,
 	error::MerkleTreeError,
-	hasher::{DataCommitment, MerkleHash, MerkleHashCircuit, ToHashOut},
+	hasher::{MerkleHash, MerkleHashCircuit, ToHashOut},
 };
 
 /// Circuit targets for verifying a chained insertion proof.
@@ -63,50 +63,25 @@ impl ChainedInsertProofTargets {
 	/// * `builder` - The circuit builder
 	/// * `depth` - The Merkle tree depth
 	/// * `batch_size` - The number of insertions in the chain
-	/// * `commit` - If `Some`, all proof data is private and committed via the provided
-	///   [`DataCommitment`]; if `None`, proof data is exposed directly as public inputs.
 	///
 	/// # Public Inputs
 	///
-	/// When `commit == Some(...)`:
-	/// - Commitment output (size depends on the [`DataCommitment`] implementation)
-	/// - Preimage: `old_root || new_root || value[0] || ... || value[n-1]`
-	///
-	/// When `commit == None`:
-	/// - old_root, new_root, and all inserted values exposed directly
-	/// - Total: (batch_size + 2) * 4 Goldilocks elements
+	/// `old_root[4]`, `new_node_path[1]` (starting chain index), all inserted
+	/// `values[batch_size × 4]`, and `new_root[4]` are exposed directly.
+	/// Total: `4 × batch_size + 9` Goldilocks field elements.
 	pub fn new<F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
 		depth: usize,
 		batch_size: usize,
-		commit: Option<&dyn DataCommitment<F, D>>,
 	) -> Self
 	where
 		F: Field + RichField + Extendable<D>,
 	{
 		assert!(batch_size > 0, "batch_size must be at least 1");
 
-		// Allocate targets - all private if committing, boundary roots public otherwise
 		let insertions: Vec<NullifierInsertProofTargets> = (0..batch_size)
-			.map(|i| {
-				if commit.is_some() {
-					NullifierInsertProofTargets::new_all_private(builder, depth)
-				} else {
-					NullifierInsertProofTargets::new(builder, depth, i == 0, i == batch_size - 1)
-				}
-			})
+			.map(|i| NullifierInsertProofTargets::new(builder, depth, i == 0, i == batch_size - 1))
 			.collect();
-
-		if let Some(commitment) = commit {
-			// Compute commitment = H(old_root || new_root || values)
-			let mut preimage: Vec<Target> = Vec::with_capacity((batch_size + 2) * 4);
-			preimage.extend_from_slice(&insertions[0].old_root.elements);
-			preimage.extend_from_slice(&insertions[batch_size - 1].new_root.elements);
-			for insertion in &insertions {
-				preimage.extend_from_slice(&insertion.new_node_value.elements);
-			}
-			commitment.commit_public_inputs(builder, preimage);
-		}
 
 		Self {
 			insertions,
@@ -217,16 +192,16 @@ where
 	C::Hasher: AlgebraicHasher<F>,
 {
 	/// Creates a new proof generator with default circuit configuration.
-	pub fn new(commit: Option<&dyn DataCommitment<F, D>>) -> Self {
-		Self::with_config(CircuitConfig::standard_recursion_config(), commit)
+	pub fn new() -> Self {
+		Self::with_config(CircuitConfig::standard_recursion_config())
 	}
 
 	/// Creates a new proof generator with a custom circuit configuration.
-	pub fn with_config(config: CircuitConfig, commit: Option<&dyn DataCommitment<F, D>>) -> Self {
+	pub fn with_config(config: CircuitConfig) -> Self {
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
 		// Allocate targets
-		let targets = ChainedInsertProofTargets::new(&mut builder, DEPTH, BATCH_SIZE, commit);
+		let targets = ChainedInsertProofTargets::new(&mut builder, DEPTH, BATCH_SIZE);
 
 		// Connect constraints
 		targets.connect::<H, F, D>(&mut builder);
@@ -285,6 +260,20 @@ where
 	}
 }
 
+impl<H, F, C, const D: usize, const DEPTH: usize, const BATCH_SIZE: usize> Default
+	for ChainedInsertProofGenerator<H, F, C, D, DEPTH, BATCH_SIZE>
+where
+	H: MerkleHash + MerkleHashCircuit<F, D>,
+	<H as MerkleHash>::Digest: ToHashOut<F>,
+	F: RichField + Extendable<D>,
+	C: GenericConfig<D, F = F>,
+	C::Hasher: AlgebraicHasher<F>,
+{
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 #[cfg(test)]
 mod test {
 	use std::time::Instant;
@@ -297,16 +286,20 @@ mod test {
 	use super::ChainedInsertProofGenerator;
 	use crate::tree::{
 		NullifierChainedInsertProof, NullifierTree,
-		hasher::{DataCommitment, Hash, NewFromU64, PoseidonCommitment},
+		hasher::{Hash, NewFromU64},
 	};
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;
 	type F = GoldilocksField;
 
-	fn run_chained_insert_test<const DEPTH: usize, const BATCH_SIZE: usize>(
-		commit: Option<&dyn DataCommitment<F, D>>,
-	) -> Result<()> {
+	#[test]
+	fn test_chained_insert() -> Result<()> {
+		println!("=== Chained Insert Proof (raw PI) ===\n");
+
+		const DEPTH: usize = 32;
+		const BATCH_SIZE: usize = 64;
+
 		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
 
 		print!("Generating {} insertion proofs: ", BATCH_SIZE);
@@ -328,14 +321,17 @@ mod test {
 
 		print!("Build circuit: ");
 		let now = Instant::now();
-		let generator =
-			ChainedInsertProofGenerator::<Hash, F, C, D, DEPTH, BATCH_SIZE>::new(commit);
+		let generator = ChainedInsertProofGenerator::<Hash, F, C, D, DEPTH, BATCH_SIZE>::new();
 		println!("{:?}", now.elapsed());
 
 		print!("Generate STARK proof: ");
 		let now = Instant::now();
 		let stark_proof = generator.prove(&chained_proof)?;
 		println!("{:?}", now.elapsed());
+
+		// Raw PI layout: old_root[4] + new_node_path[1] + values[BATCH_SIZE×4] + new_root[4]
+		// = 4*BATCH_SIZE + 9 = 265
+		assert_eq!(stark_proof.public_inputs.len(), 4 * BATCH_SIZE + 9);
 
 		print!("Verify STARK proof: ");
 		let now = Instant::now();
@@ -347,17 +343,5 @@ mod test {
 
 		println!("\n=== Test Passed! ===");
 		Ok(())
-	}
-
-	#[test]
-	fn test_chained_insert_with_commitment() -> Result<()> {
-		println!("=== Chained Insert Proof (with commitment) ===\n");
-		run_chained_insert_test::<32, 64>(Some(&PoseidonCommitment))
-	}
-
-	#[test]
-	fn test_chained_insert_without_commitment() -> Result<()> {
-		println!("=== Chained Insert Proof (without commitment) ===\n");
-		run_chained_insert_test::<32, 64>(None)
 	}
 }

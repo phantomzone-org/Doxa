@@ -464,7 +464,7 @@ impl BN128Wrapper {
 			 Possible causes: (1) the binary was produced by a different plonky2 revision; \
 			 (2) the file is truncated or corrupt; \
 			 (3) a generator type present at serialization time is missing from TesseraGeneratorSerializer. \
-			 Delete the artifacts directory and re-run pending_deposit_artifacts.",
+			 Delete the artifacts directory and re-run commitment_tree_artifacts / nullifier_tree_artifacts.",
 						path.join(NATIVE_CIRCUIT_DATA_PATH).display()
 					)
 				})?;
@@ -481,7 +481,7 @@ impl BN128Wrapper {
 			 Possible causes: (1) the binary was produced by a different plonky2 revision; \
 			 (2) the file is truncated or corrupt; \
 			 (3) a gate/generator type present at serialization time is not registered here. \
-			 Delete the artifacts directory and re-run pending_deposit_artifacts.",
+			 Delete the artifacts directory and re-run commitment_tree_artifacts / nullifier_tree_artifacts.",
 				path.join(BN128_CIRCUIT_DATA_PATH).display()
 			)
 		})?;

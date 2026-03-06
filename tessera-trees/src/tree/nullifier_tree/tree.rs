@@ -9,7 +9,7 @@ use crate::tree::{
 	hasher::MerkleHash,
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(bound(
 	serialize = "H::Digest: Serialize",
 	deserialize = "H::Digest: Deserialize<'de>"
@@ -172,8 +172,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 		//
 		// Proves predecessor membership in `old_root`
 		let pred_old_siblings: Vec<H::Digest> =
-			self.tree
-				.merkle_path(pred_index, 0, self.tree.depth())?;
+			self.tree.merkle_path(pred_index, 0, self.tree.depth())?;
 
 		// ============================================================
 		// Phase 2: Mutate the tree
@@ -192,9 +191,8 @@ impl<H: MerkleHash> NullifierTree<H> {
 		//
 		// This anchors the emptiness of the insertion slot to `old_root`.
 		// ------------------------------------------------------------
-		let new_node_siblings_before_pred_update: Vec<H::Digest> = self
-			.tree
-			.merkle_path(next_empty_index, 0, depth)?;
+		let new_node_siblings_before_pred_update: Vec<H::Digest> =
+			self.tree.merkle_path(next_empty_index, 0, depth)?;
 
 		// ------------------------------------------------------------
 		// 2.b. Update predecessor: old_root → mid_root
@@ -213,9 +211,8 @@ impl<H: MerkleHash> NullifierTree<H> {
 		//
 		// This anchors the emptiness of the insertion slot to `mid_root`.
 		// ------------------------------------------------------------
-		let new_node_siblings_after_pred_update: Vec<H::Digest> = self
-			.tree
-			.merkle_path(next_empty_index, 0, depth)?;
+		let new_node_siblings_after_pred_update: Vec<H::Digest> =
+			self.tree.merkle_path(next_empty_index, 0, depth)?;
 
 		// ------------------------------------------------------------
 		// 2.d. Insert the new node
@@ -266,6 +263,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 
 		self.find_node_by_label(&prev_node.value)
 			.ok_or(anyhow!(MerkleTreeError::LeafHashMismatch(0)))?;
+
 		for _ in 1..self.nodes.len() {
 			let node: Node<H> = self.nodes[prev_node.next_index];
 

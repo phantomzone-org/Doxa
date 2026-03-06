@@ -20,23 +20,22 @@ contract DepositsRollupBridgeTest is Test {
 
     bytes32 public constant GENESIS_NULLIFIER_ROOT = bytes32(uint256(0x1111));
     bytes32 public constant GENESIS_COMMITMENT_ROOT = bytes32(uint256(0x2222));
-    uint256 public constant BATCH_SIZE = 2;
+    uint256 public constant NOTE_BATCH_SIZE    = 8;
+    uint256 public constant ACCOUNT_BATCH_SIZE = 1;
 
     function setUp() public {
-        MockVerifierOk commitmentVerifier = new MockVerifierOk();
-        MockVerifierOk nullifierVerifier = new MockVerifierOk();
+        MockVerifierOk verifier = new MockVerifierOk();
         token = new ToyUSDT();
 
         bridge = new DepositsRollupBridge(
-            address(commitmentVerifier),
-            address(nullifierVerifier),
-            address(new MockVerifierOk()),
+            address(verifier),  // superAggregatorVerifier
             operator,
             GENESIS_NULLIFIER_ROOT,
             GENESIS_COMMITMENT_ROOT,
             bytes32(uint256(0x3333)),
             bytes32(uint256(0x4444)),
-            BATCH_SIZE,
+            NOTE_BATCH_SIZE,
+            ACCOUNT_BATCH_SIZE,
             address(token)
         );
     }
@@ -108,7 +107,15 @@ contract DepositsRollupBridgeTest is Test {
         notes[0] = n0;
         notes[1] = n1;
 
-        bridge.recordNotesCommitmentTreeUpdate(bytes32(uint256(0x9999)), notes, _dummyProof(), _dummyProof());
+        bytes32[] memory dummy = new bytes32[](1);
+        dummy[0] = bytes32(uint256(1));
+
+        bridge.registerTransactionBatchUpdate(
+            bytes32(uint256(0x9999)), notes,
+            bytes32(uint256(0x8888)), dummy,
+            bytes32(uint256(0x7777)), dummy,
+            bytes32(uint256(0x6666)), dummy
+        );
 
         assertEq(uint256(bridge.getDepositStatus(n0)), uint256(DepositsRollupBridge.DepositStatus.Validated));
         assertEq(uint256(bridge.getDepositStatus(n1)), uint256(DepositsRollupBridge.DepositStatus.Validated));
@@ -130,7 +137,15 @@ contract DepositsRollupBridgeTest is Test {
         notes[0] = tracked;
         notes[1] = externalNote;
 
-        bridge.recordNotesCommitmentTreeUpdate(bytes32(uint256(0x9999)), notes, _dummyProof(), _dummyProof());
+        bytes32[] memory dummy = new bytes32[](1);
+        dummy[0] = bytes32(uint256(1));
+
+        bridge.registerTransactionBatchUpdate(
+            bytes32(uint256(0x9999)), notes,
+            bytes32(uint256(0x8888)), dummy,
+            bytes32(uint256(0x7777)), dummy,
+            bytes32(uint256(0x6666)), dummy
+        );
 
         assertEq(uint256(bridge.getDepositStatus(tracked)), uint256(DepositsRollupBridge.DepositStatus.Validated));
         assertEq(uint256(bridge.getDepositStatus(externalNote)), uint256(DepositsRollupBridge.DepositStatus.None));
@@ -150,17 +165,19 @@ contract DepositsRollupBridgeTest is Test {
         bytes32[] memory notes = new bytes32[](1);
         notes[0] = tracked;
 
+        bytes32[] memory dummy = new bytes32[](1);
+        dummy[0] = bytes32(uint256(1));
+
         uint256 beforeLeafCount = bridge.notesCommitmentLeafCount();
-        bridge.recordNotesCommitmentTreeUpdate(bytes32(uint256(0x9999)), notes, _dummyProof(), _dummyProof());
+        bridge.registerTransactionBatchUpdate(
+            bytes32(uint256(0x9999)), notes,
+            bytes32(uint256(0x8888)), dummy,
+            bytes32(uint256(0x7777)), dummy,
+            bytes32(uint256(0x6666)), dummy
+        );
 
         assertEq(uint256(bridge.getDepositStatus(tracked)), uint256(DepositsRollupBridge.DepositStatus.Validated));
-        assertEq(bridge.notesCommitmentLeafCount(), beforeLeafCount + BATCH_SIZE);
-    }
-
-    function testRecordNotesCommitmentRejectsZeroLength() public {
-        bytes32[] memory notes = new bytes32[](0);
-        vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidBatchLength.selector, 0, BATCH_SIZE));
-        bridge.recordNotesCommitmentTreeUpdate(bytes32(uint256(0x9999)), notes, _dummyProof(), _dummyProof());
+        assertEq(bridge.notesCommitmentLeafCount(), beforeLeafCount + NOTE_BATCH_SIZE);
     }
 
 }

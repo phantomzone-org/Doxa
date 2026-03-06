@@ -356,6 +356,12 @@ pub(crate) const HASH_SIZE: usize = 4;
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Hash(pub [F; HASH_SIZE]);
 
+impl From<[F; HASH_SIZE]> for Hash {
+	fn from(value: [F; HASH_SIZE]) -> Self {
+		Self(value)
+	}
+}
+
 impl Hash {
 	pub const fn new(value: [F; HASH_SIZE]) -> Self {
 		Self(value)

@@ -35,7 +35,7 @@ Notes:
 Validation is an append-style proven transition that:
 - marks each note in the batch as `Validated`
 - advances `notesCommitmentRoot`
-- supports partial calldata batches (`0 < len <= batchSize`) with deterministic on-chain dummy reconstruction
+- supports partial calldata batches (`0 < len <= noteBatchSize`) with deterministic on-chain dummy reconstruction
 
 Primary flow:
 
@@ -51,7 +51,7 @@ Proof commitment:
 `SHA256(notesCommitmentRoot_old || notesCommitmentRoot_new || noteCommitments_bytes)`
 
 where `noteCommitments_bytes` is the packed concatenation of all 32-byte notes in batch order.
-If fewer than `batchSize` notes are provided, the contract deterministically fills the remainder with dummies before hashing.
+If fewer than `noteBatchSize` notes are provided, the contract deterministically fills the remainder with dummies before hashing.
 
 External note behavior:
 - If a note exists in bridge storage, it must be `Pending`.

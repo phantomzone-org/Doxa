@@ -1,8 +1,10 @@
-# W2: Consume Request → Batch → Prove → Finalize
+# W2: Consume Request → Batch → Prove → Finalize (Deposit-Only)
 
 ## Overview
 
-This is the main pipeline. A client submits a note commitment to the sequencer API. The sequencer validates, batches, generates a ZK proof (via the prover service), and finalizes the tree update on-chain. Deposit status transitions from `Pending → Validated`.
+This is the **deposit-only** path for the notes commitment tree. A client submits a note commitment to `/consume-request`. The sequencer validates, batches, generates a ZK proof (via the prover service), and calls `recordNotesCommitmentTreeUpdate` on-chain. Deposit status transitions from `Pending → Validated`.
+
+> **Note:** The primary private-transaction path now uses the optimistic two-phase flow (W3), which registers all 4 tree roots atomically via `registerTransactionBatchUpdate` and confirms them independently via `confirmTreeUpdate`. W2 remains active for deposit-only use cases where only the notes commitment tree needs to be updated.
 
 ## Sequence Diagram
 

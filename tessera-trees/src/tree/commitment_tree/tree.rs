@@ -80,14 +80,12 @@ impl<H: MerkleHash> CommitmentTree<H> {
 
 		let root_old: H::Digest = self.get_root();
 
-		let siblings_old: Vec<H::Digest> =
-			self.tree.merkle_path(index, 0, self.depth())?;
+		let siblings_old: Vec<H::Digest> = self.tree.merkle_path(index, 0, self.depth())?;
 
 		self.tree.insert(leaf)?;
 		*self.leaf_counts.entry(leaf).or_insert(0) += 1;
 
-		let siblings_new: Vec<H::Digest> =
-			self.tree.merkle_path(index, 0, self.depth())?;
+		let siblings_new: Vec<H::Digest> = self.tree.merkle_path(index, 0, self.depth())?;
 
 		let root_new: H::Digest = self.get_root();
 

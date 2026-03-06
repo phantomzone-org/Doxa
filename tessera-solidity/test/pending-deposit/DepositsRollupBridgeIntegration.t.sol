@@ -14,25 +14,23 @@ contract IntegrationMockVerifier is IGroth16Verifier {
 
 contract DepositsRollupBridgeIntegrationTest is Test {
     function testIntegration_AtomicTransferAndRecord() public {
-        IntegrationMockVerifier commitmentVerifier = new IntegrationMockVerifier();
-        IntegrationMockVerifier nullifierVerifier = new IntegrationMockVerifier();
+        IntegrationMockVerifier superAggVerifier = new IntegrationMockVerifier();
         ToyUSDT token = new ToyUSDT();
 
         address user = address(0xCAFE);
         uint256 amount = 25e6;
         bytes32 note = bytes32(uint256(77));
 
-        // Deploy bridge.
+        // Deploy bridge. noteBatchSize=8, accountBatchSize=1 (8:1 ratio).
         DepositsRollupBridge bridge = new DepositsRollupBridge(
-            address(commitmentVerifier),
-            address(nullifierVerifier),
-            address(new IntegrationMockVerifier()),
+            address(superAggVerifier),
             address(this),
             bytes32(uint256(0x1111)),
             bytes32(uint256(0x2222)),
             bytes32(uint256(0x3333)),
             bytes32(uint256(0x4444)),
-            2,
+            8,  // noteBatchSize
+            1,  // accountBatchSize
             address(token)
         );
 

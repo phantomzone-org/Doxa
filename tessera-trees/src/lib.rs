@@ -6,6 +6,7 @@
 extern crate alloc;
 pub mod groth;
 pub mod plonky2_gadgets;
+pub mod proof_aggregation;
 pub mod tree;
 
 use plonky2::{

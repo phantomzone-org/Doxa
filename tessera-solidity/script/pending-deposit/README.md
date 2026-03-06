@@ -24,12 +24,15 @@ Generate local prover artifacts:
 
 ```bash
 cd tessera-server
-cargo run --bin pending_deposit_artifacts --release
+TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 cargo run --bin commitment_tree_artifacts --release
+TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 cargo run --bin nullifier_tree_artifacts --release
 ```
 
-Artifacts path used by the server defaults to:
-- `tessera-server/artifacts/commitment-tree/plonky2-proof`
-- `tessera-server/artifacts/commitment-tree/groth-artifacts`
+Artifacts are written to four directories:
+- `tessera-server/artifacts/note-commitment-tree/`
+- `tessera-server/artifacts/account-commitment-tree/`
+- `tessera-server/artifacts/note-nullifier-tree/`
+- `tessera-server/artifacts/account-nullifier-tree/`
 
 ## Recommended: Use Repo-Level Scripts
 
@@ -68,7 +71,8 @@ export TESSERA_NOTES_NULLIFIER_ROOT=0x000000000000000000000000000000000000000000
 export TESSERA_NOTES_COMMITMENT_ROOT=0x0000000000000000000000000000000000000000000000000000000000000000
 export TESSERA_ACCOUNTS_NULLIFIER_ROOT=0x0000000000000000000000000000000000000000000000000000000000000000
 export TESSERA_ACCOUNTS_COMMITMENT_ROOT=0x0000000000000000000000000000000000000000000000000000000000000000
-export TESSERA_BATCH_SIZE=128
+export TESSERA_NOTE_BATCH_SIZE=128
+export TESSERA_ACCOUNT_BATCH_SIZE=16
 
 forge script script/pending-deposit/Deploy.s.sol --rpc-url "$RPC" --private-key "$OPERATOR_KEY" --broadcast
 ```

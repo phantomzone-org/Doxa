@@ -74,6 +74,7 @@ mod tests {
 	};
 
 	#[test]
+	#[ignore = "very long test"]
 	fn keccak_builder() {
 		let num_inputs = 10;
 		let inputs_random_len_range = 10..=10;

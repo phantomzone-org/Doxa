@@ -8,7 +8,7 @@ The sequencer is API-driven for intake:
 - sequencer checks note status on-chain:
   - if note exists on bridge: required status depends on endpoint/tree flow
   - if note is not tracked by bridge (`NoteNotFound`): accepted as external/network-native leaf
-- when enough notes are queued **or** batch timeout elapses, sequencer proves a full `batchSize` insertion (padding with deterministic dummies when needed) and finalizes on-chain via:
+- when enough notes are queued **or** batch timeout elapses, sequencer proves a full `noteBatchSize` / `accountBatchSize` insertion (padding with deterministic dummies when needed) and finalizes on-chain via:
   - `recordNotesCommitmentTreeUpdate` (single-phase)
 
 ## High-Level Flow
@@ -16,7 +16,7 @@ The sequencer is API-driven for intake:
 1. Trusted source records deposits on-chain via `depositAndRegister*`
 2. External caller sends note commitments to sequencer API
 3. Sequencer validates each note is `Pending` using `getDepositStatus(note)`
-4. Sequencer batches notes (`batchSize` from contract), with timeout-based flush for partial pools
+4. Sequencer batches notes (`noteBatchSize` / `accountBatchSize` from contract), with timeout-based flush for partial pools
 5. Sequencer sends `ProveRequest` to dedicated prover API
 6. Prover returns `ProveOutcome` with:
    - tree-update Solidity proof
@@ -32,6 +32,8 @@ The sequencer is API-driven for intake:
   - Prover runtime and proof generation pipeline (plonky2 -> BN128 -> Groth16)
 - `src/prover_client.rs`
   - HTTP client used by sequencer to request proofs from dedicated prover service
+- `src/aggregation_pipeline/`
+  - Streaming aggregation actor (`session.rs`), worker pool with local and remote provers (`pool.rs`), and HTTP protocol types (`types.rs`)
 - `src/states/`
   - In-memory pending request queues + local tree mirrors
 - `src/contract.rs`
@@ -59,11 +61,10 @@ HTTP errors:
 
 Note: `accepted=true` means the request entered the sequencer queue; the note is still checked against on-chain status before batching.
 
-`input_proof` rules (current Phase A):
-- required for each request
-- validated by sequencer before pooling
-- dummy verifier currently accepts only `0x01`
-- any other value is rejected with `accepted=false`
+`input_proof` rules:
+- required for each request; empty bytes are rejected
+- when `TESSERA_AGGREGATOR_ARTIFACTS_PATH` is configured on the sequencer, bytes are cryptographically verified against the leaf circuit (`LeafProofVerifier` loaded from `leaf_common.bin` / `leaf_verifier.bin`)
+- when the aggregator path is not configured, any non-empty bytes are accepted and cryptographic validation is deferred to the prover
 
 ### `POST /private-tx`
 
@@ -75,13 +76,13 @@ Request body:
   "output_notes":["0x<32-byte-hex>","0x<32-byte-hex>"],
   "input_account_commitment":"0x<32-byte-hex>",
   "output_account_commitment":"0x<32-byte-hex>",
-  "tx_proof":"0x01",
+  "tx_proof":"0x<plonky2-proof-bytes-hex>",
   "tx_id":"optional-client-tx-id"
 }
 ```
 
 Semantics:
-- `tx_proof` is validated by the same dummy verifier (currently accepts only `0x01`).
+- `tx_proof` is the hex-encoded serialization of a Plonky2 `ProofWithPublicInputs` for the transaction validity leaf circuit. Validated cryptographically at the API layer when `TESSERA_AGGREGATOR_ARTIFACTS_PATH` is set.
 - if proof verification fails, the payload is dropped and response is:
   - `{"accepted":false,"invalid_proof_tx":{"tx_id":"...","reason":"..."}}`
 - routing is deterministic:
@@ -92,19 +93,22 @@ Semantics:
 
 Batch proving semantics:
 - Sequencer sends one associated-input proof per leaf in batch order to prover.
-- Prover dummy-verifies each associated proof and dummy-aggregates them.
+- Prover aggregates all batch-size proofs (real + canonical padding) via a streaming `AggregationSession` backed by the `NodeProverPool`.
 - Prover returns both proofs (tree update + aggregated input) to sequencer.
 
 ## Configuration
 
-Loaded via `SequencerConfig::from_env()`.
+### Sequencer (`SequencerConfig::from_env()`)
 
 Required:
 - `TESSERA_RPC_URL`
 - `TESSERA_OPERATOR_KEY`
 - `TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS`
 - `TESSERA_CHAIN_ID`
-- `TESSERA_PENDING_DEPOSITS_ARTIFACTS_PATH`
+- `TESSERA_NOTES_COMMITMENT_ARTIFACTS_PATH`
+- `TESSERA_ACCOUNTS_COMMITMENT_ARTIFACTS_PATH`
+- `TESSERA_NOTES_NULLIFIER_ARTIFACTS_PATH`
+- `TESSERA_ACCOUNTS_NULLIFIER_ARTIFACTS_PATH`
 
 Optional:
 - `TESSERA_POLL_INTERVAL_SECS` (default `12`)
@@ -112,7 +116,34 @@ Optional:
 - `TESSERA_SEQUENCER_API_ADDR` (default `127.0.0.1:8081`)
 - `TESSERA_PROVER_API_URL` (default `http://127.0.0.1:8091`)
 - `TESSERA_PROVER_API_TIMEOUT_SECS` (default `1800`)
+- `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): when set, the API layer cryptographically validates `tx_proof` bytes against the leaf circuit before forwarding to the sequencer loop
 - `RUST_LOG` (default `info`)
+
+### Prover (`ProverConfig::from_env()`)
+
+Required:
+- `TESSERA_NOTES_COMMITMENT_ARTIFACTS_PATH`
+- `TESSERA_ACCOUNTS_COMMITMENT_ARTIFACTS_PATH`
+- `TESSERA_NOTES_NULLIFIER_ARTIFACTS_PATH`
+- `TESSERA_ACCOUNTS_NULLIFIER_ARTIFACTS_PATH`
+
+Optional:
+- `TESSERA_NOTE_BATCH_SIZE` (default `128`)
+- `TESSERA_ACCOUNT_BATCH_SIZE` (default `16`; must equal `NOTE_BATCH_SIZE / 8`)
+- `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`)
+- `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): path to `GenericAggregator` artifacts; required for real proof aggregation on the private-tx path
+- `TESSERA_AGGREGATION_PROVER_URLS` (default empty): comma-separated list of remote `aggregation_prover` base URLs (e.g. `http://worker1:8092,http://worker2:8092`); when empty, aggregation uses a single local prover thread
+- `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default `300`): per-request HTTP timeout for remote aggregation provers
+
+### Aggregation Prover (`AggregatorProverConfig::from_env()`)
+
+The `aggregation_prover` binary is a stateless HTTP worker for distributed node proving.
+
+Required:
+- `TESSERA_AGGREGATOR_ARTIFACTS_PATH`: path to pre-built `GenericAggregator` artifacts
+
+Optional:
+- `TESSERA_AGGREGATION_PROVER_ADDR` (default `0.0.0.0:8092`): HTTP listen address
 
 Artifacts path must contain:
 - `plonky2-proof/`
@@ -120,19 +151,28 @@ Artifacts path must contain:
 
 ## Running
 
+### Prover
+
 ```bash
 cd tessera-server
 cargo run --bin prover --release
 ```
 
-In another terminal:
+### Sequencer (separate terminal)
 
 ```bash
 cd tessera-server
 cargo run --bin sequencer --release
 ```
 
-The binary loads `.env` automatically if present.
+### Aggregation Prover (optional, for distributed proving)
+
+```bash
+cd tessera-server
+cargo run --bin aggregation_prover --release
+```
+
+All binaries load `.env` automatically if present.
 
 ## Recovery Behavior
 
@@ -177,7 +217,12 @@ Feature-gated scripted integration test (runs local devnet + deploy + recovery f
 
 ```bash
 TESSERA_RUN_INTEGRATION_SCRIPTS=1 \
-cargo test -p tessera-server --features integration-tests scripted_chain_recovery_e2e -- --nocapture --test-threads=1
+cargo test --release -p tessera-server --features integration-tests scripted_chain_recovery_e2e -- --nocapture --test-threads=1
+```
+
+```bash
+TESSERA_RUN_INTEGRATION_SCRIPTS=1 cargo test --release -p tessera-server \
+  --features integration-tests scripted_full_flow_e2e -- --nocapture --test-threads=1
 ```
 
 Notes:

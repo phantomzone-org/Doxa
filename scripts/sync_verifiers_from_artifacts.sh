@@ -1,43 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Copy freshly generated Groth16 verifier contracts (from tessera-server artifacts)
+# Copy the freshly generated Groth16 verifier contract (from tessera-server artifacts)
 # into tessera-solidity, so on-chain verification keys match the prover's artifacts.
 #
 # Why this exists:
-# - If you regenerate Groth16 trusted setup/artifacts, the verifying keys change.
+# - If you regenerate Groth16 trusted setup/artifacts, the verifying key changes.
 # - The bridge will revert with `InvalidProof()` unless the deployed Solidity verifier
 #   matches the proving/verifying keys used by the prover.
 #
-# Expected artifact inputs:
-# - tessera-server/artifacts/commitment-tree/groth-artifacts/Verifier.sol
-# - tessera-server/artifacts/nullifier-tree/groth-artifacts/Verifier.sol
+# Expected artifact input (single SuperAggregator verifier):
+# - tessera-server/artifacts/super-aggregator/groth-artifacts/Verifier.sol
 #
-# Outputs:
-# - tessera-solidity/src/VerifierCommitment.sol
-# - tessera-solidity/src/VerifierNullifier.sol
+# Output:
+# - tessera-solidity/src/VerifierSuperAggregator.sol
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-SRC_COMMIT="$ROOT_DIR/tessera-server/artifacts/commitment-tree/groth-artifacts/Verifier.sol"
-SRC_NULL="$ROOT_DIR/tessera-server/artifacts/nullifier-tree/groth-artifacts/Verifier.sol"
+SRC="$ROOT_DIR/tessera-server/artifacts/super-aggregator/groth-artifacts/Verifier.sol"
+DST="$ROOT_DIR/tessera-solidity/src/VerifierSuperAggregator.sol"
+FIXTURE="$ROOT_DIR/tessera-solidity/test/fixtures/VerifierSuperAggregatorArtifact.sol"
 
-DST_COMMIT="$ROOT_DIR/tessera-solidity/src/VerifierCommitment.sol"
-DST_NULL="$ROOT_DIR/tessera-solidity/src/VerifierNullifier.sol"
-
-if [[ ! -f "$SRC_COMMIT" ]]; then
-  echo "ERROR: missing commitment verifier artifact: $SRC_COMMIT" >&2
-  exit 1
-fi
-if [[ ! -f "$SRC_NULL" ]]; then
-  echo "ERROR: missing nullifier verifier artifact: $SRC_NULL" >&2
+if [[ ! -f "$SRC" ]]; then
+  echo "ERROR: missing super-aggregator verifier artifact: $SRC" >&2
+  echo "Run: TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 cargo run --bin super_aggregator_artifacts --release" >&2
   exit 1
 fi
 
-cp "$SRC_COMMIT" "$DST_COMMIT"
-cp "$SRC_NULL" "$DST_NULL"
+cp "$SRC" "$DST"
+cp "$SRC" "$FIXTURE"
 
 echo "Synced verifier contracts:"
-echo "  $DST_COMMIT <= $SRC_COMMIT"
-echo "  $DST_NULL   <= $SRC_NULL"
-
+echo "  $DST <= $SRC"
+echo "  $FIXTURE <= $SRC"

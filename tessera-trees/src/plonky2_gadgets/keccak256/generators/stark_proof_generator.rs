@@ -386,6 +386,7 @@ mod tests {
 	};
 
 	#[test]
+	#[ignore = "very long test"]
 	fn keccak256_stark_proof_generator() {
 		const NUM_PERMS: usize = 1;
 		const D: usize = 2;

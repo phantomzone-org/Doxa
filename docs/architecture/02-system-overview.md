@@ -35,8 +35,9 @@ graph TB
     SEQ -- "POST /prove<br/>(ProveRequest)" --> PRV
     PRV -- "ProveOutcome" --> SEQ
 
+    SEQ -- "registerTransactionBatchUpdate()<br/>confirmTreeUpdate()" --> BRIDGE
     SEQ -- "recordNotes*TreeUpdate()<br/>recordAccounts*TreeUpdate()" --> BRIDGE
-    SEQ -- "getDepositStatus()<br/>notesCommitmentRoot()" --> BRIDGE
+    SEQ -- "getDepositStatus()<br/>notesCommitmentRoot()<br/>confirmedNotes*Root()" --> BRIDGE
     SEQ -- "eth_getLogs<br/>(recovery)" --> Anvil
 
     BRIDGE -- "verifyProof()" --> VC
@@ -57,19 +58,25 @@ graph TB
 
 ### Off-Chain → On-Chain
 
-| Caller | Target | Method | Purpose |
-|---|---|---|---|
-| Sequencer | Bridge | `recordNotesCommitmentTreeUpdate()` | Finalize a commitment batch with proof |
-| Sequencer | Bridge | `recordNotesNullifierTreeUpdate()` | Finalize a nullifier batch with proof |
-| Sequencer | Bridge | `recordAccountsCommitmentTreeUpdate()` | Finalize an accounts commitment batch |
-| Sequencer | Bridge | `recordAccountsNullifierTreeUpdate()` | Finalize an accounts nullifier batch |
-| Sequencer | Bridge | `getDepositStatus()` | Preflight: check note is Pending/Validated |
-| Sequencer | Bridge | `notesCommitmentRoot()` etc. | Verify local root matches on-chain |
-| Sequencer | RPC | `eth_getLogs` | Recovery: replay finalized batches |
+| Caller | Target | Method | Purpose | Path |
+|---|---|---|---|---|
+| Sequencer | Bridge | `registerTransactionBatchUpdate()` | Register all 4 tree roots + deposit validation atomically; returns `batchId` | Private TX (W3) |
+| Sequencer | Bridge | `confirmTreeUpdate()` | Confirm one tree's Groth16 proof for a registered batch | Private TX (W3) |
+| Sequencer | Bridge | `recordNotesCommitmentTreeUpdate()` | Finalize a notes commitment batch with proof | Deposit-only (W2) |
+| Sequencer | Bridge | `recordNotesNullifierTreeUpdate()` | Finalize a notes nullifier batch with proof | Deposit-only (W2) |
+| Sequencer | Bridge | `recordAccountsCommitmentTreeUpdate()` | Finalize an accounts commitment batch | Deposit-only (W2) |
+| Sequencer | Bridge | `recordAccountsNullifierTreeUpdate()` | Finalize an accounts nullifier batch | Deposit-only (W2) |
+| Sequencer | Bridge | `getDepositStatus()` | Preflight: check note is Pending/Validated | Both |
+| Sequencer | Bridge | `notesCommitmentRoot()` etc. | Latest (optimistic) root per tree | Both |
+| Sequencer | Bridge | `confirmedNotesCommitmentRoot()` etc. | Confirmed (proof-backed) root per tree; used at startup | W3 recovery |
+| Sequencer | Bridge | `pendingBatches(slotIndex)` | Read on-chain slot state during two-phase recovery | W3 recovery |
+| Sequencer | RPC | `eth_getLogs` | Recovery: replay finalized / registered batches | W5 |
 
 Batch semantics:
 - Sequencer proves fixed-size batches (`batchSize`) and flushes partial pools on timeout by padding deterministic dummy leaves.
-- On-chain calls may submit only real leaves (`0 < len <= batchSize`); the bridge re-derives omitted dummies before proof-input hashing.
+- On-chain calls submit only real leaves (`0 < len <= batchSize`); the bridge re-derives omitted dummies before proof-input hashing.
+- `registerTransactionBatchUpdate` advances all 4 **latest** roots atomically and marks output deposits `Validated` immediately.
+- `confirmTreeUpdate` advances a single **confirmed** root; the batch is fully finalized when all 4 trees are confirmed (`confirmedMask == 0xF`).
 
 ### On-Chain Internal
 

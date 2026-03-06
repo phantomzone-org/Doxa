@@ -19,17 +19,27 @@ impl<H: MerkleHash> MerkleTree<H> {
 		for (level, layer) in self.layers.iter().enumerate() {
 			let mut expected_layer = Vec::with_capacity(layer.len());
 
-			let mut i = 0;
-			while i < prev_hashes.len() {
-				let left = &prev_hashes[i];
-				let right = if i + 1 < prev_hashes.len() {
-					&prev_hashes[i + 1]
+			if level != self.depth() - 1 {
+				let mut i = 0;
+				while i < prev_hashes.len() {
+					let left = &prev_hashes[i];
+					let right = if i + 1 < prev_hashes.len() {
+						&prev_hashes[i + 1]
+					} else {
+						&self.default_siblings[level]
+					};
+					expected_layer.push(H::hash_2_to_1(left, right, false));
+					i += 2;
+				}
+			} else {
+				let left = &prev_hashes[0];
+				let right = if 1 < prev_hashes.len() {
+					&prev_hashes[1]
 				} else {
 					&self.default_siblings[level]
 				};
 
-				expected_layer.push(H::hash_2_to_1(left, right, false));
-				i += 2;
+				expected_layer.push(H::hash_root(self.leaves.len(), left, right));
 			}
 
 			if &expected_layer != layer {
@@ -59,17 +69,28 @@ impl<H: MerkleHash> MerkleTree<H> {
 		for level in 0..self.depth() {
 			let mut next = Vec::with_capacity(current.len().div_ceil(2));
 
-			let mut i = 0;
-			while i < current.len() {
-				let left = &current[i];
-				let right = if i + 1 < current.len() {
-					&current[i + 1]
+			if level != self.depth() - 1 {
+				let mut i = 0;
+				while i < current.len() {
+					let left = &current[i];
+					let right = if i + 1 < current.len() {
+						&current[i + 1]
+					} else {
+						&self.default_siblings[level]
+					};
+
+					next.push(H::hash_2_to_1(left, right, false));
+					i += 2;
+				}
+			} else {
+				let left = &current[0];
+				let right = if 1 < current.len() {
+					&current[1]
 				} else {
 					&self.default_siblings[level]
 				};
 
-				next.push(H::hash_2_to_1(left, right, false));
-				i += 2;
+				next.push(H::hash_root(self.leaves.len(), left, right));
 			}
 
 			current = next;

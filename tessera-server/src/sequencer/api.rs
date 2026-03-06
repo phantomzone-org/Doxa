@@ -1,12 +1,69 @@
+use std::sync::Arc;
+
 use alloy::primitives::B256;
 use axum::{extract::State, routing::post, Json, Router};
+use plonky2::{
+	plonk::{
+		circuit_data::{CommonCircuitData, VerifierCircuitData, VerifierOnlyCircuitData},
+		proof::ProofWithPublicInputs,
+	},
+	util::serialization::DefaultGateSerializer,
+};
 use serde::{Deserialize, Serialize};
+use tessera_trees::{ConfigNative, D, F};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::{contract::GOLDILOCKS_PRIME, sequencer::NotesCommitmentRequest};
 
-const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
+/// Verifies a plonky2 leaf proof against the aggregator's leaf circuit.
+///
+/// Loaded from aggregator artifacts at startup by reading `leaf_common.bin`
+/// and `leaf_verifier.bin`. When not configured, any non-empty proof bytes
+/// are accepted and cryptographic validation is deferred to the prover.
+pub(super) struct LeafProofVerifier {
+	verifier_data: VerifierCircuitData<F, ConfigNative, D>,
+}
+
+impl LeafProofVerifier {
+	/// Load from an aggregator artifacts directory.
+	///
+	/// Reads only `leaf_common.bin` and `leaf_verifier.bin` — the level
+	/// circuits are not loaded, keeping startup cost minimal.
+	pub(super) fn from_artifacts(path: &std::path::Path) -> anyhow::Result<Self> {
+		let gate_ser = DefaultGateSerializer;
+
+		let common_bytes = std::fs::read(path.join("leaf_common.bin"))
+			.map_err(|e| anyhow::anyhow!("failed to read leaf_common.bin from {:?}: {e}", path))?;
+		let common = CommonCircuitData::<F, D>::from_bytes(&common_bytes, &gate_ser)
+			.map_err(|e| anyhow::anyhow!("failed to deserialize leaf_common.bin: {e:?}"))?;
+
+		let verifier_bytes = std::fs::read(path.join("leaf_verifier.bin")).map_err(|e| {
+			anyhow::anyhow!("failed to read leaf_verifier.bin from {:?}: {e}", path)
+		})?;
+		let verifier_only = VerifierOnlyCircuitData::<ConfigNative, D>::from_bytes(&verifier_bytes)
+			.map_err(|e| anyhow::anyhow!("failed to deserialize leaf_verifier.bin: {e:?}"))?;
+
+		Ok(Self {
+			verifier_data: VerifierCircuitData {
+				verifier_only,
+				common,
+			},
+		})
+	}
+
+	/// Deserialize and verify `proof_bytes` against the leaf circuit.
+	fn verify_bytes(&self, proof_bytes: &[u8]) -> anyhow::Result<()> {
+		let proof = ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
+			proof_bytes.to_vec(),
+			&self.verifier_data.common,
+		)
+		.map_err(|e| anyhow::anyhow!("leaf proof deserialization failed: {e:?}"))?;
+		self.verifier_data
+			.verify(proof)
+			.map_err(|e| anyhow::anyhow!("leaf proof verification failed: {e:?}"))
+	}
+}
 
 #[derive(Clone)]
 pub(super) struct ApiState {
@@ -14,6 +71,15 @@ pub(super) struct ApiState {
 	pub(super) notes_nullifier_tx: mpsc::Sender<[u8; 32]>,
 	pub(super) accounts_commitment_tx: mpsc::Sender<[u8; 32]>,
 	pub(super) accounts_nullifier_tx: mpsc::Sender<[u8; 32]>,
+	/// When `Some`, `/private-tx` uses the optimistic two-phase register path.
+	/// When `None`, falls back to the per-tree fan-out (deposit-only) path.
+	pub(super) private_tx_tx: Option<mpsc::Sender<super::PrivateTxRequest>>,
+	/// 4-PI verifier for `/consume-request`. `None` = accept any non-empty proof.
+	pub(super) consume_proof_verifier: Option<Arc<LeafProofVerifier>>,
+	/// 72-PI verifier for `/private-tx`. `None` = accept any non-empty proof.
+	pub(super) tx_proof_verifier: Option<Arc<LeafProofVerifier>>,
+	/// 8-PI verifier for `/accounts/commitment`. `None` = accept bare leaf without proof.
+	pub(super) account_proof_verifier: Option<Arc<LeafProofVerifier>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +103,12 @@ struct InvalidProofTx {
 #[derive(Debug, Deserialize)]
 struct LeafBody {
 	leaf: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountRegisterBody {
+	leaf: String,
+	input_proof: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,12 +139,12 @@ async fn consume_request_handler(
 ) -> Result<Json<ConsumeRequestResponse>, axum::http::StatusCode> {
 	debug!(
 		has_input_proof = !body.input_proof.is_empty(),
-		"received notes commitment request"
+		"received deposit request"
 	);
 	let proof = match parse_input_proof_hex(&body.input_proof) {
 		Ok(v) => v,
 		Err(_) => {
-			warn!("rejecting notes commitment request: invalid input proof hex");
+			warn!("rejecting deposit: invalid input proof hex");
 			return Ok(Json(ConsumeRequestResponse {
 				accepted: false,
 				invalid_proof_tx: Some(InvalidProofTx {
@@ -82,31 +154,30 @@ async fn consume_request_handler(
 			}));
 		},
 	};
-	if let Err(reason) = verify_associated_tx_proof(&proof) {
+	if let Err(e) = verify_associated_tx_proof(&proof, state.consume_proof_verifier.as_deref()) {
 		warn!(
-			reason,
-			"rejecting notes commitment request: proof verification failed"
+			reason = %e,
+			"rejecting deposit: proof verification failed"
 		);
 		return Ok(Json(ConsumeRequestResponse {
 			accepted: false,
 			invalid_proof_tx: Some(InvalidProofTx {
 				tx_id: None,
-				reason: reason.to_string(),
+				reason: e.to_string(),
 			}),
 		}));
 	}
-	info!(proof_len = proof.len(), "notes commitment proof verified");
+	info!(proof_len = proof.len(), "deposit proof verified");
 	let note =
 		parse_note_hex(&body.note_commitment).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 	state
 		.notes_commitment_tx
 		.send(NotesCommitmentRequest {
 			note,
-			associated_input_proof: proof,
 		})
 		.await
 		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	info!(note = ?B256::from(note), "accepted notes commitment leaf");
+	info!(note = ?B256::from(note), "accepted deposit");
 	Ok(Json(ConsumeRequestResponse {
 		accepted: true,
 		invalid_proof_tx: None,
@@ -139,16 +210,17 @@ async fn private_tx_notes_handler(
 			}));
 		},
 	};
-	if let Err(reason) = verify_associated_tx_proof(&tx_proof) {
+	if let Err(e) = verify_associated_tx_proof(&tx_proof, state.tx_proof_verifier.as_deref()) {
 		warn!(
 			tx_id = body.tx_id.as_deref().unwrap_or("unknown"),
-			reason, "rejecting private tx: proof verification failed"
+			reason = %e,
+			"rejecting private tx: proof verification failed"
 		);
 		return Ok(Json(ConsumeRequestResponse {
 			accepted: false,
 			invalid_proof_tx: Some(InvalidProofTx {
 				tx_id: body.tx_id,
-				reason: reason.to_string(),
+				reason: e.to_string(),
 			}),
 		}));
 	}
@@ -180,42 +252,25 @@ async fn private_tx_notes_handler(
 	let input_notes_count = input_notes.len();
 	let output_notes_count = output_notes.len();
 
-	for leaf in input_notes {
-		state
-			.notes_nullifier_tx
-			.send(leaf)
-			.await
-			.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	}
-	for leaf in output_notes {
-		state
-			.notes_commitment_tx
-			.send(NotesCommitmentRequest {
-				note: leaf,
-				associated_input_proof: tx_proof.clone(),
-			})
-			.await
-			.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	}
 	state
-		.accounts_nullifier_tx
-		.send(input_account_leaf)
-		.await
-		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	state
-		.accounts_commitment_tx
-		.send(output_account_leaf)
+		.private_tx_tx
+		.as_ref()
+		.ok_or(axum::http::StatusCode::SERVICE_UNAVAILABLE)?
+		.send(super::PrivateTxRequest {
+			tx_id: body.tx_id,
+			input_notes,
+			output_notes,
+			input_account_leaf,
+			output_account_leaf,
+			tx_proof,
+		})
 		.await
 		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
 	info!(
-		tx_id = body.tx_id.as_deref().unwrap_or("unknown"),
 		enqueued_notes_nullifier = input_notes_count,
 		enqueued_notes_commitment = output_notes_count,
-		enqueued_accounts_nullifier = 1,
-		enqueued_accounts_commitment = 1,
-		"accepted private tx leaves into sequencer pools"
+		"accepted private tx via optimistic register path"
 	);
-
 	Ok(Json(ConsumeRequestResponse {
 		accepted: true,
 		invalid_proof_tx: None,
@@ -241,8 +296,38 @@ async fn notes_nullifier_handler(
 
 async fn accounts_commitment_handler(
 	State(state): State<ApiState>,
-	Json(body): Json<LeafBody>,
+	Json(body): Json<AccountRegisterBody>,
 ) -> Result<Json<ConsumeRequestResponse>, axum::http::StatusCode> {
+	let proof = match parse_input_proof_hex(&body.input_proof) {
+		Ok(v) => v,
+		Err(_) => {
+			warn!("rejecting account registration: invalid input proof hex");
+			return Ok(Json(ConsumeRequestResponse {
+				accepted: false,
+				invalid_proof_tx: Some(InvalidProofTx {
+					tx_id: None,
+					reason: "input proof is not valid hex".to_string(),
+				}),
+			}));
+		},
+	};
+	if let Err(e) = verify_associated_tx_proof(&proof, state.account_proof_verifier.as_deref()) {
+		warn!(
+			reason = %e,
+			"rejecting account registration: proof verification failed"
+		);
+		return Ok(Json(ConsumeRequestResponse {
+			accepted: false,
+			invalid_proof_tx: Some(InvalidProofTx {
+				tx_id: None,
+				reason: e.to_string(),
+			}),
+		}));
+	}
+	info!(
+		proof_len = proof.len(),
+		"account registration proof verified"
+	);
 	let leaf = parse_note_hex(&body.leaf).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 	state
 		.accounts_commitment_tx
@@ -297,12 +382,18 @@ fn parse_input_proof_hex(s: &str) -> anyhow::Result<Vec<u8>> {
 
 /// Verify an associated transaction proof.
 ///
-/// Current behavior is a local-development stub. Only a fixed dummy proof
-/// payload is accepted until a real verifier is integrated.
-fn verify_associated_tx_proof(proof: &[u8]) -> Result<(), &'static str> {
-	if proof == DUMMY_ASSOCIATED_INPUT_PROOF {
-		Ok(())
-	} else {
-		Err("associated input proof verification failed (dummy verifier expects 0x01)")
+/// When `verifier` is `Some`, the proof bytes are deserialized and verified
+/// cryptographically against the leaf circuit. When `None`, any non-empty
+/// bytes are accepted and validation is deferred to the prover.
+fn verify_associated_tx_proof(
+	proof: &[u8],
+	verifier: Option<&LeafProofVerifier>,
+) -> anyhow::Result<()> {
+	if proof.is_empty() {
+		anyhow::bail!("associated input proof cannot be empty");
 	}
+	if let Some(v) = verifier {
+		v.verify_bytes(proof)?;
+	}
+	Ok(())
 }

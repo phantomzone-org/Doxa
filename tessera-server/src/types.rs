@@ -3,39 +3,55 @@ use serde::{Deserialize, Serialize};
 use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof, NullifierChainedInsertProof};
 
 /// Sent from Sequencer to Prover via `tokio::mpsc` channel.
+///
+/// Carries all four tree witnesses + the 16 TX leaf proofs for a single batch.
+/// The prover proves all five inner circuits and wraps them into a single
+/// SuperAggregator Groth16 proof.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ProveRequest {
-	Commitment {
-		/// The append-only commitment batch insertion proof (native witness).
-		batch_proof: BatchCommitmentProof<Hash>,
-		/// One note-validity proof per leaf in `batch_proof.leaves` order.
-		associated_input_proofs: Vec<Vec<u8>>,
-	},
-	Nullifier {
-		/// The chained nullifier insertion proof (native witness).
-		batch_proof: NullifierChainedInsertProof<Hash>,
-		/// One associated input proof per leaf order for this batch.
-		associated_input_proofs: Vec<Vec<u8>>,
-	},
+pub struct ProveRequest {
+	/// On-chain batch ID from `registerTransactionBatchUpdate`.
+	pub batch_id: u64,
+	/// Notes commitment tree batch-insertion witness.
+	pub notes_commitment_proof: BatchCommitmentProof<Hash>,
+	/// Notes nullifier tree chained-insertion witness.
+	pub notes_nullifier_proof: NullifierChainedInsertProof<Hash>,
+	/// Accounts commitment tree batch-insertion witness.
+	pub accounts_commitment_proof: BatchCommitmentProof<Hash>,
+	/// Accounts nullifier tree chained-insertion witness.
+	pub accounts_nullifier_proof: NullifierChainedInsertProof<Hash>,
+	/// Serialised TX leaf proofs (exactly 16 slots; unused slots = DUMMY_ASSOCIATED_INPUT_PROOF).
+	pub associated_tx_proofs: Vec<Vec<u8>>,
 }
 
 /// Sent from Prover back to Sequencer via `tokio::mpsc` channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProveOutcome {
 	Success {
-		/// The new consumed root after insertion.
-		new_root: Hash,
-		/// Groth16 proof formatted for the Solidity contract.
+		/// Echoed from the originating `ProveRequest`.
+		batch_id: u64,
+		/// New notes commitment root after insertion.
+		notes_new_root: Hash,
+		/// New notes nullifier root after insertion.
+		nullifier_notes_new_root: Hash,
+		/// New accounts commitment root after insertion.
+		accounts_new_root: Hash,
+		/// New accounts nullifier root after insertion.
+		nullifier_accounts_new_root: Hash,
+		/// Single SuperAggregator Groth16 proof, ready for `confirmBatch()`.
 		solidity_proof: Box<SolidityProof>,
-		/// Aggregated validity proof for the public inputs in the batch.
-		aggregated_input_solidity_proof: Box<SolidityProof>,
+		/// `keccak256` commitment over all 5 inner proofs' public inputs,
+		/// encoded as 8 × uint32 big-endian words.  Passed as `publicInputs`
+		/// to `confirmBatch()` on-chain.
+		super_pi_commitment: [u8; 32],
 	},
 	Failure {
+		/// Echoed from the originating `ProveRequest`.
+		batch_id: u64,
 		error: String,
 	},
 }
 
-/// Parsed proof ready for the contract's `finalizeConsumeBatch` call.
+/// Parsed proof ready for the contract's `confirmBatch` call.
 ///
 /// Corresponds to `DepositsRollupBridge.Proof` in Solidity.
 #[derive(Debug, Clone, Serialize, Deserialize)]

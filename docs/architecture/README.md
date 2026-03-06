@@ -17,6 +17,7 @@ This folder contains auto-generated architecture diagrams and analysis for the T
 | [09-w6-prover-pipeline.md](09-w6-prover-pipeline.md) | W6: Prover proof generation pipeline |
 | [10-concurrency-model.md](10-concurrency-model.md) | Concurrency, orchestration, and the batch state machine |
 | [11-assumptions-and-gaps.md](11-assumptions-and-gaps.md) | Known assumptions, stubs, and gaps |
+| [12-streaming-aggregation-pipeline.md](12-streaming-aggregation-pipeline.md) | Streaming aggregation pipeline with distributed proving — architecture, node addressing, implementation details |
 
 ## Rendering
 

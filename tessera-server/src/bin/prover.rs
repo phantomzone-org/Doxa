@@ -1,7 +1,11 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+	extract::{DefaultBodyLimit, State},
+	routing::post,
+	Json, Router,
+};
 use tessera_server::{
 	config::ProverConfig,
 	prover::ProverRuntime,
@@ -42,11 +46,12 @@ async fn main() -> Result<()> {
 
 	let config = ProverConfig::from_env()?;
 	let runtime = ProverRuntime::init(
-		config.plonky2_data_path,
-		config.groth16_artifacts_path,
-		config.nullifier_plonky2_data_path,
-		config.nullifier_groth16_artifacts_path,
-		config.batch_size,
+		config.note_batch_size,
+		config.account_batch_size,
+		config.super_aggregator_artifacts_path,
+		config.aggregator_artifacts_path,
+		config.aggregation_prover_urls,
+		config.aggregation_prover_timeout_secs,
 	)?;
 
 	let app_state = AppState {
@@ -54,6 +59,7 @@ async fn main() -> Result<()> {
 	};
 	let app = Router::new()
 		.route("/prove", post(prove_handler))
+		.layer(DefaultBodyLimit::max(64 * 1024 * 1024))
 		.with_state(app_state);
 
 	let listener = tokio::net::TcpListener::bind(&config.api_bind_addr).await?;
