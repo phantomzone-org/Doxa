@@ -39,7 +39,6 @@ impl<F: PrimeField64 + Extendable<5>> Hash for CompressedPoint<F> {
 	}
 }
 
-// TODO: put both X,Y into a single 2D array
 pub(crate) const GENERATOR: [[u64; 5]; 2] = [
 	[
 		11712523173042564207,

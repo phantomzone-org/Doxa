@@ -18,14 +18,15 @@ mod tests {
 	use tessera_trees::tree::{CommitmentTree, hasher::HashOutput};
 
 	use crate::{
-		DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment,
-		NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId,
+		AccountAddress, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier,
+		SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId,
 		account::AccountStateTreeLeaf,
-		default_ast_siblings, derive_tx_hash,
+		derive_tx_hash,
 		ecgfp5::PointEw,
-		note::{AssetId, NodeIdentifier, PositionedStandardNode, Recipient, Sender, StandardNote},
+		note::{NodeIdentifier, PositionedStandardNode, StandardNote},
 		plonky2_gadgets::{
-			merkle::{proof_siblings_bits, set_merkle_siblings_and_bits, tx_circuit},
+			merkle::{proof_siblings_bits, set_merkle_siblings_and_bits},
+			priv_tx::priv_tx_circuit,
 			set_hash, set_u256_zero,
 			signature::set_schnorr_witness,
 		},
@@ -123,20 +124,20 @@ mod tests {
 		let acc0_pos = acc0_act_proof.path; // = 0
 
 		// ── Create notes N0, N1 ───────────────────────────────────────────────
-		let asset_id_val = F::ONE;
+		let asset_id_val = crate::AssetId(F::ONE);
 		let n0 = StandardNote {
 			identifier: NodeIdentifier::from_rng(&mut rng),
-			asset_id: AssetId(asset_id_val),
+			asset_id: asset_id_val,
 			amt: U256::from(100u64),
-			recipient: Recipient::from_acc(&acc0),
-			sender: Sender::from_acc(&acc1),
+			recipient: crate::AccountAddress::from_acc(&acc0),
+			sender: crate::AccountAddress::from_acc(&acc1),
 		};
 		let n1 = StandardNote {
 			identifier: NodeIdentifier::from_rng(&mut rng),
-			asset_id: AssetId(asset_id_val),
+			asset_id: asset_id_val,
 			amt: U256::from(50u64),
-			recipient: Recipient::from_acc(&acc0),
-			sender: Sender::from_acc(&acc1),
+			recipient: crate::AccountAddress::from_acc(&acc0),
+			sender: crate::AccountAddress::from_acc(&acc1),
 		};
 
 		// Insert note commitments into NCT
@@ -198,7 +199,7 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = tx_circuit(&mut builder);
+		let t = priv_tx_circuit(&mut builder);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 
@@ -208,7 +209,7 @@ mod tests {
 		pw.set_bool_target(t.is_rjct, false).unwrap();
 		pw.set_bool_target(t.is_fresh_acc, false).unwrap();
 		pw.set_bool_target(t.is_update_auth, false).unwrap();
-		pw.set_target(t.is_priv_tx, F::ONE).unwrap();
+		pw.set_bool_target(t.is_priv_tx, true).unwrap();
 
 		// Tree roots
 		set_hash(&mut pw, t.main_pool_root.0, main_pool.root().0);
@@ -226,10 +227,10 @@ mod tests {
 		t.accout.set_witness(&mut pw, &accout);
 
 		// Asset / amounts
-		pw.set_target(t.asset_id.0, asset_id_val).unwrap();
+		pw.set_target(t.asset_id.0, asset_id_val.0).unwrap();
 
 		// accin_amt = 0 (acc0 has no balance for asset_id=1 before this tx)
-		set_u256_zero(&mut pw, t.accin_amt);
+		set_u256_zero(&mut pw, &t.accin_amt);
 
 		// accout_amt = 150: U256::from(150u64).0 = [150,0,0,0] in LE u64 word order
 		// limbs[2*i] = lo u32 of word i, limbs[2*i+1] = hi u32 of word i
@@ -259,13 +260,9 @@ mod tests {
 		set_merkle_siblings_and_bits(&mut pw, &t.accin_act_merkle.0, act_sibs_arr, act_bits);
 
 		// AST Merkle: accin has empty AST → default siblings at position 0
-		let ast_sibs = default_ast_siblings();
-		set_merkle_siblings_and_bits(
-			&mut pw,
-			&t.accin_ast_merkle.0,
-			ast_sibs,
-			[false; crate::ACC_AST_DEPTH],
-		);
+		let ast_proof = acc0.ast.merkle_proof_at(0);
+		let (ast_siblings, ast_bits) = proof_siblings_bits(&ast_proof);
+		set_merkle_siblings_and_bits(&mut pw, &t.accin_ast_merkle.0, ast_siblings, ast_bits);
 		// accout_ast_merkle siblings are auto-connected to accin_ast_merkle in circuit
 
 		// ── Input Notes ──────────────────────────────────────────────────────
@@ -303,10 +300,10 @@ mod tests {
 		// All notes must share the same asset_id (connected by circuit), even inactive ones.
 		let zero_note = StandardNote {
 			identifier: NodeIdentifier([F::ZERO; 2]),
-			asset_id: AssetId(asset_id_val),
+			asset_id: asset_id_val,
 			amt: U256::zero(),
-			recipient: Recipient::from_acc(&acc0),
-			sender: Sender {
+			recipient: AccountAddress::from_acc(&acc0),
+			sender: AccountAddress {
 				subpool_id: SubpoolId(F::ZERO),
 				public_id: crate::account::PublicIdentifier(HashOutput([F::ZERO; 4])),
 			},
@@ -326,13 +323,13 @@ mod tests {
 		// ── Output Notes — all inactive ────────────────────────────────────────
 		let onote = StandardNote {
 			identifier: NodeIdentifier([F::ZERO; 2]),
-			asset_id: AssetId(asset_id_val),
+			asset_id: asset_id_val,
 			amt: U256::zero(),
-			recipient: Recipient {
+			recipient: AccountAddress {
 				subpool_id: SubpoolId(F::ZERO),
 				public_id: crate::account::PublicIdentifier(HashOutput([F::ZERO; 4])),
 			},
-			sender: Sender {
+			sender: AccountAddress {
 				subpool_id: SubpoolId(F::ZERO),
 				public_id: crate::account::PublicIdentifier(HashOutput([F::ZERO; 4])),
 			},
@@ -392,9 +389,8 @@ mod tests {
 
 		// Consume (REAL): is_consume_req = true (N0+N1 active, no onotes)
 		// consume_auth.config = false → circuit uses subpool consume key (consume_cpk)
-		let consume_pub = consume_sk.public_key::<F>();
 		let k_c = Scalar::from_raw([7, 8, 9, 10, 11]);
-		let sig_c = schnorr_sign(&consume_sk, &consume_pub, &tx_hash, k_c);
+		let sig_c = schnorr_sign(&consume_sk, &tx_hash, k_c);
 		let consume_cr = sig_c.r.encode();
 		let consume_cq = consume_q.encode();
 		let mut h_inp_c: Vec<F> = consume_cr.w.0.to_vec();
@@ -424,9 +420,8 @@ mod tests {
 		);
 
 		// Approval (REAL): always required
-		let approval_pub = approval_sk.public_key::<F>();
 		let k = Scalar::from_raw([1, 2, 3, 4, 5]);
-		let sig = schnorr_sign(&approval_sk, &approval_pub, &tx_hash, k);
+		let sig = schnorr_sign(&approval_sk, &tx_hash, k);
 		let approval_cr = sig.r.encode();
 		let approval_cq = approval_q.encode();
 		let mut h_inp: Vec<F> = approval_cr.w.0.to_vec();

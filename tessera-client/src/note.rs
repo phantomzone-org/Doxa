@@ -36,19 +36,20 @@ pub struct StandardNote {
 
 impl StandardNote {
 	pub fn commitment(&self) -> NoteCommitment {
-		let mut input = [F::ZERO; 20];
+		let mut input = [F::ZERO; 21];
 		input[..2].copy_from_slice(self.identifier.0.as_slice());
 		// amount: U256.0 is [u64; 4] little-endian words, split into lo/hi u32 limbs
 		for (i, word) in self.amt.0.iter().enumerate() {
 			input[2 + i * 2] = F::from_canonical_u32(*word as u32);
 			input[2 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
 		}
+		input[10] = self.asset_id.0;
 		// recipient condition
-		input[10] = self.recipient.subpool_id.0;
-		input[11..15].copy_from_slice(self.recipient.public_id.0.0.as_slice());
+		input[11] = self.recipient.subpool_id.0;
+		input[12..16].copy_from_slice(self.recipient.public_id.0.0.as_slice());
 		// sender condition
-		input[15] = self.sender.subpool_id.0;
-		input[16..20].copy_from_slice(self.sender.public_id.0.0.as_slice());
+		input[16] = self.sender.subpool_id.0;
+		input[17..].copy_from_slice(self.sender.public_id.0.0.as_slice());
 
 		NoteCommitment(HashOutput(
 			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,

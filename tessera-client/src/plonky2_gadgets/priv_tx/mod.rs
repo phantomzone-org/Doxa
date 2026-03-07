@@ -27,7 +27,7 @@ use crate::{
 
 mod cb;
 mod freshacc;
-// mod spend;
+mod spend;
 mod targets;
 
 fn double_hash_native(elems: [F; 4]) -> [F; 4] {
