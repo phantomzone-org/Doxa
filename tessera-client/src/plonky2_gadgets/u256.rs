@@ -182,7 +182,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D> for U25
 	fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self> {
 		let len: usize = src.read_usize()?;
 		let mut limb_inputs = vec![];
-		for _ in (0..len) {
+		for _ in 0..len {
 			limb_inputs.push(src.read_target()?);
 		}
 		let carry_in = src.read_target()?;

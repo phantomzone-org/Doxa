@@ -1875,7 +1875,7 @@ mod tests {
 			11398871370327264211,
 			958391180505708567,
 		]);
-		let sig = schnorr_sign(&privkey, &pubkey, &message, k);
+		let sig = schnorr_sign(&privkey, &message, k);
 		let r = sig.r;
 		let s = sig.s;
 
