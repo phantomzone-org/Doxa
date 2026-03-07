@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, marker::PhantomData};
+use std::{collections::HashMap, fmt, fmt::Debug, hash::Hash, marker::PhantomData};
 
 use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use tessera_trees::{F, tree::hasher::HashOutput};
@@ -71,26 +71,69 @@ pub struct MerkleProofStep<NType: Node> {
 	pub direction: Direction,
 }
 
-/// A complete Merkle proof for a leaf
+/// The leaf value stored in a [`MerkleProof`].
+///
+/// `Actual` holds a real leaf that was inserted into the tree.
+/// `Empty` indicates that the slot at the proven index has never been written,
+/// so the bottom node is the tree's canonical empty node (`NType::Leaf::empty()`).
 #[derive(Clone, Debug)]
-pub struct MerkleProof<Ntype: Node> {
+pub enum MerkleLeaf<NType: Node> {
+	Actual(NType::Leaf),
+	Empty,
+}
+
+/// A complete Merkle proof for a leaf
+pub struct MerkleProof<Ntype: Node, const DEPTH: usize> {
 	/// The leaf being proven
-	pub leaf: Ntype::Leaf,
+	pub leaf: MerkleLeaf<Ntype>,
 	/// The index of the leaf in the tree
-	pub _leaf_index: usize,
+	pub leaf_index: usize,
 	/// The path from leaf to root
-	pub path: Vec<MerkleProofStep<Ntype>>,
+	pub path: [MerkleProofStep<Ntype>; DEPTH],
 	/// The root hash
 	pub root: HashOutput,
 }
 
-impl<Ntype: Node> MerkleProof<Ntype>
+impl<Ntype: Node, const DEPTH: usize> Clone for MerkleProof<Ntype, DEPTH>
+where
+	MerkleLeaf<Ntype>: Clone,
+	MerkleProofStep<Ntype>: Clone,
+{
+	fn clone(&self) -> Self {
+		Self {
+			leaf: self.leaf.clone(),
+			leaf_index: self.leaf_index,
+			path: self.path.clone(),
+			root: self.root,
+		}
+	}
+}
+
+impl<Ntype: Node, const DEPTH: usize> fmt::Debug for MerkleProof<Ntype, DEPTH>
+where
+	MerkleLeaf<Ntype>: fmt::Debug,
+	MerkleProofStep<Ntype>: fmt::Debug,
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("MerkleProof")
+			.field("leaf", &self.leaf)
+			.field("leaf_index", &self.leaf_index)
+			.field("path", &self.path)
+			.field("root", &self.root)
+			.finish()
+	}
+}
+
+impl<Ntype: Node, const DEPTH: usize> MerkleProof<Ntype, DEPTH>
 where
 	Ntype::Leaf: Clone,
 {
 	/// Verify the Merkle proof
 	pub fn verify(&self) -> bool {
-		let mut current_node: Ntype = self.leaf.clone().into();
+		let mut current_node: Ntype = match &self.leaf {
+			MerkleLeaf::Actual(leaf) => leaf.clone().into(),
+			MerkleLeaf::Empty => Ntype::Leaf::empty(),
+		};
 
 		for step in &self.path {
 			current_node = match step.direction {
@@ -117,12 +160,12 @@ pub struct MerkleTree<const DEPTH: usize, NType: Node> {
 	next_index: usize,
 }
 
-impl<const D: usize, NType: Node + Clone> MerkleTree<D, NType>
+impl<const DEPTH: usize, NType: Node + Clone + Debug> MerkleTree<DEPTH, NType>
 where
-	NType::Leaf: Hash + Eq + Clone,
+	NType::Leaf: Hash + Eq + Clone + Debug,
 {
 	pub(crate) fn new() -> Self {
-		let depth = D;
+		let depth = DEPTH;
 		let mut curr_nodes = NType::Leaf::empty();
 		let mut curr_len = 1 << depth;
 		let mut tree = vec![];
@@ -155,7 +198,7 @@ where
 
 	/// Get the maximum capacity of the tree
 	pub fn capacity(&self) -> usize {
-		1 << D
+		1 << DEPTH
 	}
 
 	/// Check if the tree is full
@@ -186,17 +229,17 @@ where
 
 		self.tree[0][index] = node;
 		index = index >> 1;
-		for i in 0..D {
+		for i in 0..DEPTH {
 			let left_child = &self.tree[i][index << 1];
 			let right_child = &self.tree[i][(index << 1) + 1];
 
 			self.tree[i + 1][index] = NType::compress_two(left_child, right_child);
 			index >>= 1;
 		}
-		self.root = self.tree[D][0].inner();
+		self.root = self.tree[DEPTH][0].inner();
 	}
 
-	pub fn merkle_proof(&self, leaf: NType::Leaf) -> Option<MerkleProof<NType>> {
+	pub fn merkle_proof(&self, leaf: NType::Leaf) -> Option<MerkleProof<NType, DEPTH>> {
 		let index = self.leaf_index_map.get(&leaf);
 
 		if index.is_none() {
@@ -205,7 +248,7 @@ where
 
 		let mut current_index = *index.unwrap();
 		let mut path = vec![];
-		for level in 0..D {
+		for level in 0..DEPTH {
 			let (sibling_index, direction) = if current_index % 2 == 0 {
 				// Current is left child, sibling is on the right
 				(current_index + 1, Direction::Right)
@@ -225,14 +268,51 @@ where
 		}
 
 		Some(MerkleProof {
-			leaf,
-			_leaf_index: *index.unwrap(),
-			path,
+			leaf: MerkleLeaf::Actual(leaf),
+			leaf_index: *index.unwrap(),
+			path: path.try_into().unwrap(),
 			root: self.root,
 		})
 	}
 
-	pub fn verify(&self, proof: &MerkleProof<NType>) -> bool {
+	/// Return a [`MerkleProof`] for an arbitrary `index`, regardless of whether a leaf
+	/// has been inserted there.  If no leaf exists at `index`, the proof uses
+	/// [`MerkleLeaf::Empty`] as the bottom node (i.e. `NType::Leaf::empty()`).
+	pub fn merkle_proof_at(&self, index: usize) -> MerkleProof<NType, DEPTH> {
+		let mut current_index = index;
+		let mut path = vec![];
+		for level in 0..DEPTH {
+			let (sibling_index, direction) = if current_index % 2 == 0 {
+				(current_index + 1, Direction::Right)
+			} else {
+				(current_index - 1, Direction::Left)
+			};
+
+			let sibling_hash = self.tree[level][sibling_index].clone();
+			path.push(MerkleProofStep {
+				sibling: sibling_hash,
+				direction,
+			});
+
+			current_index /= 2;
+		}
+
+		let leaf = self
+			.leaf_index_map
+			.iter()
+			.find(|(_, i)| i == &&index)
+			.map(|(l, _)| MerkleLeaf::Actual(l.clone()))
+			.unwrap_or(MerkleLeaf::Empty);
+
+		MerkleProof {
+			leaf,
+			leaf_index: index,
+			path: path.try_into().unwrap(),
+			root: self.root,
+		}
+	}
+
+	pub fn verify(&self, proof: &MerkleProof<NType, DEPTH>) -> bool {
 		self.root == proof.root && (proof.verify())
 	}
 }

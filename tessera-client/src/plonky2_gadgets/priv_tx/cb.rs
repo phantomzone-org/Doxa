@@ -34,7 +34,7 @@ use crate::{
 	},
 };
 
-pub trait LocalCB {
+pub trait PrivTxCircuitBuilder {
 	// ---- Add virtual methods ----
 
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
@@ -186,7 +186,7 @@ fn double_hash<F: RichField + Extendable<D>, const D: usize>(
 }
 
 // TODO: rearrange this as per the trait declaration
-impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F, D> {
+impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for CircuitBuilder<F, D> {
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
 		DummyNoteTarget(self.add_virtual_target_arr())
 	}
@@ -570,18 +570,18 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		// spend_auth and consume_auth are immutable for PrivTx only
 		for i in 0..5 {
 			self.conditional_assert_eq(
-				is_priv_tx,
+				is_priv_tx.target,
 				accout.spend_auth.0.0[i],
 				accin.spend_auth.0.0[i],
 			);
 			self.conditional_assert_eq(
-				is_priv_tx,
+				is_priv_tx.target,
 				accout.consume_auth.pk.0.0[i],
 				accin.consume_auth.pk.0.0[i],
 			);
 		}
 		self.conditional_assert_eq(
-			is_priv_tx,
+			is_priv_tx.target,
 			accout.consume_auth.config.target,
 			accin.consume_auth.config.target,
 		);

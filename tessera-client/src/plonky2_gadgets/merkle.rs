@@ -28,15 +28,11 @@ use tessera_trees::{
 };
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT,
-	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF,
-	DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH,
-	SUBPOOL_CONFIG_DEPTH,
 	account::{NullifierKey, StandardAccount},
 	plonky2_gadgets::{
 		signature::{
 			LocalPointEw, LocalQuinticExtension, PubkeyTarget, SchnorrTargets,
-			conditional_schnorr_verify_gadget, set_gfp5_target, set_schnorr_witness,
+			conditional_schnorr_verify_gadget, set_schnorr_witness,
 		},
 		u256::{CircuitBuilderU256, U256Target},
 	},
@@ -94,7 +90,7 @@ pub(crate) fn set_merkle_siblings_and_bits<
 /// Direction::Left  (sibling on left, current is right child) → bit = true
 /// Direction::Right (sibling on right, current is left child) → bit = false
 pub(crate) fn proof_siblings_bits<F: Field, N: Node, const DEPTH: usize>(
-	proof: &crate::tree::MerkleProof<N>,
+	proof: &crate::tree::MerkleProof<N, DEPTH>,
 ) -> ([[F; 4]; DEPTH], [bool; DEPTH]) {
 	let siblings: [[F; 4]; DEPTH] = core::array::from_fn(|i| {
 		proof.path[i].sibling.inner().0.map(|f| {

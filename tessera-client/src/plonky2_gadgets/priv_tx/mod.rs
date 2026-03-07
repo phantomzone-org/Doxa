@@ -7,12 +7,13 @@ use plonky2::{
 	plonk::circuit_builder::CircuitBuilder,
 };
 use plonky2_field::extension::Extendable;
+use tessera_trees::F;
 
 use crate::{
 	DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
 	plonky2_gadgets::{
 		priv_tx::{
-			cb::LocalCB,
+			cb::PrivTxCircuitBuilder,
 			targets::{
 				AccountNullifierTarget, ActRootTarget, AssetIdTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NctRootTarget, NoteNullifierTarget, NoteTarget,
@@ -26,10 +27,16 @@ use crate::{
 
 mod cb;
 mod freshacc;
-mod spend;
+// mod spend;
 mod targets;
 
-pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
+fn double_hash_native(elems: [F; 4]) -> [F; 4] {
+	use plonky2::plonk::config::Hasher;
+	let h0 = <PoseidonHash as Hasher<F>>::hash_no_pad(&elems).elements;
+	<PoseidonHash as Hasher<F>>::hash_no_pad(&h0).elements
+}
+
+pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 ) -> TxCircuitTargets {
 	// Mint constants

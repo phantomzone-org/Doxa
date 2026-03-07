@@ -22,7 +22,7 @@ mod tests {
 		NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId,
 		account::AccountStateTreeLeaf,
 		default_ast_siblings, derive_tx_hash,
-		ecgfp5::{CompressedPoint, PointEw},
+		ecgfp5::PointEw,
 		note::{AssetId, NodeIdentifier, PositionedStandardNode, Recipient, Sender, StandardNote},
 		plonky2_gadgets::{
 			merkle::{proof_siblings_bits, set_merkle_siblings_and_bits, tx_circuit},
