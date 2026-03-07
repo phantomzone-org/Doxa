@@ -197,7 +197,7 @@ pub(crate) struct TxCircuitTargets {
 	pub(crate) is_rjct: BoolTarget,
 	pub(crate) is_fresh_acc: BoolTarget,
 	pub(crate) is_update_auth: BoolTarget,
-	pub(crate) is_priv_tx: Target,
+	pub(crate) is_priv_tx: BoolTarget,
 	// tree roots
 	pub(crate) act_root: ActRootTarget,
 	pub(crate) nct_root: NctRootTarget,

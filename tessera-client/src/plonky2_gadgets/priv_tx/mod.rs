@@ -3,23 +3,24 @@ use plonky2::{
 		hash_types::{HashOutTarget, RichField},
 		poseidon::{Poseidon, PoseidonHash},
 	},
-	iop::{
-		target::{BoolTarget, Target},
-		witness::{PartialWitness, WitnessWrite},
-	},
+	iop::target::{BoolTarget, Target},
 	plonk::circuit_builder::CircuitBuilder,
 };
-use plonky2_field::{extension::Extendable, types::Field};
-use tessera_trees::F;
+use plonky2_field::extension::Extendable;
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK,
-	DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH,
-	StandardAccount,
+	DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
 	plonky2_gadgets::{
-		merkle::{ConditionalMerkleTarget, LocalCB, MerkleTarget},
-		signature::{LocalQuinticExtension, PubkeyTarget, SchnorrTargets},
-		u256::{CircuitBuilderU256, U256Target},
+		priv_tx::{
+			cb::LocalCB,
+			targets::{
+				AccountNullifierTarget, ActRootTarget, AssetIdTarget, DummyNoteTarget,
+				MainPoolConfigRootTarget, NctRootTarget, NoteNullifierTarget, NoteTarget,
+				PublicIdentifierTaregt, SubpoolIdTarget, TxCircuitTargets,
+			},
+		},
+		signature::{LocalQuinticExtension, PubkeyTarget},
+		u256::CircuitBuilderU256,
 	},
 };
 
@@ -36,10 +37,11 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 
 	// Tx kinds
+	// TODO: where it's checked that these are indeed bool targets?
 	let is_rjct = builder.add_virtual_bool_target_safe();
 	let is_fresh_acc = builder.add_virtual_bool_target_safe();
 	let is_update_auth = builder.add_virtual_bool_target_safe();
-	let is_priv_tx = builder.add_virtual_public_input();
+	let is_priv_tx = builder.add_virtual_bool_target_safe();
 
 	let act_root = ActRootTarget(builder.add_virtual_hash());
 	let nct_root = NctRootTarget(builder.add_virtual_hash());
@@ -70,8 +72,8 @@ pub fn tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	};
 	let nk = builder.derive_nullifier_key(accin.private_identifier);
 
-	let accin_comm = builder.derive_account_commitment(accin, private_identifier, subpool_id);
-	let accout_comm = builder.derive_account_commitment(accout, private_identifier, subpool_id);
+	let accin_comm = builder.derive_account_commitment(accin);
+	let accout_comm = builder.derive_account_commitment(accout);
 
 	// Assert AccIn matches FreshAccount defaults when is_fresh_acc
 	builder.assert_fresh_account(accin, is_fresh_acc);

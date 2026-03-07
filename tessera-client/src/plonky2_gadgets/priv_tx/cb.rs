@@ -85,7 +85,7 @@ pub trait LocalCB {
 		accout: AccountTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
-		is_priv_tx: Target,
+		is_priv_tx: BoolTarget,
 	);
 
 	fn assert_asset_amt_or_default_in_ast(
@@ -185,6 +185,7 @@ fn double_hash<F: RichField + Extendable<D>, const D: usize>(
 	out1
 }
 
+// TODO: rearrange this as per the trait declaration
 impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F, D> {
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
 		DummyNoteTarget(self.add_virtual_target_arr())
@@ -541,7 +542,7 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		accout: AccountTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
-		is_priv_tx: Target,
+		is_priv_tx: BoolTarget,
 	) {
 		// AccIn, AccOut must have private_identifier, subpool_id
 		self.connect_array(accin.private_identifier.0, accout.private_identifier.0);

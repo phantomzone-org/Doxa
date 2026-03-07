@@ -17,8 +17,7 @@ mod tests {
 
 	use crate::{
 		DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment,
-		NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId,
-		default_ast_siblings, derive_tx_hash,
+		NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId, derive_tx_hash,
 		ecgfp5::{CompressedPoint, PointEw},
 		plonky2_gadgets::{
 			merkle::{
@@ -147,7 +146,7 @@ mod tests {
 
 		// AST Merkle: always active (selector = true). Leaf = default_leaf (asset not in tree).
 		// Siblings and bits match the empty AST at index 0.
-		let ast_sibs = default_ast_siblings();
+		let ast_sibs = accin.ast.merkle_proof(leaf)
 		set_merkle_siblings_and_bits(
 			&mut pw,
 			&t.accin_ast_merkle.0,
