@@ -23,10 +23,7 @@ mod tests {
 		account::AccountStateTreeLeaf,
 		default_ast_siblings, derive_tx_hash,
 		ecgfp5::{CompressedPoint, PointEw},
-		note::{
-			AssetId, NodeIdentifier, PositionedStandardNode, RecipientCond, SenderCond,
-			StandardNote,
-		},
+		note::{AssetId, NodeIdentifier, PositionedStandardNode, Recipient, Sender, StandardNote},
 		plonky2_gadgets::{
 			merkle::{proof_siblings_bits, set_merkle_siblings_and_bits, tx_circuit},
 			set_hash, set_u256_zero,
@@ -131,15 +128,15 @@ mod tests {
 			identifier: NodeIdentifier::from_rng(&mut rng),
 			asset_id: AssetId(asset_id_val),
 			amt: U256::from(100u64),
-			recipient: RecipientCond::from_acc(&acc0),
-			sender: SenderCond::from_acc(&acc1),
+			recipient: Recipient::from_acc(&acc0),
+			sender: Sender::from_acc(&acc1),
 		};
 		let n1 = StandardNote {
 			identifier: NodeIdentifier::from_rng(&mut rng),
 			asset_id: AssetId(asset_id_val),
 			amt: U256::from(50u64),
-			recipient: RecipientCond::from_acc(&acc0),
-			sender: SenderCond::from_acc(&acc1),
+			recipient: Recipient::from_acc(&acc0),
+			sender: Sender::from_acc(&acc1),
 		};
 
 		// Insert note commitments into NCT
@@ -308,8 +305,8 @@ mod tests {
 			identifier: NodeIdentifier([F::ZERO; 2]),
 			asset_id: AssetId(asset_id_val),
 			amt: U256::zero(),
-			recipient: RecipientCond::from_acc(&acc0),
-			sender: SenderCond {
+			recipient: Recipient::from_acc(&acc0),
+			sender: Sender {
 				subpool_id: SubpoolId(F::ZERO),
 				public_id: crate::account::PublicIdentifier(HashOutput([F::ZERO; 4])),
 			},
@@ -331,11 +328,11 @@ mod tests {
 			identifier: NodeIdentifier([F::ZERO; 2]),
 			asset_id: AssetId(asset_id_val),
 			amt: U256::zero(),
-			recipient: RecipientCond {
+			recipient: Recipient {
 				subpool_id: SubpoolId(F::ZERO),
 				public_id: crate::account::PublicIdentifier(HashOutput([F::ZERO; 4])),
 			},
-			sender: SenderCond {
+			sender: Sender {
 				subpool_id: SubpoolId(F::ZERO),
 				public_id: crate::account::PublicIdentifier(HashOutput([F::ZERO; 4])),
 			},

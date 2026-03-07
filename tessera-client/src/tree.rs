@@ -1,11 +1,7 @@
 use std::{collections::HashMap, hash::Hash, marker::PhantomData};
 
 use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
-use plonky2_field::types::Field;
-use tessera_trees::{
-	F,
-	tree::{HASH_SIZE, hasher::HashOutput},
-};
+use tessera_trees::{F, tree::hasher::HashOutput};
 
 // #[derive(Clone, Debug, PartialEq, Eq)]
 // pub(crate) struct Node(pub(crate) HashOutput);
@@ -23,8 +19,12 @@ pub trait Node: Sized + From<HashOutput> {
 	fn compress_two(lhs: &Self, rhs: &Self) -> Self {
 		// Use two_to_one so the native hash matches the circuit's PoseidonPermutation gadget.
 		use plonky2::hash::hash_types::HashOut;
-		let left = HashOut { elements: lhs.inner().0 };
-		let right = HashOut { elements: rhs.inner().0 };
+		let left = HashOut {
+			elements: lhs.inner().0,
+		};
+		let right = HashOut {
+			elements: rhs.inner().0,
+		};
 		let result = <PoseidonHash as Hasher<F>>::two_to_one(left, right);
 		Self::from(HashOutput(result.elements))
 	}

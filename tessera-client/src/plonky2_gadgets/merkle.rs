@@ -29,8 +29,9 @@ use tessera_trees::{
 
 use crate::{
 	ACC_AST_DEPTH, ACT_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT,
-	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, DS_ACC_AST, DS_NULLIFIER_KEY,
-	DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH,
+	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF,
+	DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH,
+	SUBPOOL_CONFIG_DEPTH,
 	account::{NullifierKey, StandardAccount},
 	plonky2_gadgets::{
 		signature::{
@@ -401,7 +402,7 @@ impl<F: RichField + Extendable<D>, const D: usize> LocalCB for CircuitBuilder<F,
 		// derive asset leaf
 		let leaf = {
 			let mut inputs: [Target; 10] = self.add_virtual_target_arr();
-			inputs[0] = self.constant(F::from_canonical_u64(DS_ACC_AST));
+			inputs[0] = self.constant(F::from_canonical_u64(DS_ACC_AST_LEAF));
 			inputs[1] = asset_id.0;
 			inputs[2..].copy_from_slice(amt.0.map(|t| t.0).as_slice());
 			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs.to_vec())

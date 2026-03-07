@@ -5,10 +5,7 @@ use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt, distr::Uniform};
 use tessera_trees::{F, tree::hasher::HashOutput};
 
-use crate::{
-	account::{NullifierKey, PublicIdentifier, StandardAccount, SubpoolId},
-	commitment::Commitment,
-};
+use crate::{AccountAddress, AssetId, account::NullifierKey};
 
 pub struct NoteCommitment(pub HashOutput);
 pub struct NoteNullifier(pub HashOutput);
@@ -29,45 +26,12 @@ impl NodeIdentifier {
 }
 
 #[derive(Clone, Copy)]
-pub struct RecipientCond {
-	pub subpool_id: SubpoolId,
-	pub(crate) public_id: PublicIdentifier,
-}
-
-impl RecipientCond {
-	pub fn from_acc(acc: &StandardAccount) -> Self {
-		Self {
-			subpool_id: acc.subpool_id,
-			public_id: acc.public_id(),
-		}
-	}
-}
-
-#[derive(Clone, Copy)]
-pub struct SenderCond {
-	pub(crate) subpool_id: SubpoolId,
-	pub(crate) public_id: PublicIdentifier,
-}
-
-impl SenderCond {
-	pub fn from_acc(acc: &StandardAccount) -> Self {
-		Self {
-			subpool_id: acc.subpool_id,
-			public_id: acc.public_id(),
-		}
-	}
-}
-
-#[derive(Clone, Copy)]
-pub struct AssetId(pub(crate) F);
-
-#[derive(Clone, Copy)]
 pub struct StandardNote {
 	pub(crate) identifier: NodeIdentifier,
 	pub(crate) asset_id: AssetId,
 	pub(crate) amt: U256,
-	pub(crate) recipient: RecipientCond,
-	pub(crate) sender: SenderCond,
+	pub(crate) recipient: AccountAddress,
+	pub(crate) sender: AccountAddress,
 }
 
 impl StandardNote {
@@ -126,11 +90,16 @@ mod tests {
 	use super::*;
 
 	impl StandardNote {
-		pub fn sample_with(recipient: RecipientCond, sender: SenderCond, amt: U256) -> Self {
+		pub fn sample_with(
+			recipient: AccountAddress,
+			sender: AccountAddress,
+			amt: U256,
+			asset_id: AssetId,
+		) -> Self {
 			let mut rng = rng();
 			StandardNote {
 				identifier: NodeIdentifier::from_rng(&mut rng),
-				asset_id: AssetId(F::ZERO),
+				asset_id,
 				amt,
 				recipient,
 				sender,

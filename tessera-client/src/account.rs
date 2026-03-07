@@ -1,9 +1,6 @@
 use std::{hash::Hash, marker::PhantomData};
 
-use plonky2::{
-	gadgets::arithmetic_extension::QuotientGeneratorExtension, hash::poseidon::PoseidonHash,
-	plonk::config::Hasher,
-};
+use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64, PrimeField64};
 use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt};
@@ -14,24 +11,22 @@ use tessera_trees::{
 
 use crate::{
 	ACC_AST_DEPTH, AST_DEFAULT_LEAF, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
-	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
+	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
 	NoteCommitment, NoteNullifier,
-	commitment::Commitment,
-	ecgfp5::CompressedPoint,
-	schnorr::{CompressedPublicKey, PublicKey},
+	schnorr::CompressedPublicKey,
 	tree::{GenericNode, Leaf, MerkleTree},
 };
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct AccountCommitment(pub HashOutput);
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct AccountNullifier(pub HashOutput);
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct NullifierKey(pub [F; 4]);
 
-#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
 pub struct PrivateIdentifier(pub [F; 2]);
 
 impl PrivateIdentifier {
@@ -47,7 +42,7 @@ pub struct PublicIdentifier(pub HashOutput);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SubpoolId(pub F);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Nonce(pub F);
 
 #[derive(Debug, Clone, Default)]
@@ -73,9 +68,12 @@ impl Default for ConsumeAuth {
 	}
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct AssetId(pub(crate) F);
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct AccountStateTreeLeaf {
-	pub asset_id: F,
+	pub asset_id: AssetId,
 	pub amount: U256,
 }
 
@@ -96,8 +94,8 @@ impl From<AccountStateTreeLeaf> for GenericNode<AccountStateTreeLeaf> {
 		// limb_i is the i-th 32-bit limb of `amount`, least-significant first.
 		// U256.0 is [u64; 4] in little-endian word order.
 		let mut input = [F::ZERO; 1 + 1 + 8];
-		input[0] = F::from_canonical_u64(DS_ACC_AST);
-		input[1] = value.asset_id;
+		input[0] = F::from_canonical_u64(DS_ACC_AST_LEAF);
+		input[1] = value.asset_id.0;
 		for (i, word) in value.amount.0.iter().enumerate() {
 			input[2 + i * 2] = F::from_canonical_u32(*word as u32);
 			input[2 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
@@ -217,6 +215,21 @@ impl StandardAccount {
 	}
 }
 
+#[derive(Clone, Copy)]
+pub struct AccountAddress {
+	pub subpool_id: SubpoolId,
+	pub(crate) public_id: PublicIdentifier,
+}
+
+impl AccountAddress {
+	pub fn from_acc(acc: &StandardAccount) -> Self {
+		Self {
+			subpool_id: acc.subpool_id,
+			public_id: acc.public_id(),
+		}
+	}
+}
+
 pub fn derive_tx_hash(
 	accin_null: AccountNullifier,
 	accout_comm: AccountCommitment,
@@ -260,67 +273,5 @@ pub(crate) fn ast_default_root() -> [u64; HASH_SIZE] {
 	cur.map(|f| f.to_canonical_u64())
 }
 
-/// Siblings for the index-0 path through the empty default AST (depth ACC_AST_DEPTH).
-/// At every level the sibling equals the current node (all nodes identical in an empty tree).
-/// Bits are all false (current is always the left child).
-pub(crate) fn default_ast_siblings() -> [[F; 4]; crate::ACC_AST_DEPTH] {
-	use plonky2::{hash::hash_types::HashOut, plonk::config::Hasher};
-	let mut cur = crate::AST_DEFAULT_LEAF.map(F::from_canonical_u64);
-	core::array::from_fn(|_| {
-		let sib = cur;
-		let next = <PoseidonHash as Hasher<F>>::two_to_one(
-			HashOut {
-				elements: cur,
-			},
-			HashOut {
-				elements: cur,
-			},
-		);
-		cur = next.elements;
-		sib
-	})
-}
-
 #[cfg(test)]
-mod tests {
-	use std::array;
-
-	use rand::rng;
-	use tessera_trees::tree::CommitmentTree;
-
-	use super::*;
-	use crate::{
-		NOTE_BATCH,
-		note::{PositionedStandardNode, RecipientCond, SenderCond, StandardNote},
-	};
-
-	impl StandardAccount {
-		#[allow(dead_code)]
-		fn set_auth(&mut self, auth: SpendAuth) {
-			self.spend_auth = auth;
-		}
-	}
-
-	#[test]
-	fn testtest() {
-		let mut tree = CommitmentTree::<HashOutput>::new(32);
-
-		let mut rng = rng();
-		let sbpoolid = SubpoolId(F::ONE);
-		let [acc0, acc1] = array::from_fn(|_| StandardAccount::sample(&mut rng, sbpoolid));
-		let notes: [StandardNote; NOTE_BATCH] = array::from_fn(|i| {
-			StandardNote::sample_with(
-				RecipientCond::from_acc(&acc0),
-				SenderCond::from_acc(&acc1),
-				U256::from(i),
-			)
-		});
-		let ncs = notes.map(|n| n.commitment());
-		let pnotes = ncs.iter().enumerate().map(|(i, nc)| {
-			// tree.insert(nc.as_field_hash()).unwrap();
-			PositionedStandardNode::from_note(notes[i], F::from_canonical_usize(i))
-		});
-
-		// let mrklpaths = pnotes.map(|pn| tree.)
-	}
-}
+mod tests {}

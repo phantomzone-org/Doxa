@@ -27,10 +27,21 @@ pub(crate) fn set_gfp5<F: Field>(pw: &mut PartialWitness<F>, targets: [Target; 5
 
 pub(crate) fn set_u256_zero<F: Field>(
 	pw: &mut PartialWitness<F>,
-	t: crate::plonky2_gadgets::u256::U256Target,
+	t: &crate::plonky2_gadgets::u256::U256Target,
 ) {
 	for u in t.0 {
 		pw.set_target(u.0, F::ZERO).unwrap();
+	}
+}
+
+pub(crate) fn set_u256<F: Field>(
+	pw: &mut PartialWitness<F>,
+	target: &crate::plonky2_gadgets::u256::U256Target,
+	value: [u32; 8],
+) {
+	for (i, &w) in value.iter().enumerate() {
+		pw.set_target(target.0[i].0, F::from_canonical_u32(w))
+			.unwrap();
 	}
 }
 

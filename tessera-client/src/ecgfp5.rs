@@ -1,6 +1,6 @@
 use std::{
 	hash::Hash,
-	ops::{Add, Mul, Neg},
+	ops::{Mul, Neg},
 };
 
 use plonky2_field::{
@@ -10,19 +10,11 @@ use plonky2_field::{
 	types::{Field, PrimeField, PrimeField64},
 };
 
-use crate::{plonky2_gadgets::signature::LocalPointEw, schnorr::Scalar};
+use crate::schnorr::Scalar;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompressedPoint<F: Extendable<5>> {
 	pub(crate) w: QuinticExtension<F>,
-}
-
-impl<F: PrimeField64 + Extendable<5>> Hash for CompressedPoint<F> {
-	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		for f in &self.w.0 {
-			f.to_canonical_u64().hash(state);
-		}
-	}
 }
 
 impl<F: Field + Extendable<5>> From<[u64; 5]> for CompressedPoint<F> {
@@ -39,22 +31,49 @@ impl<F: Field + Extendable<5>> From<[u64; 5]> for CompressedPoint<F> {
 	}
 }
 
+impl<F: PrimeField64 + Extendable<5>> Hash for CompressedPoint<F> {
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		for f in &self.w.0 {
+			f.to_canonical_u64().hash(state);
+		}
+	}
+}
+
 // TODO: put both X,Y into a single 2D array
-pub(crate) const GENERATOR_X: [u64; 5] = [
-	11712523173042564207,
-	14090224426659529053,
-	13197813503519687414,
-	16280770174934269299,
-	15998333998318935536,
+pub(crate) const GENERATOR: [[u64; 5]; 2] = [
+	[
+		11712523173042564207,
+		14090224426659529053,
+		13197813503519687414,
+		16280770174934269299,
+		15998333998318935536,
+	],
+	[
+		14639054205878357578,
+		17426078571020221072,
+		2548978194165003307,
+		8663895577921260088,
+		9793640284382595140,
+	],
 ];
 
-pub(crate) const GENERATOR_Y: [u64; 5] = [
-	14639054205878357578,
-	17426078571020221072,
-	2548978194165003307,
-	8663895577921260088,
-	9793640284382595140,
-];
+pub(crate) const ECGFP5_A: [u64; 5] = [2, 0, 0, 0, 0];
+
+// a/3 = 2/3 mod p = 6148914689804861441
+pub(crate) const ECGFP5_A_DIV_3: [u64; 5] = [6148914689804861441, 0, 0, 0, 0];
+
+pub(crate) const ECGFP5_B: [u64; 5] = [0, 263, 0, 0, 0];
+
+// 4bz
+pub(crate) const ECGFP5_4BZ: [u64; 5] = [0, 263 * 4, 0, 0, 0];
+
+// A = (3b-a^2) / 3 = b - a^2/3 = 263z - 4/3
+// -4/3 mod p = 6148914689804861439
+pub(crate) const ECGFP5_CAP_A: [u64; 5] = [6148914689804861439, 263, 0, 0, 0];
+
+// B = a(2a^2 - 9b) / 27 = 16/27 - (2/3)263z
+// = 15713893096167979237 + 6148914689804861265z
+pub(crate) const ECGFP5_CAP_B: [u64; 5] = [15713893096167979237, 6148914689804861265, 0, 0, 0];
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
 pub(crate) struct PointEw<F: Extendable<5>> {
@@ -87,19 +106,6 @@ impl<F: Extendable<5>> From<[[u64; 5]; 2]> for PointEw<F> {
 	}
 }
 
-impl<F: Extendable<5>> From<LocalPointEw<F>> for PointEw<F> {
-	fn from(value: LocalPointEw<F>) -> Self {
-		let x = QuinticExtension::from_basefield_array(value.x.0);
-		let y = QuinticExtension::from_basefield_array(value.y.0);
-		// TODO: what happens when only 1 coordinate is zero?
-		Self {
-			x,
-			y,
-			at_inf: x.is_zero() && y.is_zero(),
-		}
-	}
-}
-
 impl<F: Extendable<5>> PointEw<F> {
 	// define netural
 	pub(crate) const NEUTRAL: PointEw<F> = PointEw {
@@ -109,86 +115,37 @@ impl<F: Extendable<5>> PointEw<F> {
 	};
 
 	fn a() -> QuinticExtension<F> {
-		QuinticExtension::from_basefield_array([
-			F::from_canonical_u64(2),
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-		])
+		QuinticExtension::from_basefield_array(ECGFP5_A.map(F::from_canonical_u64))
 	}
 
-	// a/3 = 2/3 mod p = 6148914689804861441
 	pub(crate) fn adiv3() -> QuinticExtension<F> {
-		QuinticExtension::from_basefield_array([
-			F::from_canonical_u64(6148914689804861441),
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-		])
+		QuinticExtension::from_basefield_array(ECGFP5_A_DIV_3.map(F::from_canonical_u64))
 	}
 
 	fn b() -> QuinticExtension<F> {
-		QuinticExtension::from_basefield_array([
-			F::ZERO,
-			F::from_canonical_u64(263),
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-		])
+		QuinticExtension::from_basefield_array(ECGFP5_B.map(F::from_canonical_u64))
 	}
 
 	fn b4mul() -> QuinticExtension<F> {
-		QuinticExtension::from_basefield_array([
-			F::ZERO,
-			F::from_canonical_u64(263 * 4),
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-		])
+		QuinticExtension::from_basefield_array(ECGFP5_4BZ.map(F::from_canonical_u64))
 	}
 
 	// A = (3b-a^2) / 3 = b - a^2/3 = 263z - 4/3
 	// -4/3 mod p = 6148914689804861439
 	fn cap_a() -> QuinticExtension<F> {
-		QuinticExtension::from_basefield_array([
-			F::from_canonical_u64(6148914689804861439),
-			F::from_canonical_u64(263),
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-		])
+		QuinticExtension::from_basefield_array(ECGFP5_CAP_A.map(F::from_canonical_u64))
 	}
 
 	// B = a(2a^2 - 9b) / 27 = 16/27 - (2/3)263z
 	// = 15713893096167979237 + 6148914689804861265z
 	fn cap_b() -> QuinticExtension<F> {
-		QuinticExtension::from_basefield_array([
-			F::from_canonical_u64(15713893096167979237),
-			F::from_canonical_u64(6148914689804861265),
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-		])
+		QuinticExtension::from_basefield_array(ECGFP5_CAP_B.map(F::from_canonical_u64))
 	}
 
 	pub(crate) fn generator() -> Self {
 		PointEw::<F> {
-			x: QuinticExtension::from_basefield_array([
-				F::from_canonical_u64(11712523173042564207),
-				F::from_canonical_u64(14090224426659529053),
-				F::from_canonical_u64(13197813503519687414),
-				F::from_canonical_u64(16280770174934269299),
-				F::from_canonical_u64(15998333998318935536),
-			]),
-			y: QuinticExtension::from_basefield_array([
-				F::from_canonical_u64(14639054205878357578),
-				F::from_canonical_u64(17426078571020221072),
-				F::from_canonical_u64(2548978194165003307),
-				F::from_canonical_u64(8663895577921260088),
-				F::from_canonical_u64(9793640284382595140),
-			]),
+			x: QuinticExtension::from_basefield_array(GENERATOR[0].map(F::from_canonical_u64)),
+			y: QuinticExtension::from_basefield_array(GENERATOR[1].map(F::from_canonical_u64)),
 			at_inf: false,
 		}
 	}
@@ -353,16 +310,16 @@ impl<F: Extendable<5>> Neg for PointEw<F> {
 	}
 }
 
-pub trait Sqrt: Sized {
-	fn sqrt(&self) -> Option<Self>;
-}
-
 fn repeated_square<F: Square>(v: F, n: usize) -> F {
 	let mut x1 = v.square();
 	(1..n).for_each(|_| {
 		x1 = x1.square();
 	});
 	x1
+}
+
+pub trait Sqrt: Sized {
+	fn sqrt(&self) -> Option<Self>;
 }
 
 impl<F: Extendable<5> + PrimeField> Sqrt for QuinticExtension<F> {

@@ -9,7 +9,7 @@ pub(crate) mod tree;
 
 pub const DS_NULLIFIER_KEY: u64 = 12;
 pub const DS_PUBLIC_IDENTIFIER: u64 = 13;
-pub const DS_ACC_AST: u64 = 1312;
+pub const DS_ACC_AST_LEAF: u64 = 1312;
 
 // TODO: set this to H("tessera::account::ast::emptyLeaf")
 pub const AST_DEFAULT_LEAF: [u64; HASH_SIZE] = [0u64; HASH_SIZE];

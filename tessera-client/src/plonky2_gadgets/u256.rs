@@ -1,7 +1,3 @@
-// ---------------------------------------------------------------------------
-// U256 gadget — 256-bit sum proof
-// ---------------------------------------------------------------------------
-
 use std::array;
 
 use itertools::izip;
@@ -25,8 +21,7 @@ use tessera_trees::plonky2_gadgets::u32::{CircuitBuilderU32, U32Target};
 #[derive(Clone, Copy, Debug)]
 pub struct U256Target(pub [U32Target; 8]);
 
-/// Extension trait for [`CircuitBuilder`]: U256 target allocation and
-/// the 9-input sum assertion gadget.
+/// Extension trait for [`CircuitBuilder`]
 pub trait CircuitBuilderU256<F: RichField + Extendable<D>, const D: usize> {
 	/// Allocates a virtual [`U256Target`] (8 unconstrained u32 limbs).
 	fn add_virtual_u256_target(&mut self) -> U256Target;
@@ -34,7 +29,7 @@ pub trait CircuitBuilderU256<F: RichField + Extendable<D>, const D: usize> {
 	/// Creates a constant [`U256Target`] from 8 big-endian u32 words.
 	fn constant_u256(&mut self, value: [u32; 8]) -> U256Target;
 
-	/// Asserts `inputs[0] + inputs[1] + ... + inputs[8] ≡ expected (mod 2^256)`.
+	/// Returns `input + \sum_i chain[i] (mod 2^256)`.
 	///
 	/// Addition is performed limb-by-limb from least to most significant word
 	/// with carry propagation. The final carry out of the MSB is discarded
@@ -46,6 +41,8 @@ pub trait CircuitBuilderU256<F: RichField + Extendable<D>, const D: usize> {
 	/// **Range checking:** assumes all input limbs are already range-checked
 	/// as u32. The expected limbs are range-checked internally via byte
 	/// decomposition (through the carry generator constraints).
+	///
+	/// TODO: Do the input bits need to checked for in range u32?
 	fn u256_addition_chain<const LEN: usize>(
 		&mut self,
 		input: &U256Target,
@@ -128,14 +125,14 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU256<F, D>
 // Generator
 // ---------------------------------------------------------------------------
 
-/// Witness generator for one limb position of a 9-input U256 sum.
+/// Witness generator for one limb position of a U256 addition chain
 ///
-/// Given 9 u32 limbs and a carry_in, computes:
+/// Given vec of u32 limbs and a carry_in, computes:
 /// - `result = (sum + carry_in) & 0xFFFFFFFF`
 /// - `carry_out = (sum + carry_in) >> 32`
 #[derive(Debug, Clone, Default)]
 struct U256LimbSumGenerator {
-	/// One limb from each of the 9 input U256 values.
+	/// One limb from each of the input U256 values
 	limb_inputs: Vec<Target>,
 	/// Carry in from the less significant limb position.
 	carry_in: Target,
@@ -209,10 +206,10 @@ mod tests {
 			config::{GenericConfig, PoseidonGoldilocksConfig},
 		},
 	};
-	use plonky2_field::types::Field;
 	use tessera_trees::plonky2_gadgets::u32::add_u8_range_check_lookup_table;
 
 	use super::*;
+	use crate::plonky2_gadgets::set_u256;
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;
@@ -222,16 +219,7 @@ mod tests {
 	// U256 sum gadget tests
 	// -----------------------------------------------------------------------
 
-	/// Helper: set all 8 limbs of a U256Target in the partial witness.
-	fn set_u256(pw: &mut PartialWitness<F>, target: &U256Target, value: [u32; 8]) {
-		for (i, &w) in value.iter().enumerate() {
-			pw.set_target(target.0[i].0, F::from_canonical_u32(w))
-				.unwrap();
-		}
-	}
-
-	/// Helper: build a circuit that proves sum(inputs[0..9]) == expected (mod 2^256).
-	/// Returns the circuit data.
+	/// Helper to build the circuit
 	fn build_u256_sum_circuit() -> (
 		plonky2::plonk::circuit_data::CircuitData<F, C, D>,
 		U256Target,
@@ -244,9 +232,7 @@ mod tests {
 
 		let input = builder.add_virtual_u256_target();
 		let chain: [U256Target; 9] = core::array::from_fn(|_| builder.add_virtual_u256_target());
-		let expected = builder.add_virtual_u256_target();
-
-		builder.u256_addition_chain(&input, &chain, range_lut);
+		let expected = builder.u256_addition_chain(&input, &chain, range_lut);
 
 		let data = builder.build::<C>();
 		(data, input, chain, expected)
@@ -267,6 +253,8 @@ mod tests {
 		let proof = data.prove(pw).expect("prove failed");
 		data.verify(proof).expect("verify failed");
 	}
+
+	// TODO: fix other tests
 
 	// #[test]
 	// fn test_u256_nine_sum_with_carry() {

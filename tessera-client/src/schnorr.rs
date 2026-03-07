@@ -2,7 +2,7 @@ use std::ops::{Add, Mul, Neg};
 
 use plonky2::hash::hashing::hash_n_to_m_no_pad;
 use plonky2_field::{
-	extension::{Extendable, quintic::QuinticExtension},
+	extension::Extendable,
 	goldilocks_field::GoldilocksField,
 	types::{Field, PrimeField64},
 };
@@ -12,6 +12,8 @@ use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 /// A scalar (integer modulo the prime group order n).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Scalar([u64; 5]);
+
+// TODO: ack Thomas Pornin
 
 impl Scalar {
 	pub const BITS: usize = 319;
@@ -38,7 +40,6 @@ impl Scalar {
 	]);
 	// Group order n is slightly below 2^319. We store values over five
 	// 64-bit limbs.
-
 	pub const ZERO: Self = Self([0, 0, 0, 0, 0]);
 
 	/// Create a scalar from raw limbs (for testing purposes).
@@ -248,7 +249,6 @@ pub(crate) struct Signature {
 
 pub(crate) fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar {
 	use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
-
 	let mut out = [GoldilocksField::ZERO; 5];
 	out.copy_from_slice(
 		hash_n_to_m_no_pad::<_, <PoseidonHash as Hasher<GoldilocksField>>::Permutation>(
@@ -256,14 +256,12 @@ pub(crate) fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar 
 		)
 		.as_slice(),
 	);
-
 	Scalar::from_hash(out)
 }
 
 /// Sign: R = k*G, e = H(R || Q || m), s = k + d*e
 pub(crate) fn schnorr_sign(
 	privkey: &PrivateKey,
-	pubkey: &PublicKey<GoldilocksField>,
 	message: &[GoldilocksField],
 	k: Scalar,
 ) -> Signature {
@@ -271,7 +269,7 @@ pub(crate) fn schnorr_sign(
 	let r = g.scalar_mul(&k);
 
 	let r_encoded = r.encode();
-	let q_encoded = pubkey.0.encode();
+	let q_encoded = privkey.public_key().as_point().encode();
 	let mut hash_input = Vec::new();
 	hash_input.extend_from_slice(&r_encoded.w.0);
 	hash_input.extend_from_slice(&q_encoded.w.0);
@@ -346,7 +344,7 @@ mod tests {
 		]);
 
 		// Sign
-		let sig = schnorr_sign(&privkey, &pubkey, &message, k);
+		let sig = schnorr_sign(&privkey, &message, k);
 		assert!(!sig.r.at_inf, "R should not be at infinity");
 
 		// Verify: correct message should pass

@@ -162,8 +162,8 @@ mod tests {
 			identifier: crate::note::NodeIdentifier([F::ZERO; 2]),
 			asset_id: crate::note::AssetId(F::ZERO),
 			amt: primitive_types::U256::zero(),
-			recipient: crate::note::RecipientCond::from_acc(&accin),
-			sender: crate::note::SenderCond {
+			recipient: crate::note::Recipient::from_acc(&accin),
+			sender: crate::note::Sender {
 				subpool_id: SubpoolId(F::ZERO),
 				public_id: crate::account::PublicIdentifier(
 					tessera_trees::tree::hasher::HashOutput([F::ZERO; 4]),
@@ -187,7 +187,7 @@ mod tests {
 		}
 
 		// onotes: all zero / inactive
-		let zero_cond = crate::note::SenderCond {
+		let zero_cond = crate::note::Sender {
 			subpool_id: SubpoolId(F::ZERO),
 			public_id: crate::account::PublicIdentifier(tessera_trees::tree::hasher::HashOutput(
 				[F::ZERO; 4],
@@ -197,7 +197,7 @@ mod tests {
 			identifier: crate::note::NodeIdentifier([F::ZERO; 2]),
 			asset_id: crate::note::AssetId(F::ZERO),
 			amt: primitive_types::U256::zero(),
-			recipient: crate::note::RecipientCond {
+			recipient: crate::note::Recipient {
 				subpool_id: SubpoolId(F::ZERO),
 				public_id: zero_cond.public_id,
 			},
