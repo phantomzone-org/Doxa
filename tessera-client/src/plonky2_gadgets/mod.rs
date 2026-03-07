@@ -8,8 +8,9 @@ use plonky2::{
 use plonky2_field::types::Field;
 
 pub(crate) mod merkle;
+pub(crate) mod priv_tx;
 pub(crate) mod signature;
-pub(crate) mod tx;
+pub(crate) mod targets;
 pub(crate) mod u256;
 
 pub(crate) fn set_hash<F: Field>(pw: &mut PartialWitness<F>, t: HashOutTarget, v: [F; 4]) {
@@ -24,7 +25,10 @@ pub(crate) fn set_gfp5<F: Field>(pw: &mut PartialWitness<F>, targets: [Target; 5
 	}
 }
 
-pub(crate) fn set_u256_zero<F: Field>(pw: &mut PartialWitness<F>, t: crate::p2::u256::U256Target) {
+pub(crate) fn set_u256_zero<F: Field>(
+	pw: &mut PartialWitness<F>,
+	t: crate::plonky2_gadgets::u256::U256Target,
+) {
 	for u in t.0 {
 		pw.set_target(u.0, F::ZERO).unwrap();
 	}

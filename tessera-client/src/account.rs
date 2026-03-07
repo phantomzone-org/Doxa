@@ -114,6 +114,7 @@ pub struct StandardAccount {
 	pub subpool_id: SubpoolId,
 	pub balance: U256,
 	pub nonce: Nonce,
+	// TODO: make spend_auth generic over Field
 	pub spend_auth: SpendAuth,
 	pub consume_auth: ConsumeAuth,
 	pub ast: MerkleTree<ACC_AST_DEPTH, GenericNode<AccountStateTreeLeaf>>,

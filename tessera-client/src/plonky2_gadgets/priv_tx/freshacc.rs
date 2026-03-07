@@ -20,7 +20,7 @@ mod tests {
 		NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId,
 		default_ast_siblings, derive_tx_hash,
 		ecgfp5::{CompressedPoint, PointEw},
-		p2::{
+		plonky2_gadgets::{
 			merkle::{
 				AccountTarget, proof_siblings_bits, set_merkle_siblings_and_bits, tx_circuit,
 			},

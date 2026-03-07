@@ -2,7 +2,7 @@ pub(crate) mod account;
 pub(crate) mod commitment;
 pub(crate) mod ecgfp5;
 pub(crate) mod note;
-pub(crate) mod p2;
+pub(crate) mod plonky2_gadgets;
 pub(crate) mod pool_config;
 pub(crate) mod schnorr;
 pub(crate) mod tree;

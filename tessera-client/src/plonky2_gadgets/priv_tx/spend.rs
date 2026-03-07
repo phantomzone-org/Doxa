@@ -27,7 +27,7 @@ mod tests {
 			AssetId, NodeIdentifier, PositionedStandardNode, RecipientCond, SenderCond,
 			StandardNote,
 		},
-		p2::{
+		plonky2_gadgets::{
 			merkle::{proof_siblings_bits, set_merkle_siblings_and_bits, tx_circuit},
 			set_hash, set_u256_zero,
 			signature::set_schnorr_witness,
@@ -60,14 +60,22 @@ mod tests {
 			let result = if bits[level] {
 				// current is right child
 				<PoseidonHash as Hasher<F>>::two_to_one(
-					HashOut { elements: sib },
-					HashOut { elements: cur },
+					HashOut {
+						elements: sib,
+					},
+					HashOut {
+						elements: cur,
+					},
 				)
 			} else {
 				// current is left child
 				<PoseidonHash as Hasher<F>>::two_to_one(
-					HashOut { elements: cur },
-					HashOut { elements: sib },
+					HashOut {
+						elements: cur,
+					},
+					HashOut {
+						elements: sib,
+					},
 				)
 			};
 			cur = result.elements;
@@ -245,8 +253,11 @@ mod tests {
 		let act_bits: [bool; crate::ACT_DEPTH] = core::array::from_fn(|i| (acc0_pos >> i) & 1 == 1);
 		// CommitmentTree uses hash_root (with num_leaves) at the top level, but the circuit's
 		// merkle_verify_gadget uses two_to_one at all levels. Compute circuit-compatible root.
-		let act_circuit_root =
-			circuit_merkle_root::<{ crate::ACT_DEPTH }>(acc0.commitment().0.0, &act_sibs_arr, act_bits);
+		let act_circuit_root = circuit_merkle_root::<{ crate::ACT_DEPTH }>(
+			acc0.commitment().0.0,
+			&act_sibs_arr,
+			act_bits,
+		);
 		set_hash(&mut pw, t.act_root.0, act_circuit_root);
 		set_merkle_siblings_and_bits(&mut pw, &t.accin_act_merkle.0, act_sibs_arr, act_bits);
 

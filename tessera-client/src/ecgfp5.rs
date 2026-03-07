@@ -10,7 +10,7 @@ use plonky2_field::{
 	types::{Field, PrimeField, PrimeField64},
 };
 
-use crate::{p2::signature::LocalPointEw, schnorr::Scalar};
+use crate::{plonky2_gadgets::signature::LocalPointEw, schnorr::Scalar};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompressedPoint<F: Extendable<5>> {

@@ -1743,7 +1743,7 @@ mod tests {
 	use super::*;
 	use crate::{
 		ecgfp5::{CompressedPoint, Legendre, PointEw},
-		p2::tests::{print_circuit_config, print_common_data},
+		plonky2_gadgets::tests::{print_circuit_config, print_common_data},
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
 	};
 
