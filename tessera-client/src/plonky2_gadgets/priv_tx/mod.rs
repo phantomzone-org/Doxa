@@ -52,6 +52,10 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	// let ds_nullifier_key = builder.constant(F::from_canonical_u64(DS_NULLIFIER_KEY));
 	let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 
+	// not_fake_tx is a PI and set to 1 for tx that are not fake. It may be se to 0 to produce a
+	// dummy proof (used at proof aggregation stage)
+	let not_fake_tx = builder.add_virtual_bool_target_safe();
+
 	// Tx kinds
 	// TODO: where is it checked that these are indeed bool targets?
 	let is_rjct = builder.add_virtual_bool_target_safe();
@@ -61,7 +65,7 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 
 	let act_root = ActRootTarget(builder.add_virtual_hash());
 	let nct_root = NctRootTarget(builder.add_virtual_hash());
-	let main_pool_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
+	let mainpool_config_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
 
 	// Subpool authority keys
 	let approval_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
@@ -97,14 +101,12 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	// same wires in `derive_account_commitment` for both accin and accout.
 	builder.assert_account_invariants(accin, accout, is_fresh_acc, is_update_auth, is_priv_tx);
 
+	// Check Comm(AccIn) in ACT iff !fresh && not_fake == 1
 	let accin_pos = builder.add_virtual_target();
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
-
-	let accin_merkletrgts = builder.conditionally_assert_account_commitment_exists_in_act(
-		accin_comm,
-		act_root,
-		not_is_fresh_acc,
-	);
+	let check_act = builder.and(not_is_fresh_acc, not_fake_tx);
+	let accin_merkletrgts = builder
+		.conditionally_assert_account_commitment_exists_in_act(accin_comm, act_root, check_act);
 
 	// AccIn nullifier — select fresh vs regular based on is_fresh_acc
 	let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
@@ -196,11 +198,14 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	// Validate authorization //
 
 	// Verify SubpoolFullProof: 3 authority key proofs (depth-2) + main pool proof (depth-20)
+	// Skip subpoolProof verification if not_fake_tx = 0
 	let subpool_proof_targets = builder.assert_subpool_full_proof(
 		SubpoolIdTarget(accin.subpool_id.0),
 		approval_key,
 		rejection_key,
 		subpool_consume_key,
+		mainpool_config_root,
+		not_fake_tx,
 	);
 
 	let sig_targets = builder.assert_tx_signatures(
@@ -210,16 +215,18 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 		accin,
 		subpool_consume_key,
 		approval_key,
+		not_fake_tx,
 	);
 
 	TxCircuitTargets {
+		not_fake_tx,
 		is_rjct,
 		is_fresh_acc,
 		is_update_auth,
 		is_priv_tx,
 		act_root,
 		nct_root,
-		main_pool_root,
+		mainpool_config_root,
 		approval_key,
 		rejection_key,
 		subpool_consume_key,

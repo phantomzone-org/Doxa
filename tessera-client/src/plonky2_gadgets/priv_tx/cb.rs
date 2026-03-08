@@ -25,9 +25,10 @@ use crate::{
 			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, ActMerkleTarget,
 			ActRootTarget, AssetIdTarget, AstMerkleTargets, ConsumeAuthTarget, ConsumeCondTarget,
 			DummyAccountCommitment, DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
-			NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-			NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt, RejectCondTarget,
-			SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
+			MainPoolConfigRootTarget, NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
+			NoteTarget, NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt,
+			RejectCondTarget, SubpoolConfigRootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
+			TxHashTarget, TxSignatureTargets,
 		},
 		signature::{LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget},
 		u256::{CircuitBuilderU256, U256Target},
@@ -140,6 +141,8 @@ pub trait PrivTxCircuitBuilder {
 		approval_key: PubkeyTarget,
 		rejection_key: PubkeyTarget,
 		consume_key: PubkeyTarget,
+		mainpoolconfig_root: MainPoolConfigRootTarget,
+		not_fake_tx: BoolTarget,
 	) -> SubpoolFullProofTargets;
 
 	fn derive_tx_hash(
@@ -172,6 +175,7 @@ pub trait PrivTxCircuitBuilder {
 		accin: AccountTarget,
 		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
+		is_fake_tx: BoolTarget,
 	) -> TxSignatureTargets;
 }
 
@@ -433,40 +437,49 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 		approval_key: PubkeyTarget,
 		rejection_key: PubkeyTarget,
 		consume_key: PubkeyTarget,
+		mainpool_config_root: MainPoolConfigRootTarget,
+		not_fake_tx: BoolTarget,
 	) -> SubpoolFullProofTargets {
 		// Subpool config root — shared across the 3 key proofs
 		let subpool_config_root = self.add_virtual_hash();
 
 		// Helper: verify one depth-2 key proof and connect leaf + root
-		let mut verify_key_proof = |key: PubkeyTarget| -> MerkleTarget<SUBPOOL_CONFIG_DEPTH> {
-			let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
-			let mt = merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(self, leaf_hash);
-
-			// connect subpool config roots for all keys
-			self.connect_array(subpool_config_root.elements, mt.root);
-
-			mt
-		};
+		let mut verify_key_proof =
+			|key: PubkeyTarget| -> ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH> {
+				let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
+				let mt = conditional_merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(
+					self,
+					leaf_hash,
+					subpool_config_root,
+					not_fake_tx,
+				);
+				mt
+			};
 
 		let approval_proof = verify_key_proof(approval_key);
 		let rejection_proof = verify_key_proof(rejection_key);
 		let consume_proof = verify_key_proof(consume_key);
 
 		// Main pool proof: leaf = H(subpool_config_root[4] || subpool_id)
+		// TODO: add a DS in the derivation of the leaf?
 		let main_pool_leaf_hash = {
 			let mut inputs = subpool_config_root.elements.to_vec();
 			inputs.push(subpool_id.0);
 			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs)
 		};
-		let main_pool_proof =
-			merkle_verify_gadget::<F, D, MAIN_POOL_CONFIG_DEPTH>(self, main_pool_leaf_hash);
-		// self.connect_array(main_pool_root.0.elements, main_pool_mt.root);
+		let main_pool_proof = conditional_merkle_verify_gadget::<F, D, MAIN_POOL_CONFIG_DEPTH>(
+			self,
+			main_pool_leaf_hash,
+			mainpool_config_root.0,
+			not_fake_tx,
+		);
 
 		SubpoolFullProofTargets {
 			approval_proof,
 			rejection_proof,
 			consume_proof,
 			main_pool_proof,
+			subpool_config_root: SubpoolConfigRootTarget(subpool_config_root),
 		}
 	}
 
@@ -655,6 +668,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 		accin: AccountTarget,
 		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
+		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets {
 		// spend sig: required when any onote is active
 		let mut is_spend_req = onotes_isactive[0];
@@ -662,6 +676,14 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 			is_spend_req = self.or(*sel, is_spend_req);
 		}
 
+		// we enforce the spend auth public key to match the one set in account. This implies for
+		// fake signatures, always set Q to the account's public key. Otherwise, the proof will
+		// fail.
+		//
+		// For fresh accounts the default public key is DEFAULT_SPEND_AUTH_PK
+		//
+		// The same logic applies for consume signature and approval signature. That is, signature
+		// can be fake but Q must match the valid public key set in place.
 		let spend =
 			conditional_schnorr_verify_gadget(self, tx_hash.0, accin.spend_auth, is_spend_req);
 
@@ -683,8 +705,8 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 			conditional_schnorr_verify_gadget(self, tx_hash.0, consume_key, is_consume_req);
 
 		// approval sig: always required
-		let tr = self._true();
-		let approval = conditional_schnorr_verify_gadget(self, tx_hash.0, approval_key, tr);
+		let approval =
+			conditional_schnorr_verify_gadget(self, tx_hash.0, approval_key, not_fake_tx);
 
 		TxSignatureTargets {
 			spend,

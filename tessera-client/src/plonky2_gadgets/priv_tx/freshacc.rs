@@ -84,8 +84,10 @@ pub(crate) fn set_freshacc_tx_witness(
 	pw.set_bool_target(t.is_update_auth, false).unwrap();
 	pw.set_bool_target(t.is_priv_tx, false).unwrap();
 
+	pw.set_bool_target(t.not_fake_tx, true).unwrap();
+
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	set_hash(pw, t.main_pool_root.0, main_pool.root().0);
+	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
 	set_hash(pw, t.act_root.0, act_root.0);
 	set_hash(pw, t.nct_root.0, nct_root.0);
 
@@ -186,6 +188,12 @@ pub(crate) fn set_freshacc_tx_witness(
 	let (sib, bit) =
 		proof_siblings_bits::<_, _, MAIN_POOL_CONFIG_DEPTH>(&full_proof.main_pool_proof);
 	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.main_pool_proof, sib, bit);
+
+	pw.set_target_arr(
+		&t.subpool_proof_targets.subpool_config_root.0.elements,
+		&subpool.root().0,
+	)
+	.unwrap();
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 

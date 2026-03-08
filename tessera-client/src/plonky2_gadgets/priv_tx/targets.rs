@@ -173,7 +173,7 @@ pub(crate) struct NctRootTarget(pub(crate) HashOutTarget);
 #[derive(Clone, Copy)]
 pub(crate) struct MainPoolConfigRootTarget(pub(crate) HashOutTarget);
 #[derive(Clone, Copy)]
-struct SubpoolConfigRootTarget(HashOutTarget);
+pub(crate) struct SubpoolConfigRootTarget(pub(crate) HashOutTarget);
 
 #[derive(Clone, Copy)]
 pub(crate) struct AssetIdTarget(pub(crate) Target);
@@ -186,13 +186,15 @@ pub(crate) struct AstMerkleTargets(pub(crate) ConditionalMerkleTarget<ACC_AST_DE
 
 #[derive(Clone)]
 pub(crate) struct SubpoolFullProofTargets {
-	pub(crate) approval_proof: MerkleTarget<SUBPOOL_CONFIG_DEPTH>,
-	pub(crate) rejection_proof: MerkleTarget<SUBPOOL_CONFIG_DEPTH>,
-	pub(crate) consume_proof: MerkleTarget<SUBPOOL_CONFIG_DEPTH>,
-	pub(crate) main_pool_proof: MerkleTarget<MAIN_POOL_CONFIG_DEPTH>,
+	pub(crate) approval_proof: ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) rejection_proof: ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) consume_proof: ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) main_pool_proof: ConditionalMerkleTarget<MAIN_POOL_CONFIG_DEPTH>,
+	pub(crate) subpool_config_root: SubpoolConfigRootTarget,
 }
 
 pub(crate) struct TxCircuitTargets {
+	pub(crate) not_fake_tx: BoolTarget,
 	// tx kind flags
 	pub(crate) is_rjct: BoolTarget,
 	pub(crate) is_fresh_acc: BoolTarget,
@@ -201,7 +203,7 @@ pub(crate) struct TxCircuitTargets {
 	// tree roots
 	pub(crate) act_root: ActRootTarget,
 	pub(crate) nct_root: NctRootTarget,
-	pub(crate) main_pool_root: MainPoolConfigRootTarget,
+	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
 	// authority public keys
 	pub(crate) approval_key: PubkeyTarget,
 	pub(crate) rejection_key: PubkeyTarget,

@@ -181,6 +181,18 @@ impl StandardAccount {
 		}
 	}
 
+	pub fn new_with(private_identifier: PrivateIdentifier, subpool_id: SubpoolId) -> Self {
+		StandardAccount {
+			private_identifier,
+			subpool_id,
+			balance: U256::zero(),
+			nonce: Nonce(F::ZERO),
+			spend_auth: SpendAuth::default(),
+			consume_auth: ConsumeAuth::default(),
+			ast: AccountStateTree::new(),
+		}
+	}
+
 	pub fn public_id(&self) -> PublicIdentifier {
 		let mut input = [F::ZERO; 3];
 		input[0] = F::from_canonical_u64(DS_PUBLIC_IDENTIFIER);
