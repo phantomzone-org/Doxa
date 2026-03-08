@@ -136,6 +136,19 @@ impl Scalar {
 		self.montymul(Self::R2).montymul(rhs)
 	}
 
+	/// Sample a uniformly random scalar in `[0, N)` using rejection sampling.
+	// TODO: I don't know whether this is secure.
+	pub(crate) fn sample<R: rand::Rng>(rng: &mut R) -> Self {
+		loop {
+			let mut limbs: [u64; 5] = std::array::from_fn(|_| rng.next_u64());
+			limbs[4] &= 0x7FFFFFFFFFFFFFFF; // N < 2^319; clear bit 63
+			let candidate = Self(limbs);
+			if candidate.sub_inner(Self::N).1 == 1 {
+				return candidate;
+			}
+		}
+	}
+
 	/// Reduce 5 Goldilocks field elements (320 bits) to scalar < N.
 	/// Circuit-friendly: just a conditional subtraction.
 	pub(crate) fn from_hash(elements: [GoldilocksField; 5]) -> Self {

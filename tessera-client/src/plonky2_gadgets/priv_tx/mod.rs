@@ -6,7 +6,8 @@ use plonky2::{
 	iop::target::{BoolTarget, Target},
 	plonk::circuit_builder::CircuitBuilder,
 };
-use plonky2_field::extension::Extendable;
+use plonky2_field::{extension::Extendable, types::Field};
+use rand::CryptoRng;
 use tessera_trees::F;
 
 use crate::{
@@ -36,6 +37,14 @@ fn double_hash_native(elems: [F; 4]) -> [F; 4] {
 	<PoseidonHash as Hasher<F>>::hash_no_pad(&h0).elements
 }
 
+fn sample_dummy_notes<R: CryptoRng>(rng: &mut R) -> ([[F; 4]; NOTE_BATCH], [[F; 4]; NOTE_BATCH]) {
+	// TODO: sample field element at random
+	let mut sample_hash = || core::array::from_fn(|_| F::from_canonical_u64(rng.next_u64() >> 1));
+	let dinotes = core::array::from_fn(|_| sample_hash());
+	let donotes = core::array::from_fn(|_| sample_hash());
+	(dinotes, donotes)
+}
+
 pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 ) -> TxCircuitTargets {
@@ -44,7 +53,7 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 
 	// Tx kinds
-	// TODO: where it's checked that these are indeed bool targets?
+	// TODO: where is it checked that these are indeed bool targets?
 	let is_rjct = builder.add_virtual_bool_target_safe();
 	let is_fresh_acc = builder.add_virtual_bool_target_safe();
 	let is_update_auth = builder.add_virtual_bool_target_safe();
@@ -66,8 +75,6 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	let asset_exists_in_accout = builder.add_virtual_bool_target_safe();
 
 	let accin = builder.add_virtual_account_target();
-	// TODO: deriver accout from accin with target for private_identifier, subpool_id fixed. Rest
-	// target wires are free.
 	let accout = builder.add_virtual_account_target();
 	let private_identifier = accin.private_identifier;
 	let subpool_id = accin.subpool_id;

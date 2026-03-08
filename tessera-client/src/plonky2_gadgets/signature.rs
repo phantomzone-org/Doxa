@@ -1267,7 +1267,7 @@ impl PubkeyTarget {
 	pub(crate) fn set_witness<F: Field + Extendable<5>>(
 		&self,
 		pw: &mut PartialWitness<F>,
-		cpk: crate::schnorr::CompressedPublicKey<F>,
+		cpk: &crate::schnorr::CompressedPublicKey<F>,
 	) {
 		for (t, v) in self.0.0.iter().zip(cpk.0.w.0.iter()) {
 			pw.set_target(*t, *v).unwrap();

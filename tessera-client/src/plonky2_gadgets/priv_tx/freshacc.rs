@@ -40,16 +40,7 @@ use crate::{
 /// Each hash is 4 Goldilocks field elements drawn uniformly at random.
 /// The returned arrays are suitable as `dinotes` / `donotes` inputs to
 /// [`set_freshacc_tx_witness`].
-pub(crate) fn sample_dummy_notes<R: Rng>(
-	rng: &mut R,
-) -> ([[F; 4]; NOTE_BATCH], [[F; 4]; NOTE_BATCH]) {
-	// TODO: sample field element at random
-	let mut sample_hash = || array::from_fn(|_| F::from_canonical_u64(rng.next_u64() >> 1));
-	let dinotes = array::from_fn(|_| sample_hash());
-	let donotes = array::from_fn(|_| sample_hash());
-	(dinotes, donotes)
-}
-
+///
 /// `nct_root` and `act_root` are [F::ZERO; 4] for a normal FreshAcc (no notes,
 /// account not yet in ACT).
 pub(crate) fn set_freshacc_tx_witness(
@@ -99,9 +90,9 @@ pub(crate) fn set_freshacc_tx_witness(
 	set_hash(pw, t.nct_root.0, nct_root.0);
 
 	// ── Authority keys ────────────────────────────────────────────────────────
-	t.approval_key.set_witness(pw, approval_key);
-	t.rejection_key.set_witness(pw, rejection_key);
-	t.subpool_consume_key.set_witness(pw, consume_key);
+	t.approval_key.set_witness(pw, &approval_key);
+	t.rejection_key.set_witness(pw, &rejection_key);
+	t.subpool_consume_key.set_witness(pw, &consume_key);
 
 	// ── Accounts ──────────────────────────────────────────────────────────────
 	t.accin.set_witness(pw, accin);
@@ -269,9 +260,9 @@ mod tests {
 
 	use super::*;
 	use crate::{
-		NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
+		Nonce, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
 		derive_tx_hash,
-		plonky2_gadgets::priv_tx::{double_hash_native, priv_tx_circuit},
+		plonky2_gadgets::priv_tx::{double_hash_native, priv_tx_circuit, sample_dummy_notes},
 		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{CompressedPublicKey, PrivateKey, Scalar, schnorr_sign},
 	};

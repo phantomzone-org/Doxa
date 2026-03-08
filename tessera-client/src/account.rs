@@ -1,4 +1,4 @@
-use std::{hash::Hash, marker::PhantomData};
+use std::{collections::HashMap, hash::Hash, marker::PhantomData};
 
 use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64, PrimeField64};
@@ -14,7 +14,7 @@ use crate::{
 	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
 	NoteCommitment, NoteNullifier,
 	schnorr::CompressedPublicKey,
-	tree::{GenericNode, Leaf, MerkleTree},
+	tree::{GenericNode, Leaf, MerkleProof, MerkleTree},
 };
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -106,6 +106,55 @@ impl From<AccountStateTreeLeaf> for GenericNode<AccountStateTreeLeaf> {
 	}
 }
 
+/// Wraps the per-account asset Merkle tree with an O(1) amount lookup map.
+// TODO: handle the case when asset limit is reached
+#[derive(Clone, Debug)]
+pub struct AccountStateTree {
+	pub(crate) tree: MerkleTree<ACC_AST_DEPTH, GenericNode<AccountStateTreeLeaf>>,
+	/// AssetId → (leaf_index, current_amount)
+	assets: HashMap<AssetId, (usize, U256)>,
+}
+
+impl AccountStateTree {
+	pub fn new() -> Self {
+		Self {
+			tree: MerkleTree::new(),
+			assets: HashMap::new(),
+		}
+	}
+
+	pub fn root(&self) -> HashOutput {
+		self.tree.root()
+	}
+
+	pub fn size(&self) -> usize {
+		self.tree.size()
+	}
+
+	/// Insert or overwrite a leaf; also updates the asset → (index, amount) map.
+	pub fn set_leaf(&mut self, at_index: usize, leaf: AccountStateTreeLeaf) {
+		self.assets.insert(leaf.asset_id, (at_index, leaf.amount));
+		self.tree.set_leaf(at_index, leaf);
+	}
+
+	pub fn merkle_proof_at(
+		&self,
+		index: usize,
+	) -> MerkleProof<GenericNode<AccountStateTreeLeaf>, ACC_AST_DEPTH> {
+		self.tree.merkle_proof_at(index)
+	}
+
+	/// Returns `(leaf_index, amount)` for the given asset, or `None` if never set.
+	pub fn amount_for(&self, asset_id: AssetId) -> Option<(usize, U256)> {
+		self.assets.get(&asset_id).copied()
+	}
+
+	/// Next free leaf index.
+	pub fn next_index(&self) -> usize {
+		self.tree.next_index()
+	}
+}
+
 #[derive(Clone, Debug)]
 pub struct StandardAccount {
 	pub private_identifier: PrivateIdentifier,
@@ -115,7 +164,7 @@ pub struct StandardAccount {
 	// TODO: make spend_auth generic over Field
 	pub spend_auth: SpendAuth,
 	pub consume_auth: ConsumeAuth,
-	pub ast: MerkleTree<ACC_AST_DEPTH, GenericNode<AccountStateTreeLeaf>>,
+	pub ast: AccountStateTree,
 }
 
 impl StandardAccount {
@@ -128,7 +177,7 @@ impl StandardAccount {
 			nonce: Nonce(F::ZERO),
 			spend_auth: SpendAuth::default(),
 			consume_auth: ConsumeAuth::default(),
-			ast: MerkleTree::new(),
+			ast: AccountStateTree::new(),
 		}
 	}
 
