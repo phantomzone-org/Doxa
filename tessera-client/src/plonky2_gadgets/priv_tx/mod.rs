@@ -26,10 +26,10 @@ use crate::{
 	},
 };
 
-mod cb;
+pub(crate) mod cb;
 mod freshacc;
 mod spend;
-mod targets;
+pub(crate) mod targets;
 
 fn double_hash_native(elems: [F; 4]) -> [F; 4] {
 	use plonky2::plonk::config::Hasher;

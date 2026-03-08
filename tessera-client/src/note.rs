@@ -7,6 +7,35 @@ use tessera_trees::{F, tree::hasher::HashOutput};
 
 use crate::{AccountAddress, AssetId, account::NullifierKey};
 
+pub struct DepositNoteCommitment(pub HashOutput);
+
+pub struct DepositNote {
+	pub identifier: [F; 2],
+	pub recipient: AccountAddress,
+	pub amount: U256,
+	pub asset_id: AssetId,
+}
+
+impl DepositNote {
+	pub fn commitment(&self) -> DepositNoteCommitment {
+		// 2 + 1 + 4 + 8 + 1 = 16 elements
+		// identifier[2] || recipient.subpool_id[1] || recipient.public_id[4]
+		// || amount[8 u32 limbs, LE] || asset_id[1]
+		let mut input = [F::ZERO; 16];
+		input[0..2].copy_from_slice(&self.identifier);
+		input[2] = self.recipient.subpool_id.0;
+		input[3..7].copy_from_slice(&self.recipient.public_id.0.0);
+		for (i, word) in self.amount.0.iter().enumerate() {
+			input[7 + i * 2] = F::from_canonical_u32(*word as u32);
+			input[7 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
+		}
+		input[15] = self.asset_id.0;
+		DepositNoteCommitment(HashOutput(
+			<PoseidonHash as Hasher<F>>::hash_no_pad(&input).elements,
+		))
+	}
+}
+
 pub struct NoteCommitment(pub HashOutput);
 pub struct NoteNullifier(pub HashOutput);
 
