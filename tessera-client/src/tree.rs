@@ -1,29 +1,49 @@
 use std::{collections::HashMap, fmt, fmt::Debug, hash::Hash, marker::PhantomData};
 
-use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
-use tessera_trees::{F, tree::hasher::HashOutput};
+use plonky2::{
+	hash::{hash_types::HashOut, poseidon::PoseidonHash},
+	plonk::{config::Hasher, proof},
+};
+use plonky2_field::types::Field;
+use tessera_trees::tree::hasher::HashOutput;
 
 // #[derive(Clone, Debug, PartialEq, Eq)]
 // pub(crate) struct Node(pub(crate) HashOutput);
+
+struct CommitmentTreeMerkleProof {
+	path: Vec<HashOutput>,
+	num_leaves: usize,
+}
+
+impl CommitmentTreeMerkleProof {
+	pub(crate) fn new(path: Vec<HashOutput>, num_leaves: usize) -> Self {
+		Self {
+			path,
+			num_leaves,
+		}
+	}
+}
 
 pub trait Leaf {
 	type Node;
 	fn empty() -> Self::Node;
 }
 
-pub trait Node: Sized + From<HashOutput> {
+// TODO: don't use HasOut once HashOutput is generic over F
+
+pub trait Node<F: Field>: Sized + From<HashOutput> {
 	type Leaf: Leaf<Node = Self> + Into<Self>;
 
-	fn inner(&self) -> HashOutput;
+	fn inner(&self) -> HashOut<F>;
 
 	fn compress_two(lhs: &Self, rhs: &Self) -> Self {
 		// Use two_to_one so the native hash matches the circuit's PoseidonPermutation gadget.
 		use plonky2::hash::hash_types::HashOut;
 		let left = HashOut {
-			elements: lhs.inner().0,
+			elements: lhs.inner().elements,
 		};
 		let right = HashOut {
-			elements: rhs.inner().0,
+			elements: rhs.inner().elements,
 		};
 		let result = <PoseidonHash as Hasher<F>>::two_to_one(left, right);
 		Self::from(HashOutput(result.elements))
@@ -145,6 +165,16 @@ where
 		}
 
 		current_node.inner() == self.root
+	}
+
+	/// Extract siblings and direction bits from a native MerkleProof.
+	/// Direction::Left  (sibling on left, current is right child) → bit = true
+	/// Direction::Right (sibling on right, current is left child) → bit = false
+	pub(crate) fn extract_siblings_bits(&self) -> ([HashOutput; DEPTH], [bool; DEPTH]) {
+		let siblings: [HashOutput; DEPTH] = core::array::from_fn(|i| self.path[i].sibling.inner());
+		let bits: [bool; DEPTH] =
+			core::array::from_fn(|i| self.path[i].direction == crate::tree::Direction::Left);
+		(siblings, bits)
 	}
 
 	pub(crate) fn extract_root(&self) -> HashOutput {

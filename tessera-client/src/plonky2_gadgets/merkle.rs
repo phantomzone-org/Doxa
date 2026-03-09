@@ -29,7 +29,7 @@ pub(crate) fn set_merkle_siblings_and_bits<
 >(
 	pw: &mut PartialWitness<F>,
 	t: &T,
-	siblings: [[F; 4]; DEPTH],
+	siblings: [[F; HASH_SIZE]; DEPTH],
 	bits: [bool; DEPTH],
 ) {
 	for lvl in 0..DEPTH {
@@ -40,23 +40,6 @@ pub(crate) fn set_merkle_siblings_and_bits<
 		pw.set_bool_target(BoolTarget::new_unsafe(t.bits()[lvl]), bits[lvl])
 			.unwrap();
 	}
-}
-
-/// Extract siblings and direction bits from a native MerkleProof.
-/// Direction::Left  (sibling on left, current is right child) → bit = true
-/// Direction::Right (sibling on right, current is left child) → bit = false
-fn proof_siblings_bits<F: Field, N: Node, const DEPTH: usize>(
-	proof: &crate::tree::MerkleProof<N, DEPTH>,
-) -> ([[F; 4]; DEPTH], [bool; DEPTH]) {
-	let siblings: [[F; 4]; DEPTH] = core::array::from_fn(|i| {
-		proof.path[i].sibling.inner().0.map(|f| {
-			use plonky2_field::types::PrimeField64;
-			F::from_canonical_u64(f.to_canonical_u64())
-		})
-	});
-	let bits: [bool; DEPTH] =
-		core::array::from_fn(|i| proof.path[i].direction == crate::tree::Direction::Left);
-	(siblings, bits)
 }
 
 pub(crate) trait MerkleSiblingsBits<const DEPTH: usize> {
@@ -70,9 +53,15 @@ pub(crate) trait MerkleSiblingsBits<const DEPTH: usize> {
 	) where
 		Self: Sized,
 	{
-		let (siblings, bits) = proof_siblings_bits::<F, N, DEPTH>(proof);
-		set_merkle_siblings_and_bits(pw, self, siblings, bits);
 	}
+}
+
+pub(crate) trait SetMerklePathOfWitness<Proof> {
+	fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, proof: &Proof);
+}
+
+pub(crate) trait SetMerkleRootOfWitness<Proof> {
+	fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, proof: &Proof);
 }
 
 impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for ConditionalMerkleTarget<DEPTH> {
@@ -99,6 +88,15 @@ impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for MerkleTarget<DEPTH> {
 pub struct ConditionalMerkleTarget<const DEPTH: usize> {
 	pub siblings: [[Target; HASH_SIZE]; DEPTH],
 	pub bits: [Target; DEPTH],
+}
+
+impl<N: Node + Clone, const D: usize> SetMerklePathOfWitness<MerkleProof<N, D>>
+	for ConditionalMerkleTarget<D>
+{
+	fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, proof: &MerkleProof<N, D>) {
+		let (siblings, bits) = proof.extract_siblings_bits();
+		set_merkle_siblings_and_bits(pw, self, siblings, bits);
+	}
 }
 
 #[derive(Clone, Copy)]
