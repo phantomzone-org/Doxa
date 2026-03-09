@@ -31,8 +31,8 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use tessera_trees::{
 	tree::{
 		hasher::{Hash, NewRandom},
-		BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
-		CommitmentTree, NullifierChainedInsertProof, NullifierTree,
+		BatchCommitmentProof, BatchCommitmentProofTargets, BatchInsertProof,
+		BatchNullifierInsertProofTargets, CommitmentTree, NullifierTree,
 	},
 	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
@@ -188,7 +188,7 @@ pub fn sample_batch_nullifier_tree_proof(
 ) -> Result<(
 	CircuitDataNative,
 	ProofNative,
-	NullifierChainedInsertProof<Hash>,
+	BatchInsertProof<Hash>,
 	Vec<Hash>,
 )> {
 	const DEPTH: usize = 32;
@@ -206,7 +206,7 @@ pub fn sample_batch_nullifier_tree_proof(
 	for _ in 0..batch_size {
 		batch.push(Hash::new_random(&mut rng));
 	}
-	let batch_proof = tree.insert_chained(batch.clone())?;
+	let batch_proof = tree.insert_batch(batch.clone())?;
 	assert!(batch_proof.verify());
 	println!("{:?}", now.elapsed());
 
@@ -215,8 +215,8 @@ pub fn sample_batch_nullifier_tree_proof(
 
 	print!("Alloc Targets: ");
 	let now: Instant = Instant::now();
-	let targets: ChainedInsertProofTargets =
-		ChainedInsertProofTargets::new::<F, D>(&mut builder, DEPTH, batch_size);
+	let targets: BatchNullifierInsertProofTargets =
+		BatchNullifierInsertProofTargets::new::<F, D>(&mut builder, DEPTH, batch_size);
 	println!("{:?}", now.elapsed());
 
 	print!("Connect: ");

@@ -13,8 +13,8 @@ use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	proof_aggregation::{GenericAggregator, SuperAggregator},
 	tree::{
-		hasher::Hash, BatchCommitmentProof, BatchCommitmentProofTargets, ChainedInsertProofTargets,
-		NullifierChainedInsertProof,
+		hasher::Hash, BatchCommitmentProof, BatchCommitmentProofTargets, BatchInsertProof,
+		BatchNullifierInsertProofTargets,
 	},
 	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
@@ -42,10 +42,10 @@ pub struct CommitmentProverService {
 
 /// Encapsulates the nullifier-tree proof pipeline (notes or accounts).
 ///
-/// Mirrors [`CommitmentProverService`] but uses `ChainedInsertProofTargets`.
+/// Mirrors [`CommitmentProverService`] but uses `BatchNullifierInsertProofTargets`.
 pub struct NullifierProverService {
 	circuit_data: CircuitDataNative,
-	targets: ChainedInsertProofTargets,
+	targets: BatchNullifierInsertProofTargets,
 }
 
 /// Aggregates `PrivateTx` leaf proofs into a single root Plonky2 proof using
@@ -107,7 +107,7 @@ impl NullifierProverService {
 	pub fn init(batch_size: usize) -> Result<Self> {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let targets = ChainedInsertProofTargets::new::<F, D>(&mut builder, 32, batch_size);
+		let targets = BatchNullifierInsertProofTargets::new::<F, D>(&mut builder, 32, batch_size);
 		targets.connect::<Hash, F, D>(&mut builder);
 		let circuit_data = builder.build::<ConfigNative>();
 		info!(batch_size, "nullifier prover initialized");
@@ -118,7 +118,7 @@ impl NullifierProverService {
 	}
 
 	/// Generate a native Plonky2 proof for the given nullifier batch.
-	pub fn prove(&self, batch_proof: &NullifierChainedInsertProof<Hash>) -> Result<ProofNative> {
+	pub fn prove(&self, batch_proof: &BatchInsertProof<Hash>) -> Result<ProofNative> {
 		let mut pw = PartialWitness::new();
 		self.targets.set::<Hash, F, 32>(&mut pw, batch_proof)?;
 		let proof = self.circuit_data.prove(pw)?;
@@ -471,19 +471,9 @@ impl ProverRuntime {
 
 		// Extract new roots up-front (before the request fields are consumed).
 		let notes_new_root = request.notes_commitment_proof.root_new;
-		let nullifier_notes_new_root = request
-			.notes_nullifier_proof
-			.proofs
-			.last()
-			.ok_or_else(|| anyhow::anyhow!("notes nullifier proof contains no insertions"))?
-			.new_root;
+		let nullifier_notes_new_root = request.notes_nullifier_proof.new_root;
 		let accounts_new_root = request.accounts_commitment_proof.root_new;
-		let nullifier_accounts_new_root = request
-			.accounts_nullifier_proof
-			.proofs
-			.last()
-			.ok_or_else(|| anyhow::anyhow!("accounts nullifier proof contains no insertions"))?
-			.new_root;
+		let nullifier_accounts_new_root = request.accounts_nullifier_proof.new_root;
 
 		info!(batch_id, "proving notes commitment tree");
 		let nc_proof = self
@@ -557,29 +547,10 @@ fn log_super_pi_preimage_debug(
 		bytes
 	}
 
-	let nn_len = nn.public_inputs.len();
-	let an_len = an.public_inputs.len();
-	let nn_nrs = nn_len - 8; // new_root at second-to-last group of 4
-	let an_nrs = an_len - 8;
-
 	let nc_bytes = fields_to_bytes(&nc.public_inputs);
-	let nn_pis: Vec<F> = nn.public_inputs[..4]
-		.iter()
-		.chain(nn.public_inputs[nn_nrs..nn_nrs + 4].iter())
-		.chain(nn.public_inputs[5..nn_nrs].iter())
-		.chain(nn.public_inputs[nn_nrs + 4..].iter())
-		.copied()
-		.collect();
-	let nn_bytes = fields_to_bytes(&nn_pis);
+	let nn_bytes = fields_to_bytes(&nn.public_inputs);
 	let ac_bytes = fields_to_bytes(&ac.public_inputs);
-	let an_pis: Vec<F> = an.public_inputs[..4]
-		.iter()
-		.chain(an.public_inputs[an_nrs..an_nrs + 4].iter())
-		.chain(an.public_inputs[5..an_nrs].iter())
-		.chain(an.public_inputs[an_nrs + 4..].iter())
-		.copied()
-		.collect();
-	let an_bytes = fields_to_bytes(&an_pis);
+	let an_bytes = fields_to_bytes(&an.public_inputs);
 
 	let nc_hash = hex::encode(alloy::primitives::keccak256(&nc_bytes));
 	let nn_hash = hex::encode(alloy::primitives::keccak256(&nn_bytes));

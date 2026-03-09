@@ -340,7 +340,7 @@ impl Sequencer {
 			&nn_real,
 		)?;
 		let mut nn_tmp = self.notes_nullifier_state.tree.clone();
-		let nn_proof = nn_tmp.insert_chained(nn_hashes.clone())?;
+		let nn_proof = nn_tmp.insert_batch(nn_hashes.clone())?;
 		anyhow::ensure!(nn_proof.verify(), "NN native proof verification failed");
 
 		let ac_real: Vec<[u8; 32]> = ac_requests.iter().map(|r| r.commitment).collect();
@@ -364,25 +364,13 @@ impl Sequencer {
 			&an_real,
 		)?;
 		let mut an_tmp = self.accounts_nullifier_state.tree.clone();
-		let an_proof = an_tmp.insert_chained(an_hashes.clone())?;
+		let an_proof = an_tmp.insert_batch(an_hashes.clone())?;
 		anyhow::ensure!(an_proof.verify(), "AN native proof verification failed");
 
 		let new_nc_root = contract::hash_to_bytes32(&nc_proof.root_new);
-		let new_nn_root = contract::hash_to_bytes32(
-			&nn_proof
-				.proofs
-				.last()
-				.ok_or_else(|| anyhow::anyhow!("NN proof is empty"))?
-				.new_root,
-		);
+		let new_nn_root = contract::hash_to_bytes32(&nn_proof.new_root);
 		let new_ac_root = contract::hash_to_bytes32(&ac_proof.root_new);
-		let new_an_root = contract::hash_to_bytes32(
-			&an_proof
-				.proofs
-				.last()
-				.ok_or_else(|| anyhow::anyhow!("AN proof is empty"))?
-				.new_root,
-		);
+		let new_an_root = contract::hash_to_bytes32(&an_proof.new_root);
 
 		let nc_out: Vec<FixedBytes<32>> =
 			nc_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
@@ -452,13 +440,13 @@ impl Sequencer {
 			.insert_batch(nc_hashes.clone())?;
 		self.notes_nullifier_state
 			.tree
-			.insert_chained(nn_hashes.clone())?;
+			.insert_batch(nn_hashes.clone())?;
 		self.accounts_commitment_state
 			.tree
 			.insert_batch(ac_hashes.clone())?;
 		self.accounts_nullifier_state
 			.tree
-			.insert_chained(an_hashes.clone())?;
+			.insert_batch(an_hashes.clone())?;
 
 		// 8. Submit single ProveRequest.
 		self.submit_prove_request_with_retry(crate::types::ProveRequest {
@@ -712,7 +700,7 @@ impl Sequencer {
 					.expect("batch was present above");
 
 				// Commit all four trees' WAL entries now that on-chain confirmation succeeded.
-				// Note: the trees were already advanced (insert_batch / insert_chained) at
+				// Note: the trees were already advanced (insert_batch) at
 				// registration time; here we only persist to the WAL/snapshot store.
 				commit_tree_batch(
 					&self.notes_commitment_state,
@@ -794,15 +782,9 @@ impl Sequencer {
 			&nn_real,
 		)?;
 		let mut nn_tmp = self.notes_nullifier_state.tree.clone();
-		let nn_proof = nn_tmp.insert_chained(nn_hashes.clone())?;
+		let nn_proof = nn_tmp.insert_batch(nn_hashes.clone())?;
 		anyhow::ensure!(nn_proof.verify(), "NN native proof failed (private tx)");
-		let new_nn_root = contract::hash_to_bytes32(
-			&nn_proof
-				.proofs
-				.last()
-				.ok_or_else(|| anyhow::anyhow!("NN proof is empty"))?
-				.new_root,
-		);
+		let new_nn_root = contract::hash_to_bytes32(&nn_proof.new_root);
 
 		// --- Accounts Commitment ---
 		let ac_real = vec![request.output_account_leaf];
@@ -825,15 +807,9 @@ impl Sequencer {
 			&an_real,
 		)?;
 		let mut an_tmp = self.accounts_nullifier_state.tree.clone();
-		let an_proof = an_tmp.insert_chained(an_hashes.clone())?;
+		let an_proof = an_tmp.insert_batch(an_hashes.clone())?;
 		anyhow::ensure!(an_proof.verify(), "AN native proof failed (private tx)");
-		let new_an_root = contract::hash_to_bytes32(
-			&an_proof
-				.proofs
-				.last()
-				.ok_or_else(|| anyhow::anyhow!("AN proof is empty"))?
-				.new_root,
-		);
+		let new_an_root = contract::hash_to_bytes32(&an_proof.new_root);
 
 		let new_nc_root = contract::hash_to_bytes32(&nc_proof.root_new);
 		let new_ac_root = contract::hash_to_bytes32(&ac_proof.root_new);
@@ -912,13 +888,13 @@ impl Sequencer {
 			.insert_batch(nc_hashes.clone())?;
 		self.notes_nullifier_state
 			.tree
-			.insert_chained(nn_hashes.clone())?;
+			.insert_batch(nn_hashes.clone())?;
 		self.accounts_commitment_state
 			.tree
 			.insert_batch(ac_hashes.clone())?;
 		self.accounts_nullifier_state
 			.tree
-			.insert_chained(an_hashes.clone())?;
+			.insert_batch(an_hashes.clone())?;
 
 		// Build and submit single ProveRequest.
 		// TX leaf proofs: place the real tx_proof in the active slots, dummy elsewhere.

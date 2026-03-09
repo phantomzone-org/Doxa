@@ -28,24 +28,16 @@
 //! TX PIs are enforced in-circuit to equal the corresponding tree leaf PIs and
 //! are therefore excluded from the Keccak preimage.
 //!
-//! Keccak preimage: **1184 Goldilocks fields** (9472 bytes)
+//! All four trees use the same PI layout: `old_root[4] || new_root[4] || leaves[N×4]`.
+//! The Keccak preimage is a straight concatenation of all four tree PI vectors.
 //!
-//! Nullifier trees (NN, AN) have a non-obvious raw PI layout: `NullifierInsertProofTargets::new`
-//! with `is_last=true` registers `new_root[4]` **before** its own `new_node_value[4]`, so for a
-//! batch of N insertions the layout is:
-//!   `[old_root[4], new_node_path[1], values[0..N-2][4 each], new_root[4], value[N-1][4]]`
-//! Equivalently, `new_root` is at `PI[nn_len-8..nn_len-4]`, not at `PI[nn_len-4..]`.
-//! The preimage reorders to `[old_root, new_root, all_values]` (skipping `new_node_path`)
-//! to match the on-chain `registerTransactionBatchUpdate` Keccak formula exactly:
-//!   `keccak(confirmedRoot || newRoot || fullBatch)` per tree.
-//!
-//! | Circuit | Raw PIs | Preimage contribution (fields) | Notes |
-//! |---------|---------|-------------------------------|-------|
-//! | NC tree | 520 | 520 | old_root[4] + new_root[4] + leaves[128×4] |
-//! | NN tree | 521 | 520 | old_root[4] + new_root[4] + values[128×4] (new_node_path skipped) |
-//! | AC tree |  72 |  72 | old_root[4] + new_root[4] + leaves[16×4] |
-//! | AN tree |  73 |  72 | old_root[4] + new_root[4] + values[16×4] (new_node_path skipped) |
-//! | TX (in-circuit, not in preimage) | 1168 | — | 16 × 73 |
+//! | Circuit | PIs (fields) | Notes |
+//! |---------|-------------|-------|
+//! | NC tree | 520 | old_root[4] + new_root[4] + leaves[128×4] |
+//! | NN tree | 520 | old_root[4] + new_root[4] + values[128×4] |
+//! | AC tree |  72 | old_root[4] + new_root[4] + leaves[16×4] |
+//! | AN tree |  72 | old_root[4] + new_root[4] + values[16×4] |
+//! | TX (in-circuit, not in preimage) | 1168 | 16 × 73 |
 //!
 //! # Serializer requirement
 //!
@@ -365,11 +357,23 @@ fn setup_builder(
 	let notes_per_slot = note_batch_size / n_tx_slots;
 	assert_eq!(notes_per_slot, 8, "notes per TX slot must be 8");
 
+	// NN uses batch insertion: same PI layout as NC (old_root[4] + new_root[4] + leaves[N×4])
+	assert_eq!(
+		inner.nn_common.num_public_inputs, inner.nc_common.num_public_inputs,
+		"NN and NC must have the same PI count with batch insertion"
+	);
+
 	// account_batch_size = AC PI count / 4 - 2; must equal n_tx_slots
 	let account_batch_size = inner.ac_common.num_public_inputs / 4 - 2;
 	assert_eq!(
 		account_batch_size, n_tx_slots,
 		"account_batch_size must equal n_tx_slots"
+	);
+
+	// AN uses batch insertion: same PI layout as AC
+	assert_eq!(
+		inner.an_common.num_public_inputs, inner.ac_common.num_public_inputs,
+		"AN and AC must have the same PI count with batch insertion"
 	);
 
 	// --- Verify all 5 inner proofs in-circuit ---
@@ -381,15 +385,9 @@ fn setup_builder(
 
 	// --- Cross-check: TX slot PIs must match the corresponding tree leaf PIs ---
 	//
-	// Commitment tree (NC/AC) PI layout:
-	//   public_inputs[0..7]  = [old_root × 4, new_root × 4]
+	// All four trees (NC/NN/AC/AN) share the same PI layout:
+	//   public_inputs[0..8]  = [old_root × 4, new_root × 4]
 	//   public_inputs[8..]   = leaves (batch_size × 4 fields)
-	// Nullifier tree (NN/AN) PI layout (from chained-insertion stark):
-	//   public_inputs[0..4]              = old_root[4]
-	//   public_inputs[4]                 = new_node_path (starting chain index)
-	//   public_inputs[5..5+(N-1)*4]      = values[0..N-2]  (first N-1 insertions)
-	//   public_inputs[5+(N-1)*4..nn_len-4] = new_root[4]   (from the last insertion)
-	//   public_inputs[nn_len-4..nn_len]  = value[N-1][4]   (last insertion, after new_root)
 	// TX leaf PI layout (73 fields per slot):
 	//   [0]      = is_real (bool: 1 = real private tx, 0 = padding)
 	//   [1..33]  = note_nullifiers[0..8]   (8 × 4 fields, from NN)
@@ -401,8 +399,7 @@ fn setup_builder(
 	// When is_real = 1: expected = tree_t → tx_data_t must equal the tree leaf.
 	// When is_real = 0: expected = 0      → tx_data_t must be zero (canonical padding).
 	// TX PIs are fully captured by the tree PIs; TX is excluded from the Keccak preimage.
-	const NC_LEAF_OFFSET: usize = 8; // old_root[4] + new_root[4]
-	const NN_LEAF_OFFSET: usize = 5; // old_root[4] + new_node_path[1]
+	const LEAF_OFFSET: usize = 8; // old_root[4] + new_root[4]
 	const TX_DATA_OFFSET: usize = 1; // PI[0] is is_real; data starts at PI[1]
 	#[allow(clippy::needless_range_loop)]
 	for s in 0..n_tx_slots {
@@ -412,14 +409,9 @@ fn setup_builder(
 		let is_real = BoolTarget::new_unsafe(tx_proof.public_inputs[tx_base]);
 		builder.assert_bool(is_real);
 		// note nullifiers (TX data[0..32]) — from NN tree
-		// values[0..N-2] at PI[5..nn_len-8]; value[N-1] at PI[nn_len-4] (after new_root).
 		for j in 0..notes_per_slot {
 			let leaf_idx = s * notes_per_slot + j;
-			let nn_val_base = if leaf_idx < note_batch_size - 1 {
-				NN_LEAF_OFFSET + leaf_idx * 4
-			} else {
-				nn_proof.public_inputs.len() - 4 // value[N-1] is after new_root
-			};
+			let nn_val_base = LEAF_OFFSET + leaf_idx * 4;
 			for k in 0..4 {
 				let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + j * 4 + k];
 				let nn_t = nn_proof.public_inputs[nn_val_base + k];
@@ -431,19 +423,13 @@ fn setup_builder(
 		for j in 0..notes_per_slot {
 			for k in 0..4 {
 				let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 32 + j * 4 + k];
-				let nc_t =
-					nc_proof.public_inputs[NC_LEAF_OFFSET + (s * notes_per_slot + j) * 4 + k];
+				let nc_t = nc_proof.public_inputs[LEAF_OFFSET + (s * notes_per_slot + j) * 4 + k];
 				let expected = builder.select(is_real, nc_t, zero);
 				builder.connect(tx_t, expected);
 			}
 		}
 		// account nullifier (TX data[64..68]) — from AN tree
-		// Same PI layout as NN: value[N-1] is at PI[an_len-4] (after new_root).
-		let an_val_base = if s < account_batch_size - 1 {
-			NN_LEAF_OFFSET + s * 4
-		} else {
-			an_proof.public_inputs.len() - 4 // value[N-1] is after new_root
-		};
+		let an_val_base = LEAF_OFFSET + s * 4;
 		for k in 0..4 {
 			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 64 + k];
 			let an_t = an_proof.public_inputs[an_val_base + k];
@@ -453,7 +439,7 @@ fn setup_builder(
 		// account commitment (TX data[68..72]) — from AC tree
 		for k in 0..4 {
 			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 68 + k];
-			let ac_t = ac_proof.public_inputs[NC_LEAF_OFFSET + s * 4 + k];
+			let ac_t = ac_proof.public_inputs[LEAF_OFFSET + s * 4 + k];
 			let expected = builder.select(is_real, ac_t, zero);
 			builder.connect(tx_t, expected);
 		}
@@ -462,7 +448,7 @@ fn setup_builder(
 	// --- Collect tree PI targets and decompose each to [hi_u32, lo_u32] ---
 	//
 	// TX PIs are enforced in-circuit above; only the 4 tree PI vectors are
-	// included in the Keccak preimage (1184 fields total).
+	// included in the Keccak preimage.
 	// The decomposition matches `keccak256_field_elements_native`: each
 	// Goldilocks field element is split big-endian into two u32 words so that
 	// the on-chain Keccak input is identical to the in-circuit preimage.
@@ -471,30 +457,14 @@ fn setup_builder(
 	// Keccak preimage layout (must match on-chain registerTransactionBatchUpdate formula):
 	//   per tree: old_root[4] || new_root[4] || full_batch[batch_size×4]
 	//
-	// Commitment trees (NC, AC): PIs already in this order — take sequentially.
-	// Nullifier trees (NN, AN): raw PIs are [old_root[4], new_node_path[1], values[0..N-2][4],
-	//   new_root[4], value[N-1][4]]. Reorder to [old_root, new_root, values[0..N-1]];
-	//   skip new_node_path (PI[4]). new_root is at [nn_len-8..nn_len-4].
-	let nn_len = nn_proof.public_inputs.len();
-	let an_len = an_proof.public_inputs.len();
-	let nn_new_root_start = nn_len - 8; // new_root: second-to-last group of 4
-	let an_new_root_start = an_len - 8; // same for AN
-
+	// All four trees (NC, NN, AC, AN) use the same PI layout — straight concatenation.
 	let all_pi: Vec<_> = nc_proof
 		.public_inputs
 		.iter()
 		.copied()
-		// NN: old_root || new_root || values[0..N-2] || value[N-1]  (skip new_node_path at PI[4])
-		.chain(nn_proof.public_inputs[..4].iter().copied())
-		.chain(nn_proof.public_inputs[nn_new_root_start..nn_new_root_start + 4].iter().copied())
-		.chain(nn_proof.public_inputs[5..nn_new_root_start].iter().copied())
-		.chain(nn_proof.public_inputs[nn_new_root_start + 4..].iter().copied())
+		.chain(nn_proof.public_inputs.iter().copied())
 		.chain(ac_proof.public_inputs.iter().copied())
-		// AN: old_root || new_root || values[0..N-2] || value[N-1]  (skip new_node_path at PI[4])
-		.chain(an_proof.public_inputs[..4].iter().copied())
-		.chain(an_proof.public_inputs[an_new_root_start..an_new_root_start + 4].iter().copied())
-		.chain(an_proof.public_inputs[5..an_new_root_start].iter().copied())
-		.chain(an_proof.public_inputs[an_new_root_start + 4..].iter().copied())
+		.chain(an_proof.public_inputs.iter().copied())
 		.collect();
 
 	let mut u32_targets = Vec::with_capacity(all_pi.len() * 2);

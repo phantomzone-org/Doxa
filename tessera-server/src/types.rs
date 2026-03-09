@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
-use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof, NullifierChainedInsertProof};
+use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof, BatchInsertProof};
 
 /// Sent from Sequencer to Prover via `tokio::mpsc` channel.
 ///
@@ -13,12 +13,12 @@ pub struct ProveRequest {
 	pub batch_id: u64,
 	/// Notes commitment tree batch-insertion witness.
 	pub notes_commitment_proof: BatchCommitmentProof<Hash>,
-	/// Notes nullifier tree chained-insertion witness.
-	pub notes_nullifier_proof: NullifierChainedInsertProof<Hash>,
+	/// Notes nullifier tree batch-insertion witness.
+	pub notes_nullifier_proof: BatchInsertProof<Hash>,
 	/// Accounts commitment tree batch-insertion witness.
 	pub accounts_commitment_proof: BatchCommitmentProof<Hash>,
-	/// Accounts nullifier tree chained-insertion witness.
-	pub accounts_nullifier_proof: NullifierChainedInsertProof<Hash>,
+	/// Accounts nullifier tree batch-insertion witness.
+	pub accounts_nullifier_proof: BatchInsertProof<Hash>,
 	/// Serialised TX leaf proofs (exactly 16 slots; unused slots = DUMMY_ASSOCIATED_INPUT_PROOF).
 	pub associated_tx_proofs: Vec<Vec<u8>>,
 }

@@ -664,7 +664,7 @@ impl Sequencer {
 		let nn_proof = self
 			.notes_nullifier_state
 			.tree
-			.insert_chained(nn_hashes.clone())?;
+			.insert_batch(nn_hashes.clone())?;
 		anyhow::ensure!(
 			nn_proof.verify(),
 			"NN native proof failed during recovery (batch {batch_id})"
@@ -694,7 +694,7 @@ impl Sequencer {
 		let an_proof = self
 			.accounts_nullifier_state
 			.tree
-			.insert_chained(an_hashes.clone())?;
+			.insert_batch(an_hashes.clone())?;
 		anyhow::ensure!(
 			an_proof.verify(),
 			"AN native proof failed during recovery (batch {batch_id})"

@@ -34,7 +34,7 @@ pub struct PendingRequest {
 /// Trait abstracting over commitment and nullifier tree insertion behavior.
 ///
 /// The sequencer manages four trees that differ only in their insertion
-/// method (`insert_batch` vs `insert_chained`) and proof-verification
+/// method (`insert_batch`) and proof-verification
 /// pattern.  This trait captures the common surface needed by
 /// [`TreeState`], WAL replay, and chain recovery.
 pub trait SequencerTree: Sized {
@@ -87,13 +87,9 @@ impl SequencerTree for NullifierTree<Hash> {
 	}
 
 	fn insert_verified(&mut self, leaves: Vec<Hash>) -> Result<Hash> {
-		let proof = self.insert_chained(leaves)?;
+		let proof = self.insert_batch(leaves)?;
 		anyhow::ensure!(proof.verify(), "nullifier tree proof verification failed");
-		proof
-			.proofs
-			.last()
-			.map(|p| p.new_root)
-			.ok_or_else(|| anyhow::anyhow!("nullifier proof contains no insertions"))
+		Ok(proof.new_root)
 	}
 }
 
