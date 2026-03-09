@@ -15,11 +15,11 @@ use crate::{
 	NCT_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth,
 	StandardAccount, SubpoolId,
 	account::PublicIdentifier,
-	derive_tx_hash,
+	derive_priv_tx_hash,
 	ecgfp5::{CompressedPoint, PointEw},
 	note::{NodeIdentifier, StandardNote},
 	plonky2_gadgets::{
-		merkle::{proof_siblings_bits, set_merkle_siblings_and_bits},
+		merkle::{MerkleSiblingsBits, set_merkle_siblings_and_bits},
 		set_hash, set_u256_zero,
 		signature::set_schnorr_witness,
 	},
@@ -71,7 +71,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	let donote_comms = array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
 
 	// ── Tx hash ───────────────────────────────────────────────────────────────
-	let tx_hash = derive_tx_hash(
+	let tx_hash = derive_priv_tx_hash(
 		accin.nullifier(None),
 		accout.commitment(),
 		dinote_nulls,
@@ -120,8 +120,7 @@ pub(crate) fn set_freshacc_tx_witness(
 
 	// accin AST at index 0 (asset not in tree → Empty leaf)
 	let ast_proof = accin.ast.merkle_proof_at(0);
-	let (ast_sib, ast_bit) = proof_siblings_bits(&ast_proof);
-	set_merkle_siblings_and_bits(pw, &t.accin_ast_merkle.0, ast_sib, ast_bit);
+	t.accin_ast_merkle.0.set_witness(pw, &ast_proof);
 	// accout_ast_merkle is auto-filled via connect_array in the circuit
 
 	// ── Input notes (all inactive) ────────────────────────────────────────────
@@ -176,18 +175,18 @@ pub(crate) fn set_freshacc_tx_witness(
 		.full_subpool_proof(&subpool, subpool_id)
 		.expect("subpool not registered in main_pool at the given subpool_id");
 
-	let (sib, bit) = proof_siblings_bits::<_, _, SUBPOOL_CONFIG_DEPTH>(&full_proof.approval_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.approval_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits::<_, _, SUBPOOL_CONFIG_DEPTH>(&full_proof.rejection_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.rejection_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits::<_, _, SUBPOOL_CONFIG_DEPTH>(&full_proof.consume_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.consume_proof, sib, bit);
-
-	let (sib, bit) =
-		proof_siblings_bits::<_, _, MAIN_POOL_CONFIG_DEPTH>(&full_proof.main_pool_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.main_pool_proof, sib, bit);
+	t.subpool_proof_targets
+		.approval_proof
+		.set_witness(pw, &full_proof.approval_proof);
+	t.subpool_proof_targets
+		.rejection_proof
+		.set_witness(pw, &full_proof.rejection_proof);
+	t.subpool_proof_targets
+		.consume_proof
+		.set_witness(pw, &full_proof.consume_proof);
+	t.subpool_proof_targets
+		.main_pool_proof
+		.set_witness(pw, &full_proof.main_pool_proof);
 
 	pw.set_target_arr(
 		&t.subpool_proof_targets.subpool_config_root.0.elements,
@@ -269,7 +268,7 @@ mod tests {
 	use super::*;
 	use crate::{
 		Nonce, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
-		derive_tx_hash,
+		derive_priv_tx_hash,
 		plonky2_gadgets::priv_tx::{double_hash_native, priv_tx_circuit, sample_dummy_notes},
 		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{CompressedPublicKey, PrivateKey, Scalar, schnorr_sign},
@@ -324,7 +323,7 @@ mod tests {
 		let dinote_nulls = array::from_fn(|i| NoteNullifier(double_hash_native(dinotes[i]).into()));
 		let donote_comms =
 			array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
-		let tx_hash = derive_tx_hash(
+		let tx_hash = derive_priv_tx_hash(
 			accin.nullifier(None),
 			accout.commitment(),
 			dinote_nulls,

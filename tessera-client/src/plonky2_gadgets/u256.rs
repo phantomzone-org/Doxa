@@ -6,12 +6,12 @@ use plonky2::{
 	iop::{
 		generator::{GeneratedValues, SimpleGenerator},
 		target::Target,
-		witness::{PartitionWitness, Witness, WitnessWrite},
+		witness::{PartialWitness, PartitionWitness, Witness, WitnessWrite},
 	},
 	plonk::{circuit_builder::CircuitBuilder, circuit_data::CommonCircuitData},
 	util::serialization::{Buffer, IoResult, Read, Write},
 };
-use plonky2_field::extension::Extendable;
+use plonky2_field::{extension::Extendable, types::Field};
 use tessera_trees::plonky2_gadgets::u32::{CircuitBuilderU32, U32Target};
 
 /// A 256-bit unsigned integer in a Plonky2 circuit, stored as 8 × [`U32Target`].
@@ -20,6 +20,20 @@ use tessera_trees::plonky2_gadgets::u32::{CircuitBuilderU32, U32Target};
 /// `limbs[7]` is the least significant.
 #[derive(Clone, Copy, Debug)]
 pub struct U256Target(pub [U32Target; 8]);
+
+impl U256Target {
+	/// Sets the witness for this target from a `primitive_types::U256`.
+	///
+	/// `value.0` is `[u64; 4]` little-endian; each u64 is split into two u32 limbs.
+	pub(crate) fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, value: primitive_types::U256) {
+		for (i, &word) in value.0.iter().enumerate() {
+			pw.set_target(self.0[2 * i].0, F::from_canonical_u32(word as u32))
+				.unwrap();
+			pw.set_target(self.0[2 * i + 1].0, F::from_canonical_u32((word >> 32) as u32))
+				.unwrap();
+		}
+	}
+}
 
 /// Extension trait for [`CircuitBuilder`]
 pub trait CircuitBuilderU256<F: RichField + Extendable<D>, const D: usize> {

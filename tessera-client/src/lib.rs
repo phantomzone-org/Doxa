@@ -6,6 +6,7 @@ pub(crate) mod plonky2_gadgets;
 pub(crate) mod pool_config;
 pub(crate) mod schnorr;
 pub(crate) mod tree;
+pub(crate) mod utils;
 
 pub const DS_NULLIFIER_KEY: u64 = 12;
 pub const DS_PUBLIC_IDENTIFIER: u64 = 13;

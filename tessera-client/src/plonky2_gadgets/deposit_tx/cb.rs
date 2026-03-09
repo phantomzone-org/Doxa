@@ -1,6 +1,5 @@
 use plonky2::{hash::hash_types::RichField, plonk::circuit_builder::CircuitBuilder};
 use plonky2_field::extension::Extendable;
-use tessera_trees::tree::HASH_SIZE;
 
 use crate::plonky2_gadgets::priv_tx::targets::AccountTarget;
 

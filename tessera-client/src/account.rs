@@ -2,7 +2,7 @@ use std::{collections::HashMap, hash::Hash, marker::PhantomData};
 
 use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64, PrimeField64};
-use primitive_types::U256;
+use primitive_types::{H160, U256};
 use rand::{CryptoRng, Rng, RngExt};
 use tessera_trees::{
 	F,
@@ -11,10 +11,11 @@ use tessera_trees::{
 
 use crate::{
 	ACC_AST_DEPTH, AST_DEFAULT_LEAF, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
-	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
-	NoteCommitment, NoteNullifier,
+	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER,
+	DepositNoteCommitment, NOTE_BATCH, NoteCommitment, NoteNullifier,
 	schnorr::CompressedPublicKey,
 	tree::{GenericNode, Leaf, MerkleProof, MerkleTree},
+	utils::map_h160_to_f,
 };
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -291,7 +292,7 @@ impl AccountAddress {
 	}
 }
 
-pub fn derive_tx_hash(
+pub fn derive_priv_tx_hash(
 	accin_null: AccountNullifier,
 	accout_comm: AccountCommitment,
 	inotes_null: [NoteNullifier; NOTE_BATCH],
@@ -308,6 +309,20 @@ pub fn derive_tx_hash(
 		inp.extend(c.0.0);
 	}
 	<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements
+}
+
+pub fn derive_deposit_tx_hash(
+	accin_null: AccountNullifier,
+	accout_comm: AccountCommitment,
+	deposit_note_comm: DepositNoteCommitment,
+	eth_adrs: H160,
+) -> HashOutput {
+	let mut tx_hash_inp: Vec<F> = Vec::with_capacity(17);
+	tx_hash_inp.extend_from_slice(&accin_null.0.0);
+	tx_hash_inp.extend_from_slice(&accout_comm.0.0);
+	tx_hash_inp.extend_from_slice(&deposit_note_comm.0.0);
+	tx_hash_inp.extend_from_slice(&map_h160_to_f(&eth_adrs));
+	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&tx_hash_inp).elements)
 }
 
 /// Compute the actual root of the default empty Account State Tree (depth `ACC_AST_DEPTH`,

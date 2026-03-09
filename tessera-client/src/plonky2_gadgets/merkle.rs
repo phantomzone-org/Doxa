@@ -41,9 +41,40 @@ use crate::{
 	tree::{Direction, MerkleProof, Node},
 };
 
+pub(crate) fn set_merkle_siblings_and_bits<
+	F: Field,
+	T: MerkleSiblingsBits<DEPTH>,
+	const DEPTH: usize,
+>(
+	pw: &mut PartialWitness<F>,
+	t: &T,
+	siblings: [[F; 4]; DEPTH],
+	bits: [bool; DEPTH],
+) {
+	for lvl in 0..DEPTH {
+		for i in 0..4 {
+			pw.set_target(t.siblings()[lvl][i], siblings[lvl][i])
+				.unwrap();
+		}
+		pw.set_bool_target(BoolTarget::new_unsafe(t.bits()[lvl]), bits[lvl])
+			.unwrap();
+	}
+}
+
 pub(crate) trait MerkleSiblingsBits<const DEPTH: usize> {
 	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH];
 	fn bits(&self) -> &[Target; DEPTH];
+
+	fn set_witness<F: Field, N: Node>(
+		&self,
+		pw: &mut PartialWitness<F>,
+		proof: &MerkleProof<N, DEPTH>,
+	) where
+		Self: Sized,
+	{
+		let (siblings, bits) = proof_siblings_bits::<F, N, DEPTH>(proof);
+		set_merkle_siblings_and_bits(pw, self, siblings, bits);
+	}
 }
 
 impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for ConditionalMerkleTarget<DEPTH> {
@@ -63,26 +94,6 @@ impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for MerkleTarget<DEPTH> {
 
 	fn bits(&self) -> &[Target; DEPTH] {
 		&self.bits
-	}
-}
-
-pub(crate) fn set_merkle_siblings_and_bits<
-	F: Field,
-	T: MerkleSiblingsBits<DEPTH>,
-	const DEPTH: usize,
->(
-	pw: &mut PartialWitness<F>,
-	t: &T,
-	siblings: [[F; 4]; DEPTH],
-	bits: [bool; DEPTH],
-) {
-	for lvl in 0..DEPTH {
-		for i in 0..4 {
-			pw.set_target(t.siblings()[lvl][i], siblings[lvl][i])
-				.unwrap();
-		}
-		pw.set_bool_target(BoolTarget::new_unsafe(t.bits()[lvl]), bits[lvl])
-			.unwrap();
 	}
 }
 

@@ -5,7 +5,6 @@ use plonky2::{
 		witness::{PartialWitness, WitnessWrite},
 	},
 };
-use plonky2_field::types::Field;
 use tessera_trees::F;
 
 use crate::{
@@ -42,19 +41,13 @@ impl DepositNoteTarget {
 			.unwrap();
 		pw.set_target(self.recipient_subpool_id.0, note.recipient.subpool_id.0)
 			.unwrap();
-		for (j, &x) in note.recipient.public_id.0.0.iter().enumerate() {
-			pw.set_target(self.recipient_public_id.0.elements[j], x)
-				.unwrap();
-		}
-		for (i, word) in note.amount.0.iter().enumerate() {
-			pw.set_target(self.amount.0[2 * i].0, F::from_canonical_u32(*word as u32))
-				.unwrap();
-			pw.set_target(
-				self.amount.0[2 * i + 1].0,
-				F::from_canonical_u32((*word >> 32) as u32),
-			)
-			.unwrap();
-		}
+		pw.set_target_arr(
+			&self.recipient_public_id.0.elements,
+			&note.recipient.public_id.0.0,
+		)
+		.unwrap();
+
+		self.amount.set_witness(pw, note.amount);
 		pw.set_target(self.asset_id.0, note.asset_id.0).unwrap();
 	}
 }

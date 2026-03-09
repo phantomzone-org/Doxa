@@ -1,5 +1,3 @@
-use std::array;
-
 use plonky2::{
 	hash::{
 		hash_types::{HashOut, RichField},
@@ -16,7 +14,7 @@ use plonky2_field::{
 	extension::Extendable,
 	types::{Field, PrimeField64},
 };
-use primitive_types::U256;
+use primitive_types::{H160, U256};
 use tessera_trees::{
 	F, plonky2_gadgets::u32::add_u8_range_check_lookup_table, tree::hasher::HashOutput,
 };
@@ -25,6 +23,7 @@ use crate::{
 	ACC_AST_DEPTH, ACT_DEPTH, AssetId, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, Nonce,
 	SUBPOOL_CONFIG_DEPTH, StandardAccount, SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
+	derive_deposit_tx_hash,
 	ecgfp5::{CompressedPoint, PointEw},
 	note::DepositNote,
 	plonky2_gadgets::{
@@ -35,7 +34,7 @@ use crate::{
 				DepositTxTargets,
 			},
 		},
-		merkle::{merkle_verify_gadget, proof_siblings_bits, set_merkle_siblings_and_bits},
+		merkle::{MerkleSiblingsBits, merkle_verify_gadget, set_merkle_siblings_and_bits},
 		priv_tx::{
 			cb::PrivTxCircuitBuilder,
 			targets::{
@@ -52,6 +51,7 @@ use crate::{
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 	schnorr::{Scalar, Signature},
+	utils::map_h160_to_f,
 };
 
 pub(crate) mod cb;
@@ -277,7 +277,7 @@ pub(crate) fn set_deposit_tx_witness(
 	accin_act_pos: usize,
 	accin_act_siblings: &[HashOutput],
 	deposit_note: &DepositNote,
-	eth_address: [u32; 5],
+	eth_address: &H160,
 	approval_key: &CompPubKey,
 	rejection_key: &CompPubKey,
 	consume_key: &CompPubKey,
@@ -312,8 +312,8 @@ pub(crate) fn set_deposit_tx_witness(
 	let asset_exists_in_accout = true; // always true after deposit
 
 	// ── ACT circuit-compatible root ───────────────────────────────────────────
-	let act_sibs: [[F; 4]; ACT_DEPTH] = array::from_fn(|i| accin_act_siblings[i].0);
-	let act_bits: [bool; ACT_DEPTH] = array::from_fn(|i| (accin_act_pos >> i) & 1 == 1);
+	let act_sibs: [[F; 4]; ACT_DEPTH] = core::array::from_fn(|i| accin_act_siblings[i].0);
+	let act_bits: [bool; ACT_DEPTH] = core::array::from_fn(|i| (accin_act_pos >> i) & 1 == 1);
 	let act_root = HashOutput(circuit_merkle_root(
 		accin.commitment().0.0,
 		&act_sibs,
@@ -324,16 +324,12 @@ pub(crate) fn set_deposit_tx_witness(
 	// H(accin_null[4] || accout_comm[4] || deposit_note_comm[4] || eth_address[5])
 	let accin_null = accin.nullifier(Some(accin_act_pos as u64));
 	let deposit_note_comm_native = deposit_note.commitment();
-	let eth_f: [F; 5] = array::from_fn(|i| F::from_canonical_u32(eth_address[i]));
-	let tx_hash: [F; 4] = {
-		let mut inp: Vec<F> = Vec::with_capacity(17);
-		inp.extend_from_slice(&accin_null.0.0);
-		inp.extend_from_slice(&accout.commitment().0.0);
-		inp.extend_from_slice(&deposit_note_comm_native.0.0);
-		inp.extend_from_slice(&eth_f);
-		<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements
-	};
-
+	let tx_hash = derive_deposit_tx_hash(
+		accin_null,
+		accout.commitment(),
+		deposit_note_comm_native,
+		*eth_address,
+	);
 	// ── Tree roots ────────────────────────────────────────────────────────────
 	set_hash(pw, t.act_root.0, act_root.0);
 	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
@@ -349,28 +345,8 @@ pub(crate) fn set_deposit_tx_witness(
 
 	// ── Asset / amounts ───────────────────────────────────────────────────────
 	pw.set_target(t.asset_id.0, asset_id.0).unwrap();
-	for i in 0..4usize {
-		pw.set_target(
-			t.accin_amt.0[2 * i].0,
-			F::from_canonical_u32((accin_amt.0[i] & 0xFFFF_FFFF) as u32),
-		)
-		.unwrap();
-		pw.set_target(
-			t.accin_amt.0[2 * i + 1].0,
-			F::from_canonical_u32((accin_amt.0[i] >> 32) as u32),
-		)
-		.unwrap();
-		pw.set_target(
-			t.accout_amt.0[2 * i].0,
-			F::from_canonical_u32((accout_amt.0[i] & 0xFFFF_FFFF) as u32),
-		)
-		.unwrap();
-		pw.set_target(
-			t.accout_amt.0[2 * i + 1].0,
-			F::from_canonical_u32((accout_amt.0[i] >> 32) as u32),
-		)
-		.unwrap();
-	}
+	t.accin_amt.set_witness(pw, accin_amt);
+	t.accout_amt.set_witness(pw, accout_amt);
 	pw.set_bool_target(t.asset_exists_in_accin, asset_exists_in_accin)
 		.unwrap();
 	pw.set_bool_target(t.asset_exists_in_accout, asset_exists_in_accout)
@@ -379,21 +355,20 @@ pub(crate) fn set_deposit_tx_witness(
 		.unwrap();
 
 	// ── ACT Merkle proof ──────────────────────────────────────────────────────
+	// TODO: move the function as a method on ActMerkle. Make sure this is only a single call
+	// everywhere
 	set_merkle_siblings_and_bits(pw, &t.accin_act_merkle, act_sibs, act_bits);
 
 	// ── AccIn AST Merkle proof ────────────────────────────────────────────────
 	let ast_proof = accin.ast.merkle_proof_at(ast_index);
-	let (ast_sib, ast_bit) = proof_siblings_bits(&ast_proof);
-	set_merkle_siblings_and_bits(pw, &t.accin_ast_merkle.0, ast_sib, ast_bit);
+	t.accin_ast_merkle.0.set_witness(pw, &ast_proof);
 
 	// ── Deposit note ─────────────────────────────────────────────────────────
 	t.deposit_note.set_witness(pw, deposit_note);
 
 	// ── Eth address ───────────────────────────────────────────────────────────
-	for (i, &w) in eth_address.iter().enumerate() {
-		pw.set_target(t.eth_address[i], F::from_canonical_u32(w))
-			.unwrap();
-	}
+	pw.set_target_arr(&t.eth_address, &map_h160_to_f(&eth_address))
+		.unwrap();
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
 	let subpool = SubpoolConfigTree::new(*approval_key, *rejection_key, *consume_key);
@@ -401,18 +376,10 @@ pub(crate) fn set_deposit_tx_witness(
 		.full_subpool_proof(&subpool, subpool_id)
 		.expect("subpool not in main_pool at the given subpool_id");
 
-	let (sib, bit) = proof_siblings_bits::<_, _, SUBPOOL_CONFIG_DEPTH>(&full_proof.approval_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.approval_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits::<_, _, SUBPOOL_CONFIG_DEPTH>(&full_proof.rejection_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.rejection_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits::<_, _, SUBPOOL_CONFIG_DEPTH>(&full_proof.consume_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.consume_proof, sib, bit);
-
-	let (sib, bit) =
-		proof_siblings_bits::<_, _, MAIN_POOL_CONFIG_DEPTH>(&full_proof.main_pool_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.main_pool_proof, sib, bit);
+	t.subpool_proof_targets.approval_proof.set_witness(pw, &full_proof.approval_proof);
+	t.subpool_proof_targets.rejection_proof.set_witness(pw, &full_proof.rejection_proof);
+	t.subpool_proof_targets.consume_proof.set_witness(pw, &full_proof.consume_proof);
+	t.subpool_proof_targets.main_pool_proof.set_witness(pw, &full_proof.main_pool_proof);
 
 	pw.set_target_arr(
 		&t.subpool_proof_targets.subpool_config_root.0.elements,
@@ -422,13 +389,14 @@ pub(crate) fn set_deposit_tx_witness(
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 
+	// TODO: move compute challenge funnction
 	// Schnorr challenge: e = DropTop2Bits(H(R_enc || Q_enc || tx_hash))
 	let compute_e = |cr: &CompressedPoint<F>, cq: &CompressedPoint<F>| -> Scalar {
 		let mut h: Vec<F> = cr.w.0.to_vec();
 		h.extend_from_slice(&cq.w.0);
-		h.extend_from_slice(&tx_hash);
+		h.extend_from_slice(&tx_hash.0);
 		let h_out = hash_n_to_m_no_pad::<F, <PoseidonHash as Hasher<F>>::Permutation>(&h, 5);
-		Scalar::from_hash(array::from_fn(|i| h_out[i]))
+		Scalar::from_hash(core::array::from_fn(|i| h_out[i]))
 	};
 
 	// Consume: uses accin.consume_auth.config to pick key (same as circuit)
@@ -479,7 +447,7 @@ mod tests {
 		},
 	};
 	use plonky2_field::types::{Field, PrimeField64};
-	use primitive_types::U256;
+	use primitive_types::{H160, U256};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
 	use tessera_trees::tree::{CommitmentTree, hasher::HashOutput};
@@ -488,6 +456,7 @@ mod tests {
 	use crate::{
 		ACT_DEPTH, AccountAddress, AssetId, Nonce, StandardAccount, SubpoolId,
 		account::AccountStateTreeLeaf,
+		derive_deposit_tx_hash,
 		note::DepositNote,
 		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
@@ -515,7 +484,13 @@ mod tests {
 
 		// ── Sample accin ──────────────────────────────────────────────────────
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let accin = StandardAccount::sample(&mut rng, subpool_id);
+		let mut accin = StandardAccount::sample(&mut rng, subpool_id);
+
+		// --- Simulate FreshAcc ------------------------------------------------
+		accin.nonce = Nonce(F::ONE);
+		accin.spend_auth = crate::SpendAuth {
+			spend_pk: Some(PrivateKey::from_raw([8, 7, 6, 5, 4]).public_key().into()),
+		};
 
 		// ── Insert accin into ACT ─────────────────────────────────────────────
 		let mut act = CommitmentTree::<HashOutput>::new(ACT_DEPTH);
@@ -530,7 +505,7 @@ mod tests {
 			amount: U256::from(1000u64),
 			asset_id,
 		};
-		let eth_address: [u32; 5] = [1, 2, 3, 4, 5];
+		let eth_address = H160::random();
 
 		// ── Compute native TxHash ─────────────────────────────────────────────
 		// Mirror the circuit formula so we can sign it.
@@ -546,18 +521,17 @@ mod tests {
 
 		let accin_null = accin.nullifier(Some(acc_act_pos as u64));
 		let deposit_note_comm = deposit_note.commitment();
-		let eth_f: [F; 5] = array::from_fn(|i| F::from_canonical_u32(eth_address[i]));
-		let mut tx_hash_inp: Vec<F> = Vec::with_capacity(17);
-		tx_hash_inp.extend_from_slice(&accin_null.0.0);
-		tx_hash_inp.extend_from_slice(&accout.commitment().0.0);
-		tx_hash_inp.extend_from_slice(&deposit_note_comm.0.0);
-		tx_hash_inp.extend_from_slice(&eth_f);
-		let tx_hash = <PoseidonHash as Hasher<F>>::hash_no_pad(&tx_hash_inp).elements;
+		let tx_hash = derive_deposit_tx_hash(
+			accin_null,
+			accout.commitment(),
+			deposit_note_comm,
+			eth_address,
+		);
 
 		// ── Sign ──────────────────────────────────────────────────────────────
 		let k = Scalar::from_raw([1, 2, 3, 4, 5]);
-		let consume_sig = schnorr_sign(&consume_sk, &tx_hash, k);
-		let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
+		let consume_sig = schnorr_sign(&consume_sk, &tx_hash.0, k);
+		let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
@@ -574,7 +548,7 @@ mod tests {
 			acc_act_pos,
 			&acc_act_siblings,
 			&deposit_note,
-			eth_address,
+			&eth_address,
 			&approval_cpk,
 			&rejection_cpk,
 			&consume_cpk,

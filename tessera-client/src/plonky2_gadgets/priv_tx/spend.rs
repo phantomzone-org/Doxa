@@ -18,11 +18,11 @@ use crate::{
 	MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier,
 	PrivateIdentifier, SUBPOOL_CONFIG_DEPTH, StandardAccount, SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
-	derive_tx_hash,
+	derive_priv_tx_hash,
 	ecgfp5::{CompressedPoint, PointEw},
 	note::{NodeIdentifier, PositionedStandardNode, StandardNote},
 	plonky2_gadgets::{
-		merkle::{proof_siblings_bits, set_merkle_siblings_and_bits},
+		merkle::{MerkleSiblingsBits, set_merkle_siblings_and_bits},
 		set_hash, set_u256_zero,
 		signature::set_schnorr_witness,
 	},
@@ -189,7 +189,7 @@ pub(crate) fn set_spend_tx_witness(
 		}
 	});
 	let accin_null = accin.nullifier(Some(accin_pos as u64));
-	let tx_hash = derive_tx_hash(
+	let tx_hash = derive_priv_tx_hash(
 		accin_null,
 		accout.commitment(),
 		tx_inote_nulls,
@@ -220,30 +220,8 @@ pub(crate) fn set_spend_tx_witness(
 
 	// ── Asset / amounts ───────────────────────────────────────────────────────
 	pw.set_target(t.asset_id.0, asset_id.0).unwrap();
-
-	// U256 → 8 × U32Target (little-endian 32-bit limbs of each u64 word)
-	for i in 0..4usize {
-		pw.set_target(
-			t.accin_amt.0[2 * i].0,
-			F::from_canonical_u32((accin_amt.0[i] & 0xFFFF_FFFF) as u32),
-		)
-		.unwrap();
-		pw.set_target(
-			t.accin_amt.0[2 * i + 1].0,
-			F::from_canonical_u32((accin_amt.0[i] >> 32) as u32),
-		)
-		.unwrap();
-		pw.set_target(
-			t.accout_amt.0[2 * i].0,
-			F::from_canonical_u32((accout_amt.0[i] & 0xFFFF_FFFF) as u32),
-		)
-		.unwrap();
-		pw.set_target(
-			t.accout_amt.0[2 * i + 1].0,
-			F::from_canonical_u32((accout_amt.0[i] >> 32) as u32),
-		)
-		.unwrap();
-	}
+	t.accin_amt.set_witness(pw, accin_amt);
+	t.accout_amt.set_witness(pw, accout_amt);
 
 	pw.set_bool_target(t.asset_exists_in_accin, asset_exists_in_accin)
 		.unwrap();
@@ -257,8 +235,7 @@ pub(crate) fn set_spend_tx_witness(
 
 	// ── AST Merkle proof ──────────────────────────────────────────────────────
 	let ast_proof = accin.ast.merkle_proof_at(ast_index);
-	let (ast_sib, ast_bit) = proof_siblings_bits(&ast_proof);
-	set_merkle_siblings_and_bits(pw, &t.accin_ast_merkle.0, ast_sib, ast_bit);
+	t.accin_ast_merkle.0.set_witness(pw, &ast_proof);
 
 	// ── Input notes ───────────────────────────────────────────────────────────
 	let zero_addr = AccountAddress {
@@ -329,17 +306,10 @@ pub(crate) fn set_spend_tx_witness(
 		.full_subpool_proof(&subpool, subpool_id)
 		.expect("subpool not registered in main_pool at the given subpool_id");
 
-	let (sib, bit) = proof_siblings_bits(&full_proof.approval_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.approval_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits(&full_proof.rejection_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.rejection_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits(&full_proof.consume_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.consume_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits(&full_proof.main_pool_proof);
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.main_pool_proof, sib, bit);
+	t.subpool_proof_targets.approval_proof.set_witness(pw, &full_proof.approval_proof);
+	t.subpool_proof_targets.rejection_proof.set_witness(pw, &full_proof.rejection_proof);
+	t.subpool_proof_targets.consume_proof.set_witness(pw, &full_proof.consume_proof);
+	t.subpool_proof_targets.main_pool_proof.set_witness(pw, &full_proof.main_pool_proof);
 
 	pw.set_target_arr(
 		&t.subpool_proof_targets.subpool_config_root.0.elements,
@@ -507,8 +477,7 @@ pub(crate) fn set_fake_tx_witness(
 
 	// ── AST Merkle proof (real path of default leaf at index 0) ──────────────
 	let ast_proof = accin.ast.merkle_proof_at(0);
-	let (ast_sib, ast_bit) = proof_siblings_bits(&ast_proof);
-	set_merkle_siblings_and_bits(pw, &t.accin_ast_merkle.0, ast_sib, ast_bit);
+	t.accin_ast_merkle.0.set_witness(pw, &ast_proof);
 
 	// ── Input notes (all inactive) ────────────────────────────────────────────
 	let zero_addr = AccountAddress {
@@ -562,14 +531,9 @@ pub(crate) fn set_fake_tx_witness(
 	let fake_subpool =
 		SubpoolConfigTree::new(fake_approval_cpk, fake_rejection_cpk, fake_consume_cpk);
 
-	let (sib, bit) = proof_siblings_bits(&fake_subpool.approval_key_proof());
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.approval_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits(&fake_subpool.rejection_key_proof());
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.rejection_proof, sib, bit);
-
-	let (sib, bit) = proof_siblings_bits(&fake_subpool.consume_key_proof());
-	set_merkle_siblings_and_bits(pw, &t.subpool_proof_targets.consume_proof, sib, bit);
+	t.subpool_proof_targets.approval_proof.set_witness(pw, &fake_subpool.approval_key_proof());
+	t.subpool_proof_targets.rejection_proof.set_witness(pw, &fake_subpool.rejection_key_proof());
+	t.subpool_proof_targets.consume_proof.set_witness(pw, &fake_subpool.consume_key_proof());
 
 	set_merkle_siblings_and_bits(
 		pw,
@@ -768,7 +732,7 @@ mod tests {
 			array::from_fn(|i| NoteCommitment(HashOutput(double_hash_native(donotes[i]))));
 
 		let accin_null = acc0.nullifier(Some(acc0_pos as u64));
-		let tx_hash = derive_tx_hash(
+		let tx_hash = derive_priv_tx_hash(
 			accin_null,
 			accout.commitment(),
 			tx_inote_nulls,

@@ -107,16 +107,7 @@ impl NoteTarget {
 			.unwrap();
 		pw.set_target(self.identifier[1], note.identifier.0[1])
 			.unwrap();
-		// amount: U256.0 is [u64; 4] little-endian words, split into lo/hi u32 limbs
-		for (i, word) in note.amt.0.iter().enumerate() {
-			pw.set_target(self.amount.0[2 * i].0, F::from_canonical_u32(*word as u32))
-				.unwrap();
-			pw.set_target(
-				self.amount.0[2 * i + 1].0,
-				F::from_canonical_u32((*word >> 32) as u32),
-			)
-			.unwrap();
-		}
+		self.amount.set_witness(pw, note.amt);
 		pw.set_target(self.asset_id.0, note.asset_id.0).unwrap();
 		pw.set_target(self.spend_cond.subpool_id.0, note.recipient.subpool_id.0)
 			.unwrap();
