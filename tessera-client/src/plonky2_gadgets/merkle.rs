@@ -7,39 +7,20 @@ use std::{
 use itertools::{Itertools, izip};
 use plonky2::{
 	hash::{
-		hash_types::{HashOutTarget, NUM_HASH_OUT_ELTS, RichField},
+		hash_types::{HashOutTarget, RichField},
 		hashing::PlonkyPermutation,
 		poseidon::{Poseidon, PoseidonHash, PoseidonPermutation},
 	},
 	iop::{
 		target::{BoolTarget, Target},
-		witness::{PartialWitness, PartitionWitness, Witness, WitnessWrite},
+		witness::{PartialWitness, WitnessWrite},
 	},
-	plonk::{
-		circuit_builder::CircuitBuilder, circuit_data::CommonCircuitData, config::AlgebraicHasher,
-	},
-	util::serialization::{Buffer, IoResult, Read as _, Write as _},
+	plonk::{circuit_builder::CircuitBuilder, config::AlgebraicHasher},
 };
-use plonky2_field::{extension::Extendable, goldilocks_field::GoldilocksField, types::Field};
-use tessera_trees::{
-	F,
-	plonky2_gadgets::u32::gadgets::{U32Target, add_u8_range_check_lookup_table},
-	tree::{HASH_SIZE, hasher::HashOutput},
-};
+use plonky2_field::{extension::Extendable, types::Field};
+use tessera_trees::tree::HASH_SIZE;
 
-use crate::{
-	account::{NullifierKey, StandardAccount},
-	plonky2_gadgets::{
-		signature::{
-			LocalPointEw, LocalQuinticExtension, PubkeyTarget, SchnorrTargets,
-			conditional_schnorr_verify_gadget, set_schnorr_witness,
-		},
-		u256::{CircuitBuilderU256, U256Target},
-	},
-	pool_config::{MainPoolConfigNode, MainPoolConfigTree, SubpoolConfigNode, SubpoolConfigTree},
-	schnorr::{PrivateKey, PublicKey, Scalar, poseidon_hash_to_scalar, schnorr_sign},
-	tree::{Direction, MerkleProof, Node},
-};
+use crate::tree::{MerkleProof, Node};
 
 pub(crate) fn set_merkle_siblings_and_bits<
 	F: Field,
@@ -59,6 +40,23 @@ pub(crate) fn set_merkle_siblings_and_bits<
 		pw.set_bool_target(BoolTarget::new_unsafe(t.bits()[lvl]), bits[lvl])
 			.unwrap();
 	}
+}
+
+/// Extract siblings and direction bits from a native MerkleProof.
+/// Direction::Left  (sibling on left, current is right child) → bit = true
+/// Direction::Right (sibling on right, current is left child) → bit = false
+fn proof_siblings_bits<F: Field, N: Node, const DEPTH: usize>(
+	proof: &crate::tree::MerkleProof<N, DEPTH>,
+) -> ([[F; 4]; DEPTH], [bool; DEPTH]) {
+	let siblings: [[F; 4]; DEPTH] = core::array::from_fn(|i| {
+		proof.path[i].sibling.inner().0.map(|f| {
+			use plonky2_field::types::PrimeField64;
+			F::from_canonical_u64(f.to_canonical_u64())
+		})
+	});
+	let bits: [bool; DEPTH] =
+		core::array::from_fn(|i| proof.path[i].direction == crate::tree::Direction::Left);
+	(siblings, bits)
 }
 
 pub(crate) trait MerkleSiblingsBits<const DEPTH: usize> {
@@ -95,23 +93,6 @@ impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for MerkleTarget<DEPTH> {
 	fn bits(&self) -> &[Target; DEPTH] {
 		&self.bits
 	}
-}
-
-/// Extract siblings and direction bits from a native MerkleProof.
-/// Direction::Left  (sibling on left, current is right child) → bit = true
-/// Direction::Right (sibling on right, current is left child) → bit = false
-pub(crate) fn proof_siblings_bits<F: Field, N: Node, const DEPTH: usize>(
-	proof: &crate::tree::MerkleProof<N, DEPTH>,
-) -> ([[F; 4]; DEPTH], [bool; DEPTH]) {
-	let siblings: [[F; 4]; DEPTH] = core::array::from_fn(|i| {
-		proof.path[i].sibling.inner().0.map(|f| {
-			use plonky2_field::types::PrimeField64;
-			F::from_canonical_u64(f.to_canonical_u64())
-		})
-	});
-	let bits: [bool; DEPTH] =
-		core::array::from_fn(|i| proof.path[i].direction == crate::tree::Direction::Left);
-	(siblings, bits)
 }
 
 #[derive(Clone, Copy)]

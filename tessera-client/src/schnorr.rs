@@ -6,6 +6,7 @@ use plonky2_field::{
 	goldilocks_field::GoldilocksField,
 	types::{Field, PrimeField64},
 };
+use tessera_trees::F;
 
 use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 
@@ -260,7 +261,7 @@ pub(crate) struct Signature {
 	pub(crate) s: Scalar,
 }
 
-pub(crate) fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar {
+fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar {
 	use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 	let mut out = [GoldilocksField::ZERO; 5];
 	out.copy_from_slice(
@@ -272,7 +273,18 @@ pub(crate) fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar 
 	Scalar::from_hash(out)
 }
 
-/// Sign: R = k*G, e = H(R || Q || m), s = k + d*e
+pub(crate) fn schnorr_challenge(
+	cr: &CompressedPoint<F>,
+	cq: &CompressedPoint<F>,
+	m: &[F],
+) -> Scalar {
+	let mut h: Vec<F> = cr.w.0.to_vec();
+	h.extend_from_slice(&cq.w.0);
+	h.extend_from_slice(m);
+	poseidon_hash_to_scalar(&h)
+}
+
+/// Sign: R = k*G, e = H(R || Q || m), s = k + d*-e
 pub(crate) fn schnorr_sign(
 	privkey: &PrivateKey,
 	message: &[GoldilocksField],
@@ -283,12 +295,9 @@ pub(crate) fn schnorr_sign(
 
 	let r_encoded = r.encode();
 	let q_encoded = privkey.public_key().as_point().encode();
-	let mut hash_input = Vec::new();
-	hash_input.extend_from_slice(&r_encoded.w.0);
-	hash_input.extend_from_slice(&q_encoded.w.0);
-	hash_input.extend_from_slice(message);
 
-	let e = poseidon_hash_to_scalar(&hash_input);
+	let e = schnorr_challenge(&r_encoded, &q_encoded, message);
+
 	let s = k + privkey.0 * -e;
 
 	Signature {
@@ -297,7 +306,7 @@ pub(crate) fn schnorr_sign(
 	}
 }
 
-/// Verify: s*G - e*Q == R
+/// Verify: s*G + e*Q == R
 pub(crate) fn schnorr_verify(
 	pubkey: &PublicKey<GoldilocksField>,
 	message: &[GoldilocksField],
@@ -305,12 +314,8 @@ pub(crate) fn schnorr_verify(
 ) -> bool {
 	let r_encoded = sig.r.encode();
 	let q_encoded = pubkey.0.encode();
-	let mut hash_input = Vec::new();
-	hash_input.extend_from_slice(&r_encoded.w.0);
-	hash_input.extend_from_slice(&q_encoded.w.0);
-	hash_input.extend_from_slice(message);
 
-	let e = poseidon_hash_to_scalar(&hash_input);
+	let e = schnorr_challenge(&r_encoded, &q_encoded, message);
 
 	let g = PointEw::generator();
 	let sg = g.scalar_mul(&sig.s);

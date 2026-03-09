@@ -24,7 +24,7 @@ use crate::{
 		signature::set_schnorr_witness,
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::{Scalar, Signature},
+	schnorr::{Scalar, Signature, schnorr_challenge},
 };
 
 /// Fill `pw` with a complete FreshAcc transaction witness.
@@ -233,11 +233,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	let approval_q: PointEw<F> = PointEw::decode(approval_key.0).unwrap();
 	let approval_cr = approval_sig.r.encode();
 	let approval_cq = approval_q.encode();
-	let mut h_inp: Vec<F> = approval_cr.w.0.to_vec();
-	h_inp.extend_from_slice(&approval_cq.w.0);
-	h_inp.extend_from_slice(&tx_hash);
-	let h_out = hash_n_to_m_no_pad::<F, <PoseidonHash as Hasher<F>>::Permutation>(&h_inp, 5);
-	let approval_e = Scalar::from_hash(array::from_fn(|i| h_out[i]));
+	let approval_e = schnorr_challenge(&approval_cr, &approval_cq, &tx_hash);
 	set_schnorr_witness(
 		pw,
 		&t.sig_targets.approval,

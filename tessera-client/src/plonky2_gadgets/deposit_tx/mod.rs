@@ -50,7 +50,7 @@ use crate::{
 		u256::CircuitBuilderU256,
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::{Scalar, Signature},
+	schnorr::{Scalar, Signature, schnorr_challenge},
 	utils::map_h160_to_f,
 };
 
@@ -376,10 +376,18 @@ pub(crate) fn set_deposit_tx_witness(
 		.full_subpool_proof(&subpool, subpool_id)
 		.expect("subpool not in main_pool at the given subpool_id");
 
-	t.subpool_proof_targets.approval_proof.set_witness(pw, &full_proof.approval_proof);
-	t.subpool_proof_targets.rejection_proof.set_witness(pw, &full_proof.rejection_proof);
-	t.subpool_proof_targets.consume_proof.set_witness(pw, &full_proof.consume_proof);
-	t.subpool_proof_targets.main_pool_proof.set_witness(pw, &full_proof.main_pool_proof);
+	t.subpool_proof_targets
+		.approval_proof
+		.set_witness(pw, &full_proof.approval_proof);
+	t.subpool_proof_targets
+		.rejection_proof
+		.set_witness(pw, &full_proof.rejection_proof);
+	t.subpool_proof_targets
+		.consume_proof
+		.set_witness(pw, &full_proof.consume_proof);
+	t.subpool_proof_targets
+		.main_pool_proof
+		.set_witness(pw, &full_proof.main_pool_proof);
 
 	pw.set_target_arr(
 		&t.subpool_proof_targets.subpool_config_root.0.elements,
@@ -389,16 +397,6 @@ pub(crate) fn set_deposit_tx_witness(
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 
-	// TODO: move compute challenge funnction
-	// Schnorr challenge: e = DropTop2Bits(H(R_enc || Q_enc || tx_hash))
-	let compute_e = |cr: &CompressedPoint<F>, cq: &CompressedPoint<F>| -> Scalar {
-		let mut h: Vec<F> = cr.w.0.to_vec();
-		h.extend_from_slice(&cq.w.0);
-		h.extend_from_slice(&tx_hash.0);
-		let h_out = hash_n_to_m_no_pad::<F, <PoseidonHash as Hasher<F>>::Permutation>(&h, 5);
-		Scalar::from_hash(core::array::from_fn(|i| h_out[i]))
-	};
-
 	// Consume: uses accin.consume_auth.config to pick key (same as circuit)
 	{
 		let cq = if accin.consume_auth.config {
@@ -407,7 +405,7 @@ pub(crate) fn set_deposit_tx_witness(
 			consume_key.0
 		};
 		let cr = consume_sig.r.encode();
-		let e = compute_e(&cr, &cq);
+		let e = schnorr_challenge(&cr, &cq, &tx_hash.0);
 		set_schnorr_witness(
 			pw,
 			&t.sig_targets.consume,
@@ -422,7 +420,7 @@ pub(crate) fn set_deposit_tx_witness(
 	{
 		let cq = approval_key.0;
 		let cr = approval_sig.r.encode();
-		let e = compute_e(&cr, &cq);
+		let e = schnorr_challenge(&cr, &cq, &tx_hash.0);
 		set_schnorr_witness(
 			pw,
 			&t.sig_targets.approval,
@@ -467,7 +465,6 @@ mod tests {
 	type F = <C as GenericConfig<D>>::F;
 
 	#[test]
-	// TODO: proof fails either because tx_hash derivation mismatch or invalid signature generation
 	fn test_prove_deposit_tx() {
 		// ── Keys for subpool ──────────────────────────────────────────────────
 		let approval_sk = PrivateKey::from_raw([1, 2, 3, 4, 5]);

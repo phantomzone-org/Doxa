@@ -1,22 +1,19 @@
 use std::array;
 
 use plonky2::{
-	hash::{hash_types::HashOut, hashing::hash_n_to_m_no_pad, poseidon::PoseidonHash},
+	hash::{hash_types::HashOut, poseidon::PoseidonHash},
 	iop::witness::{PartialWitness, WitnessWrite},
 	plonk::config::Hasher,
 };
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
-use tessera_trees::{
-	F,
-	tree::{CommitmentInsertProof, hasher::HashOutput},
-};
+use tessera_trees::{F, tree::hasher::HashOutput};
 
 use super::{double_hash_native, targets::TxCircuitTargets};
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, AccountAddress, AssetId, DEFAULT_SPEND_AUTH_PK,
-	MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier,
-	PrivateIdentifier, SUBPOOL_CONFIG_DEPTH, StandardAccount, SubpoolId,
+	ACT_DEPTH, AccountAddress, AssetId, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH,
+	NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, PrivateIdentifier, StandardAccount,
+	SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
 	derive_priv_tx_hash,
 	ecgfp5::{CompressedPoint, PointEw},
@@ -27,7 +24,7 @@ use crate::{
 		signature::set_schnorr_witness,
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::{CompressedPublicKey, Scalar, Signature},
+	schnorr::{CompressedPublicKey, Scalar, Signature, schnorr_challenge},
 };
 
 /// Compute circuit-compatible Merkle root using `two_to_one` at every level.
@@ -306,10 +303,18 @@ pub(crate) fn set_spend_tx_witness(
 		.full_subpool_proof(&subpool, subpool_id)
 		.expect("subpool not registered in main_pool at the given subpool_id");
 
-	t.subpool_proof_targets.approval_proof.set_witness(pw, &full_proof.approval_proof);
-	t.subpool_proof_targets.rejection_proof.set_witness(pw, &full_proof.rejection_proof);
-	t.subpool_proof_targets.consume_proof.set_witness(pw, &full_proof.consume_proof);
-	t.subpool_proof_targets.main_pool_proof.set_witness(pw, &full_proof.main_pool_proof);
+	t.subpool_proof_targets
+		.approval_proof
+		.set_witness(pw, &full_proof.approval_proof);
+	t.subpool_proof_targets
+		.rejection_proof
+		.set_witness(pw, &full_proof.rejection_proof);
+	t.subpool_proof_targets
+		.consume_proof
+		.set_witness(pw, &full_proof.consume_proof);
+	t.subpool_proof_targets
+		.main_pool_proof
+		.set_witness(pw, &full_proof.main_pool_proof);
 
 	pw.set_target_arr(
 		&t.subpool_proof_targets.subpool_config_root.0.elements,
@@ -319,22 +324,12 @@ pub(crate) fn set_spend_tx_witness(
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 
-	// Helper: given sig.r and the signer's decoded public key, compute the
-	// challenge scalar e = H(R_enc || Q_enc || tx_hash).
-	let compute_e = |cr: &CompressedPoint<F>, cq: &CompressedPoint<F>| -> Scalar {
-		let mut h: Vec<F> = cr.w.0.to_vec();
-		h.extend_from_slice(&cq.w.0);
-		h.extend_from_slice(&tx_hash);
-		let h_out = hash_n_to_m_no_pad::<F, <PoseidonHash as Hasher<F>>::Permutation>(&h, 5);
-		Scalar::from_hash(array::from_fn(|i| h_out[i]))
-	};
-
 	// Spend signature
 	{
 		if let Some(sig) = spend_sig {
 			let cq = accin.spend_auth.spend_pk.unwrap().0;
 			let cr = sig.r.encode();
-			let e = compute_e(&cr, &cq);
+			let e = schnorr_challenge(&cr, &cq, &tx_hash);
 			set_schnorr_witness(
 				pw,
 				&t.sig_targets.spend,
@@ -369,7 +364,7 @@ pub(crate) fn set_spend_tx_witness(
 		};
 		if let Some(sig) = consume_sig {
 			let cr = sig.r.encode();
-			let e = compute_e(&cr, &cq);
+			let e = schnorr_challenge(&cr, &cq, &tx_hash);
 			set_schnorr_witness(
 				pw,
 				&t.sig_targets.consume,
@@ -392,7 +387,7 @@ pub(crate) fn set_spend_tx_witness(
 	{
 		let cq = approval_key.0;
 		let cr = approval_sig.r.encode();
-		let e = compute_e(&cr, &cq);
+		let e = schnorr_challenge(&cr, &cq, &tx_hash);
 		set_schnorr_witness(
 			pw,
 			&t.sig_targets.approval,
@@ -531,9 +526,15 @@ pub(crate) fn set_fake_tx_witness(
 	let fake_subpool =
 		SubpoolConfigTree::new(fake_approval_cpk, fake_rejection_cpk, fake_consume_cpk);
 
-	t.subpool_proof_targets.approval_proof.set_witness(pw, &fake_subpool.approval_key_proof());
-	t.subpool_proof_targets.rejection_proof.set_witness(pw, &fake_subpool.rejection_key_proof());
-	t.subpool_proof_targets.consume_proof.set_witness(pw, &fake_subpool.consume_key_proof());
+	t.subpool_proof_targets
+		.approval_proof
+		.set_witness(pw, &fake_subpool.approval_key_proof());
+	t.subpool_proof_targets
+		.rejection_proof
+		.set_witness(pw, &fake_subpool.rejection_key_proof());
+	t.subpool_proof_targets
+		.consume_proof
+		.set_witness(pw, &fake_subpool.consume_key_proof());
 
 	set_merkle_siblings_and_bits(
 		pw,
