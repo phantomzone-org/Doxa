@@ -8,7 +8,7 @@ use plonky2::{
 };
 use plonky2_field::{extension::Extendable, types::Field};
 use rand::CryptoRng;
-use tessera_trees::F;
+use tessera_trees::{F, tree::hasher::MerkleHashCircuit};
 
 use crate::{
 	DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
@@ -45,7 +45,11 @@ fn sample_dummy_notes<R: CryptoRng>(rng: &mut R) -> ([[F; 4]; NOTE_BATCH], [[F; 
 	(dinotes, donotes)
 }
 
-pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
+pub fn priv_tx_circuit<
+	H: MerkleHashCircuit<F, D>,
+	F: RichField + Extendable<D> + Poseidon,
+	const D: usize,
+>(
 	builder: &mut CircuitBuilder<F, D>,
 ) -> TxCircuitTargets {
 	// Mint constants
@@ -105,8 +109,9 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	let accin_pos = builder.add_virtual_target();
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
 	let check_act = builder.and(not_is_fresh_acc, not_fake_tx);
-	let accin_merkletrgts = builder
-		.conditionally_assert_account_commitment_exists_in_act(accin_comm, act_root, check_act);
+	let accin_merkletrgts = builder.conditionally_assert_account_commitment_exists_in_act::<H>(
+		accin_comm, act_root, check_act,
+	);
 
 	// AccIn nullifier — select fresh vs regular based on is_fresh_acc
 	let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
@@ -122,7 +127,7 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	});
 
 	// Verify asset/amt proofs in AccIn and AccOut ASTs; enforce same leaf position was updated
-	let (accin_ast_merkle, accout_ast_merkle) = builder.assert_ast_update(
+	let accin_ast_merkle = builder.assert_ast_update(
 		asset_id,
 		accin_amt,
 		accout_amt,
@@ -164,7 +169,7 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 	}
 
 	// for each inote verify NCT membership, and check spend auth
-	let inotes_mrkltrgt = builder.assert_inotes_valid(
+	let inotes_mrkltrgt = builder.assert_inotes_valid::<H>(
 		inotes,
 		inotes_isactive,
 		inotes_comm,
@@ -240,7 +245,6 @@ pub fn priv_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usize>(
 		accin_pos,
 		accin_act_merkle: accin_merkletrgts,
 		accin_ast_merkle,
-		accout_ast_merkle,
 		inotes,
 		inotes_pos,
 		inotes_isactive,

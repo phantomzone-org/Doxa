@@ -7,7 +7,7 @@ use plonky2::{
 };
 use plonky2_field::types::Field;
 
-pub(crate) mod deposit_tx;
+// pub(crate) mod deposit_tx;
 pub(crate) mod merkle;
 pub(crate) mod priv_tx;
 pub(crate) mod signature;

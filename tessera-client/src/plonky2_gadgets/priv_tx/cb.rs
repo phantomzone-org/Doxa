@@ -6,10 +6,10 @@ use plonky2::{
 	iop::target::{BoolTarget, Target},
 	plonk::circuit_builder::CircuitBuilder,
 };
-use plonky2_field::extension::Extendable;
+use plonky2_field::{extension::Extendable, types::Field};
 use tessera_trees::{
 	plonky2_gadgets::u32::{U32Target, add_u8_range_check_lookup_table},
-	tree::HASH_SIZE,
+	tree::{HASH_SIZE, hasher::MerkleHashCircuit},
 };
 
 use crate::{
@@ -18,24 +18,25 @@ use crate::{
 	DS_NULLIFIER_KEY, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
 		merkle::{
-			ConditionalMerkleTarget, MerkleTarget, conditional_merkle_verify_gadget,
+			CommitmentTreeMerkleTarget, ConditionalMerkleTarget, MerkleTarget,
+			conditional_merkle_verify_commitment_tree_gadget, conditional_merkle_verify_gadget,
 			merkle_verify_gadget,
 		},
 		priv_tx::targets::{
-			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, ActMerkleTarget,
-			ActRootTarget, AssetIdTarget, AstMerkleTargets, ConsumeAuthTarget, ConsumeCondTarget,
-			DummyAccountCommitment, DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
-			MainPoolConfigRootTarget, NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
-			NoteTarget, NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt,
-			RejectCondTarget, SubpoolConfigRootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
-			TxHashTarget, TxSignatureTargets,
+			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, ActRootTarget,
+			AssetIdTarget, ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment,
+			DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget, MainPoolConfigRootTarget,
+			NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
+			NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt, RejectCondTarget,
+			SubpoolConfigRootTarget, SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget,
+			TxSignatureTargets,
 		},
 		signature::{LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget},
 		u256::{CircuitBuilderU256, U256Target},
 	},
 };
 
-pub trait PrivTxCircuitBuilder {
+pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	// ---- Add virtual methods ----
 
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
@@ -69,12 +70,12 @@ pub trait PrivTxCircuitBuilder {
 	fn derive_dummy_account_nullifier(&mut self, dacc: DummyAccountTarget)
 	-> DummyAccountNullifier;
 
-	fn conditionally_assert_account_commitment_exists_in_act(
+	fn conditionally_assert_account_commitment_exists_in_act<H: MerkleHashCircuit<F, D>>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
 		act_root: ActRootTarget,
 		condition: BoolTarget,
-	) -> ActMerkleTarget;
+	) -> CommitmentTreeMerkleTarget<ACT_DEPTH>;
 
 	fn derive_nullifier_key(&mut self, priv_id: PrivateIdentifierTarget) -> NullifierKeyTarget;
 
@@ -95,7 +96,7 @@ pub trait PrivTxCircuitBuilder {
 		amt: U256Target,
 		acc_ast_root: HashOutTarget,
 		selector: BoolTarget,
-	) -> AstMerkleTargets;
+	) -> ConditionalMerkleTarget<ACC_AST_DEPTH>;
 
 	fn assert_ast_update(
 		&mut self,
@@ -106,7 +107,7 @@ pub trait PrivTxCircuitBuilder {
 		accout: AccountTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
-	) -> (AstMerkleTargets, AstMerkleTargets);
+	) -> ConditionalMerkleTarget<ACC_AST_DEPTH>;
 
 	// ---- Note related methods ----
 
@@ -123,7 +124,7 @@ pub trait PrivTxCircuitBuilder {
 
 	fn derive_dummy_note_commitment(&mut self, dnote: DummyNoteTarget) -> NoteCommitmentTarget;
 
-	fn assert_inotes_valid(
+	fn assert_inotes_valid<H: MerkleHashCircuit<F, D>>(
 		&mut self,
 		inotes: [NoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
@@ -131,7 +132,7 @@ pub trait PrivTxCircuitBuilder {
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
-	) -> [ConditionalMerkleTarget<NCT_DEPTH>; NOTE_BATCH];
+	) -> [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
 
@@ -190,7 +191,9 @@ fn double_hash<F: RichField + Extendable<D>, const D: usize>(
 }
 
 // TODO: rearrange this as per the trait declaration
-impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for CircuitBuilder<F, D> {
+impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
+	for CircuitBuilder<F, D>
+{
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
 		DummyNoteTarget(self.add_virtual_target_arr())
 	}
@@ -252,16 +255,15 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 		AccountCommitmentTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
 	}
 
-	fn conditionally_assert_account_commitment_exists_in_act(
+	fn conditionally_assert_account_commitment_exists_in_act<H: MerkleHashCircuit<F, D>>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
 		act_root: ActRootTarget,
 		condition: BoolTarget,
-	) -> ActMerkleTarget {
-		let merkletargets = conditional_merkle_verify_gadget::<F, D, ACT_DEPTH>(
+	) -> CommitmentTreeMerkleTarget<ACT_DEPTH> {
+		conditional_merkle_verify_commitment_tree_gadget::<H, F, D, ACT_DEPTH>(
 			self, acc_comm.0, act_root.0, condition,
-		);
-		ActMerkleTarget(merkletargets)
+		)
 	}
 
 	fn derive_account_nullifier(
@@ -397,7 +399,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 		amt: U256Target,
 		acc_ast_root: HashOutTarget,
 		selector: BoolTarget,
-	) -> AstMerkleTargets {
+	) -> ConditionalMerkleTarget<ACC_AST_DEPTH> {
 		let tr = self._true();
 		// derive asset leaf
 		let leaf = {
@@ -428,7 +430,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 			self.conditional_assert_eq(not_sel.target, amt.0[i].0, zero);
 		}
 
-		AstMerkleTargets(merkletargets)
+		merkletargets
 	}
 
 	fn assert_subpool_full_proof(
@@ -492,7 +494,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 		accout: AccountTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
-	) -> (AstMerkleTargets, AstMerkleTargets) {
+	) -> ConditionalMerkleTarget<ACC_AST_DEPTH> {
 		let accin_merkletrgts = self.assert_asset_amt_or_default_in_ast(
 			asset_id,
 			accin_amt,
@@ -508,17 +510,21 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 
 		// Siblings and path bits must match: the same leaf position is updated in both trees
 		for i in 0..ACC_AST_DEPTH {
-			self.connect_array(
-				accin_merkletrgts.0.siblings[i],
-				accout_merkletrgts.0.siblings[i],
+			self.connect_hashes(
+				accin_merkletrgts.siblings[i],
+				accout_merkletrgts.siblings[i],
 			);
-			self.connect(accin_merkletrgts.0.bits[i], accout_merkletrgts.0.bits[i]);
+
+			self.connect(
+				accin_merkletrgts.bits[i].target,
+				accout_merkletrgts.bits[i].target,
+			);
 		}
 
-		(accin_merkletrgts, accout_merkletrgts)
+		accin_merkletrgts
 	}
 
-	fn assert_inotes_valid(
+	fn assert_inotes_valid<H: MerkleHashCircuit<F, D>>(
 		&mut self,
 		inotes: [NoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
@@ -526,10 +532,10 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder for Circ
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
-	) -> [ConditionalMerkleTarget<NCT_DEPTH>; NOTE_BATCH] {
-		let merkle_proofs: [ConditionalMerkleTarget<NCT_DEPTH>; NOTE_BATCH] =
+	) -> [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH] {
+		let merkle_proofs: [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH] =
 			core::array::from_fn(|i| {
-				conditional_merkle_verify_gadget(
+				conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
 					self,
 					inotes_comm[i].0,
 					nct_root.0,

@@ -13,9 +13,8 @@ use crate::{
 	plonky2_gadgets::{
 		merkle::MerkleTarget,
 		priv_tx::targets::{
-			AccountTarget, ActMerkleTarget, ActRootTarget, AssetIdTarget, AstMerkleTargets,
-			MainPoolConfigRootTarget, PublicIdentifierTaregt, SubpoolFullProofTargets,
-			SubpoolIdTarget,
+			AccountTarget, ActRootTarget, AssetIdTarget, MainPoolConfigRootTarget,
+			PublicIdentifierTaregt, SubpoolFullProofTargets, SubpoolIdTarget,
 		},
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,

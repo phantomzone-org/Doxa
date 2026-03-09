@@ -478,7 +478,6 @@ impl MerkleHash for HashOutput {
 	fn hash_root(num_leaves: usize, left: &Self::Digest, right: &Self::Digest) -> Self::Digest {
 		assert!((num_leaves as u64) < F::ORDER);
 		let out: HashOut<F> = PoseidonHash::hash_no_pad(&[
-			F::from_canonical_u64(num_leaves as u64),
 			left.0[0],
 			left.0[1],
 			left.0[2],
@@ -487,6 +486,7 @@ impl MerkleHash for HashOutput {
 			right.0[1],
 			right.0[2],
 			right.0[3],
+			F::from_canonical_u64(num_leaves as u64), // TODO(Jay): @JP I've swapped the order
 		]);
 		Self::Digest::new(out.elements)
 	}
@@ -548,7 +548,6 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 		right: HashOutTarget,
 	) -> HashOutTarget {
 		builder.hash_n_to_hash_no_pad::<PoseidonHash>(vec![
-			num_leaves,
 			left.elements[0],
 			left.elements[1],
 			left.elements[2],
@@ -557,6 +556,7 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 			right.elements[1],
 			right.elements[2],
 			right.elements[3],
+			num_leaves, // TODO(Jay): @JP I've swapped the order
 		])
 	}
 

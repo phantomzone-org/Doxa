@@ -1,9 +1,15 @@
 use std::{collections::HashMap, fmt, fmt::Debug, hash::Hash, marker::PhantomData};
 
+use itertools::Itertools;
 use plonky2::{
-	hash::poseidon::PoseidonHash,
-	plonk::{config::Hasher, proof},
+	hash::{
+		hash_types::HashOut,
+		hashing::hash_n_to_hash_no_pad,
+		poseidon::{Poseidon, PoseidonHash, SPONGE_WIDTH},
+	},
+	plonk::config::{AlgebraicHasher, Hasher},
 };
+use plonky2_field::types::Field;
 use tessera_trees::{
 	F,
 	tree::{HASH_SIZE, hasher::HashOutput},
@@ -13,15 +19,22 @@ use tessera_trees::{
 // pub(crate) struct Node(pub(crate) HashOutput);
 
 pub(crate) struct CommitmentTreeMerkleProof<const DEPTH: usize> {
+	pub(crate) leaf: HashOutput,
 	pub(crate) path: Vec<HashOutput>,
 	pub(crate) num_leaves: usize,
 	pub(crate) pos: usize,
 }
 
 impl<const DEPTH: usize> CommitmentTreeMerkleProof<DEPTH> {
-	pub(crate) fn new(path: Vec<HashOutput>, pos: usize, num_leaves: usize) -> Self {
+	pub(crate) fn new(
+		leaf: HashOutput,
+		path: Vec<HashOutput>,
+		pos: usize,
+		num_leaves: usize,
+	) -> Self {
 		assert!(path.len() == DEPTH);
 		Self {
+			leaf,
 			path,
 			num_leaves,
 			pos,
@@ -32,6 +45,44 @@ impl<const DEPTH: usize> CommitmentTreeMerkleProof<DEPTH> {
 		let siblings: [[F; 4]; DEPTH] = core::array::from_fn(|i| self.path[i].0);
 		let bits: [bool; DEPTH] = core::array::from_fn(|j| (self.pos >> j) & 1 == 1);
 		(siblings, bits)
+	}
+
+	pub(crate) fn verify(&self, root: HashOutput) -> bool {
+		let bits: [bool; DEPTH] = core::array::from_fn(|j| (self.pos >> j) & 1 == 1);
+		let mut current = self.leaf.0;
+
+		// Levels 0..DEPTH-2: standard two_to_one (matches circuit's permute_swapped)
+		for level in 0..DEPTH - 1 {
+			let sib = self.path[level].0;
+			let (left, right) = if bits[level] {
+				(sib, current)
+			} else {
+				(current, sib)
+			};
+			let h = left
+				.iter()
+				.copied()
+				.chain(right.iter().copied())
+				.collect_vec();
+			current = <PoseidonHash as Hasher<F>>::hash_no_pad(&h).elements;
+		}
+
+		// Root level: Poseidon([left | right | num_leaves | 0 | 0 | 0])
+		// Matches circuit: permute_swapped([current, sibling, num_leaves, 0, 0, 0], bits[DEPTH-1])
+		let sib = self.path[DEPTH - 1].0;
+		let (left, right) = if bits[DEPTH - 1] {
+			(sib, current)
+		} else {
+			(current, sib)
+		};
+		let mut h = left.to_vec();
+		h.extend(right);
+		h.push(F::from_canonical_usize(self.num_leaves));
+		// PoseidonHash::permute_swapped(&h, swap, builder)
+		let output = <PoseidonHash as Hasher<F>>::hash_no_pad(&h).elements;
+		let computed_root = HashOutput(core::array::from_fn(|i| output[i]));
+
+		computed_root == root
 	}
 }
 

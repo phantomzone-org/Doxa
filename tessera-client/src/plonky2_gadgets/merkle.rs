@@ -24,20 +24,27 @@ use plonky2_field::{
 	extension::Extendable,
 	types::{Field, Field64},
 };
-use tessera_trees::{F, tree::HASH_SIZE};
+use tessera_trees::{
+	F,
+	tree::{
+		HASH_SIZE,
+		hasher::{HashOutput, MerkleHashCircuit},
+	},
+};
 
 use crate::tree::{CommitmentTreeMerkleProof, MerkleProof, Node};
 
 fn set_merkle_siblings_and_bits<F: Field, const DEPTH: usize>(
 	pw: &mut PartialWitness<F>,
-	t_siblings: &[[Target; HASH_SIZE]; DEPTH],
+	t_siblings: &[HashOutTarget; DEPTH],
 	t_bits: &[BoolTarget; DEPTH],
 	siblings: [[F; HASH_SIZE]; DEPTH],
 	bits: [bool; DEPTH],
 ) {
 	for lvl in 0..DEPTH {
 		for i in 0..4 {
-			pw.set_target(t_siblings[lvl][i], siblings[lvl][i]).unwrap();
+			pw.set_target(t_siblings[lvl].elements[i], siblings[lvl][i])
+				.unwrap();
 		}
 		pw.set_bool_target(t_bits[lvl], bits[lvl]).unwrap();
 	}
@@ -57,7 +64,7 @@ pub(crate) trait SetDummyMerklePathOfWitness {
 
 #[derive(Clone, Copy)]
 pub struct ConditionalMerkleTarget<const DEPTH: usize> {
-	pub siblings: [[Target; HASH_SIZE]; DEPTH],
+	pub siblings: [HashOutTarget; DEPTH],
 	pub bits: [BoolTarget; DEPTH],
 }
 
@@ -87,7 +94,7 @@ impl<const D: usize> SetDummyMerklePathOfWitness for ConditionalMerkleTarget<D> 
 #[derive(Clone, Copy)]
 pub struct MerkleTarget<const DEPTH: usize> {
 	pub root: [Target; HASH_SIZE],
-	pub siblings: [[Target; HASH_SIZE]; DEPTH],
+	pub siblings: [HashOutTarget; DEPTH],
 	// TODO:Change bits to bool
 	pub bits: [BoolTarget; DEPTH],
 }
@@ -107,7 +114,7 @@ where
 	N::Leaf: Clone,
 {
 	fn set_witness(&self, pw: &mut PartialWitness<F>, proof: &MerkleProof<N, D>) {
-		pw.set_target_arr(&self.root, &proof.root.0);
+		pw.set_target_arr(&self.root, &proof.root.0).unwrap()
 	}
 }
 
@@ -126,7 +133,7 @@ where
 // }
 
 pub struct CommitmentTreeMerkleTarget<const DEPTH: usize> {
-	pub siblings: [[Target; HASH_SIZE]; DEPTH],
+	pub siblings: [HashOutTarget; DEPTH],
 	pub bits: [BoolTarget; DEPTH],
 	pub num_leaves: Target,
 }
@@ -201,8 +208,9 @@ pub fn merkle_verify_gadget<
 	builder: &mut CircuitBuilder<F, D>,
 	leaf: HashOutTarget,
 ) -> MerkleTarget<DEPTH> {
-	let siblings: [[Target; HASH_SIZE]; DEPTH] = [[builder.add_virtual_target(); 4]; DEPTH];
-	let bits: [BoolTarget; DEPTH] = [builder.add_virtual_bool_target_safe(); DEPTH];
+	let siblings: [HashOutTarget; DEPTH] = core::array::from_fn(|_| builder.add_virtual_hash());
+	let bits: [BoolTarget; DEPTH] =
+		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 
 	let mut current: [Target; HASH_SIZE] = leaf.elements;
 	for level in 0..DEPTH {
@@ -214,9 +222,10 @@ pub fn merkle_verify_gadget<
 		let perm_inputs = PoseidonPermutation::new(
 			current
 				.iter()
-				.chain(siblings[level].iter())
+				.chain(siblings[level].elements.iter())
 				.copied()
-				.chain(core::iter::repeat(zero).take(4)),
+				//TODO(jay): why removing zeros fails the test?
+				.chain(core::iter::repeat(zero)),
 		);
 
 		let perm_output = PoseidonHash::permute_swapped(perm_inputs, bits[level], builder);
@@ -236,9 +245,10 @@ pub fn merkle_verify_gadget<
 /// Merkle verification of logic of commitment tree is different from other merkle trees.
 ///
 /// Uptill level depth-1, the nodes are compressed in binary structure, like any other merkle tree.
-/// For the root, the hash function computes H(num_leaves, left, right) (not H(left, right)). Hence,
+/// For the root, the hash function computes H(left, right, num_leaves) (not H(left, right)). Hence,
 /// merkle path verification of CommitmentTree requires a distinct gadget
 pub fn conditional_merkle_verify_commitment_tree_gadget<
+	H: MerkleHashCircuit<F, D>,
 	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 	const DEPTH: usize,
@@ -248,56 +258,36 @@ pub fn conditional_merkle_verify_commitment_tree_gadget<
 	expected_root: HashOutTarget,
 	selector: BoolTarget,
 ) -> CommitmentTreeMerkleTarget<DEPTH> {
-	let siblings: [[Target; HASH_SIZE]; DEPTH] = [[builder.add_virtual_target(); 4]; DEPTH];
-	let bits: [BoolTarget; DEPTH] = [builder.add_virtual_bool_target_safe(); DEPTH];
+	let siblings: [HashOutTarget; DEPTH] = core::array::from_fn(|_| builder.add_virtual_hash());
+	let bits: [BoolTarget; DEPTH] =
+		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 	let num_leaves = builder.add_virtual_target();
 
-	let zero = builder.zero();
-
-	let mut current: [Target; HASH_SIZE] = leaf.elements;
-	for level in 0..DEPTH - 1 {
-		// Build the 12-element Poseidon input:
-		//   [current[0..4] || sibling[0..4] || zero[0..4]]
-		// PoseidonGate SWAP will swap the first 4 with the next 4 when bit=1,
-		// so the permutation always receives [left || right || zeros].
-		let perm_inputs = PoseidonPermutation::new(
-			current
-				.iter()
-				.chain(siblings[level].iter())
-				.copied()
-				.chain(core::iter::repeat(zero).take(4)),
-		);
-
-		let perm_output = PoseidonHash::permute_swapped(perm_inputs, bits[level], builder);
-		let output = perm_output.squeeze();
-
-		let parent: [Target; HASH_SIZE] = core::array::from_fn(|i| output[i]);
-
-		current = parent;
+	let mut current = leaf;
+	for level in 0..DEPTH {
+		if level == DEPTH - 1 {
+			let dir = bits[DEPTH - 1];
+			let sibling = siblings[DEPTH - 1];
+			let left = HashOutTarget {
+				elements: core::array::from_fn(|i| {
+					builder.select(dir, sibling.elements[i], current.elements[i])
+				}),
+			};
+			let right = HashOutTarget {
+				elements: core::array::from_fn(|i| {
+					builder.select(dir, current.elements[i], sibling.elements[i])
+				}),
+			};
+			current = H::hash_root_circuit(builder, num_leaves, left, right);
+		} else {
+			current = H::hash_2_to_1_circuit(builder, current, siblings[level], bits[level]);
+		}
 	}
 
-	// root = H(left | right | num_leaves)
-	let perm_inputs = PoseidonPermutation::new(
-		current
-			.iter()
-			.chain(siblings[DEPTH - 1].iter())
-			.copied()
-			.chain(core::iter::once(num_leaves))
-			.chain(core::iter::repeat(zero).take(3)),
-	);
-	let computed_root: [Target; HASH_SIZE] = {
-		let tmp = PoseidonHash::permute_swapped(perm_inputs, bits[DEPTH - 1], builder);
-		let tmp = tmp.squeeze();
-		array::from_fn(|i| tmp[i])
-	};
-
-	// Selector-gated root equality: selector * (computed_root[i] -
-	// expected_root[i]) = 0
-	for i in 0..HASH_SIZE {
-		let diff = builder.sub(computed_root[i], expected_root.elements[i]);
-		let product = builder.mul(selector.target, diff);
-		builder.assert_zero(product);
-	}
+	// Selector-gated root equality
+	izip!(current.elements.iter(), expected_root.elements.iter()).for_each(|(a, b)| {
+		builder.conditional_assert_eq(selector.target, *a, *b);
+	});
 
 	CommitmentTreeMerkleTarget {
 		siblings,
@@ -393,8 +383,11 @@ mod tests {
 		// Set siblings and bits
 		for level in 0..32 {
 			for i in 0..4 {
-				pw.set_target(targets.siblings[level][i], siblings[level].elements[i])
-					.unwrap();
+				pw.set_target(
+					targets.siblings[level].elements[i],
+					siblings[level].elements[i],
+				)
+				.unwrap();
 			}
 			pw.set_bool_target(targets.bits[level], bits[level])
 				.unwrap();
@@ -445,8 +438,11 @@ mod tests {
 		}
 		for level in 0..32 {
 			for i in 0..4 {
-				pw.set_target(targets.siblings[level][i], siblings[level].elements[i])
-					.unwrap();
+				pw.set_target(
+					targets.siblings[level].elements[i],
+					siblings[level].elements[i],
+				)
+				.unwrap();
 			}
 			pw.set_bool_target(targets.bits[level], bits[level])
 				.unwrap();
@@ -504,8 +500,11 @@ mod tests {
 		}
 		for level in 0..32 {
 			for i in 0..4 {
-				pw.set_target(targets.siblings[level][i], siblings[level].elements[i])
-					.unwrap();
+				pw.set_target(
+					targets.siblings[level].elements[i],
+					siblings[level].elements[i],
+				)
+				.unwrap();
 			}
 			pw.set_bool_target(targets.bits[level], bits[level])
 				.unwrap();

@@ -77,13 +77,11 @@ pub(crate) fn set_spend_tx_witness(
 	accin: &StandardAccount,
 	act_root: HashOutput,
 	nct_root: HashOutput,
-	// Position of Comm(accin) in the ACT.
-	accin_act_pos: usize,
 	// MarkleProof of commitment of AccIn in ACT
-	accin_merkle_proof: CommitmentTreeMerkleProof,
+	accin_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
 	inotes: &[StandardNote],
 	// MerkleProof of commitments of inotes in NCT
-	inotes_nct_proofs: &[CommitmentTreeMerkleProof],
+	inotes_nct_proofs: &[CommitmentTreeMerkleProof<NCT_DEPTH>],
 	onotes: &[StandardNote],
 	dinotes: [[F; 4]; NOTE_BATCH],
 	donotes: [[F; 4]; NOTE_BATCH],
@@ -141,34 +139,11 @@ pub(crate) fn set_spend_tx_witness(
 	let asset_exists_in_accin = accin.ast.amount_for(asset_id).is_some();
 	let asset_exists_in_accout = accout.ast.amount_for(asset_id).is_some();
 
-	// ── ACT position, siblings, circuit-compatible root ───────────────────────
-	let accin_pos = accin_act_pos;
-	let act_sibs: [[F; 4]; ACT_DEPTH] = array::from_fn(|i| accin_act_siblings[i].0);
-	let act_bits: [bool; ACT_DEPTH] = array::from_fn(|i| (accin_pos >> i) & 1 == 1);
-	let act_root = HashOutput(circuit_merkle_root(
-		accin.commitment().0.0,
-		&act_sibs,
-		act_bits,
-	));
-
-	// ── NCT circuit-compatible root (from first active note's proof) ──────────
-	let nct_root = if !inotes.is_empty() {
-		let sibs_0: [[F; 4]; NCT_DEPTH] = array::from_fn(|j| inotes_nct_proofs[0][j].0);
-		let bits_0: [bool; NCT_DEPTH] = array::from_fn(|j| (inotes_pos[0] >> j) & 1 == 1);
-		HashOutput(circuit_merkle_root(
-			inotes[0].commitment().0.0,
-			&sibs_0,
-			bits_0,
-		))
-	} else {
-		HashOutput([F::ZERO; 4])
-	};
-
 	// ── tx_hash ───────────────────────────────────────────────────────────────
 	let nk = accin.nk();
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = array::from_fn(|i| {
 		if i < inotes.len() {
-			let pos_f = F::from_canonical_usize(inotes_pos[i]);
+			let pos_f = F::from_canonical_usize(inotes_nct_proofs[i].pos);
 			NoteNullifier(
 				PositionedStandardNode::from_note(inotes[i].clone(), pos_f)
 					.nullifier(&nk)
@@ -185,7 +160,7 @@ pub(crate) fn set_spend_tx_witness(
 			NoteCommitment(HashOutput(double_hash_native(donotes[i])))
 		}
 	});
-	let accin_null = accin.nullifier(Some(accin_pos as u64));
+	let accin_null = accin.nullifier(Some(accin_merkle_proof.pos as u64));
 	let tx_hash = derive_priv_tx_hash(
 		accin_null,
 		accout.commitment(),
@@ -224,15 +199,15 @@ pub(crate) fn set_spend_tx_witness(
 		.unwrap();
 	pw.set_bool_target(t.asset_exists_in_accout, asset_exists_in_accout)
 		.unwrap();
-	pw.set_target(t.accin_pos, F::from_canonical_usize(accin_pos))
+	pw.set_target(t.accin_pos, F::from_canonical_usize(accin_merkle_proof.pos))
 		.unwrap();
 
 	// ── ACT Merkle proof ──────────────────────────────────────────────────────
-	set_merkle_siblings_and_bits(pw, &t.accin_act_merkle.0, act_sibs, act_bits);
+	t.accin_act_merkle.set_witness(pw, &accin_merkle_proof);
 
 	// ── AST Merkle proof ──────────────────────────────────────────────────────
-	let ast_proof = accin.ast.merkle_proof_at(ast_index);
-	t.accin_ast_merkle.0.set_witness(pw, &ast_proof);
+	t.accin_ast_merkle
+		.set_witness(pw, &accin.ast.merkle_proof_at(ast_index));
 
 	// ── Input notes ───────────────────────────────────────────────────────────
 	let zero_addr = AccountAddress {
@@ -249,15 +224,14 @@ pub(crate) fn set_spend_tx_witness(
 
 	for i in 0..NOTE_BATCH {
 		if i < inotes.len() {
-			let pos_i = inotes_pos[i];
-			let sibs_i: [[F; 4]; NCT_DEPTH] = array::from_fn(|j| inotes_nct_proofs[i][j].0);
-			let bits_i: [bool; NCT_DEPTH] = array::from_fn(|j| (pos_i >> j) & 1 == 1);
 			t.inotes[i].set_witness(pw, &inotes[i]);
-			pw.set_target(t.inotes_pos[i], F::from_canonical_usize(pos_i))
-				.unwrap();
+			pw.set_target(
+				t.inotes_pos[i],
+				F::from_canonical_usize(inotes_nct_proofs[i].pos),
+			)
+			.unwrap();
 			pw.set_bool_target(t.inotes_isactive[i], true).unwrap();
-			t.inotes_nct_merkle[i].set_witness(pw, i);
-			set_merkle_siblings_and_bits(pw, &t.inotes_nct_merkle[i], sibs_i, bits_i);
+			t.inotes_nct_merkle[i].set_witness(pw, &inotes_nct_proofs[i]);
 		} else {
 			t.inotes[i].set_witness(pw, &inactive_inote);
 			pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
@@ -459,16 +433,11 @@ pub(crate) fn set_fake_tx_witness(
 	pw.set_target(t.accin_pos, F::ZERO).unwrap();
 
 	// ── ACT Merkle proof (all zeros) ──────────────────────────────────────────
-	set_merkle_siblings_and_bits(
-		pw,
-		&t.accin_act_merkle.0,
-		[[F::ZERO; 4]; ACT_DEPTH],
-		[false; ACT_DEPTH],
-	);
+	t.accin_act_merkle.set_dummy_witness(pw, ACT_DEPTH);
 
 	// ── AST Merkle proof (real path of default leaf at index 0) ──────────────
-	let ast_proof = accin.ast.merkle_proof_at(0);
-	t.accin_ast_merkle.0.set_witness(pw, &ast_proof);
+	t.accin_ast_merkle
+		.set_witness(pw, &accin.ast.merkle_proof_at(0));
 
 	// ── Input notes (all inactive) ────────────────────────────────────────────
 	let zero_addr = AccountAddress {
@@ -651,7 +620,13 @@ mod tests {
 
 		// Insert acc0 commitment into ACT
 		let acc0_pos = act.insert(acc0.commitment().0).unwrap().path; // = 0
-		let acc0_act_siblings = act.merkle_path(acc0_pos, 0, crate::ACT_DEPTH).unwrap();
+		let acc0_act_proof = CommitmentTreeMerkleProof::new(
+			acc0.commitment().0,
+			act.merkle_path(acc0_pos, 0, ACT_DEPTH).unwrap(),
+			acc0_pos,
+			act.num_leaves(),
+		);
+		assert!(acc0_act_proof.verify(act.get_root()));
 
 		// ── Create notes N0, N1 ───────────────────────────────────────────────
 		let asset_id_val = crate::AssetId(F::ONE);
@@ -688,6 +663,21 @@ mod tests {
 		let n1_nct_proof = nct.insert(n1.commitment().0).unwrap();
 		let n0_pos = n0_nct_proof.path;
 		let n1_pos = n1_nct_proof.path;
+		let inotes = [n0, n1];
+		let inotes_nct_proofs = [
+			CommitmentTreeMerkleProof::new(
+				inotes[0].commitment().0,
+				nct.merkle_path(n0_pos, 0, NCT_DEPTH).unwrap(),
+				n0_pos,
+				nct.num_leaves(),
+			),
+			CommitmentTreeMerkleProof::new(
+				inotes[1].commitment().0,
+				nct.merkle_path(n1_pos, 0, NCT_DEPTH).unwrap(),
+				n1_pos,
+				nct.num_leaves(),
+			),
+		];
 
 		// Dummy notes (same pattern as freshacc)
 		let dinotes: [[F; 4]; NOTE_BATCH] = array::from_fn(|i| [F::from_canonical_usize(i); 4]);
@@ -731,16 +721,9 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit(&mut builder);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
-
-		let inotes = vec![n0, n1];
-		let inotes_pos = vec![n0_pos, n1_pos];
-		let inotes_nct_proofs = inotes_pos
-			.iter()
-			.map(|i| nct.merkle_path(*i, 0, crate::NCT_DEPTH).unwrap())
-			.collect_vec();
 
 		// ── Signatures ────────────────────────────────────────────────────────
 
@@ -763,10 +746,10 @@ mod tests {
 			&mut pw,
 			&t,
 			&acc0,
-			acc0_pos,
-			&acc0_act_siblings,
+			act.get_root(),
+			nct.get_root(),
+			acc0_act_proof,
 			&inotes,
-			&inotes_pos,
 			&inotes_nct_proofs,
 			&vec![],
 			dinotes,
@@ -791,7 +774,7 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit(&mut builder);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 

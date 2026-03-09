@@ -12,7 +12,7 @@ use crate::{
 	ACC_AST_DEPTH, ACT_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK,
 	MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH, StandardAccount,
 	plonky2_gadgets::{
-		merkle::{ConditionalMerkleTarget, MerkleTarget},
+		merkle::{CommitmentTreeMerkleTarget, ConditionalMerkleTarget, MerkleTarget},
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
 	},
@@ -170,12 +170,6 @@ pub(crate) struct SubpoolConfigRootTarget(pub(crate) HashOutTarget);
 pub(crate) struct AssetIdTarget(pub(crate) Target);
 
 #[derive(Clone)]
-pub(crate) struct ActMerkleTarget(pub(crate) ConditionalMerkleTarget<ACT_DEPTH>);
-
-#[derive(Clone)]
-pub(crate) struct AstMerkleTargets(pub(crate) ConditionalMerkleTarget<ACC_AST_DEPTH>);
-
-#[derive(Clone)]
 pub(crate) struct SubpoolFullProofTargets {
 	pub(crate) approval_proof: ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH>,
 	pub(crate) rejection_proof: ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH>,
@@ -210,12 +204,11 @@ pub(crate) struct TxCircuitTargets {
 	// accin position (needed for nullifier witness)
 	pub(crate) accin_pos: Target,
 	// merkle targets
-	pub(crate) accin_act_merkle: ActMerkleTarget,
-	pub(crate) accin_ast_merkle: AstMerkleTargets,
-	pub(crate) accout_ast_merkle: AstMerkleTargets,
-	pub(crate) inotes_nct_merkle: [ConditionalMerkleTarget<NCT_DEPTH>; NOTE_BATCH], /* inotes NCT merkle
-	                                                                                 * proofs (one per
-	                                                                                 * inote) */
+	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<ACT_DEPTH>,
+	pub(crate) accin_ast_merkle: ConditionalMerkleTarget<ACC_AST_DEPTH>,
+	pub(crate) inotes_nct_merkle: [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH], /* inotes NCT merkle
+	                                                                                    * proofs (one per
+	                                                                                    * inote) */
 	// notes
 	pub(crate) inotes: [NoteTarget; NOTE_BATCH],
 	pub(crate) inotes_pos: [Target; NOTE_BATCH],

@@ -48,8 +48,8 @@ pub(crate) fn set_freshacc_tx_witness(
 	accin: &StandardAccount,
 	new_spend_auth: SpendAuth,
 	new_consume_auth: ConsumeAuth,
-	nct_root: HashOutput,
 	act_root: HashOutput,
+	nct_root: HashOutput,
 	approval_key: CompPubKey,
 	rejection_key: CompPubKey,
 	consume_key: CompPubKey,
@@ -110,11 +110,10 @@ pub(crate) fn set_freshacc_tx_witness(
 	// ── Merkle proofs ─────────────────────────────────────────────────────────
 
 	// ACT: not enforced for FreshAcc
-	t.accin_act_merkle.0.set_dummy_witness(pw, ACT_DEPTH);
+	t.accin_act_merkle.set_dummy_witness(pw, ACT_DEPTH);
 
 	// accin AST at index 0 (asset not in tree → Empty leaf)
 	t.accin_ast_merkle
-		.0
 		.set_witness(pw, &accin.ast.merkle_proof_at(0));
 	// accout_ast_merkle is auto-filled via connect_array in the circuit
 
@@ -323,7 +322,7 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit(&mut builder);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 
@@ -334,8 +333,8 @@ mod tests {
 			&accin,
 			new_spend_auth,
 			new_consume_auth,
-			HashOutput([F::ZERO; 4]), // nct_root: no notes for FreshAcc
 			HashOutput([F::ZERO; 4]), // act_root: not in ACT yet
+			HashOutput([F::ZERO; 4]), // nct_root: no notes for FreshAcc
 			approval_cpk,
 			rejection_cpk,
 			consume_cpk,
