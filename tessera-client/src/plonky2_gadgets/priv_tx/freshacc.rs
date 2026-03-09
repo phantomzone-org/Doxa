@@ -1,7 +1,6 @@
 use std::array;
 
 use plonky2::{
-	hash::{hashing::hash_n_to_m_no_pad, poseidon::PoseidonHash},
 	iop::witness::{PartialWitness, WitnessWrite},
 	plonk::config::Hasher,
 };
@@ -19,7 +18,7 @@ use crate::{
 	ecgfp5::{CompressedPoint, PointEw},
 	note::{NodeIdentifier, StandardNote},
 	plonky2_gadgets::{
-		merkle::{MerkleSiblingsBits, set_merkle_siblings_and_bits},
+		merkle::{SetDummyMerklePathOfWitness, SetMerklePathOfWitness},
 		set_hash, set_u256_zero,
 		signature::set_schnorr_witness,
 	},
@@ -111,16 +110,12 @@ pub(crate) fn set_freshacc_tx_witness(
 	// ── Merkle proofs ─────────────────────────────────────────────────────────
 
 	// ACT: not enforced for FreshAcc
-	set_merkle_siblings_and_bits(
-		pw,
-		&t.accin_act_merkle.0,
-		[[F::ZERO; 4]; ACT_DEPTH],
-		[false; ACT_DEPTH],
-	);
+	t.accin_act_merkle.0.set_dummy_witness(pw, ACT_DEPTH);
 
 	// accin AST at index 0 (asset not in tree → Empty leaf)
-	let ast_proof = accin.ast.merkle_proof_at(0);
-	t.accin_ast_merkle.0.set_witness(pw, &ast_proof);
+	t.accin_ast_merkle
+		.0
+		.set_witness(pw, &accin.ast.merkle_proof_at(0));
 	// accout_ast_merkle is auto-filled via connect_array in the circuit
 
 	// ── Input notes (all inactive) ────────────────────────────────────────────
@@ -140,12 +135,7 @@ pub(crate) fn set_freshacc_tx_witness(
 		pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 		pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
 		// NCT: not enforced (selector = false)
-		set_merkle_siblings_and_bits(
-			pw,
-			&t.inotes_nct_merkle[i],
-			[[F::ZERO; 4]; NCT_DEPTH],
-			[false; NCT_DEPTH],
-		);
+		t.inotes_nct_merkle[i].set_dummy_witness(pw, NCT_DEPTH);
 	}
 
 	// ── Output notes (all inactive) ───────────────────────────────────────────

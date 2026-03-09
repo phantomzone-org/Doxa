@@ -19,12 +19,13 @@ use crate::{
 	ecgfp5::{CompressedPoint, PointEw},
 	note::{NodeIdentifier, PositionedStandardNode, StandardNote},
 	plonky2_gadgets::{
-		merkle::{MerkleSiblingsBits, set_merkle_siblings_and_bits},
+		merkle::{SetDummyMerklePathOfWitness, SetMerklePathOfWitness},
 		set_hash, set_u256_zero,
 		signature::set_schnorr_witness,
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 	schnorr::{CompressedPublicKey, Scalar, Signature, schnorr_challenge},
+	tree::CommitmentTreeMerkleProof,
 };
 
 /// Compute circuit-compatible Merkle root using `two_to_one` at every level.
@@ -74,15 +75,15 @@ pub(crate) fn set_spend_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
 	accin: &StandardAccount,
+	act_root: HashOutput,
+	nct_root: HashOutput,
 	// Position of Comm(accin) in the ACT.
 	accin_act_pos: usize,
-	// Siblings from act.merkle_path(accin_act_pos, 0, ACT_DEPTH).unwrap().
-	accin_act_siblings: &[HashOutput],
+	// MarkleProof of commitment of AccIn in ACT
+	accin_merkle_proof: CommitmentTreeMerkleProof,
 	inotes: &[StandardNote],
-	// Position of inote commitments in NCT tree (same order)
-	inotes_pos: &[usize],
-	// Merkle path of inotes in NCT tree
-	inotes_nct_proofs: &[Vec<HashOutput>],
+	// MerkleProof of commitments of inotes in NCT
+	inotes_nct_proofs: &[CommitmentTreeMerkleProof],
 	onotes: &[StandardNote],
 	dinotes: [[F; 4]; NOTE_BATCH],
 	donotes: [[F; 4]; NOTE_BATCH],
@@ -101,7 +102,6 @@ pub(crate) fn set_spend_tx_witness(
 	assert!(inotes.len() <= NOTE_BATCH);
 	assert!(onotes.len() <= NOTE_BATCH);
 	assert_eq!(inotes.len(), inotes_nct_proofs.len());
-	assert_eq!(inotes.len(), inotes_pos.len());
 
 	// ── Derive asset_id ───────────────────────────────────────────────────────
 	let asset_id = inotes
@@ -256,17 +256,13 @@ pub(crate) fn set_spend_tx_witness(
 			pw.set_target(t.inotes_pos[i], F::from_canonical_usize(pos_i))
 				.unwrap();
 			pw.set_bool_target(t.inotes_isactive[i], true).unwrap();
+			t.inotes_nct_merkle[i].set_witness(pw, i);
 			set_merkle_siblings_and_bits(pw, &t.inotes_nct_merkle[i], sibs_i, bits_i);
 		} else {
 			t.inotes[i].set_witness(pw, &inactive_inote);
 			pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 			pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
-			set_merkle_siblings_and_bits(
-				pw,
-				&t.inotes_nct_merkle[i],
-				[[F::ZERO; 4]; NCT_DEPTH],
-				[false; NCT_DEPTH],
-			);
+			t.inotes_nct_merkle[i].set_dummy_witness(pw, NCT_DEPTH);
 		}
 	}
 
@@ -490,12 +486,7 @@ pub(crate) fn set_fake_tx_witness(
 		t.inotes[i].set_witness(pw, &inactive_inote);
 		pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 		pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
-		set_merkle_siblings_and_bits(
-			pw,
-			&t.inotes_nct_merkle[i],
-			[[F::ZERO; 4]; NCT_DEPTH],
-			[false; NCT_DEPTH],
-		);
+		t.inotes_nct_merkle[i].set_dummy_witness(pw, NCT_DEPTH);
 	}
 
 	// ── Output notes (all inactive) ───────────────────────────────────────────
@@ -535,13 +526,10 @@ pub(crate) fn set_fake_tx_witness(
 	t.subpool_proof_targets
 		.consume_proof
 		.set_witness(pw, &fake_subpool.consume_key_proof());
+	t.subpool_proof_targets
+		.main_pool_proof
+		.set_dummy_witness(pw, MAIN_POOL_CONFIG_DEPTH);
 
-	set_merkle_siblings_and_bits(
-		pw,
-		&t.subpool_proof_targets.main_pool_proof,
-		[[F::ZERO; 4]; MAIN_POOL_CONFIG_DEPTH],
-		[false; MAIN_POOL_CONFIG_DEPTH],
-	);
 	pw.set_target_arr(
 		&t.subpool_proof_targets.subpool_config_root.0.elements,
 		&fake_subpool.root().0,

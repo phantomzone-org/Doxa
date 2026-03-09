@@ -15,87 +15,72 @@ use plonky2::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
 	},
-	plonk::{circuit_builder::CircuitBuilder, config::AlgebraicHasher},
+	plonk::{
+		circuit_builder::CircuitBuilder,
+		config::{AlgebraicHasher, Hasher},
+	},
 };
-use plonky2_field::{extension::Extendable, types::Field};
-use tessera_trees::tree::HASH_SIZE;
+use plonky2_field::{
+	extension::Extendable,
+	types::{Field, Field64},
+};
+use tessera_trees::{F, tree::HASH_SIZE};
 
-use crate::tree::{MerkleProof, Node};
+use crate::tree::{CommitmentTreeMerkleProof, MerkleProof, Node};
 
-pub(crate) fn set_merkle_siblings_and_bits<
-	F: Field,
-	T: MerkleSiblingsBits<DEPTH>,
-	const DEPTH: usize,
->(
+fn set_merkle_siblings_and_bits<F: Field, const DEPTH: usize>(
 	pw: &mut PartialWitness<F>,
-	t: &T,
+	t_siblings: &[[Target; HASH_SIZE]; DEPTH],
+	t_bits: &[BoolTarget; DEPTH],
 	siblings: [[F; HASH_SIZE]; DEPTH],
 	bits: [bool; DEPTH],
 ) {
 	for lvl in 0..DEPTH {
 		for i in 0..4 {
-			pw.set_target(t.siblings()[lvl][i], siblings[lvl][i])
-				.unwrap();
+			pw.set_target(t_siblings[lvl][i], siblings[lvl][i]).unwrap();
 		}
-		pw.set_bool_target(BoolTarget::new_unsafe(t.bits()[lvl]), bits[lvl])
-			.unwrap();
-	}
-}
-
-pub(crate) trait MerkleSiblingsBits<const DEPTH: usize> {
-	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH];
-	fn bits(&self) -> &[Target; DEPTH];
-
-	fn set_witness<F: Field, N: Node>(
-		&self,
-		pw: &mut PartialWitness<F>,
-		proof: &MerkleProof<N, DEPTH>,
-	) where
-		Self: Sized,
-	{
+		pw.set_bool_target(t_bits[lvl], bits[lvl]).unwrap();
 	}
 }
 
 pub(crate) trait SetMerklePathOfWitness<Proof> {
-	fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, proof: &Proof);
+	fn set_witness(&self, pw: &mut PartialWitness<F>, proof: &Proof);
 }
 
 pub(crate) trait SetMerkleRootOfWitness<Proof> {
-	fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, proof: &Proof);
+	fn set_witness(&self, pw: &mut PartialWitness<F>, proof: &Proof);
 }
 
-impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for ConditionalMerkleTarget<DEPTH> {
-	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH] {
-		&self.siblings
-	}
-
-	fn bits(&self) -> &[Target; DEPTH] {
-		&self.bits
-	}
-}
-
-impl<const DEPTH: usize> MerkleSiblingsBits<DEPTH> for MerkleTarget<DEPTH> {
-	fn siblings(&self) -> &[[Target; HASH_SIZE]; DEPTH] {
-		&self.siblings
-	}
-
-	fn bits(&self) -> &[Target; DEPTH] {
-		&self.bits
-	}
+pub(crate) trait SetDummyMerklePathOfWitness {
+	fn set_dummy_witness(&self, pw: &mut PartialWitness<F>, depth: usize);
 }
 
 #[derive(Clone, Copy)]
 pub struct ConditionalMerkleTarget<const DEPTH: usize> {
 	pub siblings: [[Target; HASH_SIZE]; DEPTH],
-	pub bits: [Target; DEPTH],
+	pub bits: [BoolTarget; DEPTH],
 }
 
-impl<N: Node + Clone, const D: usize> SetMerklePathOfWitness<MerkleProof<N, D>>
+impl<N: Node, const D: usize> SetMerklePathOfWitness<MerkleProof<N, D>>
 	for ConditionalMerkleTarget<D>
+where
+	N::Leaf: Clone,
 {
-	fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, proof: &MerkleProof<N, D>) {
+	fn set_witness(&self, pw: &mut PartialWitness<F>, proof: &MerkleProof<N, D>) {
 		let (siblings, bits) = proof.extract_siblings_bits();
-		set_merkle_siblings_and_bits(pw, self, siblings, bits);
+		set_merkle_siblings_and_bits(pw, &self.siblings, &self.bits, siblings, bits);
+	}
+}
+
+impl<const D: usize> SetDummyMerklePathOfWitness for ConditionalMerkleTarget<D> {
+	fn set_dummy_witness(&self, pw: &mut PartialWitness<F>, _depth: usize) {
+		set_merkle_siblings_and_bits(
+			pw,
+			&self.siblings,
+			&self.bits,
+			[[F::ZERO; 4]; D],
+			[false; D],
+		);
 	}
 }
 
@@ -103,7 +88,72 @@ impl<N: Node + Clone, const D: usize> SetMerklePathOfWitness<MerkleProof<N, D>>
 pub struct MerkleTarget<const DEPTH: usize> {
 	pub root: [Target; HASH_SIZE],
 	pub siblings: [[Target; HASH_SIZE]; DEPTH],
-	pub bits: [Target; DEPTH],
+	// TODO:Change bits to bool
+	pub bits: [BoolTarget; DEPTH],
+}
+
+impl<N: Node, const D: usize> SetMerklePathOfWitness<MerkleProof<N, D>> for MerkleTarget<D>
+where
+	N::Leaf: Clone,
+{
+	fn set_witness(&self, pw: &mut PartialWitness<F>, proof: &MerkleProof<N, D>) {
+		let (siblings, bits) = proof.extract_siblings_bits();
+		set_merkle_siblings_and_bits(pw, &self.siblings, &self.bits, siblings, bits);
+	}
+}
+
+impl<N: Node, const D: usize> SetMerkleRootOfWitness<MerkleProof<N, D>> for MerkleTarget<D>
+where
+	N::Leaf: Clone,
+{
+	fn set_witness(&self, pw: &mut PartialWitness<F>, proof: &MerkleProof<N, D>) {
+		pw.set_target_arr(&self.root, &proof.root.0);
+	}
+}
+
+// MerkleTarget can never be set to DummyWitness. DummyWitness is only allowed in
+// ConditionalMerkleTarget
+//  impl<const D: usize> SetDummyMerklePathOfWitness for MerkleTarget<D> {
+// 	fn set_dummy_witness(&self, pw: &mut PartialWitness<F>, _depth: usize) {
+// 		set_merkle_siblings_and_bits(
+// 			pw,
+// 			&self.siblings,
+// 			&self.bits,
+// 			[[F::ZERO; 4]; D],
+// 			[false; D],
+// 		);
+// 	}
+// }
+
+pub struct CommitmentTreeMerkleTarget<const DEPTH: usize> {
+	pub siblings: [[Target; HASH_SIZE]; DEPTH],
+	pub bits: [BoolTarget; DEPTH],
+	pub num_leaves: Target,
+}
+
+impl<const D: usize> SetMerklePathOfWitness<CommitmentTreeMerkleProof<D>>
+	for CommitmentTreeMerkleTarget<D>
+{
+	fn set_witness(&self, pw: &mut PartialWitness<F>, proof: &CommitmentTreeMerkleProof<D>) {
+		let (siblings, bits) = proof.extract_siblings_bits();
+		set_merkle_siblings_and_bits(pw, &self.siblings, &self.bits, siblings, bits);
+		assert!(proof.num_leaves < F::ORDER as usize);
+		pw.set_target(self.num_leaves, F::from_canonical_usize(proof.num_leaves))
+			.unwrap();
+	}
+}
+
+impl<const D: usize> SetDummyMerklePathOfWitness for CommitmentTreeMerkleTarget<D> {
+	fn set_dummy_witness(&self, pw: &mut PartialWitness<F>, _depth: usize) {
+		set_merkle_siblings_and_bits(
+			pw,
+			&self.siblings,
+			&self.bits,
+			[[F::ZERO; 4]; D],
+			[false; D],
+		);
+		pw.set_target(self.num_leaves, F::ZERO).unwrap();
+	}
 }
 
 /// Builds a depth-32 Merkle path verification gadget using the existing
@@ -151,15 +201,11 @@ pub fn merkle_verify_gadget<
 	builder: &mut CircuitBuilder<F, D>,
 	leaf: HashOutTarget,
 ) -> MerkleTarget<DEPTH> {
+	let siblings: [[Target; HASH_SIZE]; DEPTH] = [[builder.add_virtual_target(); 4]; DEPTH];
+	let bits: [BoolTarget; DEPTH] = [builder.add_virtual_bool_target_safe(); DEPTH];
+
 	let mut current: [Target; HASH_SIZE] = leaf.elements;
-	let mut siblings: [[Target; HASH_SIZE]; DEPTH] = [[builder.zero(); 4]; DEPTH];
-	let mut bits: [Target; DEPTH] = [builder.zero(); DEPTH];
-
 	for level in 0..DEPTH {
-		let sibling: [Target; 4] = core::array::from_fn(|_| builder.add_virtual_target());
-
-		let bit = builder.add_virtual_bool_target_safe();
-
 		// Build the 12-element Poseidon input:
 		//   [current[0..4] || sibling[0..4] || zero[0..4]]
 		// PoseidonGate SWAP will swap the first 4 with the next 4 when bit=1,
@@ -168,18 +214,15 @@ pub fn merkle_verify_gadget<
 		let perm_inputs = PoseidonPermutation::new(
 			current
 				.iter()
-				.chain(sibling.iter())
+				.chain(siblings[level].iter())
 				.copied()
 				.chain(core::iter::repeat(zero).take(4)),
 		);
 
-		let perm_output = PoseidonHash::permute_swapped(perm_inputs, bit, builder);
+		let perm_output = PoseidonHash::permute_swapped(perm_inputs, bits[level], builder);
 		let output = perm_output.squeeze();
 
 		let parent: [Target; HASH_SIZE] = core::array::from_fn(|i| output[i]);
-
-		siblings[level] = sibling;
-		bits[level] = bit.target;
 		current = parent;
 	}
 
@@ -187,6 +230,79 @@ pub fn merkle_verify_gadget<
 		root: current,
 		siblings,
 		bits,
+	}
+}
+
+/// Merkle verification of logic of commitment tree is different from other merkle trees.
+///
+/// Uptill level depth-1, the nodes are compressed in binary structure, like any other merkle tree.
+/// For the root, the hash function computes H(num_leaves, left, right) (not H(left, right)). Hence,
+/// merkle path verification of CommitmentTree requires a distinct gadget
+pub fn conditional_merkle_verify_commitment_tree_gadget<
+	F: RichField + Extendable<D> + Poseidon,
+	const D: usize,
+	const DEPTH: usize,
+>(
+	builder: &mut CircuitBuilder<F, D>,
+	leaf: HashOutTarget,
+	expected_root: HashOutTarget,
+	selector: BoolTarget,
+) -> CommitmentTreeMerkleTarget<DEPTH> {
+	let siblings: [[Target; HASH_SIZE]; DEPTH] = [[builder.add_virtual_target(); 4]; DEPTH];
+	let bits: [BoolTarget; DEPTH] = [builder.add_virtual_bool_target_safe(); DEPTH];
+	let num_leaves = builder.add_virtual_target();
+
+	let zero = builder.zero();
+
+	let mut current: [Target; HASH_SIZE] = leaf.elements;
+	for level in 0..DEPTH - 1 {
+		// Build the 12-element Poseidon input:
+		//   [current[0..4] || sibling[0..4] || zero[0..4]]
+		// PoseidonGate SWAP will swap the first 4 with the next 4 when bit=1,
+		// so the permutation always receives [left || right || zeros].
+		let perm_inputs = PoseidonPermutation::new(
+			current
+				.iter()
+				.chain(siblings[level].iter())
+				.copied()
+				.chain(core::iter::repeat(zero).take(4)),
+		);
+
+		let perm_output = PoseidonHash::permute_swapped(perm_inputs, bits[level], builder);
+		let output = perm_output.squeeze();
+
+		let parent: [Target; HASH_SIZE] = core::array::from_fn(|i| output[i]);
+
+		current = parent;
+	}
+
+	// root = H(left | right | num_leaves)
+	let perm_inputs = PoseidonPermutation::new(
+		current
+			.iter()
+			.chain(siblings[DEPTH - 1].iter())
+			.copied()
+			.chain(core::iter::once(num_leaves))
+			.chain(core::iter::repeat(zero).take(3)),
+	);
+	let computed_root: [Target; HASH_SIZE] = {
+		let tmp = PoseidonHash::permute_swapped(perm_inputs, bits[DEPTH - 1], builder);
+		let tmp = tmp.squeeze();
+		array::from_fn(|i| tmp[i])
+	};
+
+	// Selector-gated root equality: selector * (computed_root[i] -
+	// expected_root[i]) = 0
+	for i in 0..HASH_SIZE {
+		let diff = builder.sub(computed_root[i], expected_root.elements[i]);
+		let product = builder.mul(selector.target, diff);
+		builder.assert_zero(product);
+	}
+
+	CommitmentTreeMerkleTarget {
+		siblings,
+		bits,
+		num_leaves,
 	}
 }
 
@@ -280,7 +396,7 @@ mod tests {
 				pw.set_target(targets.siblings[level][i], siblings[level].elements[i])
 					.unwrap();
 			}
-			pw.set_bool_target(BoolTarget::new_unsafe(targets.bits[level]), bits[level])
+			pw.set_bool_target(targets.bits[level], bits[level])
 				.unwrap();
 		}
 		// Set expected root = computed root
@@ -332,7 +448,7 @@ mod tests {
 				pw.set_target(targets.siblings[level][i], siblings[level].elements[i])
 					.unwrap();
 			}
-			pw.set_bool_target(BoolTarget::new_unsafe(targets.bits[level]), bits[level])
+			pw.set_bool_target(targets.bits[level], bits[level])
 				.unwrap();
 		}
 
@@ -391,7 +507,7 @@ mod tests {
 				pw.set_target(targets.siblings[level][i], siblings[level].elements[i])
 					.unwrap();
 			}
-			pw.set_bool_target(BoolTarget::new_unsafe(targets.bits[level]), bits[level])
+			pw.set_bool_target(targets.bits[level], bits[level])
 				.unwrap();
 		}
 

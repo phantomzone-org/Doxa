@@ -1,26 +1,37 @@
 use std::{collections::HashMap, fmt, fmt::Debug, hash::Hash, marker::PhantomData};
 
 use plonky2::{
-	hash::{hash_types::HashOut, poseidon::PoseidonHash},
+	hash::poseidon::PoseidonHash,
 	plonk::{config::Hasher, proof},
 };
-use plonky2_field::types::Field;
-use tessera_trees::tree::hasher::HashOutput;
+use tessera_trees::{
+	F,
+	tree::{HASH_SIZE, hasher::HashOutput},
+};
 
 // #[derive(Clone, Debug, PartialEq, Eq)]
 // pub(crate) struct Node(pub(crate) HashOutput);
 
-struct CommitmentTreeMerkleProof {
-	path: Vec<HashOutput>,
-	num_leaves: usize,
+pub(crate) struct CommitmentTreeMerkleProof<const DEPTH: usize> {
+	pub(crate) path: Vec<HashOutput>,
+	pub(crate) num_leaves: usize,
+	pub(crate) pos: usize,
 }
 
-impl CommitmentTreeMerkleProof {
-	pub(crate) fn new(path: Vec<HashOutput>, num_leaves: usize) -> Self {
+impl<const DEPTH: usize> CommitmentTreeMerkleProof<DEPTH> {
+	pub(crate) fn new(path: Vec<HashOutput>, pos: usize, num_leaves: usize) -> Self {
+		assert!(path.len() == DEPTH);
 		Self {
 			path,
 			num_leaves,
+			pos,
 		}
+	}
+
+	pub(crate) fn extract_siblings_bits(&self) -> ([[F; HASH_SIZE]; DEPTH], [bool; DEPTH]) {
+		let siblings: [[F; 4]; DEPTH] = core::array::from_fn(|i| self.path[i].0);
+		let bits: [bool; DEPTH] = core::array::from_fn(|j| (self.pos >> j) & 1 == 1);
+		(siblings, bits)
 	}
 }
 
@@ -29,21 +40,19 @@ pub trait Leaf {
 	fn empty() -> Self::Node;
 }
 
-// TODO: don't use HasOut once HashOutput is generic over F
-
-pub trait Node<F: Field>: Sized + From<HashOutput> {
+pub trait Node: Sized + From<HashOutput> {
 	type Leaf: Leaf<Node = Self> + Into<Self>;
 
-	fn inner(&self) -> HashOut<F>;
+	fn inner(&self) -> HashOutput;
 
 	fn compress_two(lhs: &Self, rhs: &Self) -> Self {
 		// Use two_to_one so the native hash matches the circuit's PoseidonPermutation gadget.
 		use plonky2::hash::hash_types::HashOut;
 		let left = HashOut {
-			elements: lhs.inner().elements,
+			elements: lhs.inner().0,
 		};
 		let right = HashOut {
-			elements: rhs.inner().elements,
+			elements: rhs.inner().0,
 		};
 		let result = <PoseidonHash as Hasher<F>>::two_to_one(left, right);
 		Self::from(HashOutput(result.elements))
@@ -170,8 +179,8 @@ where
 	/// Extract siblings and direction bits from a native MerkleProof.
 	/// Direction::Left  (sibling on left, current is right child) → bit = true
 	/// Direction::Right (sibling on right, current is left child) → bit = false
-	pub(crate) fn extract_siblings_bits(&self) -> ([HashOutput; DEPTH], [bool; DEPTH]) {
-		let siblings: [HashOutput; DEPTH] = core::array::from_fn(|i| self.path[i].sibling.inner());
+	pub(crate) fn extract_siblings_bits(&self) -> ([[F; HASH_SIZE]; DEPTH], [bool; DEPTH]) {
+		let siblings: [[F; 4]; DEPTH] = core::array::from_fn(|i| self.path[i].sibling.inner().0);
 		let bits: [bool; DEPTH] =
 			core::array::from_fn(|i| self.path[i].direction == crate::tree::Direction::Left);
 		(siblings, bits)
