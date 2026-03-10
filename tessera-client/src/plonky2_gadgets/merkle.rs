@@ -92,14 +92,15 @@ impl<const D: usize> SetDummyMerklePathOfWitness for ConditionalMerkleTarget<D> 
 }
 
 #[derive(Clone, Copy)]
-pub struct MerkleTarget<const DEPTH: usize> {
-	pub root: [Target; HASH_SIZE],
+pub struct ComputeMerkleRootTarget<const DEPTH: usize> {
+	pub root: HashOutTarget,
 	pub siblings: [HashOutTarget; DEPTH],
 	// TODO:Change bits to bool
 	pub bits: [BoolTarget; DEPTH],
 }
 
-impl<N: Node, const D: usize> SetMerklePathOfWitness<MerkleProof<N, D>> for MerkleTarget<D>
+impl<N: Node, const D: usize> SetMerklePathOfWitness<MerkleProof<N, D>>
+	for ComputeMerkleRootTarget<D>
 where
 	N::Leaf: Clone,
 {
@@ -108,29 +109,6 @@ where
 		set_merkle_siblings_and_bits(pw, &self.siblings, &self.bits, siblings, bits);
 	}
 }
-
-impl<N: Node, const D: usize> SetMerkleRootOfWitness<MerkleProof<N, D>> for MerkleTarget<D>
-where
-	N::Leaf: Clone,
-{
-	fn set_witness(&self, pw: &mut PartialWitness<F>, proof: &MerkleProof<N, D>) {
-		pw.set_target_arr(&self.root, &proof.root.0).unwrap()
-	}
-}
-
-// MerkleTarget can never be set to DummyWitness. DummyWitness is only allowed in
-// ConditionalMerkleTarget
-//  impl<const D: usize> SetDummyMerklePathOfWitness for MerkleTarget<D> {
-// 	fn set_dummy_witness(&self, pw: &mut PartialWitness<F>, _depth: usize) {
-// 		set_merkle_siblings_and_bits(
-// 			pw,
-// 			&self.siblings,
-// 			&self.bits,
-// 			[[F::ZERO; 4]; D],
-// 			[false; D],
-// 		);
-// 	}
-// }
 
 pub struct CommitmentTreeMerkleTarget<const DEPTH: usize> {
 	pub siblings: [HashOutTarget; DEPTH],
@@ -183,31 +161,33 @@ pub fn conditional_merkle_verify_gadget<
 	expected_root: HashOutTarget,
 	selector: BoolTarget,
 ) -> ConditionalMerkleTarget<DEPTH> {
-	let merkletrgt = merkle_verify_gadget(builder, leaf);
-
-	// Selector-gated root equality: selector * (computed_root[i] -
-	// expected_root[i]) = 0
-	let computed_root = merkletrgt.root;
+	let merkletrgt = compute_merkle_root_gagdet(builder, leaf);
 	for i in 0..HASH_SIZE {
-		let diff = builder.sub(computed_root[i], expected_root.elements[i]);
-		let product = builder.mul(selector.target, diff);
-		builder.assert_zero(product);
+		builder.conditional_assert_eq(
+			selector.target,
+			merkletrgt.root.elements[i],
+			expected_root.elements[i],
+		);
 	}
-
 	ConditionalMerkleTarget {
 		siblings: merkletrgt.siblings,
 		bits: merkletrgt.bits,
 	}
 }
 
-pub fn merkle_verify_gadget<
+// TODO: both conditional_merkle_verify_commitment_tree_gadget, condtional_merkle_verify_gadget can
+// use compute_merkle_root_gadget if the fn computes node till depth-1, since the two parent
+// functions only differ in root computation. However, the compute_merkle_root_gadget is
+// independently useful. Hence, it'll suit better if it takes DEPTH to compute node until as a
+// parameter.
+pub fn compute_merkle_root_gagdet<
 	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 	const DEPTH: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
 	leaf: HashOutTarget,
-) -> MerkleTarget<DEPTH> {
+) -> ComputeMerkleRootTarget<DEPTH> {
 	let siblings: [HashOutTarget; DEPTH] = core::array::from_fn(|_| builder.add_virtual_hash());
 	let bits: [BoolTarget; DEPTH] =
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
@@ -235,8 +215,10 @@ pub fn merkle_verify_gadget<
 		current = parent;
 	}
 
-	MerkleTarget {
-		root: current,
+	ComputeMerkleRootTarget {
+		root: HashOutTarget {
+			elements: current,
+		},
 		siblings,
 		bits,
 	}
@@ -245,8 +227,8 @@ pub fn merkle_verify_gadget<
 /// Merkle verification of logic of commitment tree is different from other merkle trees.
 ///
 /// Uptill level depth-1, the nodes are compressed in binary structure, like any other merkle tree.
-/// For the root, the hash function computes H(left, right, num_leaves) (not H(left, right)). Hence,
-/// merkle path verification of CommitmentTree requires a distinct gadget
+/// For the root, the hash function computes H(num_leaves | left | right) (not H(left, right)).
+/// Hence, merkle path verification of CommitmentTree requires a distinct gadget
 pub fn conditional_merkle_verify_commitment_tree_gadget<
 	H: MerkleHashCircuit<F, D>,
 	F: RichField + Extendable<D> + Poseidon,
@@ -540,28 +522,3 @@ mod tests {
 
 	// ── Witness-setting helpers ───────────────────────────────────────────────
 }
-
-// TODO: assert account is fresh
-//
-// AccountFresh
-// if account is fresh, then what things need to be chcked:
-//  - all values of the account are set to default
-//  - one should only be allowed to update the configuration of the account
-//  - if acc_fresh, then it's a new type of tx
-//
-// PrivateTrafer
-//      - for each inote:
-//          - Comm(inote) exists in NCT
-//          - Null(inote) is derived correctly
-//          - inote.spend_cond = AccIn
-//      - for each dinote:
-//          - Comm(dinote) is derived correctly
-//      - for each onote:
-//          - Comm(onote) is derived correctly
-//      - accin.amt + sum(inote) == accout.amt + sum(onote)
-//      - approval signature
-//      - if [onote].len > 0: user spend sig
-//      - if [inote].len > 0 && [onote].len == 0: consume sig
-//      - approval_key exists in MainConfigTree root
-//
-//

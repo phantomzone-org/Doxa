@@ -12,7 +12,10 @@ use plonky2::{
 use plonky2_field::types::Field;
 use tessera_trees::{
 	F,
-	tree::{HASH_SIZE, hasher::HashOutput},
+	tree::{
+		HASH_SIZE,
+		hasher::{HashOutput, MerkleHash},
+	},
 };
 
 // #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,40 +52,21 @@ impl<const DEPTH: usize> CommitmentTreeMerkleProof<DEPTH> {
 
 	pub(crate) fn verify(&self, root: HashOutput) -> bool {
 		let bits: [bool; DEPTH] = core::array::from_fn(|j| (self.pos >> j) & 1 == 1);
-		let mut current = self.leaf.0;
+		let mut current = self.leaf;
 
-		// Levels 0..DEPTH-2: standard two_to_one (matches circuit's permute_swapped)
-		for level in 0..DEPTH - 1 {
-			let sib = self.path[level].0;
-			let (left, right) = if bits[level] {
-				(sib, current)
+		for level in 0..DEPTH {
+			if level == DEPTH - 1 {
+				let (left, right) = if bits[level] {
+					(self.path[level], current)
+				} else {
+					(current, self.path[level])
+				};
+				current = HashOutput::hash_root(self.num_leaves, &left, &right);
 			} else {
-				(current, sib)
-			};
-			let h = left
-				.iter()
-				.copied()
-				.chain(right.iter().copied())
-				.collect_vec();
-			current = <PoseidonHash as Hasher<F>>::hash_no_pad(&h).elements;
+				current = HashOutput::hash_2_to_1(&current, &self.path[level], bits[level]);
+			}
 		}
-
-		// Root level: Poseidon([left | right | num_leaves | 0 | 0 | 0])
-		// Matches circuit: permute_swapped([current, sibling, num_leaves, 0, 0, 0], bits[DEPTH-1])
-		let sib = self.path[DEPTH - 1].0;
-		let (left, right) = if bits[DEPTH - 1] {
-			(sib, current)
-		} else {
-			(current, sib)
-		};
-		let mut h = left.to_vec();
-		h.extend(right);
-		h.push(F::from_canonical_usize(self.num_leaves));
-		// PoseidonHash::permute_swapped(&h, swap, builder)
-		let output = <PoseidonHash as Hasher<F>>::hash_no_pad(&h).elements;
-		let computed_root = HashOutput(core::array::from_fn(|i| output[i]));
-
-		computed_root == root
+		current == root
 	}
 }
 

@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use plonky2::{
 	hash::{
 		hash_types::{HashOutTarget, RichField},
@@ -17,8 +18,8 @@ use crate::{
 			cb::PrivTxCircuitBuilder,
 			targets::{
 				AccountNullifierTarget, ActRootTarget, AssetIdTarget, DummyNoteTarget,
-				MainPoolConfigRootTarget, NctRootTarget, NoteNullifierTarget, NoteTarget,
-				PublicIdentifierTaregt, SubpoolIdTarget, TxCircuitTargets,
+				MainPoolConfigRootTarget, NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
+				NoteTarget, PublicIdentifierTaregt, SubpoolIdTarget, TxCircuitTargets,
 			},
 		},
 		signature::{LocalQuinticExtension, PubkeyTarget},
@@ -189,13 +190,34 @@ pub fn priv_tx_circuit<
 	);
 
 	// Derive tx hash //
+
+	// select valid inote nullifiers, onote commitments as per respective isactive selector
+	let effective_inotes_null: [NoteNullifierTarget; NOTE_BATCH] = core::array::from_fn(|i| {
+		NoteNullifierTarget(HashOutTarget {
+			elements: core::array::from_fn(|j| {
+				builder._if(
+					inotes_isactive[i],
+					inotes_null[i].0.elements[j],
+					dinotes_null[i].0.elements[j],
+				)
+			}),
+		})
+	});
+	let effective_onotes_comm: [NoteCommitmentTarget; NOTE_BATCH] = core::array::from_fn(|i| {
+		NoteCommitmentTarget(HashOutTarget {
+			elements: core::array::from_fn(|j| {
+				builder._if(
+					onotes_isactive[i],
+					onotes_comm[i].0.elements[j],
+					donotes_comm[i].0.elements[j],
+				)
+			}),
+		})
+	});
+
 	let tx_hash = builder.derive_tx_hash(
-		inotes_isactive,
-		inotes_null,
-		dinotes_null,
-		onotes_isactive,
-		onotes_comm,
-		donotes_comm,
+		effective_inotes_null,
+		effective_onotes_comm,
 		accin_null,
 		accout_comm,
 	);
@@ -221,6 +243,30 @@ pub fn priv_tx_circuit<
 		subpool_consume_key,
 		approval_key,
 		not_fake_tx,
+	);
+
+	// Declare public inputs:
+	//  - effective input note nullifiers
+	//  - effective output note commitments
+	//  - AIn Nullifier
+	//  - AOut commitment
+	//  - not_is_fake bool target
+	builder.register_public_input(not_fake_tx.target);
+	builder.register_public_inputs(&accin_null.0.elements);
+	builder.register_public_inputs(&accout_comm.0.elements);
+	builder.register_public_inputs(
+		effective_inotes_null
+			.iter()
+			.flat_map(|v| v.0.elements)
+			.collect_vec()
+			.as_slice(),
+	);
+	builder.register_public_inputs(
+		effective_onotes_comm
+			.iter()
+			.flat_map(|v| v.0.elements)
+			.collect_vec()
+			.as_slice(),
 	);
 
 	TxCircuitTargets {

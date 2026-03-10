@@ -12,7 +12,7 @@ use crate::{
 	ACC_AST_DEPTH, ACT_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK,
 	MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH, StandardAccount,
 	plonky2_gadgets::{
-		merkle::{CommitmentTreeMerkleTarget, ConditionalMerkleTarget, MerkleTarget},
+		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget, ConditionalMerkleTarget},
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
 	},

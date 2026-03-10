@@ -1621,28 +1621,22 @@ mod tests {
 		gates::gate_testing::{test_eval_fns, test_low_degree},
 		hash::{hashing::hash_n_to_m_no_pad, poseidon::PoseidonHash},
 		iop::witness::PartialWitness,
-		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig, config::Hasher},
+		plonk::{
+			circuit_builder::CircuitBuilder,
+			circuit_data::CircuitConfig,
+			config::{GenericConfig, Hasher, PoseidonGoldilocksConfig},
+		},
 	};
+	use plonky2_field::goldilocks_field::GoldilocksField;
+	use rand::{RngExt, rng};
 
 	use super::*;
 	use crate::{
 		ecgfp5::{CompressedPoint, PointEw},
 		plonky2_gadgets::tests::print_common_data,
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
+		time,
 	};
-
-	/// Time `$expr`, print `"$label: <duration>"`, and return the result.
-	macro_rules! time {
-		($label:expr, $expr:expr) => {{
-			let _t = std::time::Instant::now();
-			let _res = $expr;
-			println!("{}: {:?}", $label, _t.elapsed());
-			_res
-		}};
-	}
-	use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
-	use plonky2_field::goldilocks_field::GoldilocksField;
-	use rand::{RngExt, rng};
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;

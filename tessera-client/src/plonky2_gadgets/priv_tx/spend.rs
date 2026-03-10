@@ -557,10 +557,13 @@ pub(crate) fn set_fake_tx_witness(
 #[cfg(test)]
 mod tests {
 	use itertools::Itertools;
-	use plonky2::plonk::{
-		circuit_builder::CircuitBuilder,
-		circuit_data::CircuitConfig,
-		config::{GenericConfig, PoseidonGoldilocksConfig},
+	use plonky2::{
+		plonk::{
+			circuit_builder::CircuitBuilder,
+			circuit_data::CircuitConfig,
+			config::{GenericConfig, PoseidonGoldilocksConfig},
+		},
+		timed,
 	};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
@@ -569,8 +572,9 @@ mod tests {
 	use super::*;
 	use crate::{
 		SpendAuth,
-		plonky2_gadgets::priv_tx::priv_tx_circuit,
+		plonky2_gadgets::{priv_tx::priv_tx_circuit, tests::print_common_data},
 		schnorr::{CompressedPublicKey, PrivateKey, schnorr_sign},
+		time,
 	};
 
 	const D: usize = 2;
@@ -718,13 +722,6 @@ mod tests {
 			tx_onote_comms,
 		);
 
-		// ── Build circuit ──────────────────────────────────────────────────────
-		let config = CircuitConfig::standard_recursion_config();
-		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
-		let data = builder.build::<C>();
-		let mut pw = PartialWitness::new();
-
 		// ── Signatures ────────────────────────────────────────────────────────
 
 		// Consume (REAL): is_consume_req = true (N0+N1 active, no onotes)
@@ -739,6 +736,13 @@ mod tests {
 			let k = Scalar::from_raw([1, 2, 3, 4, 5]);
 			schnorr_sign(&approval_sk, &tx_hash, k)
 		};
+
+		// ── Build circuit ──────────────────────────────────────────────────────
+		let config = CircuitConfig::standard_recursion_zk_config();
+		let mut builder = CircuitBuilder::<F, D>::new(config);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let inner_data = builder.build::<C>();
+		let mut pw = PartialWitness::new();
 
 		// --- Set Witness -------------------------------------------------------
 
@@ -765,8 +769,58 @@ mod tests {
 		);
 
 		// ── Prove & verify ─────────────────────────────────────────────────────
-		let proof = data.prove(pw).expect("prove failed");
-		data.verify(proof).expect("verify failed");
+
+		// Inner prove and verify
+		print_common_data(&inner_data.common, "inner common data");
+		let inner_proof = time!(
+			"inner prove",
+			inner_data.prove(pw).expect("inner proof generation failed")
+		);
+		time!(
+			"inner verify",
+			inner_data
+				.verify(inner_proof.clone())
+				.expect("inner verification failed")
+		);
+
+		// --- Recursive prove & verify ------------------------------------------
+
+		// Build the outer (recursive) circuit that verifies the inner proof.
+		let mut rec_builder =
+			CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+		let proof_target = rec_builder.add_virtual_proof_with_pis(&inner_data.common);
+		let verifier_target =
+			rec_builder.add_virtual_verifier_data(inner_data.common.config.fri_config.cap_height);
+		rec_builder.verify_proof::<C>(&proof_target, &verifier_target, &inner_data.common);
+		let rec_data = time!("rec build", rec_builder.build::<C>());
+		print_common_data(&rec_data.common, "rec common data");
+
+		// Set the recursive witness.
+		let mut rec_pw = PartialWitness::new();
+		rec_pw
+			.set_proof_with_pis_target(&proof_target, &inner_proof)
+			.unwrap();
+		rec_pw
+			.set_cap_target(
+				&verifier_target.constants_sigmas_cap,
+				&inner_data.verifier_only.constants_sigmas_cap,
+			)
+			.unwrap();
+		rec_pw
+			.set_hash_target(
+				verifier_target.circuit_digest,
+				inner_data.verifier_only.circuit_digest,
+			)
+			.unwrap();
+
+		let rec_proof = time!(
+			"rec prove",
+			rec_data.prove(rec_pw).expect("recursive proof failed")
+		);
+		time!(
+			"rec verify",
+			rec_data.verify(rec_proof).expect("recursive verify failed")
+		);
 	}
 
 	#[test]

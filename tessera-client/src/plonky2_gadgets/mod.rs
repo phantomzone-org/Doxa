@@ -7,7 +7,7 @@ use plonky2::{
 };
 use plonky2_field::types::Field;
 
-// pub(crate) mod deposit_tx;
+pub(crate) mod deposit_tx;
 pub(crate) mod merkle;
 pub(crate) mod priv_tx;
 pub(crate) mod signature;
@@ -49,6 +49,17 @@ pub(crate) fn set_u256<F: Field>(
 mod tests {
 	use plonky2::{hash::hash_types::RichField, plonk::circuit_data::CircuitConfig};
 	use plonky2_field::extension::Extendable;
+
+	/// Time `$expr`, print `"$label: <duration>"`, and return the result.
+	#[macro_export]
+	macro_rules! time {
+		($label:expr, $expr:expr) => {{
+			let _t = std::time::Instant::now();
+			let _res = $expr;
+			println!("{}: {:?}", $label, _t.elapsed());
+			_res
+		}};
+	}
 
 	pub(crate) fn avg(times: &[std::time::Duration]) -> std::time::Duration {
 		times.iter().sum::<std::time::Duration>() / times.len() as u32

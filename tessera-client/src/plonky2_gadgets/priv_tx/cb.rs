@@ -6,7 +6,7 @@ use plonky2::{
 	iop::target::{BoolTarget, Target},
 	plonk::circuit_builder::CircuitBuilder,
 };
-use plonky2_field::{extension::Extendable, types::Field};
+use plonky2_field::extension::Extendable;
 use tessera_trees::{
 	plonky2_gadgets::u32::{U32Target, add_u8_range_check_lookup_table},
 	tree::{HASH_SIZE, hasher::MerkleHashCircuit},
@@ -18,9 +18,8 @@ use crate::{
 	DS_NULLIFIER_KEY, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
 		merkle::{
-			CommitmentTreeMerkleTarget, ConditionalMerkleTarget, MerkleTarget,
+			CommitmentTreeMerkleTarget, ConditionalMerkleTarget,
 			conditional_merkle_verify_commitment_tree_gadget, conditional_merkle_verify_gadget,
-			merkle_verify_gadget,
 		},
 		priv_tx::targets::{
 			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, ActRootTarget,
@@ -148,12 +147,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 
 	fn derive_tx_hash(
 		&mut self,
-		inotes_isactive: [BoolTarget; NOTE_BATCH],
-		inotes_null: [NoteNullifierTarget; NOTE_BATCH],
-		dinotes_null: [NoteNullifierTarget; NOTE_BATCH],
-		onotes_isactive: [BoolTarget; NOTE_BATCH],
-		onotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
-		donotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
+		effective_inotes_null: [NoteNullifierTarget; NOTE_BATCH],
+		effective_onotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		accin_null: AccountNullifierTarget,
 		accout_comm: AccountCommitmentTarget,
 	) -> TxHashTarget;
@@ -348,46 +343,18 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 
 	fn derive_tx_hash(
 		&mut self,
-		inotes_isactive: [BoolTarget; NOTE_BATCH],
-		inotes_null: [NoteNullifierTarget; NOTE_BATCH],
-		dinotes_null: [NoteNullifierTarget; NOTE_BATCH],
-		onotes_isactive: [BoolTarget; NOTE_BATCH],
-		onotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
-		donotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
+		effective_inotes_null: [NoteNullifierTarget; NOTE_BATCH],
+		effective_onotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		accin_null: AccountNullifierTarget,
 		accout_comm: AccountCommitmentTarget,
 	) -> TxHashTarget {
-		// select valid inote nullifiers, onote commitments as per respective isactive selector
-		let act_inotenulls: [NoteNullifierTarget; NOTE_BATCH] = core::array::from_fn(|i| {
-			NoteNullifierTarget(HashOutTarget {
-				elements: core::array::from_fn(|j| {
-					self._if(
-						inotes_isactive[i],
-						inotes_null[i].0.elements[j],
-						dinotes_null[i].0.elements[j],
-					)
-				}),
-			})
-		});
-		let act_onotecomms: [NoteCommitmentTarget; NOTE_BATCH] = core::array::from_fn(|i| {
-			NoteCommitmentTarget(HashOutTarget {
-				elements: core::array::from_fn(|j| {
-					self._if(
-						onotes_isactive[i],
-						onotes_comm[i].0.elements[j],
-						donotes_comm[i].0.elements[j],
-					)
-				}),
-			})
-		});
-
 		let mut input = Vec::with_capacity(4 + 4 + 4 * NOTE_BATCH + 4 * NOTE_BATCH);
 		input.extend_from_slice(&accin_null.0.elements);
 		input.extend_from_slice(&accout_comm.0.elements);
-		for null in &act_inotenulls {
+		for null in &effective_inotes_null {
 			input.extend_from_slice(&null.0.elements);
 		}
-		for comm in &act_onotecomms {
+		for comm in &effective_onotes_comm {
 			input.extend_from_slice(&comm.0.elements);
 		}
 		TxHashTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
