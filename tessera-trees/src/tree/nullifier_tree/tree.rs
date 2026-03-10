@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::tree::{
 	MerkleTree, Node, NullifierInsertProof,
 	error::{MerkleTreeError, MerkleTreeResult},
-	hasher::{Hash, MerkleHash},
+	hasher::{HashOutput, MerkleHash},
 };
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -317,7 +317,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 	}
 }
 
-impl NullifierTree<Hash> {
+impl NullifierTree<HashOutput> {
 	/// Creates a new nullifier tree pre-padded so that `nodes.len() == batch_size`.
 	///
 	/// The tree starts with the sentinel node at index 0, then deterministically
@@ -355,7 +355,7 @@ impl NullifierTree<Hash> {
 
 	/// Derives a deterministic padding leaf value:
 	///   `Hash::from_32bytes_digest(Keccak256(leaf_index_be8 || node_hash_be32))`
-	fn derive_padding_leaf(leaf_index: usize, prev_node_hash: &Hash) -> Hash {
+	fn derive_padding_leaf(leaf_index: usize, prev_node_hash: &HashOutput) -> HashOutput {
 		use tiny_keccak::{Hasher, Keccak};
 
 		let mut keccak = Keccak::v256();
@@ -371,7 +371,7 @@ impl NullifierTree<Hash> {
 		let mut digest = [0u8; 32];
 		keccak.finalize(&mut digest);
 
-		Hash::from_32bytes_digest(digest)
+		HashOutput::from_32bytes_digest(digest)
 	}
 }
 
@@ -399,16 +399,16 @@ mod tests {
 
 	#[test]
 	fn test_new_with_padding() {
-		let tree = NullifierTree::<Hash>::new_with_padding(DEPTH, 16);
+		let tree = NullifierTree::<HashOutput>::new_with_padding(DEPTH, 16);
 		assert_eq!(tree.nodes.len(), 16);
 		tree.verify().expect("padded tree should be valid");
 
 		// Determinism: same batch_size always yields the same root.
-		let tree2 = NullifierTree::<Hash>::new_with_padding(DEPTH, 16);
+		let tree2 = NullifierTree::<HashOutput>::new_with_padding(DEPTH, 16);
 		assert_eq!(tree.get_root(), tree2.get_root());
 
 		// Different batch_size yields a different root.
-		let tree4 = NullifierTree::<Hash>::new_with_padding(DEPTH, 4);
+		let tree4 = NullifierTree::<HashOutput>::new_with_padding(DEPTH, 4);
 		assert_eq!(tree4.nodes.len(), 4);
 		assert_ne!(tree.get_root(), tree4.get_root());
 		tree4.verify().expect("padded tree (4) should be valid");
@@ -416,11 +416,11 @@ mod tests {
 
 	#[test]
 	fn test_padded_tree_accepts_batch_insert() {
-		let mut tree = NullifierTree::<Hash>::new_with_padding(DEPTH, 4);
+		let mut tree = NullifierTree::<HashOutput>::new_with_padding(DEPTH, 4);
 		assert_eq!(tree.nodes.len(), 4);
 
 		let mut rng: StdRng = StdRng::from_seed([99u8; 32]);
-		let batch: Vec<Hash> = (0..4).map(|_| Hash::new_random(&mut rng)).collect();
+		let batch: Vec<HashOutput> = (0..4).map(|_| HashOutput::new_random(&mut rng)).collect();
 		let proof = tree
 			.insert_batch(batch)
 			.expect("batch insert should succeed");
