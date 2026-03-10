@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use digest::{Digest, Output};
 use serde::{Deserialize, Serialize};
 use tessera_client::NoteCommitment;
 use tessera_trees::tree::hasher::HashOutput;
@@ -26,13 +25,8 @@ impl NoteCommitmentBatch {
 		Ok(())
 	}
 
-	/// Compute leaf hashes using SHA-256 (for native leaf hashing mode).
-	pub fn leaves<H: Digest>(&self) -> Vec<Output<H>> {
-		self.notes.iter().map(|d| d.hash::<H>()).collect()
-	}
-
-	pub fn leaves_as_field_hashes<H: Digest>(&self) -> Vec<HashOutput> {
-		self.notes.iter().map(|d| d.as_field_hash()).collect()
+	pub fn leaves_as_field_hashes(&self) -> Vec<HashOutput> {
+		self.notes.iter().map(|d| d.0).collect()
 	}
 }
 

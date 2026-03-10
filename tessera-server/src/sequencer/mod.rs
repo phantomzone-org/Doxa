@@ -1,5 +1,5 @@
 use std::{
-	collections::{BTreeMap, HashSet},
+	collections::{BTreeMap, HashMap, HashSet},
 	sync::Arc,
 	time::Duration,
 };
@@ -42,7 +42,7 @@ const MAX_PENDING_BATCHES: usize = 128;
 struct TxPerTreeBatch {
 	real_commitments_bytes: Vec<[u8; 32]>,
 	proving_commitments_bytes: Vec<[u8; 32]>,
-	proving_commitments_hash: Vec<Hash>,
+	proving_commitments_hash: Vec<HashOutput>,
 }
 
 /// A batch registered on-chain and awaiting a single SuperAggregator proof
@@ -97,13 +97,13 @@ pub(super) struct NotesCommitmentRequest {
 }
 
 /// Pad `real_bytes` to `batch_size` with deterministic dummy leaves, then convert
-/// the result to the native `Hash` type expected by the plonky2 circuit.
+/// the result to the native `HashOutput` type expected by the plonky2 circuit.
 fn build_proving_commitments(
 	dummy_type: DummyTreeType,
 	batch_start_index: usize,
 	batch_size: usize,
 	real_bytes: &[[u8; 32]],
-) -> anyhow::Result<(Vec<[u8; 32]>, Vec<Hash>)> {
+) -> anyhow::Result<(Vec<[u8; 32]>, Vec<HashOutput>)> {
 	let proving_bytes =
 		crate::dummy::pad_leaves(dummy_type, batch_start_index, batch_size, real_bytes)?;
 	let proving_hashes = contract::bytes_slice_to_hashes(&proving_bytes)?;
@@ -136,6 +136,9 @@ pub struct Sequencer {
 	/// AN commitments from real private TXs currently in the pending pool.
 	/// Used by `start_batch` to compute `real_account_slots` after sorting.
 	real_private_tx_an_leaves: HashSet<[u8; 32]>,
+	/// Client-submitted TX proof bytes, keyed by AN leaf.
+	/// Consumed by `start_batch` when building the `ProveRequest`.
+	tx_proofs_by_an_leaf: HashMap<[u8; 32], Vec<u8>>,
 	api_order_counter: u64,
 	notes_commitment_pending_since: Option<std::time::Instant>,
 }
@@ -230,6 +233,7 @@ impl Sequencer {
 			registered_pending_batches: BTreeMap::new(),
 			private_tx_rx: None,
 			real_private_tx_an_leaves: HashSet::new(),
+			tx_proofs_by_an_leaf: HashMap::new(),
 			api_order_counter: 0,
 			notes_commitment_pending_since: None,
 		}
@@ -288,7 +292,7 @@ impl Sequencer {
 		);
 
 		// Load all four persisted trees (snapshot + WAL). Treated as cache; may be behind chain.
-		let (tree, store, meta) = recovery::load_tree_from_store::<CommitmentTree<Hash>>(
+		let (tree, store, meta) = recovery::load_tree_from_store::<CommitmentTree<HashOutput>>(
 			&self.config.tree_store_path,
 			TreeId::NotesCommitment,
 			"notes_commitment",
@@ -370,13 +374,16 @@ impl Sequencer {
 			.map(|path| api::LeafProofVerifier::from_artifacts(path).map(Arc::new))
 			.transpose()
 			.context("failed to load consume proof verifier from consume artifacts")?;
-		let tx_proof_verifier = self
-			.config
-			.aggregator_artifacts_path
-			.as_deref()
-			.map(|path| api::LeafProofVerifier::from_artifacts(path).map(Arc::new))
-			.transpose()
-			.context("failed to load tx proof verifier from aggregator artifacts")?;
+		let tx_proof_verifier = if self.config.aggregator_artifacts_path.is_some() {
+			info!("building inner PrivTx circuit verifier for API proof validation...");
+			Some(Arc::new(
+				tokio::task::spawn_blocking(api::LeafProofVerifier::from_inner_circuit)
+					.await
+					.context("inner circuit build task panicked")?,
+			))
+		} else {
+			None
+		};
 		let api_state = api::ApiState {
 			notes_commitment_tx,
 			private_tx_tx: Some(private_tx_tx),
@@ -557,6 +564,7 @@ impl Sequencer {
 						self.api_order_counter = self.api_order_counter.saturating_add(1);
 						self.accounts_nullifier_state.add_consume_request(order_key, an_leaf, account_batch_size);
 						self.real_private_tx_an_leaves.insert(an_leaf);
+						self.tx_proofs_by_an_leaf.insert(an_leaf, tx_req.tx_proof);
 					}
 
 					info!(

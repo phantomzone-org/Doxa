@@ -589,7 +589,8 @@ mod tests {
 		println!("Step 1: Generating {} insertion proofs", NUM_PROOFS);
 		let now = Instant::now();
 		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
-		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> = Vec::with_capacity(NUM_PROOFS);
+		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> =
+			Vec::with_capacity(NUM_PROOFS);
 
 		for i in 0..NUM_PROOFS {
 			let value = HashOutput::new_from_u64((i + 1) as u64 * 100);
@@ -686,7 +687,8 @@ mod tests {
 
 		// 1. Generate leaf proofs
 		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
-		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> = Vec::with_capacity(NUM_PROOFS);
+		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> =
+			Vec::with_capacity(NUM_PROOFS);
 
 		for i in 0..NUM_PROOFS {
 			let value = HashOutput::new_from_u64((i + 1) as u64 * 100);

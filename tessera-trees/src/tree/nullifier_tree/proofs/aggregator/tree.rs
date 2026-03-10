@@ -249,7 +249,8 @@ mod tests {
 		);
 		let now = Instant::now();
 		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
-		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> = Vec::with_capacity(NUM_PROOFS);
+		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> =
+			Vec::with_capacity(NUM_PROOFS);
 
 		for i in 0..NUM_PROOFS {
 			let value = HashOutput::new_from_u64((i + 1) as u64 * 100);

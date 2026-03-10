@@ -3,7 +3,7 @@
 //! Subcommands:
 //!   deposit          — mint ERC20, approve bridge, call depositAndRegister N times
 //!   consume          — load 4-PI circuit, prove, POST /consume-request N times
-//!   private-tx       — generate random TX data, prove 73-PI, POST /private-tx
+//!   private-tx       — generate random TX data, prove 75-PI, POST /private-tx
 
 use std::{fs, path::Path};
 
@@ -17,7 +17,7 @@ use alloy::{
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use plonky2::{
-	field::types::Field,
+	field::types::{Field, PrimeField64},
 	iop::{
 		target::Target,
 		witness::{PartialWitness, WitnessWrite},
@@ -25,7 +25,6 @@ use plonky2::{
 	plonk::circuit_data::CircuitData,
 	util::serialization::{DefaultGateSerializer, DefaultGeneratorSerializer},
 };
-use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tessera_trees::{ConfigNative, D, F};
 
@@ -255,70 +254,48 @@ async fn cmd_consume(count: usize, start_index: usize) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// private-tx (random data + dummy proof)
+// private-tx (real inner PrivTx proof with not_fake_tx=1)
 // ---------------------------------------------------------------------------
 
 async fn cmd_private_tx(count: usize) -> Result<()> {
-	let artifacts_dir = env_required("TESSERA_AGGREGATOR_ARTIFACTS_PATH")?;
 	let sequencer_url =
 		std::env::var("TESSERA_SEQUENCER_API_URL").unwrap_or("http://127.0.0.1:8081".to_string());
 
-	let circuit = load_circuit(Path::new(&artifacts_dir))?;
-	let n_pi = circuit.common.num_public_inputs;
-	anyhow::ensure!(
-		n_pi == 73,
-		"expected 73-PI circuit (is_real + 72 data), got {n_pi}"
+	// Build the inner PrivTx circuit and generate a real proof (not_fake_tx=1).
+	// The server will wrap this in its recursive leaf circuit during aggregation.
+	println!("building inner PrivTx circuit + real proof...");
+	let (_inner_circuit, real_proof) =
+		tokio::task::spawn_blocking(tessera_client::build_circuit_and_real_proof).await?;
+	let proof_bytes = real_proof.to_bytes();
+	println!(
+		"  inner proof: {} bytes, {} PIs",
+		proof_bytes.len(),
+		real_proof.public_inputs.len()
 	);
-	let targets = circuit.prover_only.public_inputs.clone();
+
+	// Extract PI data from the proof to populate the request body.
+	// PI layout: [0]=subpool_id_in, [1]=subpool_id_out, [2]=not_fake_tx,
+	//            [3..7]=AN, [7..11]=AC, [11..43]=NN(8×4), [43..75]=NC(8×4)
+	let pis = &real_proof.public_inputs;
+	let account_nullifier = pi_hash_to_b256(&pis[3..7]);
+	let account_commitment = pi_hash_to_b256(&pis[7..11]);
+	let note_nullifiers: Vec<B256> = (0..8)
+		.map(|i| pi_hash_to_b256(&pis[11 + i * 4..11 + (i + 1) * 4]))
+		.collect();
+	let note_commitments: Vec<B256> = (0..8)
+		.map(|i| pi_hash_to_b256(&pis[43 + i * 4..43 + (i + 1) * 4]))
+		.collect();
+
 	let http = reqwest::Client::new();
+	let norm_b256 = |b: &B256| -> String { format!("0x{}", hex::encode(b.as_slice())) };
 
 	for tx_idx in 0..count {
-		// Generate 8 random note nullifiers, 8 random note commitments,
-		// 1 random account nullifier, 1 random account commitment.
-		let input_nullifiers: Vec<B256> = (0..8).map(|_| random_b256()).collect();
-		let output_commitments: Vec<B256> = (0..8).map(|_| random_b256()).collect();
-		let input_account_nullifier = random_b256();
-		let output_account_commitment = random_b256();
-
-		// Build the 73-field PI array.
-		//   [0]      : is_real = 1
-		//   [1..33]  : 8 input note nullifiers  (4 fields each)
-		//   [33..65] : 8 output note commitments (4 fields each)
-		//   [65..69] : input account nullifier   (4 fields)
-		//   [69..73] : output account commitment (4 fields)
-		let mut pi = [0u64; 73];
-		pi[0] = 1; // is_real = true
-		for (slot, nf) in input_nullifiers.iter().enumerate() {
-			let fields = bytes32_to_pi_fields(&nf.0);
-			pi[1 + slot * 4..1 + slot * 4 + 4].copy_from_slice(&fields);
-		}
-		for (slot, oc) in output_commitments.iter().enumerate() {
-			let fields = bytes32_to_pi_fields(&oc.0);
-			pi[33 + slot * 4..33 + slot * 4 + 4].copy_from_slice(&fields);
-		}
-		{
-			let fields = bytes32_to_pi_fields(&input_account_nullifier.0);
-			pi[65..69].copy_from_slice(&fields);
-		}
-		{
-			let fields = bytes32_to_pi_fields(&output_account_commitment.0);
-			pi[69..73].copy_from_slice(&fields);
-		}
-
-		let proof_bytes = tokio::task::spawn_blocking({
-			let circuit = circuit.clone();
-			let targets = targets.clone();
-			move || prove(&circuit, &targets, &pi)
-		})
-		.await??;
-
 		let proof_hex = format!("0x{}", hex::encode(&proof_bytes));
-		let norm_b256 = |b: &B256| -> String { format!("0x{}", hex::encode(b.as_slice())) };
 		let body = PrivateTxBody {
-			input_notes: input_nullifiers.iter().map(norm_b256).collect(),
-			output_notes: output_commitments.iter().map(norm_b256).collect(),
-			input_account_commitment: norm_b256(&input_account_nullifier),
-			output_account_commitment: norm_b256(&output_account_commitment),
+			input_notes: note_nullifiers.iter().map(&norm_b256).collect(),
+			output_notes: note_commitments.iter().map(&norm_b256).collect(),
+			input_account_commitment: norm_b256(&account_nullifier),
+			output_account_commitment: norm_b256(&account_commitment),
 			tx_proof: proof_hex,
 			tx_id: None,
 		};
@@ -395,16 +372,14 @@ fn index_to_b256(i: usize) -> B256 {
 	B256::from(index_to_bytes32(i))
 }
 
-const GOLDILOCKS_PRIME: u64 = 0xFFFF_FFFF_0000_0001;
-
-/// Generate a random B256 with each 8-byte limb clamped to < GOLDILOCKS_PRIME.
-fn random_b256() -> B256 {
+/// Convert 4 Goldilocks field elements (a Poseidon hash) to a B256.
+///
+/// Each field element is encoded as a big-endian u64, yielding 32 bytes total.
+fn pi_hash_to_b256(fields: &[F]) -> B256 {
+	assert_eq!(fields.len(), 4);
 	let mut bytes = [0u8; 32];
-	rand::rng().fill(&mut bytes[..]);
-	for i in 0..4 {
-		let limb = u64::from_be_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
-		let clamped = limb % GOLDILOCKS_PRIME;
-		bytes[i * 8..(i + 1) * 8].copy_from_slice(&clamped.to_be_bytes());
+	for (i, f) in fields.iter().enumerate() {
+		bytes[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
 	}
 	B256::from(bytes)
 }

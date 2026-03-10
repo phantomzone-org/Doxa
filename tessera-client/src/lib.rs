@@ -48,7 +48,5 @@ pub const MAIN_POOL_CONFIG_DEPTH: usize = 20;
 
 pub use account::*;
 pub use note::*;
+pub use plonky2_gadgets::priv_tx::{build_circuit_and_dummy_proof, build_circuit_and_real_proof};
 use tessera_trees::tree::HASH_SIZE;
-
-#[cfg(test)]
-mod tests {}

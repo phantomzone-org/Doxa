@@ -30,7 +30,7 @@ use plonky2::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tessera_trees::{
 	tree::{
-		hasher::{Hash, NewRandom},
+		hasher::{HashOutput, NewRandom},
 		BatchCommitmentProof, BatchCommitmentProofTargets, BatchInsertProof,
 		BatchNullifierInsertProofTargets, CommitmentTree, NullifierTree,
 	},
@@ -123,9 +123,9 @@ pub fn sample_batch_commitment_tree_proof(
 
 	print!("Insert batch: ");
 	let now: Instant = Instant::now();
-	let mut batch: Vec<Hash> = Vec::with_capacity(batch_size);
+	let mut batch: Vec<HashOutput> = Vec::with_capacity(batch_size);
 	for _ in 0..batch_size {
-		batch.push(Hash::new_random(&mut rng));
+		batch.push(HashOutput::new_random(&mut rng));
 	}
 	let batch_proof = tree.insert_batch(batch.clone())?;
 	assert!(batch_proof.verify());
@@ -188,8 +188,8 @@ pub fn sample_batch_nullifier_tree_proof(
 ) -> Result<(
 	CircuitDataNative,
 	ProofNative,
-	BatchInsertProof<Hash>,
-	Vec<Hash>,
+	BatchInsertProof<HashOutput>,
+	Vec<HashOutput>,
 )> {
 	const DEPTH: usize = 32;
 
@@ -202,9 +202,9 @@ pub fn sample_batch_nullifier_tree_proof(
 
 	print!("Insert batch: ");
 	let now = Instant::now();
-	let mut batch: Vec<Hash> = Vec::with_capacity(batch_size);
+	let mut batch: Vec<HashOutput> = Vec::with_capacity(batch_size);
 	for _ in 0..batch_size {
-		batch.push(Hash::new_random(&mut rng));
+		batch.push(HashOutput::new_random(&mut rng));
 	}
 	let batch_proof = tree.insert_batch(batch.clone())?;
 	assert!(batch_proof.verify());

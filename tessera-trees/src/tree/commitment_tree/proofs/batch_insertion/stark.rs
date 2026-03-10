@@ -225,7 +225,7 @@ mod test {
 
 	use crate::tree::{
 		BatchCommitmentProofTargets, CommitmentTree,
-		hasher::{Hash, NewRandom},
+		hasher::{HashOutput, NewRandom},
 	};
 
 	const D: usize = 2;

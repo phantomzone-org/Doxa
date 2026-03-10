@@ -7,7 +7,7 @@ use alloy::{
 	sol_types::{SolCall, SolEvent},
 };
 use serde::{Deserialize, Serialize};
-use tessera_trees::tree::hasher::Hash;
+use tessera_trees::tree::hasher::HashOutput;
 use tracing::{debug, info, warn};
 
 use super::*;
@@ -100,7 +100,8 @@ where
 			batch_size,
 			real_commitments_bytes,
 		)?;
-		let commitments_hash: Vec<Hash> = contract::bytes_slice_to_hashes(&commitments_bytes)?;
+		let commitments_hash: Vec<HashOutput> =
+			contract::bytes_slice_to_hashes(&commitments_bytes)?;
 		let actual_root = state.tree.insert_verified(commitments_hash)?;
 		anyhow::ensure!(
 			actual_root == contract::bytes32_to_hash(&new_root)?,
@@ -177,7 +178,7 @@ impl Sequencer {
 		note_batch_size: usize,
 		account_batch_size: usize,
 	) -> anyhow::Result<()> {
-		let (tree, store, meta) = load_tree_from_store::<NullifierTree<Hash>>(
+		let (tree, store, meta) = load_tree_from_store::<NullifierTree<HashOutput>>(
 			&self.config.tree_store_path,
 			TreeId::NotesNullifier,
 			"notes_nullifier",
@@ -188,7 +189,7 @@ impl Sequencer {
 		self.notes_nullifier_store = Some(store);
 		self.notes_nullifier_meta = Some(meta);
 
-		let (tree, store, meta) = load_tree_from_store::<CommitmentTree<Hash>>(
+		let (tree, store, meta) = load_tree_from_store::<CommitmentTree<HashOutput>>(
 			&self.config.tree_store_path,
 			TreeId::AccountsCommitment,
 			"accounts_commitment",
@@ -199,7 +200,7 @@ impl Sequencer {
 		self.accounts_commitment_store = Some(store);
 		self.accounts_commitment_meta = Some(meta);
 
-		let (tree, store, meta) = load_tree_from_store::<NullifierTree<Hash>>(
+		let (tree, store, meta) = load_tree_from_store::<NullifierTree<HashOutput>>(
 			&self.config.tree_store_path,
 			TreeId::AccountsNullifier,
 			"accounts_nullifier",
@@ -776,6 +777,7 @@ impl Sequencer {
 				.proving_commitments_bytes
 				.clone(),
 			real_account_slots: vec![], // recovery: treat all as dummy
+			tx_proofs_by_slot: std::collections::HashMap::new(),
 		})?;
 
 		Ok(true)

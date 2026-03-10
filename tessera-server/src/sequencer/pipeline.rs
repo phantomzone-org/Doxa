@@ -417,18 +417,18 @@ impl Sequencer {
 			.tree
 			.insert_batch(an_hashes.clone())?;
 
-		// 8. Determine which account-level slots are real private TXs after sorting.
-		let real_account_slots: Vec<usize> = an_padded_bytes
-			.iter()
-			.enumerate()
-			.filter_map(|(i, leaf)| {
-				if self.real_private_tx_an_leaves.contains(leaf) {
-					Some(i)
-				} else {
-					None
+		// 8. Determine which account-level slots are real private TXs after sorting, and collect
+		//    the corresponding client proof bytes.
+		let mut real_account_slots = Vec::new();
+		let mut tx_proofs_by_slot = std::collections::HashMap::new();
+		for (i, leaf) in an_padded_bytes.iter().enumerate() {
+			if self.real_private_tx_an_leaves.contains(leaf) {
+				real_account_slots.push(i);
+				if let Some(proof) = self.tx_proofs_by_an_leaf.remove(leaf) {
+					tx_proofs_by_slot.insert(i, proof);
 				}
-			})
-			.collect();
+			}
+		}
 		// Remove consumed AN leaves from the tracking set.
 		for req in &an_requests {
 			self.real_private_tx_an_leaves.remove(&req.commitment);
@@ -446,6 +446,7 @@ impl Sequencer {
 			ac_sorted_leaves: ac_padded_bytes.clone(),
 			an_sorted_leaves: an_padded_bytes.clone(),
 			real_account_slots,
+			tx_proofs_by_slot,
 		})?;
 
 		// 10. Store TxBatch in the pending map.

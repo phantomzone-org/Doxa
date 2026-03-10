@@ -185,7 +185,7 @@ impl SuperAggregator {
 	///
 	/// Public inputs of the root proof: 8 Goldilocks field elements (Keccak-256
 	/// digest over all concatenated inner tree PIs). TX slot liveness is encoded
-	/// in the TX proof's own public inputs (`is_real` at `PI[s * 73]` for slot `s`).
+	/// in the TX proof's own public inputs (`is_real` at `PI[s * 75 + 2]` for slot `s`).
 	pub fn prove(
 		&self,
 		nc: ProofNative,
@@ -342,13 +342,13 @@ fn setup_builder(
 	let tx_vd = builder.constant_verifier_data(&inner.tx_verifier);
 
 	// --- Derive batch sizes from inner circuit data ---
-	// n_tx_slots = TX root PI count / 73  (73 fields per TX leaf slot: is_real + 72 data)
-	const TX_LEAF_PI_SIZE: usize = 73; // is_real(1) + data(72)
+	// n_tx_slots = TX root PI count / 75  (75 fields per TX leaf slot)
+	const TX_LEAF_PI_SIZE: usize = 75; // subpool_id_in(1) + subpool_id_out(1) + is_real(1) + data(72)
 	let tx_total_pi = inner.tx_common.num_public_inputs;
 	assert_eq!(
 		tx_total_pi % TX_LEAF_PI_SIZE,
 		0,
-		"TX root PI count must be a multiple of TX_LEAF_PI_SIZE (73)"
+		"TX root PI count must be a multiple of TX_LEAF_PI_SIZE (75)"
 	);
 	let n_tx_slots = tx_total_pi / TX_LEAF_PI_SIZE;
 
@@ -388,55 +388,66 @@ fn setup_builder(
 	// All four trees (NC/NN/AC/AN) share the same PI layout:
 	//   public_inputs[0..8]  = [old_root × 4, new_root × 4]
 	//   public_inputs[8..]   = leaves (batch_size × 4 fields)
-	// TX leaf PI layout (73 fields per slot):
-	//   [0]      = is_real (bool: 1 = real private tx, 0 = padding)
-	//   [1..33]  = note_nullifiers[0..8]   (8 × 4 fields, from NN)
-	//   [33..65] = note_commitments[0..8]  (8 × 4 fields, from NC)
-	//   [65..69] = account_nullifier        (1 × 4 fields, from AN)
-	//   [69..73] = account_commitment       (1 × 4 fields, from AC)
+	// TX leaf PI layout (75 fields per slot):
+	//   [0]      = subpool_id_in
+	//   [1]      = subpool_id_out
+	//   [2]      = is_real (bool: 1 = real private tx, 0 = padding)
+	//   [3..7]   = account_nullifier        (1 × 4 fields, from AN)
+	//   [7..11]  = account_commitment       (1 × 4 fields, from AC)
+	//   [11..43] = note_nullifiers[0..8]   (8 × 4 fields, from NN)
+	//   [43..75] = note_commitments[0..8]  (8 × 4 fields, from NC)
 	//
-	// is_real is read from the TX proof and asserted boolean (kept as a PI for
-	// downstream use) but does NOT participate in the cross-check.  Every TX
-	// slot (real or dummy) carries the actual sorted tree leaf values, so the
-	// connection is unconditional: tx_data == tree_leaf for all slots.
+	// The cross-check is conditional on is_real:
+	//   is_real * (tx_data - tree_leaf) == 0
+	// Real slots (is_real=1): tx_data must equal tree_leaf.
+	// Padding slots (is_real=0): no constraint (dummy TX PIs are unchecked).
 	const LEAF_OFFSET: usize = 8; // old_root[4] + new_root[4]
-	const TX_DATA_OFFSET: usize = 1; // PI[0] is is_real; data starts at PI[1]
+	const TX_DATA_OFFSET: usize = 3; // PI[0..2] are subpool_ids + is_real; data starts at PI[3]
+	let zero = builder.zero();
 	#[allow(clippy::needless_range_loop)]
 	for s in 0..n_tx_slots {
 		let tx_base = s * TX_LEAF_PI_SIZE;
-		// Read is_real from TX root proof PI[tx_base]; wrap and assert boolean.
-		let is_real = BoolTarget::new_unsafe(tx_proof.public_inputs[tx_base]);
+		// Read is_real from TX root proof PI[tx_base + 2]; wrap and assert boolean.
+		let is_real = BoolTarget::new_unsafe(tx_proof.public_inputs[tx_base + 2]);
 		builder.assert_bool(is_real);
-		// note nullifiers (TX data[0..32]) — from NN tree
+		// account nullifier (TX PI[3..7]) — from AN tree
+		let an_val_base = LEAF_OFFSET + s * 4;
+		for k in 0..4 {
+			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + k];
+			let an_t = an_proof.public_inputs[an_val_base + k];
+			let diff = builder.sub(tx_t, an_t);
+			let gated = builder.mul(is_real.target, diff);
+			builder.connect(gated, zero);
+		}
+		// account commitment (TX PI[7..11]) — from AC tree
+		for k in 0..4 {
+			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 4 + k];
+			let ac_t = ac_proof.public_inputs[LEAF_OFFSET + s * 4 + k];
+			let diff = builder.sub(tx_t, ac_t);
+			let gated = builder.mul(is_real.target, diff);
+			builder.connect(gated, zero);
+		}
+		// note nullifiers (TX PI[11..43]) — from NN tree
 		for j in 0..notes_per_slot {
 			let leaf_idx = s * notes_per_slot + j;
 			let nn_val_base = LEAF_OFFSET + leaf_idx * 4;
 			for k in 0..4 {
-				let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + j * 4 + k];
+				let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 8 + j * 4 + k];
 				let nn_t = nn_proof.public_inputs[nn_val_base + k];
-				builder.connect(tx_t, nn_t);
+				let diff = builder.sub(tx_t, nn_t);
+				let gated = builder.mul(is_real.target, diff);
+				builder.connect(gated, zero);
 			}
 		}
-		// note commitments (TX data[32..64]) — from NC tree
+		// note commitments (TX PI[43..75]) — from NC tree
 		for j in 0..notes_per_slot {
 			for k in 0..4 {
-				let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 32 + j * 4 + k];
+				let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 40 + j * 4 + k];
 				let nc_t = nc_proof.public_inputs[LEAF_OFFSET + (s * notes_per_slot + j) * 4 + k];
-				builder.connect(tx_t, nc_t);
+				let diff = builder.sub(tx_t, nc_t);
+				let gated = builder.mul(is_real.target, diff);
+				builder.connect(gated, zero);
 			}
-		}
-		// account nullifier (TX data[64..68]) — from AN tree
-		let an_val_base = LEAF_OFFSET + s * 4;
-		for k in 0..4 {
-			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 64 + k];
-			let an_t = an_proof.public_inputs[an_val_base + k];
-			builder.connect(tx_t, an_t);
-		}
-		// account commitment (TX data[68..72]) — from AC tree
-		for k in 0..4 {
-			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 68 + k];
-			let ac_t = ac_proof.public_inputs[LEAF_OFFSET + s * 4 + k];
-			builder.connect(tx_t, ac_t);
 		}
 	}
 
@@ -602,7 +613,8 @@ mod tests {
 		(CircuitDataNative, Vec<Target>), // nn
 		(CircuitDataNative, Vec<Target>), // ac
 		(CircuitDataNative, Vec<Target>), // an
-		(CircuitDataNative, Vec<Target>), // tx (73 PIs per slot: is_real + 72 data)
+		(CircuitDataNative, Vec<Target>), /* tx (75 PIs per slot: subpool_ids(2) + is_real + 72
+		                                   * data) */
 	) {
 		let note_batch_size = notes_per_slot * n_tx_slots;
 		let account_batch_size = n_tx_slots;
@@ -610,7 +622,7 @@ mod tests {
 		let nn = build_leaf((2 + note_batch_size) * 4);
 		let ac = build_leaf((2 + account_batch_size) * 4);
 		let an = build_leaf((2 + account_batch_size) * 4);
-		let tx = build_leaf(n_tx_slots * 73);
+		let tx = build_leaf(n_tx_slots * 75);
 		(nc, nn, ac, an, tx)
 	}
 
@@ -642,8 +654,9 @@ mod tests {
 
 	#[test]
 	fn test_consume_only_is_real_all_false() {
-		// Consume-only batch: NC leaves are non-zero, TX carries matching tree values.
-		// Circuit: unconditional connect → tx_data must equal tree_data for all slots.
+		// Consume-only batch: all slots are padding (is_real=0).
+		// Cross-check is conditional on is_real, so TX data is unconstrained.
+		// Here TX data happens to be all-zero (doesn't match NC leaves) → still passes.
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
 			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
 
@@ -657,21 +670,9 @@ mod tests {
 		let nn_proof = prove_zeros(&nn_cd, &nn_t);
 		let ac_proof = prove_zeros(&ac_cd, &ac_t);
 		let an_proof = prove_zeros(&an_cd, &an_t);
-		// TX: is_real=0 for all slots, but data must match tree leaves.
-		// NC leaves are 42, so TX note_commitments must also be 42.
-		let tx_n_pi = tx_t.len();
-		let mut tx_vals = vec![0u64; tx_n_pi];
-		for s in 0..N_TX_SLOTS {
-			let tx_base = s * 73;
-			// tx_vals[tx_base] = 0; // is_real=false
-			// note_commitments: TX data[32..64] must match NC leaves
-			for j in 0..NOTES_PER_SLOT {
-				for k in 0..4 {
-					tx_vals[tx_base + 1 + 32 + j * 4 + k] = 42;
-				}
-			}
-		}
-		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+		// TX: is_real=0 for all slots, data all-zero (doesn't match NC leaves=42).
+		// Conditional cross-check: is_real=0 → no constraint → passes.
+		let tx_proof = prove_zeros(&tx_cd, &tx_t);
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
 		let root = super_agg
@@ -695,11 +696,11 @@ mod tests {
 		let ac_proof = prove_zeros(&ac_cd, &ac_t);
 		let an_proof = prove_zeros(&an_cd, &an_t);
 
-		// TX: is_real=1 for all slots (PI[s*73]=1), all data zero.
+		// TX: is_real=1 for all slots (PI[s*75+2]=1), all data zero.
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
 		for s in 0..N_TX_SLOTS {
-			tx_vals[s * 73] = 1; // is_real=true for slot s
+			tx_vals[s * 75 + 2] = 1; // is_real=true for slot s
 		}
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
@@ -724,10 +725,10 @@ mod tests {
 		let ac_proof = prove_zeros(&ac_cd, &ac_t);
 		let an_proof = prove_zeros(&an_cd, &an_t);
 
-		// Slot 0: is_real=1 (PI[0]=1), slot 1: is_real=0 (PI[73]=0). Data all zero.
+		// Slot 0: is_real=1 (PI[2]=1), slot 1: is_real=0 (PI[77]=0). Data all zero.
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
-		tx_vals[0] = 1; // slot 0 is_real=1
+		tx_vals[2] = 1; // slot 0 is_real=1
 		// slot 1 is_real=0 (already 0)
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
@@ -741,9 +742,9 @@ mod tests {
 	}
 
 	#[test]
-	fn test_soundness_tx_data_mismatch_tree_data_should_fail() {
-		// TX data for slot 0 differs from tree data → unconditional connect fails.
-		// Tree NN leaf[0][0]=0, TX note_nullifier[0][0]=99 → mismatch.
+	fn test_soundness_tx_data_mismatch_tree_data_is_real_true_should_fail() {
+		// TX data for slot 0 differs from tree data AND is_real=1 → conditional check fails.
+		// Tree AN leaf[0][0]=0, TX account_nullifier[0]=99 → mismatch.
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
 			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
 
@@ -752,10 +753,11 @@ mod tests {
 		let ac_proof = prove_zeros(&ac_cd, &ac_t);
 		let an_proof = prove_zeros(&an_cd, &an_t);
 
-		// TX slot 0: is_real=0, but data[0] = 99 ≠ tree's 0 → connect fails.
+		// TX slot 0: is_real=1, data[0] = 99 ≠ tree's 0 → conditional check enforced → fails.
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
-		tx_vals[1] = 99; // slot 0, TX_DATA_OFFSET=1, note_nullifier[0][0]
+		tx_vals[2] = 1; // is_real=1
+		tx_vals[3] = 99; // slot 0, TX_DATA_OFFSET=3, account_nullifier[0]
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
@@ -764,9 +766,36 @@ mod tests {
 	}
 
 	#[test]
+	fn test_is_real_false_mismatched_data_should_pass() {
+		// is_real=0 for slot 0, TX data differs from tree data → conditional check
+		// is not enforced → should pass.
+		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
+			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
+
+		let nc_proof = prove_zeros(&nc_cd, &nc_t);
+		let nn_proof = prove_zeros(&nn_cd, &nn_t);
+		let ac_proof = prove_zeros(&ac_cd, &ac_t);
+		let an_proof = prove_zeros(&an_cd, &an_t);
+
+		// TX slot 0: is_real=0, data[0] = 99 ≠ tree's 0 → no constraint → passes.
+		let tx_n_pi = tx_t.len();
+		let mut tx_vals = vec![0u64; tx_n_pi];
+		tx_vals[3] = 99; // slot 0, account_nullifier[0] = 99
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+
+		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
+		let root = super_agg
+			.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_proof)
+			.expect("is_real=false mismatch should pass");
+
+		assert_eq!(root.public_inputs.len(), 8);
+		super_agg.circuit_data.verify(root).expect("verify failed");
+	}
+
+	#[test]
 	fn test_is_real_false_nonzero_matching_tx_data_should_pass() {
 		// is_real=0 for slot 0, TX data matches tree data (both non-zero) → pass.
-		// After the unconditional-connect change, is_real does not gate the cross-check.
+		// Cross-check is conditional on is_real; matching data passes regardless.
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
 			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
 
@@ -782,8 +811,8 @@ mod tests {
 		// TX slot 0: is_real=0, note_nullifier[0][0]=99 (matches NN).
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
-		// tx_vals[0] = 0; // is_real=false
-		tx_vals[1] = 99; // note_nullifier[0][0] matches NN
+		// tx_vals[2] = 0; // is_real=false
+		tx_vals[11] = 99; // note_nullifier[0][0] matches NN (TX_DATA_OFFSET + 8)
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
@@ -811,12 +840,12 @@ mod tests {
 		let ac_proof = prove_zeros(&ac_cd, &ac_t);
 		let an_proof = prove_zeros(&an_cd, &an_t);
 
-		// TX slot 0: is_real=1 (PI[0]=1), note_commitment[0][0] (PI[33]) = 999.
-		// TX_DATA_OFFSET=1; note_commitments start at data offset 32 → PI[1+32]=PI[33].
+		// TX slot 0: is_real=1 (PI[2]=1), note_commitment[0][0] (PI[43]) = 999.
+		// TX_DATA_OFFSET=3; note_commitments start at data offset 40 → PI[3+40]=PI[43].
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
-		tx_vals[0] = 1; // is_real=1
-		tx_vals[33] = 999; // note_commitment[0][0] (mismatch with NC leaf = 7)
+		tx_vals[2] = 1; // is_real=1
+		tx_vals[43] = 999; // note_commitment[0][0] (mismatch with NC leaf = 7)
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
@@ -831,12 +860,14 @@ mod tests {
 	// Non-trivial (non-zero value) pass tests
 	// -----------------------------------------------------------------------
 	//
-	// TX leaf PI layout per slot (tx_base = s × 73):
-	//   PI[tx_base + 0]        = is_real
-	//   PI[tx_base + 1 + j*4 + k]      = note_nullifier[j][k]   (NN)
-	//   PI[tx_base + 1 + 32 + j*4 + k] = note_commitment[j][k]  (NC)
-	//   PI[tx_base + 1 + 64 + k]       = account_nullifier[k]   (AN)
-	//   PI[tx_base + 1 + 68 + k]       = account_commitment[k]  (AC)
+	// TX leaf PI layout per slot (tx_base = s × 75):
+	//   PI[tx_base + 0]              = subpool_id_in
+	//   PI[tx_base + 1]              = subpool_id_out
+	//   PI[tx_base + 2]              = is_real
+	//   PI[tx_base + 3 + k]          = account_nullifier[k]   (AN)
+	//   PI[tx_base + 7 + k]          = account_commitment[k]  (AC)
+	//   PI[tx_base + 11 + j*4 + k]   = note_nullifier[j][k]   (NN)
+	//   PI[tx_base + 43 + j*4 + k]   = note_commitment[j][k]  (NC)
 	//
 	// All four trees share the same PI layout: old_root[4] + new_root[4] + values[batch_size × 4]
 	// LEAF_OFFSET = 8 for all trees (NC, NN, AC, AN).
@@ -883,17 +914,17 @@ mod tests {
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
 		// Slot 0 (tx_base = 0):
-		tx_vals[0] = 1; // is_real
-		tx_vals[1] = 101; // note_nullifier[0][0]
-		tx_vals[1 + 32] = 201; // note_commitment[0][0]
-		tx_vals[1 + 64] = 301; // account_nullifier[0]
-		tx_vals[1 + 68] = 401; // account_commitment[0]
-		// Slot 1 (tx_base = 73):
-		tx_vals[73] = 1; // is_real
-		tx_vals[73 + 1] = 102; // note_nullifier[0][0]
-		tx_vals[73 + 1 + 32] = 202; // note_commitment[0][0]
-		tx_vals[73 + 1 + 64] = 302; // account_nullifier[0]
-		tx_vals[73 + 1 + 68] = 402; // account_commitment[0]
+		tx_vals[2] = 1; // is_real
+		tx_vals[3] = 301; // account_nullifier[0]
+		tx_vals[7] = 401; // account_commitment[0]
+		tx_vals[11] = 101; // note_nullifier[0][0]
+		tx_vals[43] = 201; // note_commitment[0][0]
+		// Slot 1 (tx_base = 75):
+		tx_vals[75 + 2] = 1; // is_real
+		tx_vals[75 + 3] = 302; // account_nullifier[0]
+		tx_vals[75 + 7] = 402; // account_commitment[0]
+		tx_vals[75 + 11] = 102; // note_nullifier[0][0]
+		tx_vals[75 + 43] = 202; // note_commitment[0][0]
 
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
@@ -909,8 +940,8 @@ mod tests {
 	#[test]
 	fn test_partial_tx_nonzero_active_slot_and_nonzero_nc_padding() {
 		// Partial TX: slot 0 is_real=1 with matching non-zero values; slot 1 is
-		// padding (is_real=0) with non-zero NC leaf — TX data must also carry
-		// the NC value (unconditional connect).
+		// padding (is_real=0) with non-zero NC leaf — TX data for slot 1 is
+		// unconstrained (conditional cross-check skips is_real=0 slots).
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
 			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
 
@@ -936,15 +967,14 @@ mod tests {
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
 		// Slot 0 (tx_base=0): is_real=1, data matches tree.
-		tx_vals[0] = 1;
-		tx_vals[1] = 101;
-		tx_vals[1 + 32] = 201;
-		tx_vals[1 + 64] = 301;
-		tx_vals[1 + 68] = 401;
-		// Slot 1 (tx_base=73): is_real=0, TX data must match tree data.
-		// NC leaf=999, all others=0.
-		// tx_vals[73] = 0; // is_real=false
-		tx_vals[73 + 1 + 32] = 999; // note_commitment[0][0] matches NC slot 1
+		tx_vals[2] = 1;
+		tx_vals[3] = 301;
+		tx_vals[7] = 401;
+		tx_vals[11] = 101;
+		tx_vals[43] = 201;
+		// Slot 1 (tx_base=75): is_real=0 → TX data unconstrained (no match required).
+		// tx_vals[75 + 2] = 0; // is_real=false
+		// TX slot 1 data left as zero even though NC leaf=999 → no constraint → ok.
 
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
@@ -974,7 +1004,7 @@ mod tests {
 
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
-		tx_vals[0] = 2; // is_real=2: not boolean
+		tx_vals[2] = 2; // is_real=2: not boolean
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
@@ -1003,8 +1033,8 @@ mod tests {
 		// TX slot 0: is_real=1, note_nullifier[0][0] = 0 (should be 55).
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
-		tx_vals[0] = 1; // is_real=1
-		// tx_vals[1] = 0 ≠ 55 → mismatch
+		tx_vals[2] = 1; // is_real=1
+		// tx_vals[11] = 0 ≠ 55 → mismatch
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
@@ -1033,8 +1063,8 @@ mod tests {
 		// TX slot 0: is_real=1, account_nullifier[0] = 0 (should be 77).
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
-		tx_vals[0] = 1; // is_real=1
-		// tx_vals[65] = 0 ≠ 77 → mismatch
+		tx_vals[2] = 1; // is_real=1
+		// tx_vals[3] = 0 ≠ 77 → mismatch
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);

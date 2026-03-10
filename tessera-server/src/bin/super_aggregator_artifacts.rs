@@ -4,8 +4,8 @@
 //! `aggregator_artifacts` have completed successfully.
 //!
 //! Inner PI counts (for reference):
-//!   TX aggregator root: 128 × 73 = 9344 fields (ARITY=2, DEPTH=7, ReducerKind::None)
-//!     Each TX leaf: is_real(1) + 72 data fields
+//!   TX aggregator root: 128 × 75 = 9600 fields (ARITY=2, DEPTH=7, ReducerKind::None)
+//!     Each TX leaf: subpool_id_in(1) + subpool_id_out(1) + is_real(1) + 72 data fields
 //!   NC / NN tree:  (2 + note_batch_size) × 4    fields  (default: 4104 with batch_size=1024)
 //!   AC / AN tree:  (2 + account_batch_size) × 4  fields  (default:  520 with batch_size=128)
 //!   SuperAggregator Keccak preimage: 9248 fields (TX PIs enforced in-circuit, not hashed)
@@ -24,11 +24,12 @@ use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::{ensure, Result};
 use plonky2::{
-	iop::{
-		target::Target,
-		witness::{PartialWitness, WitnessWrite},
+	iop::witness::{PartialWitness, WitnessWrite},
+	plonk::{
+		circuit_builder::CircuitBuilder,
+		circuit_data::{CircuitConfig, VerifierCircuitTarget},
+		proof::{ProofWithPublicInputs, ProofWithPublicInputsTarget},
 	},
-	plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 	util::serialization::DefaultGateSerializer,
 };
 use tessera_server::{sample_batch_commitment_tree_proof, sample_batch_nullifier_tree_proof};
@@ -66,48 +67,60 @@ fn load_native_circuit_data(path: &std::path::Path) -> Result<CircuitDataNative>
 	})
 }
 
-/// Build a TX-leaf circuit instance and prove it with specific 72-field data PI values.
-///
-/// The circuit geometry matches `aggregator_leaf_circuit` (TX_LEAF_PI=73,
-/// standard_recursion_config): PI[0]=is_real (set to `true`), PI[1..73]=data.
-/// Used when leaf PI values must be derived from tree proof public inputs.
-fn prove_tx_leaf(data_values: &[F]) -> Result<ProofNative> {
-	const TX_DATA_PI: usize = 72;
-	assert_eq!(
-		data_values.len(),
-		TX_DATA_PI,
-		"TX leaf must have exactly 72 data PI fields"
+/// Build a recursive leaf circuit that verifies an inner PrivTx proof and forwards its PIs.
+/// Returns the circuit, proof target, and verifier target.
+fn build_recursive_leaf_circuit(
+	inner_circuit: &CircuitDataNative,
+) -> (
+	CircuitDataNative,
+	ProofWithPublicInputsTarget<D>,
+	VerifierCircuitTarget,
+) {
+	let config = CircuitConfig::standard_recursion_config();
+	let mut builder = CircuitBuilder::<F, D>::new(config);
+	let inner_proof_target = builder.add_virtual_proof_with_pis(&inner_circuit.common);
+	let inner_verifier_target = builder.constant_verifier_data(&inner_circuit.verifier_only);
+	builder.verify_proof::<ConfigNative>(
+		&inner_proof_target,
+		&inner_verifier_target,
+		&inner_circuit.common,
 	);
-	let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
-	// PI[0] = is_real boolean (always true for real TX proofs)
-	let is_real = builder.add_virtual_bool_target_safe();
-	builder.register_public_input(is_real.target);
-	// PI[1..73] = data fields
-	let targets: Vec<Target> = (0..TX_DATA_PI)
-		.map(|_| builder.add_virtual_target())
-		.collect();
-	for &t in &targets {
-		builder.register_public_input(t);
+	for &pi in &inner_proof_target.public_inputs {
+		builder.register_public_input(pi);
 	}
-	let cd = builder.build::<ConfigNative>();
+	let circuit = builder.build::<ConfigNative>();
+	(circuit, inner_proof_target, inner_verifier_target)
+}
+
+/// Prove a recursive leaf by wrapping an inner PrivTx proof.
+fn prove_recursive_leaf(
+	leaf_circuit: &CircuitDataNative,
+	inner_proof_target: &ProofWithPublicInputsTarget<D>,
+	inner_verifier_target: &VerifierCircuitTarget,
+	inner_circuit: &CircuitDataNative,
+	inner_proof: &ProofWithPublicInputs<F, ConfigNative, D>,
+) -> Result<ProofNative> {
 	let mut pw = PartialWitness::new();
-	pw.set_bool_target(is_real, true)?;
-	for (&t, &v) in targets.iter().zip(data_values.iter()) {
-		pw.set_target(t, v)?;
-	}
-	cd.prove(pw)
+	pw.set_verifier_data_target(inner_verifier_target, &inner_circuit.verifier_only)?;
+	pw.set_proof_with_pis_target(inner_proof_target, inner_proof)?;
+	let proof = leaf_circuit.prove(pw)?;
+	Ok(proof)
 }
 
 /// Generate one complete set of 5 inner proofs and prove the SuperAggregator.
 ///
-/// TX leaf proofs are constructed with PI values matching the corresponding
-/// tree leaf PIs, satisfying the in-circuit cross-check constraints.
-///
-/// All four trees (NC, NN, AC, AN) share the same PI layout:
-///   old_root[4] + new_root[4] + values[batch_size × 4] → values at offset 8
+/// TX leaf proofs use dummy inner PrivTx proofs (not_fake_tx=0) for all slots.
+/// Since is_real=false for all dummy proofs, the SuperAggregator skips cross-check
+/// constraints, making this valid for artifact generation and testing.
+#[allow(clippy::too_many_arguments)]
 fn prove_super(
 	super_agg: &SuperAggregator,
 	tx_agg: &GenericAggregator<F, ConfigNative, D>,
+	inner_circuit: &CircuitDataNative,
+	dummy_inner_proof: &ProofWithPublicInputs<F, ConfigNative, D>,
+	leaf_circuit: &CircuitDataNative,
+	inner_proof_target: &ProofWithPublicInputsTarget<D>,
+	inner_verifier_target: &VerifierCircuitTarget,
 	note_batch_size: usize,
 	account_batch_size: usize,
 	seed: [u8; 32],
@@ -118,46 +131,21 @@ fn prove_super(
 	let (_, an_proof, _, _) = sample_batch_nullifier_tree_proof(seed, account_batch_size)?;
 
 	let n_tx_slots = TX_ARITY.pow(TX_DEPTH as u32); // = 128
-	let notes_per_slot = note_batch_size / n_tx_slots; // = 8
 
-	// All four trees share PI layout: old_root[4] + new_root[4] + values[batch_size × 4]
-	const LEAF_OFFSET: usize = 8;
-
-	// Build one TX leaf proof per slot with PI values matching the tree leaf PIs.
-	// TX leaf layout (72 fields per slot):
-	//   [0 ..31] = note_nullifiers[0..8]  (from NN values)
-	//   [32..63] = note_commitments[0..8] (from NC leaves)
-	//   [64..67] = account_nullifier       (from AN values)
-	//   [68..71] = account_commitment      (from AC leaves)
+	// All TX leaf proofs wrap the dummy inner proof (not_fake_tx=0).
 	let leaf_proofs: Vec<ProofNative> = (0..n_tx_slots)
-		.map(|s| {
-			let mut vals = Vec::with_capacity(72);
-			// note nullifiers [0..32]: from NN values
-			for j in 0..notes_per_slot {
-				let leaf_idx = s * notes_per_slot + j;
-				let nn_val_base = LEAF_OFFSET + leaf_idx * 4;
-				for k in 0..4 {
-					vals.push(nn_proof.public_inputs[nn_val_base + k]);
-				}
+		.map(|i| {
+			let proof = prove_recursive_leaf(
+				leaf_circuit,
+				inner_proof_target,
+				inner_verifier_target,
+				inner_circuit,
+				dummy_inner_proof,
+			);
+			if (i + 1) % 16 == 0 {
+				println!("  proved recursive leaf {}/{}", i + 1, n_tx_slots);
 			}
-			// note commitments [32..64]: from NC leaves
-			for j in 0..notes_per_slot {
-				for k in 0..4 {
-					vals.push(
-						nc_proof.public_inputs[LEAF_OFFSET + (s * notes_per_slot + j) * 4 + k],
-					);
-				}
-			}
-			// account nullifier [64..68]: from AN values
-			let an_val_base = LEAF_OFFSET + s * 4;
-			for k in 0..4 {
-				vals.push(an_proof.public_inputs[an_val_base + k]);
-			}
-			// account commitment [68..72]: from AC leaves
-			for k in 0..4 {
-				vals.push(ac_proof.public_inputs[LEAF_OFFSET + s * 4 + k]);
-			}
-			prove_tx_leaf(&vals)
+			proof
 		})
 		.collect::<Result<_>>()?;
 
@@ -212,6 +200,22 @@ fn main() -> Result<()> {
 		GenericAggregator::from_artifacts(&artifacts_root.join("associated-input-aggregator"))?;
 	let tx_root = tx_agg.level_circuit(TX_DEPTH - 1)?;
 
+	// --- Build inner PrivTx circuit + dummy proof + recursive leaf circuit ---
+	println!("\nBuilding inner PrivTx circuit + recursive leaf circuit...");
+	let (inner_circuit, dummy_inner_proof) = tessera_client::build_circuit_and_dummy_proof();
+	let (leaf_circuit, inner_proof_target, inner_verifier_target) =
+		build_recursive_leaf_circuit(&inner_circuit);
+	println!(
+		"  inner PrivTx: {} PIs, degree_bits={}",
+		inner_circuit.common.num_public_inputs,
+		inner_circuit.common.degree_bits()
+	);
+	println!(
+		"  recursive leaf: {} PIs, degree_bits={}",
+		leaf_circuit.common.num_public_inputs,
+		leaf_circuit.common.degree_bits()
+	);
+
 	// --- Build SuperAggregator ---
 	println!("\nBuilding SuperAggregator circuit...");
 	let now = Instant::now();
@@ -235,6 +239,11 @@ fn main() -> Result<()> {
 	let dummy_proof = prove_super(
 		&super_agg,
 		&tx_agg,
+		&inner_circuit,
+		&dummy_inner_proof,
+		&leaf_circuit,
+		&inner_proof_target,
+		&inner_verifier_target,
 		note_batch_size,
 		account_batch_size,
 		[0u8; 32],
@@ -280,6 +289,11 @@ fn main() -> Result<()> {
 	let super_proof2 = prove_super(
 		&super_agg,
 		&tx_agg,
+		&inner_circuit,
+		&dummy_inner_proof,
+		&leaf_circuit,
+		&inner_proof_target,
+		&inner_verifier_target,
 		note_batch_size,
 		account_batch_size,
 		[1u8; 32],

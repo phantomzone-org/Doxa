@@ -8,7 +8,7 @@ use plonky2::{
 	plonk::circuit_builder::CircuitBuilder,
 };
 use plonky2_field::{extension::Extendable, types::Field};
-use rand::CryptoRng;
+use rand::{CryptoRng, Rng};
 use tessera_trees::{F, tree::hasher::MerkleHashCircuit};
 
 use crate::{
@@ -38,7 +38,9 @@ fn double_hash_native(elems: [F; 4]) -> [F; 4] {
 	<PoseidonHash as Hasher<F>>::hash_no_pad(&h0).elements
 }
 
-fn sample_dummy_notes<R: CryptoRng>(rng: &mut R) -> ([[F; 4]; NOTE_BATCH], [[F; 4]; NOTE_BATCH]) {
+pub(crate) fn sample_dummy_notes<R: CryptoRng>(
+	rng: &mut R,
+) -> ([[F; 4]; NOTE_BATCH], [[F; 4]; NOTE_BATCH]) {
 	// TODO: sample field element at random
 	let mut sample_hash = || core::array::from_fn(|_| F::from_canonical_u64(rng.next_u64() >> 1));
 	let dinotes = core::array::from_fn(|_| sample_hash());
@@ -302,4 +304,144 @@ pub fn priv_tx_circuit<
 		sig_targets,
 		inotes_nct_merkle: inotes_mrkltrgt,
 	}
+}
+
+/// Build the PrivTx circuit and generate a FreshAcc proof.
+///
+/// When `not_fake_tx = false`, produces a dummy proof for padding empty aggregation slots.
+/// When `not_fake_tx = true`, produces a real proof with enforced constraints.
+///
+/// Returns `(circuit_data, proof)`.
+fn build_circuit_and_proof_inner(
+	not_fake_tx: bool,
+) -> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+	use std::array;
+
+	use plonky2::{
+		iop::witness::PartialWitness,
+		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
+	};
+	use plonky2_field::types::Field;
+	use rand::SeedableRng;
+	use rand_chacha::ChaCha8Rng;
+	use tessera_trees::tree::hasher::HashOutput;
+
+	use crate::{
+		ConsumeAuth, Nonce, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
+		derive_priv_tx_hash,
+		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+		schnorr::{PrivateKey, Scalar, schnorr_sign},
+	};
+
+	// 1. Build circuit
+	let config = CircuitConfig::standard_recursion_config();
+	let mut builder = CircuitBuilder::<F, { tessera_trees::D }>::new(config);
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder);
+	let circuit = builder.build::<tessera_trees::ConfigNative>();
+
+	// 2. Setup witness data (FreshAcc)
+	let mut rng = ChaCha8Rng::seed_from_u64(0xDEAD_BEEF_CAFE_0000);
+	// Use Scalar::sample to ensure keys are properly reduced modulo the curve order.
+	// PrivateKey::from_raw with arbitrary u64s can produce unreduced scalars that
+	// break the Montgomery multiplication in Schnorr signature arithmetic.
+	let approval_sk = PrivateKey::new(Scalar::sample(&mut rng));
+	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
+	let rejection_sk = PrivateKey::new(Scalar::sample(&mut rng));
+	let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
+	let consume_sk = PrivateKey::new(Scalar::sample(&mut rng));
+	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
+
+	let subpool = SubpoolConfigTree::new(approval_cpk, rejection_cpk, consume_cpk);
+	let subpool_id = SubpoolId(F::ONE);
+	let mut main_pool = MainPoolConfigTree::new();
+	main_pool.set_subpool(0, subpool_id, subpool.root());
+
+	let accin = StandardAccount::sample(&mut rng, subpool_id);
+
+	// For real proofs, set proper new auth keys; for dummy, use defaults.
+	let (new_spend_auth, new_consume_auth) = if not_fake_tx {
+		let nspend_sk = PrivateKey::new(Scalar::sample(&mut rng));
+		let spend_cpk = nspend_sk.public_key::<F>().into();
+		(
+			SpendAuth {
+				spend_pk: Some(spend_cpk),
+			},
+			accin.consume_auth.clone(),
+		)
+	} else {
+		(SpendAuth::default(), ConsumeAuth::default())
+	};
+
+	let (dinotes, donotes) = sample_dummy_notes(&mut rng);
+	let dinote_nulls: [NoteNullifier; crate::NOTE_BATCH] =
+		array::from_fn(|i| NoteNullifier(double_hash_native(dinotes[i]).into()));
+	let donote_comms: [NoteCommitment; crate::NOTE_BATCH] =
+		array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
+
+	let mut accout = accin.clone();
+	accout.nonce = Nonce(F::ONE);
+	accout.spend_auth = new_spend_auth.clone();
+	accout.consume_auth = new_consume_auth.clone();
+	let tx_hash = derive_priv_tx_hash(
+		accin.nullifier(None),
+		accout.commitment(),
+		dinote_nulls,
+		donote_comms,
+	);
+	let k = Scalar::from_raw(array::from_fn(|_| 1u64));
+	let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
+
+	// 3. Fill witness
+	let mut pw = PartialWitness::new();
+	freshacc::set_freshacc_tx_witness(
+		&mut pw,
+		&t,
+		not_fake_tx,
+		&accin,
+		new_spend_auth,
+		new_consume_auth,
+		HashOutput([F::ZERO; 4]),
+		HashOutput([F::ZERO; 4]),
+		approval_cpk,
+		rejection_cpk,
+		consume_cpk,
+		subpool_id,
+		&main_pool,
+		approval_sig,
+		dinotes,
+		donotes,
+	);
+
+	// 4. Prove & verify
+	let label = if not_fake_tx { "real" } else { "dummy" };
+	let proof = circuit
+		.prove(pw)
+		.unwrap_or_else(|e| panic!("{label} PrivTx proof generation failed: {e}"));
+	circuit
+		.verify(proof.clone())
+		.unwrap_or_else(|e| panic!("{label} PrivTx proof verification failed: {e}"));
+
+	(circuit, proof)
+}
+
+/// Build the PrivTx plonky2 circuit and generate a dummy proof with `not_fake_tx=0`.
+///
+/// Returns `(circuit_data, dummy_proof)` where:
+/// - `circuit_data` contains `common` and `verifier_only` needed for recursive verification.
+/// - `dummy_proof` is a valid proof with `PI[0]=0` (not_fake_tx=false), used for padding empty
+///   aggregation slots on the server.
+pub fn build_circuit_and_dummy_proof()
+-> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+	build_circuit_and_proof_inner(false)
+}
+
+/// Build the PrivTx plonky2 circuit and generate a real proof with `not_fake_tx=1`.
+///
+/// Returns `(circuit_data, real_proof)` where:
+/// - `circuit_data` contains `common` and `verifier_only` needed for recursive verification.
+/// - `real_proof` is a valid proof with `PI[0]=1` (not_fake_tx=true) and all constraints enforced.
+///   Suitable for E2E testing with the full proof pipeline.
+pub fn build_circuit_and_real_proof()
+-> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+	build_circuit_and_proof_inner(true)
 }

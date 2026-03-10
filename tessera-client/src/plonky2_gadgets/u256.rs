@@ -25,12 +25,19 @@ impl U256Target {
 	/// Sets the witness for this target from a `primitive_types::U256`.
 	///
 	/// `value.0` is `[u64; 4]` little-endian; each u64 is split into two u32 limbs.
-	pub(crate) fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, value: primitive_types::U256) {
+	pub(crate) fn set_witness<F: Field>(
+		&self,
+		pw: &mut PartialWitness<F>,
+		value: primitive_types::U256,
+	) {
 		for (i, &word) in value.0.iter().enumerate() {
 			pw.set_target(self.0[2 * i].0, F::from_canonical_u32(word as u32))
 				.unwrap();
-			pw.set_target(self.0[2 * i + 1].0, F::from_canonical_u32((word >> 32) as u32))
-				.unwrap();
+			pw.set_target(
+				self.0[2 * i + 1].0,
+				F::from_canonical_u32((word >> 32) as u32),
+			)
+			.unwrap();
 		}
 	}
 }

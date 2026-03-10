@@ -3,6 +3,7 @@ use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64};
 use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt, distr::Uniform};
+use serde::{Deserialize, Serialize};
 use tessera_trees::{F, tree::hasher::HashOutput};
 
 use crate::{AccountAddress, AssetId, account::NullifierKey};
@@ -36,7 +37,10 @@ impl DepositNote {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteCommitment(pub HashOutput);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteNullifier(pub HashOutput);
 
 #[derive(Clone, Copy)]

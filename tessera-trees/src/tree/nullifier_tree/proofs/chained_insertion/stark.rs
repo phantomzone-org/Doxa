@@ -286,7 +286,7 @@ mod test {
 	use super::ChainedInsertProofGenerator;
 	use crate::tree::{
 		NullifierChainedInsertProof, NullifierTree,
-		hasher::{Hash, NewFromU64},
+		hasher::{HashOutput, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -300,7 +300,7 @@ mod test {
 		const DEPTH: usize = 32;
 		const BATCH_SIZE: usize = 64;
 
-		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
 
 		print!("Generating {} insertion proofs: ", BATCH_SIZE);
 		let now = Instant::now();
@@ -321,7 +321,8 @@ mod test {
 
 		print!("Build circuit: ");
 		let now = Instant::now();
-		let generator = ChainedInsertProofGenerator::<Hash, F, C, D, DEPTH, BATCH_SIZE>::new();
+		let generator =
+			ChainedInsertProofGenerator::<HashOutput, F, C, D, DEPTH, BATCH_SIZE>::new();
 		println!("{:?}", now.elapsed());
 
 		print!("Generate STARK proof: ");

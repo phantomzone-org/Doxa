@@ -16,33 +16,57 @@ use tracing::{debug, info, warn};
 
 use crate::{contract::GOLDILOCKS_PRIME, sequencer::NotesCommitmentRequest};
 
-/// Verifies a plonky2 leaf proof against the aggregator's leaf circuit.
+/// Verifies a plonky2 proof against a circuit's verifier data.
 ///
-/// Loaded from aggregator artifacts at startup by reading `leaf_common.bin`
-/// and `leaf_verifier.bin`. When not configured, any non-empty proof bytes
-/// are accepted and cryptographic validation is deferred to the prover.
+/// Used for both consume proofs (loaded from consume artifacts) and
+/// private-tx proofs (loaded from aggregator artifacts).
+/// When not configured, any non-empty proof bytes are accepted and
+/// cryptographic validation is deferred to the prover.
 pub(super) struct LeafProofVerifier {
 	verifier_data: VerifierCircuitData<F, ConfigNative, D>,
 }
 
 impl LeafProofVerifier {
-	/// Load from an aggregator artifacts directory.
-	///
-	/// Reads only `leaf_common.bin` and `leaf_verifier.bin` — the level
-	/// circuits are not loaded, keeping startup cost minimal.
+	/// Load from an artifacts directory using `leaf_common.bin` + `leaf_verifier.bin`.
 	pub(super) fn from_artifacts(path: &std::path::Path) -> anyhow::Result<Self> {
+		Self::from_files(path, "leaf_common.bin", "leaf_verifier.bin")
+	}
+
+	/// Build the inner PrivTx circuit verifier by compiling the circuit from scratch.
+	///
+	/// The inner circuit uses custom gates (ECGFp5 `DoubleAdd4x`) that cannot be
+	/// serialized with `DefaultGateSerializer`, so we reconstruct the circuit at
+	/// startup instead of loading from files. Only the circuit compilation runs
+	/// (no proving), so this is fast (~1s).
+	///
+	/// This verifies raw client-submitted PrivTx proofs at the API layer,
+	/// before they reach the prover's recursive leaf circuit.
+	pub(super) fn from_inner_circuit() -> Self {
+		let (circuit, _dummy_proof) = tessera_client::build_circuit_and_dummy_proof();
+		Self {
+			verifier_data: VerifierCircuitData {
+				verifier_only: circuit.verifier_only,
+				common: circuit.common,
+			},
+		}
+	}
+
+	fn from_files(
+		path: &std::path::Path,
+		common_name: &str,
+		verifier_name: &str,
+	) -> anyhow::Result<Self> {
 		let gate_ser = DefaultGateSerializer;
 
-		let common_bytes = std::fs::read(path.join("leaf_common.bin"))
-			.map_err(|e| anyhow::anyhow!("failed to read leaf_common.bin from {:?}: {e}", path))?;
+		let common_bytes = std::fs::read(path.join(common_name))
+			.map_err(|e| anyhow::anyhow!("failed to read {common_name} from {:?}: {e}", path))?;
 		let common = CommonCircuitData::<F, D>::from_bytes(&common_bytes, &gate_ser)
-			.map_err(|e| anyhow::anyhow!("failed to deserialize leaf_common.bin: {e:?}"))?;
+			.map_err(|e| anyhow::anyhow!("failed to deserialize {common_name}: {e:?}"))?;
 
-		let verifier_bytes = std::fs::read(path.join("leaf_verifier.bin")).map_err(|e| {
-			anyhow::anyhow!("failed to read leaf_verifier.bin from {:?}: {e}", path)
-		})?;
+		let verifier_bytes = std::fs::read(path.join(verifier_name))
+			.map_err(|e| anyhow::anyhow!("failed to read {verifier_name} from {:?}: {e}", path))?;
 		let verifier_only = VerifierOnlyCircuitData::<ConfigNative, D>::from_bytes(&verifier_bytes)
-			.map_err(|e| anyhow::anyhow!("failed to deserialize leaf_verifier.bin: {e:?}"))?;
+			.map_err(|e| anyhow::anyhow!("failed to deserialize {verifier_name}: {e:?}"))?;
 
 		Ok(Self {
 			verifier_data: VerifierCircuitData {
@@ -52,16 +76,16 @@ impl LeafProofVerifier {
 		})
 	}
 
-	/// Deserialize and verify `proof_bytes` against the leaf circuit.
+	/// Deserialize and verify `proof_bytes` against the circuit.
 	fn verify_bytes(&self, proof_bytes: &[u8]) -> anyhow::Result<()> {
 		let proof = ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
 			proof_bytes.to_vec(),
 			&self.verifier_data.common,
 		)
-		.map_err(|e| anyhow::anyhow!("leaf proof deserialization failed: {e:?}"))?;
+		.map_err(|e| anyhow::anyhow!("proof deserialization failed: {e:?}"))?;
 		self.verifier_data
 			.verify(proof)
-			.map_err(|e| anyhow::anyhow!("leaf proof verification failed: {e:?}"))
+			.map_err(|e| anyhow::anyhow!("proof verification failed: {e:?}"))
 	}
 }
 

@@ -45,6 +45,7 @@ use crate::{
 pub(crate) fn set_freshacc_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
+	not_fake_tx: bool,
 	accin: &StandardAccount,
 	new_spend_auth: SpendAuth,
 	new_consume_auth: ConsumeAuth,
@@ -83,7 +84,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	pw.set_bool_target(t.is_update_auth, false).unwrap();
 	pw.set_bool_target(t.is_priv_tx, false).unwrap();
 
-	pw.set_bool_target(t.not_fake_tx, true).unwrap();
+	pw.set_bool_target(t.not_fake_tx, not_fake_tx).unwrap();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
 	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
@@ -330,6 +331,7 @@ mod tests {
 		super::set_freshacc_tx_witness(
 			&mut pw,
 			&t,
+			true,
 			&accin,
 			new_spend_auth,
 			new_consume_auth,

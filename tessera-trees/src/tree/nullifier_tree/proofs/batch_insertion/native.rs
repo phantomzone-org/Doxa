@@ -611,7 +611,7 @@ pub mod test {
 
 	use crate::tree::{
 		NullifierInsertProof, NullifierTree,
-		hasher::{Hash, NewFromU64},
+		hasher::{HashOutput, NewFromU64},
 	};
 
 	const DEPTH: usize = 4;
@@ -620,13 +620,13 @@ pub mod test {
 
 	/// Helper: builds a tree with 7 leaves then batch-inserts 4 more.
 	/// Returns the valid proof.
-	fn make_valid_proof() -> Result<BatchInsertProof<Hash>> {
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+	fn make_valid_proof() -> Result<BatchInsertProof<HashOutput>> {
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
 		let input_leaves = [5, 15, 12, 30, 7, 13, 25];
 		for i in 0..7 {
-			let leaf: Hash = Hash::new_from_u64(input_leaves[i]);
-			let proof: NullifierInsertProof<Hash> = tree.insert(leaf)?;
+			let leaf: HashOutput = HashOutput::new_from_u64(input_leaves[i]);
+			let proof: NullifierInsertProof<HashOutput> = tree.insert(leaf)?;
 			assert!(proof.verify());
 		}
 		tree.verify()?;
@@ -634,7 +634,7 @@ pub mod test {
 		let new_leaves = [6, 14, 26, 27];
 		let mut leaves = Vec::with_capacity(4);
 		for i in 0..new_leaves.len() {
-			leaves.push(Hash::new_from_u64(new_leaves[i]));
+			leaves.push(HashOutput::new_from_u64(new_leaves[i]));
 		}
 
 		let batch_proof = tree.insert_batch(leaves)?;
@@ -652,7 +652,7 @@ pub mod test {
 	#[test]
 	fn test_tampered_new_root() -> Result<()> {
 		let mut proof = make_valid_proof()?;
-		proof.new_root = Hash::new_from_u64(999);
+		proof.new_root = HashOutput::new_from_u64(999);
 		assert!(!proof.verify());
 		Ok(())
 	}
@@ -660,7 +660,7 @@ pub mod test {
 	#[test]
 	fn test_tampered_old_root() -> Result<()> {
 		let mut proof = make_valid_proof()?;
-		proof.old_root = Hash::new_from_u64(999);
+		proof.old_root = HashOutput::new_from_u64(999);
 		assert!(!proof.verify());
 		Ok(())
 	}
@@ -678,7 +678,7 @@ pub mod test {
 	#[test]
 	fn test_fake_predecessor_value() -> Result<()> {
 		let mut proof = make_valid_proof()?;
-		proof.links[0].pred_value = Hash::new_from_u64(999);
+		proof.links[0].pred_value = HashOutput::new_from_u64(999);
 		assert!(!proof.verify());
 		Ok(())
 	}
@@ -703,9 +703,9 @@ pub mod test {
 
 	#[test]
 	fn test_empty_proof_returns_false() {
-		let proof: BatchInsertProof<Hash> = BatchInsertProof {
-			old_root: Hash::new_from_u64(0),
-			new_root: Hash::new_from_u64(0),
+		let proof: BatchInsertProof<HashOutput> = BatchInsertProof {
+			old_root: HashOutput::new_from_u64(0),
+			new_root: HashOutput::new_from_u64(0),
 			start_index: 0,
 			links: vec![],
 			new_node_upper_siblings_after_pred_update: vec![],
@@ -735,7 +735,7 @@ pub mod test {
 			.collect();
 		if masked_indices.len() >= 2 {
 			let second = masked_indices[1];
-			proof.links[second].pred_new_siblings[0] = Hash::new_from_u64(999);
+			proof.links[second].pred_new_siblings[0] = HashOutput::new_from_u64(999);
 			assert!(!proof.verify());
 		}
 		Ok(())
@@ -745,12 +745,12 @@ pub mod test {
 	/// exercising the path-overlap merge in compute_sparse_root_update.
 	#[test]
 	fn test_sibling_predecessors() -> Result<()> {
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
 		let input_leaves = [10, 20, 30, 40, 50, 60, 70];
 		for i in 0..7 {
-			let leaf: Hash = Hash::new_from_u64(input_leaves[i]);
-			let proof: NullifierInsertProof<Hash> = tree.insert(leaf)?;
+			let leaf: HashOutput = HashOutput::new_from_u64(input_leaves[i]);
+			let proof: NullifierInsertProof<HashOutput> = tree.insert(leaf)?;
 			assert!(proof.verify());
 		}
 		tree.verify()?;
@@ -758,7 +758,7 @@ pub mod test {
 		let new_leaves = [15, 25, 35, 45];
 		let mut leaves = Vec::with_capacity(4);
 		for &v in &new_leaves {
-			leaves.push(Hash::new_from_u64(v));
+			leaves.push(HashOutput::new_from_u64(v));
 		}
 
 		let batch_proof = tree.insert_batch(leaves)?;
@@ -777,12 +777,12 @@ pub mod test {
 	/// Test with maximum chaining: all batch leaves share the same predecessor.
 	#[test]
 	fn test_max_chaining() -> Result<()> {
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
 		let input_leaves = [10, 100, 200, 300, 400, 500, 600];
 		for i in 0..7 {
-			let leaf: Hash = Hash::new_from_u64(input_leaves[i]);
-			let proof: NullifierInsertProof<Hash> = tree.insert(leaf)?;
+			let leaf: HashOutput = HashOutput::new_from_u64(input_leaves[i]);
+			let proof: NullifierInsertProof<HashOutput> = tree.insert(leaf)?;
 			assert!(proof.verify());
 		}
 		tree.verify()?;
@@ -790,7 +790,7 @@ pub mod test {
 		let new_leaves = [20, 30, 40, 50];
 		let mut leaves = Vec::with_capacity(4);
 		for &v in &new_leaves {
-			leaves.push(Hash::new_from_u64(v));
+			leaves.push(HashOutput::new_from_u64(v));
 		}
 
 		let batch_proof = tree.insert_batch(leaves)?;
@@ -807,10 +807,10 @@ pub mod test {
 	#[test]
 	fn test_large_batch_128_initial_1024() -> Result<()> {
 		const LARGE_DEPTH: usize = 12;
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(LARGE_DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(LARGE_DEPTH);
 
 		for v in 1..=1023u64 {
-			let leaf: Hash = Hash::new_from_u64(v * 3);
+			let leaf: HashOutput = HashOutput::new_from_u64(v * 3);
 			let proof = tree.insert(leaf)?;
 			assert!(proof.verify());
 		}
@@ -818,7 +818,7 @@ pub mod test {
 
 		let mut leaves = Vec::with_capacity(128);
 		for i in 0..128u64 {
-			leaves.push(Hash::new_from_u64(i * 3 + 1));
+			leaves.push(HashOutput::new_from_u64(i * 3 + 1));
 		}
 
 		let batch_proof = tree.insert_batch(leaves)?;

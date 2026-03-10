@@ -761,7 +761,7 @@ mod test {
 	use super::BatchNullifierInsertProofTargets;
 	use crate::tree::{
 		NullifierInsertProof, NullifierTree,
-		hasher::{Hash, NewFromU64},
+		hasher::{HashOutput, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -773,17 +773,17 @@ mod test {
 
 	/// Helper: builds a tree, batch-inserts, and runs the full circuit proof.
 	fn run_batch_circuit(initial_leaves: &[u64], batch_leaves: &[u64]) -> Result<()> {
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 		for &v in initial_leaves {
-			let leaf: Hash = Hash::new_from_u64(v);
-			let proof: NullifierInsertProof<Hash> = tree.insert(leaf)?;
+			let leaf: HashOutput = HashOutput::new_from_u64(v);
+			let proof: NullifierInsertProof<HashOutput> = tree.insert(leaf)?;
 			assert!(proof.verify());
 		}
 		tree.verify()?;
 
-		let leaves: Vec<Hash> = batch_leaves
+		let leaves: Vec<HashOutput> = batch_leaves
 			.iter()
-			.map(|&v| Hash::new_from_u64(v))
+			.map(|&v| HashOutput::new_from_u64(v))
 			.collect();
 		let batch_proof = tree.insert_batch(leaves)?;
 		tree.verify()?;
@@ -793,10 +793,10 @@ mod test {
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
 		let targets = BatchNullifierInsertProofTargets::new(&mut builder, DEPTH, BATCH_SIZE);
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 
 		let mut pw = PartialWitness::new();
-		targets.set::<Hash, F, DEPTH>(&mut pw, &batch_proof)?;
+		targets.set::<HashOutput, F, DEPTH>(&mut pw, &batch_proof)?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -822,9 +822,9 @@ mod test {
 		run_batch_circuit(&[10, 100, 200, 300, 400, 500, 600], &[20, 30, 40, 50])
 	}
 
-	/// Generates `count` unique random-looking Hash values using a multiplicative hash.
+	/// Generates `count` unique random-looking HashOutput values using a multiplicative hash.
 	/// Values are guaranteed unique and well-spread across the field.
-	fn random_hashes(seed: u64, count: usize) -> Vec<Hash> {
+	fn random_hashes(seed: u64, count: usize) -> Vec<HashOutput> {
 		use std::collections::HashSet;
 		let mut seen = HashSet::new();
 		let mut hashes = Vec::with_capacity(count);
@@ -848,7 +848,7 @@ mod test {
 				.wrapping_add(1442695040888963407);
 			let d = state;
 			// Ensure uniqueness by canonical form
-			let h = Hash::new([
+			let h = HashOutput::new([
 				F::from_noncanonical_u64(a),
 				F::from_noncanonical_u64(b),
 				F::from_noncanonical_u64(c),
@@ -884,7 +884,7 @@ mod test {
 		let initial_hashes = &all_hashes[..num_initial];
 		let batch_hashes = &all_hashes[num_initial..];
 
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(TREE_DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(TREE_DEPTH);
 		for &h in initial_hashes {
 			let proof = tree.insert(h)?;
 			assert!(proof.verify());
@@ -899,10 +899,10 @@ mod test {
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
 		let targets = BatchNullifierInsertProofTargets::new(&mut builder, TREE_DEPTH, BATCH);
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 
 		let mut pw = PartialWitness::new();
-		targets.set::<Hash, F, TREE_DEPTH>(&mut pw, &batch_proof)?;
+		targets.set::<HashOutput, F, TREE_DEPTH>(&mut pw, &batch_proof)?;
 
 		let data = builder.build::<C>();
 		let now = Instant::now();
@@ -942,17 +942,17 @@ mod test {
 	// ================================================================
 
 	use super::{BatchInsertProof, BatchInsertionLinkTargets};
-	use crate::tree::hasher::{MerkleHash, ToHashOut};
+	use crate::tree::hasher::ToHashOut;
 
 	/// Builds a valid batch proof for low-level tests (depth=4, batch=4).
-	fn make_batch_proof() -> BatchInsertProof<Hash> {
-		let mut tree = NullifierTree::<Hash>::new(DEPTH);
+	fn make_batch_proof() -> BatchInsertProof<HashOutput> {
+		let mut tree = NullifierTree::<HashOutput>::new(DEPTH);
 		for &v in &[5u64, 15, 12, 30, 7, 13, 25] {
-			tree.insert(Hash::new_from_u64(v)).unwrap();
+			tree.insert(HashOutput::new_from_u64(v)).unwrap();
 		}
 		let leaves = [6u64, 14, 26, 27]
 			.iter()
-			.map(|&v| Hash::new_from_u64(v))
+			.map(|&v| HashOutput::new_from_u64(v))
 			.collect();
 		let proof = tree.insert_batch(leaves).unwrap();
 		assert!(proof.verify());
@@ -967,10 +967,10 @@ mod test {
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
 		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
-		link_targets.connect_link_constraints::<Hash, F, D>(&mut builder);
+		link_targets.connect_link_constraints::<HashOutput, F, D>(&mut builder);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<Hash, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -987,16 +987,16 @@ mod test {
 		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
 		let start_index = builder.add_virtual_target();
 		let old_root_target = builder.add_virtual_hash();
-		let mid_root = link_targets.compute_mid_root::<Hash, F, D>(&mut builder, start_index);
-		link_targets.connect_pred_old_auth::<Hash, F, D>(
+		let mid_root = link_targets.compute_mid_root::<HashOutput, F, D>(&mut builder, start_index);
+		link_targets.connect_pred_old_auth::<HashOutput, F, D>(
 			&mut builder,
 			old_root_target,
 			start_index,
 		);
-		link_targets.connect_pred_new_auth::<Hash, F, D>(&mut builder, mid_root, start_index);
+		link_targets.connect_pred_new_auth::<HashOutput, F, D>(&mut builder, mid_root, start_index);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<Hash, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
 		pw.set_target(start_index, F::from_canonical_u64(proof.start_index as u64))?;
 		pw.set_hash_target(old_root_target, proof.old_root.to_hash_out())?;
 
@@ -1010,7 +1010,7 @@ mod test {
 	#[test]
 	fn test_link_pred_auth_tampered() -> Result<()> {
 		let mut proof = make_batch_proof();
-		proof.links[0].pred_old_siblings[0] = Hash::new_from_u64(999);
+		proof.links[0].pred_old_siblings[0] = HashOutput::new_from_u64(999);
 
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
@@ -1018,14 +1018,14 @@ mod test {
 		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
 		let start_index = builder.add_virtual_target();
 		let old_root_target = builder.add_virtual_hash();
-		link_targets.connect_pred_old_auth::<Hash, F, D>(
+		link_targets.connect_pred_old_auth::<HashOutput, F, D>(
 			&mut builder,
 			old_root_target,
 			start_index,
 		);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<Hash, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
 		pw.set_target(start_index, F::from_canonical_u64(proof.start_index as u64))?;
 		pw.set_hash_target(old_root_target, proof.old_root.to_hash_out())?;
 
@@ -1046,8 +1046,8 @@ mod test {
 		link0.connect_transition_constraints(&mut builder, &link1);
 
 		let mut pw = PartialWitness::new();
-		link0.set::<Hash, F>(&mut pw, &proof.links[0])?;
-		link1.set::<Hash, F>(&mut pw, &proof.links[1])?;
+		link0.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
+		link1.set::<HashOutput, F>(&mut pw, &proof.links[1])?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -1067,7 +1067,7 @@ mod test {
 		link_targets.connect_first_link(&mut builder);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<Hash, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -1080,7 +1080,7 @@ mod test {
 		link_targets.connect_last_link(&mut builder);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<Hash, F>(&mut pw, last)?;
+		link_targets.set::<HashOutput, F>(&mut pw, last)?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -1097,14 +1097,14 @@ mod test {
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
 		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
-		let hash_target = link_targets.leaf_hash_circuit::<Hash, F, D>(&mut builder);
+		let hash_target = link_targets.leaf_hash_circuit::<HashOutput, F, D>(&mut builder);
 		let expected = builder.add_virtual_hash();
 		builder.connect_hashes(hash_target, expected);
 
 		let native_hash = proof.links[0].leaf_hash();
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<Hash, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
 		pw.set_hash_target(expected, native_hash.to_hash_out())?;
 
 		let data = builder.build::<C>();

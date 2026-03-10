@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
-use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof, BatchInsertProof};
+use tessera_trees::tree::{hasher::HashOutput, BatchCommitmentProof, BatchInsertProof};
 
 /// Sent from Sequencer to Prover via `tokio::mpsc` channel.
 ///
@@ -12,13 +14,13 @@ pub struct ProveRequest {
 	/// On-chain batch ID from `registerTransactionBatchUpdate`.
 	pub batch_id: u64,
 	/// Notes commitment tree batch-insertion witness.
-	pub notes_commitment_proof: BatchCommitmentProof<Hash>,
+	pub notes_commitment_proof: BatchCommitmentProof<HashOutput>,
 	/// Notes nullifier tree batch-insertion witness.
-	pub notes_nullifier_proof: BatchInsertProof<Hash>,
+	pub notes_nullifier_proof: BatchInsertProof<HashOutput>,
 	/// Accounts commitment tree batch-insertion witness.
-	pub accounts_commitment_proof: BatchCommitmentProof<Hash>,
+	pub accounts_commitment_proof: BatchCommitmentProof<HashOutput>,
 	/// Accounts nullifier tree batch-insertion witness.
-	pub accounts_nullifier_proof: BatchInsertProof<Hash>,
+	pub accounts_nullifier_proof: BatchInsertProof<HashOutput>,
 	/// Sorted leaf bytes for all 4 trees (after padding and sorting).
 	/// Used by the prover to build TX leaf proofs with correct tree data.
 	pub nc_sorted_leaves: Vec<[u8; 32]>,
@@ -28,6 +30,9 @@ pub struct ProveRequest {
 	/// Indices (in the sorted account-level batch) of slots that are real
 	/// private transactions (is_real=1). Empty for deposit-only batches.
 	pub real_account_slots: Vec<usize>,
+	/// Client-submitted TX proof bytes keyed by sorted account slot index.
+	/// Only present for real private TX slots; absent slots use dummy proofs.
+	pub tx_proofs_by_slot: HashMap<usize, Vec<u8>>,
 }
 
 /// Sent from Prover back to Sequencer via `tokio::mpsc` channel.
@@ -37,13 +42,13 @@ pub enum ProveOutcome {
 		/// Echoed from the originating `ProveRequest`.
 		batch_id: u64,
 		/// New notes commitment root after insertion.
-		notes_new_root: Hash,
+		notes_new_root: HashOutput,
 		/// New notes nullifier root after insertion.
-		nullifier_notes_new_root: Hash,
+		nullifier_notes_new_root: HashOutput,
 		/// New accounts commitment root after insertion.
-		accounts_new_root: Hash,
+		accounts_new_root: HashOutput,
 		/// New accounts nullifier root after insertion.
-		nullifier_accounts_new_root: Hash,
+		nullifier_accounts_new_root: HashOutput,
 		/// Single SuperAggregator Groth16 proof, ready for `confirmBatch()`.
 		solidity_proof: Box<SolidityProof>,
 		/// `keccak256` commitment over all 5 inner proofs' public inputs,

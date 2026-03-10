@@ -2,18 +2,19 @@ use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use plonky2::{
-	field::types::{Field, PrimeField64},
-	iop::{
-		target::Target,
-		witness::{PartialWitness, WitnessWrite},
+	field::types::PrimeField64,
+	iop::witness::{PartialWitness, WitnessWrite},
+	plonk::{
+		circuit_builder::CircuitBuilder,
+		circuit_data::{CircuitConfig, VerifierCircuitTarget},
+		proof::{ProofWithPublicInputs, ProofWithPublicInputsTarget},
 	},
-	plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 };
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	proof_aggregation::{GenericAggregator, SuperAggregator},
 	tree::{
-		hasher::Hash, BatchCommitmentProof, BatchCommitmentProofTargets, BatchInsertProof,
+		hasher::HashOutput, BatchCommitmentProof, BatchCommitmentProofTargets, BatchInsertProof,
 		BatchNullifierInsertProofTargets,
 	},
 	CircuitDataNative, ConfigNative, ProofNative, D, F,
@@ -54,12 +55,16 @@ pub struct NullifierProverService {
 pub struct AssociatedInputAggregatorService {
 	aggregator: Arc<GenericAggregator<F, ConfigNative, D>>,
 	pool: Arc<NodeProverPool<F, ConfigNative, D>>,
-	/// The trivial TX leaf circuit (73 PIs, no constraints).
+	/// The recursive TX leaf circuit (verifies one inner PrivTx proof, 75 PIs).
 	leaf_circuit: CircuitDataNative,
-	/// Witness target for `is_real` (PI[0]).
-	is_real_target: plonky2::iop::target::BoolTarget,
-	/// Witness targets for the 72 data fields (PI[1..73]).
-	data_targets: Vec<Target>,
+	/// Witness target for the inner PrivTx proof being verified.
+	inner_proof_target: ProofWithPublicInputsTarget<D>,
+	/// Witness target for the inner circuit's verifier data (constant in circuit).
+	inner_verifier_target: VerifierCircuitTarget,
+	/// The inner PrivTx circuit data (needed for deserialization and witness setting).
+	inner_circuit: CircuitDataNative,
+	/// Pre-generated dummy inner proof (not_fake_tx=0) used for padding slots.
+	dummy_inner_proof: ProofWithPublicInputs<F, ConfigNative, D>,
 }
 
 /// Merges 5 independent inner Plonky2 proofs into a single Groth16 proof via
@@ -79,7 +84,7 @@ impl CommitmentProverService {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let targets = BatchCommitmentProofTargets::new::<F, D>(&mut builder, 32, batch_size);
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		let circuit_data = builder.build::<ConfigNative>();
 		info!(batch_size, "commitment prover initialized");
 		Ok(Self {
@@ -89,9 +94,10 @@ impl CommitmentProverService {
 	}
 
 	/// Generate a native Plonky2 proof for the given commitment batch.
-	pub fn prove(&self, batch_proof: &BatchCommitmentProof<Hash>) -> Result<ProofNative> {
+	pub fn prove(&self, batch_proof: &BatchCommitmentProof<HashOutput>) -> Result<ProofNative> {
 		let mut pw = PartialWitness::new();
-		self.targets.set::<Hash, F, 32>(&mut pw, batch_proof)?;
+		self.targets
+			.set::<HashOutput, F, 32>(&mut pw, batch_proof)?;
 		let proof = self.circuit_data.prove(pw)?;
 		self.circuit_data.verify(proof.clone())?;
 		Ok(proof)
@@ -108,7 +114,7 @@ impl NullifierProverService {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let targets = BatchNullifierInsertProofTargets::new::<F, D>(&mut builder, 32, batch_size);
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		let circuit_data = builder.build::<ConfigNative>();
 		info!(batch_size, "nullifier prover initialized");
 		Ok(Self {
@@ -118,9 +124,10 @@ impl NullifierProverService {
 	}
 
 	/// Generate a native Plonky2 proof for the given nullifier batch.
-	pub fn prove(&self, batch_proof: &BatchInsertProof<Hash>) -> Result<ProofNative> {
+	pub fn prove(&self, batch_proof: &BatchInsertProof<HashOutput>) -> Result<ProofNative> {
 		let mut pw = PartialWitness::new();
-		self.targets.set::<Hash, F, 32>(&mut pw, batch_proof)?;
+		self.targets
+			.set::<HashOutput, F, 32>(&mut pw, batch_proof)?;
 		let proof = self.circuit_data.prove(pw)?;
 		self.circuit_data.verify(proof.clone())?;
 		Ok(proof)
@@ -132,7 +139,7 @@ impl AssociatedInputAggregatorService {
 	/// distributed node proving.
 	///
 	/// Expects the standard layout produced by `cargo run --bin aggregator_artifacts --release`:
-	/// native Plonky2 aggregator data directly under `path`.
+	/// native Plonky2 aggregator data directly under `path`, plus `dummy_inner_proof.bin`.
 	pub fn from_artifacts_and_pool(
 		path: &Path,
 		pool: Arc<NodeProverPool<F, ConfigNative, D>>,
@@ -147,50 +154,90 @@ impl AssociatedInputAggregatorService {
 		info!("loading associated input aggregator from artifacts");
 		let aggregator = GenericAggregator::<F, ConfigNative, D>::from_artifacts(path)?;
 
-		// Rebuild the 73-PI leaf circuit (no constraints) so that we can prove
-		// arbitrary TX leaf values at proving time.
-		let n_pi = aggregator.leaf_common().num_public_inputs;
+		// Rebuild the inner PrivTx circuit deterministically (same as artifact generation).
+		info!("building inner PrivTx circuit for recursive leaf verification");
+		let (inner_circuit, _dummy_from_build) = tessera_client::build_circuit_and_dummy_proof();
 		info!(
-			n_pi,
-			"building TX leaf circuit for dynamic proof generation"
+			inner_pi = inner_circuit.common.num_public_inputs,
+			inner_degree_bits = inner_circuit.common.degree_bits(),
+			"inner PrivTx circuit ready"
 		);
-		let leaf_config = CircuitConfig::standard_recursion_config();
-		let mut builder = CircuitBuilder::<F, D>::new(leaf_config);
-		let is_real_t = builder.add_virtual_bool_target_safe();
-		builder.register_public_input(is_real_t.target);
-		let data_targets: Vec<Target> = (0..n_pi - 1)
-			.map(|_| builder.add_virtual_target())
-			.collect();
-		for &t in &data_targets {
-			builder.register_public_input(t);
+
+		// Load the pre-generated dummy inner proof from artifacts.
+		let dummy_proof_path = path.join("dummy_inner_proof.bin");
+		let dummy_proof_bytes = std::fs::read(&dummy_proof_path).map_err(|e| {
+			anyhow::anyhow!(
+				"failed to read dummy_inner_proof.bin at {:?}: {}. \
+				 Run `cargo run --bin aggregator_artifacts --release` first.",
+				dummy_proof_path,
+				e
+			)
+		})?;
+		let dummy_inner_proof = ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
+			dummy_proof_bytes,
+			&inner_circuit.common,
+		)?;
+		info!("loaded dummy inner proof from artifacts");
+
+		// Rebuild the recursive leaf circuit (must match artifact generation).
+		info!("building recursive TX leaf circuit");
+		let config = CircuitConfig::standard_recursion_config();
+		let mut builder = CircuitBuilder::<F, D>::new(config);
+		let inner_proof_target = builder.add_virtual_proof_with_pis(&inner_circuit.common);
+		let inner_verifier_target = builder.constant_verifier_data(&inner_circuit.verifier_only);
+		builder.verify_proof::<ConfigNative>(
+			&inner_proof_target,
+			&inner_verifier_target,
+			&inner_circuit.common,
+		);
+		for &pi in &inner_proof_target.public_inputs {
+			builder.register_public_input(pi);
 		}
 		let leaf_circuit = builder.build::<ConfigNative>();
-		info!("TX leaf circuit ready");
+		info!(
+			leaf_pi = leaf_circuit.common.num_public_inputs,
+			leaf_degree_bits = leaf_circuit.common.degree_bits(),
+			"recursive TX leaf circuit ready"
+		);
 
 		Ok(Self {
 			aggregator: Arc::new(aggregator),
 			pool,
 			leaf_circuit,
-			is_real_target: is_real_t,
-			data_targets,
+			inner_proof_target,
+			inner_verifier_target,
+			inner_circuit,
+			dummy_inner_proof,
 		})
 	}
 
-	/// Prove a single TX leaf with the given `is_real` flag and 72 data fields.
+	/// Prove a single recursive TX leaf by verifying the given inner PrivTx proof.
 	///
-	/// The leaf circuit is trivial (no constraints), so proving is fast.
-	fn prove_leaf(&self, is_real: bool, data: &[F]) -> Result<Vec<u8>> {
-		anyhow::ensure!(
-			data.len() == self.data_targets.len(),
-			"TX leaf data length mismatch: got {}, expected {}",
-			data.len(),
-			self.data_targets.len()
-		);
+	/// The inner proof bytes are deserialized and then verified inside the
+	/// recursive leaf circuit, which forwards the inner proof's 75 PIs.
+	fn prove_leaf(&self, inner_proof_bytes: &[u8]) -> Result<Vec<u8>> {
+		let inner_proof = ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
+			inner_proof_bytes.to_vec(),
+			&self.inner_circuit.common,
+		)?;
 		let mut pw = PartialWitness::new();
-		pw.set_bool_target(self.is_real_target, is_real)?;
-		for (&t, &v) in self.data_targets.iter().zip(data.iter()) {
-			pw.set_target(t, v)?;
-		}
+		pw.set_verifier_data_target(
+			&self.inner_verifier_target,
+			&self.inner_circuit.verifier_only,
+		)?;
+		pw.set_proof_with_pis_target(&self.inner_proof_target, &inner_proof)?;
+		let proof = self.leaf_circuit.prove(pw)?;
+		Ok(proof.to_bytes())
+	}
+
+	/// Prove a single recursive TX leaf using the pre-generated dummy inner proof.
+	fn prove_dummy_leaf(&self) -> Result<Vec<u8>> {
+		let mut pw = PartialWitness::new();
+		pw.set_verifier_data_target(
+			&self.inner_verifier_target,
+			&self.inner_circuit.verifier_only,
+		)?;
+		pw.set_proof_with_pis_target(&self.inner_proof_target, &self.dummy_inner_proof)?;
 		let proof = self.leaf_circuit.prove(pw)?;
 		Ok(proof.to_bytes())
 	}
@@ -406,68 +453,41 @@ impl ProverRuntime {
 		})
 	}
 
-	/// Build all TX leaf proofs from sorted tree data, then aggregate them.
+	/// Build all TX leaf proofs and aggregate them.
 	///
-	/// Each TX leaf proof carries the sorted tree leaf values for its slot
-	/// (real or dummy).  `is_real` is set to `true` only for slots listed in
-	/// `real_account_slots`.
+	/// For each account slot:
+	/// - Real private TX slots (in `real_account_slots`): uses the client-supplied PrivTx proof
+	///   from `tx_proofs_by_slot`, wrapped in the recursive leaf circuit.
+	/// - Deposit/inactive slots: uses the pre-generated dummy inner proof (not_fake_tx=0).
 	///
 	/// Called from a `spawn_blocking` context; uses `Handle::current().block_on(...)` to drive
 	/// the async aggregation pipeline.
-	#[allow(clippy::too_many_arguments)]
 	fn build_and_aggregate_tx_proofs(
 		aggregator: &Option<AssociatedInputAggregatorService>,
-		nc_sorted: &[Hash],
-		nn_sorted: &[Hash],
-		ac_sorted: &[Hash],
-		an_sorted: &[Hash],
-		real_account_slots: &[usize],
 		account_batch_size: usize,
-		notes_per_slot: usize,
+		real_account_slots: &[usize],
+		tx_proofs_by_slot: &std::collections::HashMap<usize, Vec<u8>>,
 	) -> Result<ProofNative> {
 		let Some(agg_service) = aggregator else {
 			anyhow::bail!("no aggregator configured (set TESSERA_AGGREGATOR_ARTIFACTS_PATH)");
 		};
 
-		anyhow::ensure!(
-			nn_sorted.len() == account_batch_size * notes_per_slot,
-			"NN sorted leaves: got {}, expected {}",
-			nn_sorted.len(),
-			account_batch_size * notes_per_slot
-		);
-		anyhow::ensure!(
-			nc_sorted.len() == account_batch_size * notes_per_slot,
-			"NC sorted leaves: got {}, expected {}",
-			nc_sorted.len(),
-			account_batch_size * notes_per_slot
-		);
-		anyhow::ensure!(an_sorted.len() == account_batch_size);
-		anyhow::ensure!(ac_sorted.len() == account_batch_size);
-
-		// Build one TX leaf proof per account slot.
+		// Build one recursive TX leaf proof per account slot.
 		let mut leaf_proofs = Vec::with_capacity(account_batch_size);
 		for s in 0..account_batch_size {
-			let is_real = real_account_slots.contains(&s);
-			let mut data = Vec::with_capacity(72);
-			// note nullifiers (8 × 4 fields) — from NN
-			for j in 0..notes_per_slot {
-				let leaf_idx = s * notes_per_slot + j;
-				data.extend_from_slice(&nn_sorted[leaf_idx].0);
+			if real_account_slots.contains(&s) {
+				// Real private TX: use the client-supplied inner PrivTx proof.
+				let inner_proof_bytes = tx_proofs_by_slot.get(&s).ok_or_else(|| {
+					anyhow::anyhow!("slot {} is marked real but no PrivTx proof was supplied", s)
+				})?;
+				leaf_proofs.push(agg_service.prove_leaf(inner_proof_bytes)?);
+			} else {
+				// Deposit or inactive slot: use dummy inner proof.
+				leaf_proofs.push(agg_service.prove_dummy_leaf()?);
 			}
-			// note commitments (8 × 4 fields) — from NC
-			for j in 0..notes_per_slot {
-				let leaf_idx = s * notes_per_slot + j;
-				data.extend_from_slice(&nc_sorted[leaf_idx].0);
-			}
-			// account nullifier (1 × 4 fields) — from AN
-			data.extend_from_slice(&an_sorted[s].0);
-			// account commitment (1 × 4 fields) — from AC
-			data.extend_from_slice(&ac_sorted[s].0);
-
-			leaf_proofs.push(agg_service.prove_leaf(is_real, &data)?);
 		}
 
-		// Pad to the aggregation tree leaf count with all-zero padding proofs.
+		// Pad to the aggregation tree leaf count with dummy proofs.
 		let cfg = agg_service.aggregator.config();
 		let n_leaves = cfg.arity.pow(cfg.depth as u32);
 		anyhow::ensure!(
@@ -476,7 +496,7 @@ impl ProverRuntime {
 			leaf_proofs.len(),
 			n_leaves
 		);
-		let padding_proof = agg_service.prove_leaf(false, &vec![F::ZERO; 72])?;
+		let padding_proof = agg_service.prove_dummy_leaf()?;
 		leaf_proofs.resize(n_leaves, padding_proof);
 
 		// Bridge the async session into the synchronous context.
@@ -538,29 +558,13 @@ impl ProverRuntime {
 			.account_nullifier_prover
 			.prove(&request.accounts_nullifier_proof)?;
 
-		info!(
-			batch_id,
-			"building and aggregating TX leaf proofs from sorted data"
-		);
-		let nc_sorted_hashes = crate::contract::bytes_slice_to_hashes(&request.nc_sorted_leaves)?;
-		let nn_sorted_hashes = crate::contract::bytes_slice_to_hashes(&request.nn_sorted_leaves)?;
-		let ac_sorted_hashes = crate::contract::bytes_slice_to_hashes(&request.ac_sorted_leaves)?;
-		let an_sorted_hashes = crate::contract::bytes_slice_to_hashes(&request.an_sorted_leaves)?;
+		info!(batch_id, "building and aggregating TX leaf proofs");
 		let account_batch_size = request.ac_sorted_leaves.len();
-		let notes_per_slot = if account_batch_size > 0 {
-			request.nc_sorted_leaves.len() / account_batch_size
-		} else {
-			8
-		};
 		let tx_agg_root = Self::build_and_aggregate_tx_proofs(
 			&self.aggregator,
-			&nc_sorted_hashes,
-			&nn_sorted_hashes,
-			&ac_sorted_hashes,
-			&an_sorted_hashes,
-			&request.real_account_slots,
 			account_batch_size,
-			notes_per_slot,
+			&request.real_account_slots,
+			&request.tx_proofs_by_slot,
 		)?;
 
 		info!(batch_id, "running SuperAggregator (BN128 + Groth16)");

@@ -4,6 +4,7 @@ use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64, PrimeField64};
 use primitive_types::{H160, U256};
 use rand::{CryptoRng, Rng, RngExt};
+use serde::{Deserialize, Serialize};
 use tessera_trees::{
 	F,
 	tree::{HASH_SIZE, hasher::HashOutput},
@@ -18,16 +19,16 @@ use crate::{
 	utils::map_h160_to_f,
 };
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct AccountCommitment(pub HashOutput);
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct AccountNullifier(pub HashOutput);
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct NullifierKey(pub [F; 4]);
 
-#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct PrivateIdentifier(pub [F; 2]);
 
 impl PrivateIdentifier {
