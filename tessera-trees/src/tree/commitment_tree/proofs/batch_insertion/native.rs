@@ -203,7 +203,7 @@ mod test {
 
 	use crate::tree::{
 		BatchCommitmentProof, CommitmentTree,
-		hasher::{Hash, NewRandom},
+		hasher::{HashOutput, NewRandom},
 	};
 
 	#[test]
@@ -211,18 +211,18 @@ mod test {
 		const DEPTH: usize = 16;
 		const BATCH: usize = 16;
 
-		let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let mut tree: CommitmentTree<HashOutput> = CommitmentTree::<HashOutput>::new(DEPTH);
 
 		let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
 		// Create batch of random leaves
-		let mut leaves: Vec<Hash> = Vec::new();
+		let mut leaves: Vec<HashOutput> = Vec::new();
 		for _ in 0..BATCH {
-			leaves.push(Hash::new_random(&mut rng));
+			leaves.push(HashOutput::new_random(&mut rng));
 		}
 
 		// Insert batch and get proof
-		let proof: BatchCommitmentProof<Hash> = tree.insert_batch(leaves)?;
+		let proof: BatchCommitmentProof<HashOutput> = tree.insert_batch(leaves)?;
 
 		// Verify the proof
 		assert!(proof.verify());
@@ -236,24 +236,24 @@ mod test {
 		const INITIAL_LEAVES: usize = 32;
 		const BATCH: usize = 16;
 
-		let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let mut tree: CommitmentTree<HashOutput> = CommitmentTree::<HashOutput>::new(DEPTH);
 
 		let mut rng = StdRng::from_seed([0u8; 32]);
 
 		// Insert some initial leaves
 		for _ in 0..INITIAL_LEAVES {
-			let value = Hash::new_random(&mut rng);
+			let value = HashOutput::new_random(&mut rng);
 			tree.insert(value).unwrap();
 		}
 
 		// Create batch of random leaves
-		let mut leaves: Vec<Hash> = Vec::new();
+		let mut leaves: Vec<HashOutput> = Vec::new();
 		for _ in 0..BATCH {
-			leaves.push(Hash::new_random(&mut rng));
+			leaves.push(HashOutput::new_random(&mut rng));
 		}
 
 		// Insert batch and get proof
-		let proof: BatchCommitmentProof<Hash> = tree.insert_batch(leaves)?;
+		let proof: BatchCommitmentProof<HashOutput> = tree.insert_batch(leaves)?;
 
 		// Verify the proof
 		assert!(proof.verify());
@@ -269,16 +269,16 @@ mod test {
 
 		// Test various batch sizes (all powers of 2)
 		for batch_size in [1, 2, 4, 8, 16, 32, 64] {
-			let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+			let mut tree: CommitmentTree<HashOutput> = CommitmentTree::<HashOutput>::new(DEPTH);
 
 			// Create batch of random leaves
-			let mut leaves: Vec<Hash> = Vec::new();
+			let mut leaves: Vec<HashOutput> = Vec::new();
 			for _ in 0..batch_size {
-				leaves.push(Hash::new_random(&mut rng));
+				leaves.push(HashOutput::new_random(&mut rng));
 			}
 
 			// Insert batch and get proof
-			let proof: BatchCommitmentProof<Hash> = tree.insert_batch(leaves)?;
+			let proof: BatchCommitmentProof<HashOutput> = tree.insert_batch(leaves)?;
 
 			// Verify the proof
 			assert!(proof.verify(), "Failed for batch_size={}", batch_size);

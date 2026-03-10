@@ -8,6 +8,7 @@ plonky2_field = {workspace = true}
 plonky2 = {workspace = true}
 anyhow = {workspace = true}
 rand = {workspace = true}
+rand_chacha = {workspace = true}
 itertools = {workspace = true}
 tessera-trees = {workspace = true}
 primitive-types = {workspace = true}

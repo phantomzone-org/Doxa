@@ -146,7 +146,7 @@ mod tests {
 
 	use crate::tree::{
 		BatchCommitmentProof, CommitmentInsertProof, CommitmentTree,
-		hasher::{Hash, NewRandom},
+		hasher::{HashOutput, NewRandom},
 	};
 
 	const DEPTH: usize = 10;
@@ -154,13 +154,13 @@ mod tests {
 
 	#[test]
 	fn test_new() {
-		let tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let tree: CommitmentTree<HashOutput> = CommitmentTree::<HashOutput>::new(DEPTH);
 		assert_eq!(tree.num_leaves(), 0);
 	}
 
 	#[test]
 	fn test_insert() -> Result<()> {
-		let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let mut tree: CommitmentTree<HashOutput> = CommitmentTree::<HashOutput>::new(DEPTH);
 
 		let mut rng: StdRng = StdRng::from_seed([0u8; 32]);
 
@@ -168,13 +168,13 @@ mod tests {
 
 		let mut batch = Vec::with_capacity(NUM_INSERTS);
 		for _ in 0..NUM_INSERTS as u64 {
-			let leaf: Hash = Hash::new_random(&mut rng);
-			let proof: CommitmentInsertProof<Hash> = tree.insert(leaf)?;
+			let leaf: HashOutput = HashOutput::new_random(&mut rng);
+			let proof: CommitmentInsertProof<HashOutput> = tree.insert(leaf)?;
 			assert!(proof.verify());
-			batch.push(Hash::new_random(&mut rng));
+			batch.push(HashOutput::new_random(&mut rng));
 		}
 
-		let proof: BatchCommitmentProof<Hash> = tree.insert_batch(batch)?;
+		let proof: BatchCommitmentProof<HashOutput> = tree.insert_batch(batch)?;
 		assert!(proof.verify());
 
 		Ok(())
@@ -182,11 +182,11 @@ mod tests {
 
 	#[test]
 	fn test_duplicate_leaf_counts() -> Result<()> {
-		let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let mut tree: CommitmentTree<HashOutput> = CommitmentTree::<HashOutput>::new(DEPTH);
 		let mut rng: StdRng = StdRng::from_seed([1u8; 32]);
 
-		let a = Hash::new_random(&mut rng);
-		let b = Hash::new_random(&mut rng);
+		let a = HashOutput::new_random(&mut rng);
+		let b = HashOutput::new_random(&mut rng);
 
 		let p1 = tree.insert_batch(vec![a, b, a, a])?;
 		assert!(p1.verify());
@@ -204,11 +204,11 @@ mod tests {
 
 	#[test]
 	fn test_rebuild_leaf_counts_from_leaves() -> Result<()> {
-		let mut tree: CommitmentTree<Hash> = CommitmentTree::<Hash>::new(DEPTH);
+		let mut tree: CommitmentTree<HashOutput> = CommitmentTree::<HashOutput>::new(DEPTH);
 		let mut rng: StdRng = StdRng::from_seed([2u8; 32]);
 
-		let a = Hash::new_random(&mut rng);
-		let b = Hash::new_random(&mut rng);
+		let a = HashOutput::new_random(&mut rng);
+		let b = HashOutput::new_random(&mut rng);
 
 		let p = tree.insert_batch(vec![a, b, a, b])?;
 		assert!(p.verify());

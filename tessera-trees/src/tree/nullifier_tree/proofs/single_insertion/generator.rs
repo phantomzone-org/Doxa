@@ -168,7 +168,7 @@ mod test {
 
 	use crate::tree::{
 		NullifierTree, ProofGenerator, StreamingAggregator,
-		hasher::{Hash, NewFromU64},
+		hasher::{HashOutput, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -184,13 +184,13 @@ mod test {
 		// Create tree
 		print!("Create tree: ");
 		let now = Instant::now();
-		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
 		println!("{:?}", now.elapsed());
 
 		// Create generator (this builds the circuit once)
 		print!("Create generator (build circuit): ");
 		let now = Instant::now();
-		let generator = ProofGenerator::<Hash, F, C, D, DEPTH>::new();
+		let generator = ProofGenerator::<HashOutput, F, C, D, DEPTH>::new();
 		println!("{:?}", now.elapsed());
 
 		// Insert multiple values and generate STARK proofs
@@ -200,7 +200,7 @@ mod test {
 			// Insert value and get native proof
 			print!("  Insert value: ");
 			let now = Instant::now();
-			let value = Hash::new_from_u64((i + 1) as u64 * 100);
+			let value = HashOutput::new_from_u64((i + 1) as u64 * 100);
 			let native_proof = tree.insert(value)?;
 			println!("{:?}", now.elapsed());
 
@@ -236,8 +236,8 @@ mod test {
 		println!("=== Generator + Aggregator Integration Test ===\n");
 
 		// Create tree and generator
-		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
-		let generator = ProofGenerator::<Hash, F, C, D, DEPTH>::new();
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
+		let generator = ProofGenerator::<HashOutput, F, C, D, DEPTH>::new();
 
 		// Create aggregator using the generator's circuit data
 		let aggregator = StreamingAggregator::<F, C, D>::new(
@@ -254,7 +254,7 @@ mod test {
 
 		for i in 0..NUM_PROOFS {
 			// Insert and generate STARK proof
-			let value = Hash::new_from_u64((i + 1) as u64 * 100);
+			let value = HashOutput::new_from_u64((i + 1) as u64 * 100);
 			let native_proof = tree.insert(value)?;
 			let stark_proof = generator.prove(&native_proof)?;
 

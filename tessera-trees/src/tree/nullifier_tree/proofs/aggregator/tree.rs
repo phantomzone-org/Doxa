@@ -208,7 +208,7 @@ mod tests {
 	use super::aggregate_to_tree;
 	use crate::tree::{
 		NullifierInsertProof, NullifierInsertProofTargets, NullifierTree,
-		hasher::{Hash, NewFromU64},
+		hasher::{HashOutput, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -227,7 +227,7 @@ mod tests {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let targets = NullifierInsertProofTargets::new(&mut builder, depth, true, true);
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		let circuit_data = builder.build::<C>();
 		(circuit_data, targets)
 	}
@@ -248,11 +248,11 @@ mod tests {
 			NUM_PROOFS
 		);
 		let now = Instant::now();
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
-		let mut insert_proofs: Vec<NullifierInsertProof<Hash>> = Vec::with_capacity(NUM_PROOFS);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
+		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> = Vec::with_capacity(NUM_PROOFS);
 
 		for i in 0..NUM_PROOFS {
-			let value = Hash::new_from_u64((i + 1) as u64 * 100);
+			let value = HashOutput::new_from_u64((i + 1) as u64 * 100);
 			let proof = tree.insert(value)?;
 			assert!(proof.verify(), "Native proof {} verification failed", i);
 
@@ -288,7 +288,7 @@ mod tests {
 
 		for (i, proof) in insert_proofs.iter().enumerate() {
 			let mut pw = PartialWitness::new();
-			targets.set::<Hash, F, DEPTH>(&mut pw, proof)?;
+			targets.set::<HashOutput, F, DEPTH>(&mut pw, proof)?;
 			let circuit_proof = leaf_circuit_data.prove(pw)?;
 			leaf_circuit_proofs.push(circuit_proof);
 			println!("  Proof {} generated", i);
@@ -354,13 +354,13 @@ mod tests {
 		println!("=== Simple 2-proof aggregation test ===\n");
 
 		// Create tree and 2 proofs
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 
-		let value1 = Hash::new_from_u64(100);
+		let value1 = HashOutput::new_from_u64(100);
 		let proof1 = tree.insert(value1)?;
 		assert!(proof1.verify());
 
-		let value2 = Hash::new_from_u64(200);
+		let value2 = HashOutput::new_from_u64(200);
 		let proof2 = tree.insert(value2)?;
 		assert!(proof2.verify());
 
@@ -374,11 +374,11 @@ mod tests {
 		let (leaf_circuit_data, targets) = build_insert_circuit(DEPTH);
 
 		let mut pw1 = PartialWitness::new();
-		targets.set::<Hash, F, DEPTH>(&mut pw1, &proof1)?;
+		targets.set::<HashOutput, F, DEPTH>(&mut pw1, &proof1)?;
 		let circuit_proof1 = leaf_circuit_data.prove(pw1)?;
 
 		let mut pw2 = PartialWitness::new();
-		targets.set::<Hash, F, DEPTH>(&mut pw2, &proof2)?;
+		targets.set::<HashOutput, F, DEPTH>(&mut pw2, &proof2)?;
 		let circuit_proof2 = leaf_circuit_data.prove(pw2)?;
 
 		// Aggregate

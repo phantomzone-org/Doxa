@@ -444,7 +444,7 @@ mod test {
 		},
 	};
 
-	use crate::tree::{hasher::Hash, utils::IndexRangeCheckTarget};
+	use crate::tree::{hasher::HashOutput, utils::IndexRangeCheckTarget};
 
 	const D: usize = 2;
 	pub type C = PoseidonGoldilocksConfig;
@@ -454,8 +454,8 @@ mod test {
 
 	#[test]
 	fn inclusion_check() -> Result<()> {
-		let a: Vec<Hash> = vec![
-			Hash::new([
+		let a: Vec<HashOutput> = vec![
+			HashOutput::new([
 				F::from_canonical_u64(0),
 				F::from_canonical_u64(0),
 				F::from_canonical_u64(0),
@@ -464,8 +464,8 @@ mod test {
 			BATCH
 		];
 
-		let x: Vec<Hash> = vec![
-			Hash::new([
+		let x: Vec<HashOutput> = vec![
+			HashOutput::new([
 				F::from_canonical_u64(1),
 				F::from_canonical_u64(0),
 				F::from_canonical_u64(0),
@@ -474,8 +474,8 @@ mod test {
 			BATCH
 		];
 
-		let b: Vec<Hash> = vec![
-			Hash::new([
+		let b: Vec<HashOutput> = vec![
+			HashOutput::new([
 				F::from_canonical_u64(1),
 				F::from_canonical_u64(0),
 				F::from_canonical_u64(0),
@@ -499,7 +499,7 @@ mod test {
 
 		print!("Set Witnesses: ");
 		let mut pw: PartialWitness<GoldilocksField> = PartialWitness::new();
-		targets.set::<Hash, F, D>(&mut pw, a, x, b)?;
+		targets.set::<HashOutput, F, D>(&mut pw, a, x, b)?;
 		println!("{:?}", now.elapsed());
 
 		print!("Build: ");

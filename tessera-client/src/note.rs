@@ -3,18 +3,44 @@ use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, Field64};
 use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt, distr::Uniform};
-use tessera_trees::F;
+use tessera_trees::{F, tree::hasher::HashOutput};
 
-use crate::{
-	account::{NullifierKey, PublicIdentifier, StandardAccount, SubpoolId},
-	commitment::Commitment,
-};
+use crate::{AccountAddress, AssetId, account::NullifierKey};
 
-pub type NoteCommitment = Commitment;
-pub type NoteNullifier = Commitment;
+pub struct DepositNoteCommitment(pub HashOutput);
+
+pub struct DepositNote {
+	pub identifier: [F; 2],
+	pub recipient: AccountAddress,
+	pub amount: U256,
+	pub asset_id: AssetId,
+}
+
+impl DepositNote {
+	pub fn commitment(&self) -> DepositNoteCommitment {
+		// 2 + 1 + 4 + 8 + 1 = 16 elements
+		// identifier[2] || recipient.subpool_id[1] || recipient.public_id[4]
+		// || amount[8 u32 limbs, LE] || asset_id[1]
+		let mut input = [F::ZERO; 16];
+		input[0..2].copy_from_slice(&self.identifier);
+		input[2] = self.recipient.subpool_id.0;
+		input[3..7].copy_from_slice(&self.recipient.public_id.0.0);
+		for (i, word) in self.amount.0.iter().enumerate() {
+			input[7 + i * 2] = F::from_canonical_u32(*word as u32);
+			input[7 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
+		}
+		input[15] = self.asset_id.0;
+		DepositNoteCommitment(HashOutput(
+			<PoseidonHash as Hasher<F>>::hash_no_pad(&input).elements,
+		))
+	}
+}
+
+pub struct NoteCommitment(pub HashOutput);
+pub struct NoteNullifier(pub HashOutput);
 
 #[derive(Clone, Copy)]
-pub struct NodeIdentifier([F; 2]);
+pub struct NodeIdentifier(pub(crate) [F; 2]);
 
 impl NodeIdentifier {
 	pub fn from_rng<R: CryptoRng + Rng>(rng: &mut R) -> Self {
@@ -29,56 +55,34 @@ impl NodeIdentifier {
 }
 
 #[derive(Clone, Copy)]
-pub struct RecipientCond {
-	pub subpool_id: SubpoolId,
-	public_id: PublicIdentifier,
-}
-
-impl RecipientCond {
-	pub fn from_acc(acc: &StandardAccount) -> Self {
-		Self {
-			subpool_id: acc.subpool_id,
-			public_id: acc.public_id(),
-		}
-	}
-}
-
-#[derive(Clone, Copy)]
-pub struct SenderCond {
-	subpool_id: SubpoolId,
-	public_id: PublicIdentifier,
-}
-
-impl SenderCond {
-	pub fn from_acc(acc: &StandardAccount) -> Self {
-		Self {
-			subpool_id: acc.subpool_id,
-			public_id: acc.public_id(),
-		}
-	}
-}
-
-#[derive(Clone, Copy)]
 pub struct StandardNote {
-	identifier: NodeIdentifier,
-	amt: U256,
-	recipient: RecipientCond,
-	sender: SenderCond,
+	pub(crate) identifier: NodeIdentifier,
+	pub(crate) asset_id: AssetId,
+	pub(crate) amt: U256,
+	pub(crate) recipient: AccountAddress,
+	pub(crate) sender: AccountAddress,
 }
 
 impl StandardNote {
 	pub fn commitment(&self) -> NoteCommitment {
-		let mut input = [F::ZERO; 20];
+		let mut input = [F::ZERO; 21];
 		input[..2].copy_from_slice(self.identifier.0.as_slice());
-		// TODO: add amount here
+		// amount: U256.0 is [u64; 4] little-endian words, split into lo/hi u32 limbs
+		for (i, word) in self.amt.0.iter().enumerate() {
+			input[2 + i * 2] = F::from_canonical_u32(*word as u32);
+			input[2 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
+		}
+		input[10] = self.asset_id.0;
 		// recipient condition
-		input[10] = self.recipient.subpool_id.0;
-		input[11..15].copy_from_slice(self.recipient.public_id.0.0.as_slice());
+		input[11] = self.recipient.subpool_id.0;
+		input[12..16].copy_from_slice(self.recipient.public_id.0.0.as_slice());
 		// sender condition
-		input[15] = self.sender.subpool_id.0;
-		input[16..20].copy_from_slice(self.sender.public_id.0.0.as_slice());
-		let note_comm = <PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements;
-		NoteCommitment::new_from_field_elements(note_comm)
+		input[16] = self.sender.subpool_id.0;
+		input[17..].copy_from_slice(self.sender.public_id.0.0.as_slice());
+
+		NoteCommitment(HashOutput(
+			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
+		))
 	}
 }
 
@@ -99,11 +103,13 @@ impl PositionedStandardNode {
 
 	pub fn nullifier(&self, nk: &NullifierKey) -> NoteNullifier {
 		let mut input = [F::ZERO; 9];
-		input[..4].copy_from_slice(&self.note.commitment().as_field_elems());
-		input[4..8].copy_from_slice(nk.0.as_slice());
-		input[8] = self.position;
-		let nullifier = <PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements;
-		NoteNullifier::new_from_field_elements(nullifier)
+		input[..4].copy_from_slice(&self.note.commitment().0.0);
+		input[4] = self.position;
+		input[5..9].copy_from_slice(nk.0.as_slice());
+
+		NoteNullifier(HashOutput(
+			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
+		))
 	}
 }
 
@@ -114,10 +120,16 @@ mod tests {
 	use super::*;
 
 	impl StandardNote {
-		pub fn sample_with(recipient: RecipientCond, sender: SenderCond, amt: U256) -> Self {
+		pub fn sample_with(
+			recipient: AccountAddress,
+			sender: AccountAddress,
+			amt: U256,
+			asset_id: AssetId,
+		) -> Self {
 			let mut rng = rng();
 			StandardNote {
 				identifier: NodeIdentifier::from_rng(&mut rng),
+				asset_id,
 				amt,
 				recipient,
 				sender,

@@ -1,9 +1,7 @@
 use std::{
 	array,
 	fmt::Debug,
-	hash::BuildHasherDefault,
-	ops::{Add, Div, Mul, Neg, Sub},
-	sync::Arc,
+	ops::{Add, Mul, Neg, Sub},
 };
 
 use anyhow::Result;
@@ -14,20 +12,21 @@ use plonky2::{
 	iop::{
 		generator::SimpleGenerator,
 		target::{BoolTarget, Target},
-		wire::Wire,
-		witness::{Witness, WitnessWrite},
+		witness::{PartialWitness, WitnessWrite},
 	},
 	plonk::circuit_data::{CircuitConfig, CommonCircuitData},
 	util::serialization::{IoResult, Read, Write},
 };
 use plonky2_field::{
 	extension::{Extendable, FieldExtension as _, quintic::QuinticExtension},
-	goldilocks_field::GoldilocksField,
-	ops::Square,
 	types::Field,
 };
 
-use crate::ecgfp5::{CompressedPoint, GENERATOR_X, GENERATOR_Y, PointEw};
+use crate::{
+	ecgfp5::{CompressedPoint, GENERATOR, Legendre, PointEw},
+	plonky2_gadgets::set_gfp5,
+	schnorr::Scalar,
+};
 
 /// [x,y] coordinates of the offset point O added to the accumulator at the
 /// start of the chain
@@ -48,7 +47,7 @@ pub const OFFSET: [[u64; 5]; 2] = [
 	],
 ];
 
-/// [x,y] coordinates of -2^320 * O (the offset point) added to the
+/// [x,y] coordinates of -2^319 * O (the offset point) added to the
 /// accumulator at the end of the chain
 pub const OFFSET_NEG_319: [[u64; 5]; 2] = [
 	[
@@ -121,6 +120,7 @@ impl<F: Field> LocalQuinticExtension<F> {
 		Self([a0 + a0, a1 + a1, a2 + a2, a3 + a3, a4 + a4])
 	}
 
+	// TODO: move constants from here. They don't belong here
 	fn adiv3() -> LocalQuinticExtension<F> {
 		// a/3 = 2/3 mod p = 6148914689804861441
 		LocalQuinticExtension([
@@ -152,6 +152,135 @@ impl<F: Field> LocalQuinticExtension<F> {
 			F::ZERO,
 			F::ZERO,
 		])
+	}
+
+	fn assert_equal(x: Self, y: Self) -> Vec<F> {
+		izip!(x.0.into_iter(), y.0.into_iter())
+			.map(|(x0, y0)| x0 - y0)
+			.collect()
+	}
+
+	// Returns constraints polynomials for Po = P1 + P2
+	//
+	// Constriants:
+	// (xo + x1 + x2) * (x2 - x1)^2 == (y2 - y1)^2 // degree 3
+	// (yo + y1) * (x2 - x1) == (y2 - y1) * (x1 - xo) // degree 2
+	fn add_two_points(x1: Self, y1: Self, x2: Self, y2: Self, xo: Self, yo: Self) -> Vec<F> {
+		let mut constraints = vec![];
+		let x2x1 = x2 - x1;
+		let y2y1 = y2 - y1;
+		constraints.extend(Self::assert_equal(
+			(xo + x1 + x2) * x2x1.square(),
+			y2y1.square(),
+		));
+		constraints.extend(Self::assert_equal((yo + y1) * x2x1, y2y1 * (x1 - xo)));
+		constraints
+	}
+
+	// lmabda * (x2-x1) == y2-y1
+	//
+	// xi = lambda^2 - x1- x2 // degree = 2
+	// yi = lambda (x1 - xi) - y1 // degree = 3
+	//
+	// (xo + xi + x3) (xi - x3)^2 == (yi - y3)^2 // degree = 6
+	// (yo + y3) * (xi - x3) == (yi - y3) * (x3 - xo) // degree = 4
+	fn add_three_points(
+		x1: Self,
+		y1: Self,
+		x2: Self,
+		y2: Self,
+		x3: Self,
+		y3: Self,
+		lambda: Self,
+		xo: Self,
+		yo: Self,
+	) -> Vec<F> {
+		let mut constraints = vec![];
+		let xi = lambda.square() - x1 - x2;
+		let yi = (lambda * (x1 - xi)) - y1;
+		let yiy3 = yi - y3;
+		let xix3 = xi - x3;
+		constraints.extend(Self::assert_equal(lambda * (x2 - x1), y2 - y1));
+		constraints.extend(Self::assert_equal(
+			(xo + xi + x3) * xix3.square(),
+			yiy3.square(),
+		));
+		constraints.extend(Self::assert_equal((yo + y3) * xix3, yiy3 * (x3 - xo)));
+		constraints
+	}
+
+	// Returns constraints for
+	//      AccOut = AccIn + b0 x P1 + b1 x P2
+	// where `x` op is intepreted as selection with bi as the selector bit
+	fn double_acc_chain(
+		accix: Self,
+		acciy: Self,
+		p1x: Self,
+		p1y: Self,
+		p2x: Self,
+		p2y: Self,
+		accox: Self,
+		accoy: Self,
+		lambda: Self,
+		b0: F,
+		b1: F,
+	) -> Vec<F> {
+		let mut constraints = vec![];
+		let one = F::ONE;
+		constraints.push((one - b0) * b0);
+		constraints.push((one - b1) * b1);
+		let s0 = (one - b0) * (one - b1);
+		let s1 = b0 * (one - b1);
+		let s2 = (one - b0) * b1;
+		let s3 = b0 * b1;
+		// case=0, AccOut = AccIn
+		for i in 0..5 {
+			constraints.push(s0 * (accix.0[i] - accox.0[i]));
+			constraints.push(s0 * (acciy.0[i] - accoy.0[i]));
+		}
+		// case=1, AccOut = AccOut + P1
+		//
+		// AccIn = (x1,y1)
+		// AccOut = (xo, yo)
+		// P1 = (x2, y2)
+		constraints.extend(
+			Self::add_two_points(accix, acciy, p1x, p1y, accox, accoy)
+				.into_iter()
+				.map(|c| s1 * c),
+		);
+		// case=2, AccOut = AccIn + P2
+		constraints.extend(
+			Self::add_two_points(accix, acciy, p2x, p2y, accox, accoy)
+				.into_iter()
+				.map(|c| s2 * c),
+		);
+		// case=3, AccOut = AccIn + P1 + P2
+		constraints.extend(
+			Self::add_three_points(accix, acciy, p1x, p1y, p2x, p2y, lambda, accox, accoy)
+				.into_iter()
+				.map(|c| s3 * c),
+		);
+		constraints
+	}
+
+	fn p2_doubleof_p1(p1x: Self, p1y: Self, p2x: Self, p2y: Self) -> Vec<F> {
+		let mut constraints = vec![];
+		let three = F::from_canonical_u64(3);
+		let two = F::TWO;
+		let lambda_num = p1x.square() * three + LocalQuinticExtension::cap_a();
+		let lambda_denom = p1y * two;
+		constraints.extend(Self::assert_equal(
+			(p2x + p1x + p1x) * lambda_denom.square(),
+			lambda_num.square(),
+		));
+		let lambda_num_sq = lambda_num.square();
+		let lambda_denom_sq = lambda_denom.square();
+		let lambda_denom_cube = lambda_denom_sq * lambda_denom;
+		constraints.extend(Self::assert_equal(
+			(p2y + p1y) * lambda_denom_cube,
+			(p1x * lambda_num * lambda_denom_sq * three) - lambda_num_sq * lambda_num,
+		));
+		constraints
 	}
 }
 
@@ -232,31 +361,6 @@ impl<F: Default> Default for LocalQuinticExtension<F> {
 			F::default(),
 			F::default(),
 		])
-	}
-}
-
-// TODO: get rid of LocalPointEw. Instead work as x,y abstraction
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct LocalPointEw<F> {
-	pub(crate) x: LocalQuinticExtension<F>,
-	pub(crate) y: LocalQuinticExtension<F>,
-}
-
-impl<F: Extendable<5>> From<PointEw<F>> for LocalPointEw<F> {
-	fn from(value: PointEw<F>) -> Self {
-		LocalPointEw {
-			x: value.x.into(),
-			y: value.y.into(),
-		}
-	}
-}
-
-impl<F: Default> Default for LocalPointEw<F> {
-	fn default() -> Self {
-		LocalPointEw {
-			x: Default::default(),
-			y: Default::default(),
-		}
 	}
 }
 
@@ -364,324 +468,172 @@ impl<const D: usize> QET<D> {
 		let s = b.constant_extension(F::Extension::from_basefield(scalar));
 		Self(array::from_fn(|i| b.mul_extension(self.0[i], s)))
 	}
-}
 
-fn qet_assert_equal<F: RichField + Extendable<D>, const D: usize>(
-	x: QET<D>,
-	y: QET<D>,
-	b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
-) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
-	(0..5).map(|i| b.sub_extension(x.0[i], y.0[i])).collect()
-}
-
-fn qet_add_two_points<F: RichField + Extendable<D>, const D: usize>(
-	x1: QET<D>,
-	y1: QET<D>,
-	x2: QET<D>,
-	y2: QET<D>,
-	xo: QET<D>,
-	yo: QET<D>,
-	b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
-) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
-	let mut c = vec![];
-	let x2x1 = x2.sub(x1, b);
-	let y2y1 = y2.sub(y1, b);
-	// (xo + x1 + x2) * (x2-x1)^2 == (y2-y1)^2
-	let lhs = (xo.add(x1, b).add(x2, b)).mul(x2x1.square(b), b);
-	let rhs = y2y1.square(b);
-	c.extend(qet_assert_equal(lhs, rhs, b));
-	// (yo + y1) * (x2-x1) == (y2-y1) * (x1-xo)
-	let lhs2 = (yo.add(y1, b)).mul(x2x1, b);
-	let rhs2 = y2y1.mul(x1.sub(xo, b), b);
-	c.extend(qet_assert_equal(lhs2, rhs2, b));
-	c
-}
-
-fn qet_add_three_points<F: RichField + Extendable<D>, const D: usize>(
-	x1: QET<D>,
-	y1: QET<D>,
-	x2: QET<D>,
-	y2: QET<D>,
-	x3: QET<D>,
-	y3: QET<D>,
-	lambda: QET<D>,
-	xo: QET<D>,
-	yo: QET<D>,
-	b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
-) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
-	let mut c = vec![];
-	let xi = (lambda.square(b).sub(x1, b)).sub(x2, b);
-	let yi = (lambda.mul(x1.sub(xi, b), b)).sub(y1, b);
-	let yiy3 = yi.sub(y3, b);
-	let xix3 = xi.sub(x3, b);
-	// lambda * (x2-x1) == y2-y1
-	c.extend(qet_assert_equal(
-		lambda.mul(x2.sub(x1, b), b),
-		y2.sub(y1, b),
-		b,
-	));
-	// (xo + xi + x3) * (xi-x3)^2 == (yi-y3)^2
-	c.extend(qet_assert_equal(
-		((xo.add(xi, b)).add(x3, b)).mul(xix3.square(b), b),
-		yiy3.square(b),
-		b,
-	));
-	// (yo + y3) * (xi-x3) == (yi-y3) * (x3-xo)
-	c.extend(qet_assert_equal(
-		(yo.add(y3, b)).mul(xix3, b),
-		yiy3.mul(x3.sub(xo, b), b),
-		b,
-	));
-	c
-}
-
-fn qet_double_acc_chain<F: RichField + Extendable<D>, const D: usize>(
-	accix: QET<D>,
-	acciy: QET<D>,
-	p1x: QET<D>,
-	p1y: QET<D>,
-	p2x: QET<D>,
-	p2y: QET<D>,
-	accox: QET<D>,
-	accoy: QET<D>,
-	lambda: QET<D>,
-	b0: plonky2::iop::ext_target::ExtensionTarget<D>,
-	b1: plonky2::iop::ext_target::ExtensionTarget<D>,
-	b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
-) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
-	use plonky2::iop::ext_target::ExtensionTarget;
-	let mut c: Vec<ExtensionTarget<D>> = vec![];
-	let one = b.one_extension();
-
-	// b0, b1 are bits
-	let nb0 = b.sub_extension(one, b0);
-	let nb1 = b.sub_extension(one, b1);
-	c.push(b.mul_extension(nb0, b0));
-	c.push(b.mul_extension(nb1, b1));
-
-	let s0 = b.mul_extension(nb0, nb1);
-	let s1 = b.mul_extension(b0, nb1);
-	let s2 = b.mul_extension(nb0, b1);
-	let s3 = b.mul_extension(b0, b1);
-
-	// case=0: AccOut = AccIn
-	for i in 0..5 {
-		let diff_x = b.sub_extension(accix.0[i], accox.0[i]);
-		let diff_y = b.sub_extension(acciy.0[i], accoy.0[i]);
-		c.push(b.mul_extension(s0, diff_x));
-		c.push(b.mul_extension(s0, diff_y));
-	}
-	// case=1: AccOut = AccIn + P1
-	for con in qet_add_two_points(accix, acciy, p1x, p1y, accox, accoy, b) {
-		c.push(b.mul_extension(s1, con));
-	}
-	// case=2: AccOut = AccIn + P2
-	for con in qet_add_two_points(accix, acciy, p2x, p2y, accox, accoy, b) {
-		c.push(b.mul_extension(s2, con));
-	}
-	// case=3: AccOut = AccIn + P1 + P2
-	for con in qet_add_three_points(accix, acciy, p1x, p1y, p2x, p2y, lambda, accox, accoy, b) {
-		c.push(b.mul_extension(s3, con));
-	}
-	c
-}
-
-fn qet_p2_doubleof_p1<F: RichField + Extendable<D>, const D: usize>(
-	p1x: QET<D>,
-	p1y: QET<D>,
-	p2x: QET<D>,
-	p2y: QET<D>,
-	b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
-) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
-	let mut c = vec![];
-	let three = F::from_canonical_u64(3);
-	let two = F::TWO;
-
-	let cap_a = QET(array::from_fn(|k| {
-		b.constant_extension(F::Extension::from_basefield(
-			LocalQuinticExtension::<F>::cap_a().0[k],
-		))
-	}));
-
-	// lambda_num = 3 * p1x^2 + A
-	let lambda_num = p1x.square(b).mul_basef(three, b).add(cap_a, b);
-	// lambda_denom = 2 * p1y
-	let lambda_denom = p1y.mul_basef(two, b);
-
-	// (p2x + 2*p1x) * lambda_denom^2 == lambda_num^2
-	let lhs = p2x
-		.add(p1x.mul_basef(two, b), b)
-		.mul(lambda_denom.square(b), b);
-	let rhs = lambda_num.square(b);
-	c.extend(qet_assert_equal(lhs, rhs, b));
-
-	// (p2y + p1y) * lambda_denom^3 == 3*p1x*lambda_num*lambda_denom^2 -
-	// lambda_num^3
-	let ld2 = lambda_denom.square(b);
-	let ld3 = ld2.mul(lambda_denom, b);
-	let ln2 = lambda_num.square(b);
-	let ln3 = ln2.mul(lambda_num, b);
-	let lhs2 = p2y.add(p1y, b).mul(ld3, b);
-	let rhs2 = p1x
-		.mul(lambda_num, b)
-		.mul(ld2, b)
-		.mul_basef(three, b)
-		.sub(ln3, b);
-	c.extend(qet_assert_equal(lhs2, rhs2, b));
-	c
-}
-
-fn assert_equal<F: Field>(x: LocalQuinticExtension<F>, y: LocalQuinticExtension<F>) -> Vec<F> {
-	izip!(x.0.into_iter(), y.0.into_iter())
-		.map(|(x0, y0)| x0 - y0)
-		.collect()
-}
-
-// Returns constraints polynomials for Po = P1 + P2
-//
-// Constriants:
-// (xo + x1 + x2) * (x2 - x1)^2 == (y2 - y1)^2 // degree 3
-// (yo + y1) * (x2 - x1) == (y2 - y1) * (x1 - xo) // degree 2
-fn add_two_points<F: Field>(
-	x1: LocalQuinticExtension<F>,
-	y1: LocalQuinticExtension<F>,
-	x2: LocalQuinticExtension<F>,
-	y2: LocalQuinticExtension<F>,
-	xo: LocalQuinticExtension<F>,
-	yo: LocalQuinticExtension<F>,
-) -> Vec<F> {
-	let mut constraints = vec![];
-
-	let x2x1 = (x2 - x1);
-	let y2y1 = (y2 - y1);
-
-	constraints.extend(assert_equal((xo + x1 + x2) * x2x1.square(), y2y1.square()));
-	constraints.extend(assert_equal((yo + y1) * x2x1, y2y1 * (x1 - xo)));
-	constraints
-}
-
-// lmabda * (x2-x1) == y2-y1
-//
-// xi = lambda^2 - x1- x2 // degree = 2
-// yi = lambda (x1 - xi) - y1 // degree = 3
-//
-// (xo + xi + x3) (xi - x3)^2 == (yi - y3)^2 // degree = 6
-// (yo + y3) * (xi - x3) == (yi - y3) * (x3 - xo) // degree = 4
-fn add_three_points<F: Field>(
-	x1: LocalQuinticExtension<F>,
-	y1: LocalQuinticExtension<F>,
-	x2: LocalQuinticExtension<F>,
-	y2: LocalQuinticExtension<F>,
-	x3: LocalQuinticExtension<F>,
-	y3: LocalQuinticExtension<F>,
-	lambda: LocalQuinticExtension<F>,
-	xo: LocalQuinticExtension<F>,
-	yo: LocalQuinticExtension<F>,
-) -> Vec<F> {
-	let mut constraints = vec![];
-
-	let xi = lambda.square() - x1 - x2;
-	let yi = (lambda * (x1 - xi)) - y1;
-
-	let yiy3 = yi - y3;
-	let xix3 = xi - x3;
-
-	constraints.extend(assert_equal(lambda * (x2 - x1), y2 - y1));
-	constraints.extend(assert_equal((xo + xi + x3) * xix3.square(), yiy3.square()));
-	constraints.extend(assert_equal((yo + y3) * xix3, yiy3 * (x3 - xo)));
-
-	constraints
-}
-
-// Returns constraints for
-//      AccOut = AccIn + b0 x P1 + b1 x P2
-// where `x` op is intepreted as selection with bi as the selector bit
-fn double_acc_chain<F: Field>(
-	accix: LocalQuinticExtension<F>,
-	acciy: LocalQuinticExtension<F>,
-	p1x: LocalQuinticExtension<F>,
-	p1y: LocalQuinticExtension<F>,
-	p2x: LocalQuinticExtension<F>,
-	p2y: LocalQuinticExtension<F>,
-	accox: LocalQuinticExtension<F>,
-	accoy: LocalQuinticExtension<F>,
-	lambda: LocalQuinticExtension<F>,
-	b0: F,
-	b1: F,
-) -> Vec<F> {
-	let mut constraints = vec![];
-
-	// both b0,b1 are either zero or 1
-	let one = F::ONE;
-	constraints.push((one - b0) * b0);
-	constraints.push((one - b1) * b1);
-
-	let s0 = (one - b0) * (one - b1);
-	let s1 = b0 * (one - b1);
-	let s2 = (one - b0) * b1;
-	let s3 = b0 * b1;
-
-	// case=0, AccOut = AccIn
-	for i in 0..5 {
-		constraints.push(s0 * (accix.0[i] - accox.0[i]));
-		constraints.push(s0 * (acciy.0[i] - accoy.0[i]));
+	fn assert_equal<F: RichField + Extendable<D>>(
+		x: QET<D>,
+		y: QET<D>,
+		b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
+	) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
+		(0..5).map(|i| b.sub_extension(x.0[i], y.0[i])).collect()
 	}
 
-	// case=1, AccOut = AccOut + P1
-	//
-	// AccIn = (x1,y1)
-	// AccOut = (xo, yo)
-	// P1 = (x2, y2)
-	constraints.extend(
-		add_two_points(accix, acciy, p1x, p1y, accox, accoy)
-			.into_iter()
-			.map(|c| s1 * c),
-	);
+	fn add_two_points<F: RichField + Extendable<D>>(
+		x1: QET<D>,
+		y1: QET<D>,
+		x2: QET<D>,
+		y2: QET<D>,
+		xo: QET<D>,
+		yo: QET<D>,
+		b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
+	) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
+		let mut c = vec![];
+		let x2x1 = x2.sub(x1, b);
+		let y2y1 = y2.sub(y1, b);
+		// (xo + x1 + x2) * (x2-x1)^2 == (y2-y1)^2
+		let lhs = (xo.add(x1, b).add(x2, b)).mul(x2x1.square(b), b);
+		let rhs = y2y1.square(b);
+		c.extend(QET::assert_equal(lhs, rhs, b));
+		// (yo + y1) * (x2-x1) == (y2-y1) * (x1-xo)
+		let lhs2 = (yo.add(y1, b)).mul(x2x1, b);
+		let rhs2 = y2y1.mul(x1.sub(xo, b), b);
+		c.extend(QET::assert_equal(lhs2, rhs2, b));
+		c
+	}
 
-	// case=2, AccOut = AccIn + P2
-	constraints.extend(
-		add_two_points(accix, acciy, p2x, p2y, accox, accoy)
-			.into_iter()
-			.map(|c| s2 * c),
-	);
+	fn add_three_points<F: RichField + Extendable<D>>(
+		x1: QET<D>,
+		y1: QET<D>,
+		x2: QET<D>,
+		y2: QET<D>,
+		x3: QET<D>,
+		y3: QET<D>,
+		lambda: QET<D>,
+		xo: QET<D>,
+		yo: QET<D>,
+		b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
+	) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
+		let mut c = vec![];
+		let xi = (lambda.square(b).sub(x1, b)).sub(x2, b);
+		let yi = (lambda.mul(x1.sub(xi, b), b)).sub(y1, b);
+		let yiy3 = yi.sub(y3, b);
+		let xix3 = xi.sub(x3, b);
+		// lambda * (x2-x1) == y2-y1
+		c.extend(QET::assert_equal(
+			lambda.mul(x2.sub(x1, b), b),
+			y2.sub(y1, b),
+			b,
+		));
+		// (xo + xi + x3) * (xi-x3)^2 == (yi-y3)^2
+		c.extend(QET::assert_equal(
+			((xo.add(xi, b)).add(x3, b)).mul(xix3.square(b), b),
+			yiy3.square(b),
+			b,
+		));
+		// (yo + y3) * (xi-x3) == (yi-y3) * (x3-xo)
+		c.extend(QET::assert_equal(
+			(yo.add(y3, b)).mul(xix3, b),
+			yiy3.mul(x3.sub(xo, b), b),
+			b,
+		));
+		c
+	}
 
-	// case=3, AccOut = AccIn + P1 + P2
-	constraints.extend(
-		add_three_points(accix, acciy, p1x, p1y, p2x, p2y, lambda, accox, accoy)
-			.into_iter()
-			.map(|c| s3 * c),
-	);
+	fn double_acc_chain<F: RichField + Extendable<D>>(
+		accix: QET<D>,
+		acciy: QET<D>,
+		p1x: QET<D>,
+		p1y: QET<D>,
+		p2x: QET<D>,
+		p2y: QET<D>,
+		accox: QET<D>,
+		accoy: QET<D>,
+		lambda: QET<D>,
+		b0: plonky2::iop::ext_target::ExtensionTarget<D>,
+		b1: plonky2::iop::ext_target::ExtensionTarget<D>,
+		b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
+	) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
+		use plonky2::iop::ext_target::ExtensionTarget;
+		let mut c: Vec<ExtensionTarget<D>> = vec![];
+		let one = b.one_extension();
 
-	constraints
-}
+		// b0, b1 are bits
+		let nb0 = b.sub_extension(one, b0);
+		let nb1 = b.sub_extension(one, b1);
+		c.push(b.mul_extension(nb0, b0));
+		c.push(b.mul_extension(nb1, b1));
 
-fn p2_doubleof_p1<F: Field>(
-	p1x: LocalQuinticExtension<F>,
-	p1y: LocalQuinticExtension<F>,
-	p2x: LocalQuinticExtension<F>,
-	p2y: LocalQuinticExtension<F>,
-) -> Vec<F> {
-	let mut constraints = vec![];
+		let s0 = b.mul_extension(nb0, nb1);
+		let s1 = b.mul_extension(b0, nb1);
+		let s2 = b.mul_extension(nb0, b1);
+		let s3 = b.mul_extension(b0, b1);
 
-	let three = F::from_canonical_u64(3);
-	let two = F::TWO;
-	let lambda_num = p1x.square() * three + LocalQuinticExtension::cap_a();
-	let lambda_denom = p1y * two;
+		// case=0: AccOut = AccIn
+		for i in 0..5 {
+			let diff_x = b.sub_extension(accix.0[i], accox.0[i]);
+			let diff_y = b.sub_extension(acciy.0[i], accoy.0[i]);
+			c.push(b.mul_extension(s0, diff_x));
+			c.push(b.mul_extension(s0, diff_y));
+		}
+		// case=1: AccOut = AccIn + P1
+		for con in QET::add_two_points(accix, acciy, p1x, p1y, accox, accoy, b) {
+			c.push(b.mul_extension(s1, con));
+		}
+		// case=2: AccOut = AccIn + P2
+		for con in QET::add_two_points(accix, acciy, p2x, p2y, accox, accoy, b) {
+			c.push(b.mul_extension(s2, con));
+		}
+		// case=3: AccOut = AccIn + P1 + P2
+		for con in QET::add_three_points(accix, acciy, p1x, p1y, p2x, p2y, lambda, accox, accoy, b)
+		{
+			c.push(b.mul_extension(s3, con));
+		}
+		c
+	}
 
-	constraints.extend(assert_equal(
-		(p2x + p1x + p1x) * lambda_denom.square(),
-		lambda_num.square(),
-	));
+	fn p2_doubleof_p1<F: RichField + Extendable<D>>(
+		p1x: QET<D>,
+		p1y: QET<D>,
+		p2x: QET<D>,
+		p2y: QET<D>,
+		b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
+	) -> Vec<plonky2::iop::ext_target::ExtensionTarget<D>> {
+		let mut c = vec![];
+		let three = F::from_canonical_u64(3);
+		let two = F::TWO;
 
-	let lambda_num_sq = lambda_num.square();
-	let lambda_denom_sq = lambda_denom.square();
-	let lambda_denom_cube = lambda_denom_sq * lambda_denom;
-	constraints.extend(assert_equal(
-		(p2y + p1y) * lambda_denom_cube,
-		(p1x * lambda_num * lambda_denom_sq * three) - lambda_num_sq * lambda_num,
-	));
+		let cap_a = QET(array::from_fn(|k| {
+			b.constant_extension(F::Extension::from_basefield(
+				LocalQuinticExtension::<F>::cap_a().0[k],
+			))
+		}));
 
-	constraints
+		// lambda_num = 3 * p1x^2 + A
+		let lambda_num = p1x.square(b).mul_basef(three, b).add(cap_a, b);
+		// lambda_denom = 2 * p1y
+		let lambda_denom = p1y.mul_basef(two, b);
+
+		// (p2x + 2*p1x) * lambda_denom^2 == lambda_num^2
+		let lhs = p2x
+			.add(p1x.mul_basef(two, b), b)
+			.mul(lambda_denom.square(b), b);
+		let rhs = lambda_num.square(b);
+		c.extend(QET::assert_equal(lhs, rhs, b));
+
+		// (p2y + p1y) * lambda_denom^3 == 3*p1x*lambda_num*lambda_denom^2 -
+		// lambda_num^3
+		let ld2 = lambda_denom.square(b);
+		let ld3 = ld2.mul(lambda_denom, b);
+		let ln2 = lambda_num.square(b);
+		let ln3 = ln2.mul(lambda_num, b);
+		let lhs2 = p2y.add(p1y, b).mul(ld3, b);
+		let rhs2 = p1x
+			.mul(lambda_num, b)
+			.mul(ld2, b)
+			.mul_basef(three, b)
+			.sub(ln3, b);
+		c.extend(QET::assert_equal(lhs2, rhs2, b));
+		c
+	}
 }
 
 #[derive(Debug)]
@@ -730,7 +682,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 		_local_constants: &[F],
 	) -> Vec<plonky2::iop::generator::WitnessGeneratorRef<F, D>> {
 		vec![plonky2::iop::generator::WitnessGeneratorRef::new(
-			SigGate1Generator {
+			DoubleAdd4xGenerator {
 				row,
 			}
 			.adapter(),
@@ -762,10 +714,10 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 		let mut constraints = vec![];
 
 		let gx = LocalQuinticExtension(array::from_fn(|i| {
-			<F as Extendable<D>>::Extension::from_canonical_u64(GENERATOR_X[i])
+			<F as Extendable<D>>::Extension::from_canonical_u64(GENERATOR[0][i])
 		}));
 		let gy = LocalQuinticExtension(array::from_fn(|i| {
-			<F as Extendable<D>>::Extension::from_canonical_u64(GENERATOR_Y[i])
+			<F as Extendable<D>>::Extension::from_canonical_u64(GENERATOR[1][i])
 		}));
 
 		// 2^319 * -O (O = Offset point)
@@ -805,34 +757,40 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 		let lambda4 = LocalQuinticExtension(array::from_fn(|i| vars.local_wires[125 + i]));
 
 		// AccInDbl2 = 2*AccIn
-		constraints.extend(p2_doubleof_p1(accinx, acciny, accdblinx, accdbliny));
+		constraints.extend(LocalQuinticExtension::p2_doubleof_p1(
+			accinx, acciny, accdblinx, accdbliny,
+		));
 		// AccDblO1 = 2*AccO1
-		constraints.extend(p2_doubleof_p1(acco1x, acco1y, accdblo1x, accdblo1y));
-		constraints.extend(p2_doubleof_p1(acco2x, acco2y, accdblo2x, accdblo2y));
+		constraints.extend(LocalQuinticExtension::p2_doubleof_p1(
+			acco1x, acco1y, accdblo1x, accdblo1y,
+		));
+		constraints.extend(LocalQuinticExtension::p2_doubleof_p1(
+			acco2x, acco2y, accdblo2x, accdblo2y,
+		));
 		// If lgs == 0, then accdblo3 = 2acco3 otherwise accdblo3 = acco3
 		let nlgs = <F as Extendable<D>>::Extension::ONE - lgs;
 		constraints.push(lgs * nlgs);
 		constraints.extend(
-			p2_doubleof_p1(acco3x, acco3y, accdblo3x, accdblo3y)
+			LocalQuinticExtension::p2_doubleof_p1(acco3x, acco3y, accdblo3x, accdblo3y)
 				.into_iter()
 				.map(|c| nlgs * c),
 		);
 		constraints.extend(
-			assert_equal(acco3x, accdblo3x)
+			LocalQuinticExtension::assert_equal(acco3x, accdblo3x)
 				.into_iter()
-				.chain(assert_equal(acco3y, accdblo3y))
+				.chain(LocalQuinticExtension::assert_equal(acco3y, accdblo3y))
 				.map(|c| lgs * c),
 		);
 
 		// AccO1 = AccDblIn + sp0 * P + sg0 G
-		constraints.extend(double_acc_chain(
+		constraints.extend(LocalQuinticExtension::double_acc_chain(
 			accdblinx, accdbliny, px, py, gx, gy, acco1x, acco1y, lambda1, sp0, sg0,
 		));
 		// AccO2 = AccDblO1 + sp1 * P + sg1 G
-		constraints.extend(double_acc_chain(
+		constraints.extend(LocalQuinticExtension::double_acc_chain(
 			accdblo1x, accdblo1y, px, py, gx, gy, acco2x, acco2y, lambda2, sp1, sg1,
 		));
-		constraints.extend(double_acc_chain(
+		constraints.extend(LocalQuinticExtension::double_acc_chain(
 			accdblo2x, accdblo2y, px, py, gx, gy, acco3x, acco3y, lambda3, sp2, sg2,
 		));
 
@@ -845,7 +803,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 		// ok, since scalar is only 319 bits
 		let p2x = LocalQuinticExtension(array::from_fn(|i| nlgs * gx.0[i] + lgs * noffx.0[i]));
 		let p2y = LocalQuinticExtension(array::from_fn(|i| nlgs * gy.0[i] + lgs * noffy.0[i]));
-		constraints.extend(double_acc_chain(
+		constraints.extend(LocalQuinticExtension::double_acc_chain(
 			accdblo3x, accdblo3y, px, py, p2x, p2y, acco4x, acco4y, lambda4, sp3, sg3,
 		));
 
@@ -862,12 +820,12 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 
 		let gx = QET(array::from_fn(|i| {
 			builder.constant_extension(<F as Extendable<D>>::Extension::from_canonical_u64(
-				GENERATOR_X[i],
+				GENERATOR[0][i],
 			))
 		}));
 		let gy = QET(array::from_fn(|i| {
 			builder.constant_extension(<F as Extendable<D>>::Extension::from_canonical_u64(
-				GENERATOR_Y[i],
+				GENERATOR[1][i],
 			))
 		}));
 
@@ -911,39 +869,39 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 
 		let mut constraints = vec![];
 
-		constraints.extend(qet_p2_doubleof_p1(
+		constraints.extend(QET::p2_doubleof_p1(
 			accinx, acciny, accdblinx, accdbliny, builder,
 		));
-		constraints.extend(qet_p2_doubleof_p1(
+		constraints.extend(QET::p2_doubleof_p1(
 			acco1x, acco1y, accdblo1x, accdblo1y, builder,
 		));
-		constraints.extend(qet_p2_doubleof_p1(
+		constraints.extend(QET::p2_doubleof_p1(
 			acco2x, acco2y, accdblo2x, accdblo2y, builder,
 		));
 		let one = builder.one_extension();
 		let nlgs = builder.sub_extension(one, lgs);
 		constraints.push(builder.mul_extension(nlgs, lgs));
 		constraints.extend(
-			qet_p2_doubleof_p1(acco3x, acco3y, accdblo3x, accdblo3y, builder)
+			QET::p2_doubleof_p1(acco3x, acco3y, accdblo3x, accdblo3y, builder)
 				.into_iter()
 				.map(|c| builder.mul_extension(c, nlgs)),
 		);
 		constraints.extend(
-			qet_assert_equal(acco3x, accdblo3x, builder)
+			QET::assert_equal(acco3x, accdblo3x, builder)
 				.into_iter()
-				.chain(qet_assert_equal(acco3y, accdblo3y, builder))
+				.chain(QET::assert_equal(acco3y, accdblo3y, builder))
 				.map(|c| builder.mul_extension(c, lgs)),
 		);
 
 		// AccO1 = AccDblIn + sp0 * P + sg0 G
-		constraints.extend(qet_double_acc_chain(
+		constraints.extend(QET::double_acc_chain(
 			accdblinx, accdbliny, px, py, gx, gy, acco1x, acco1y, lambda1, sp0, sg0, builder,
 		));
 		// AccO2 = AccDblO1 + sp1 * P + sg1 G
-		constraints.extend(qet_double_acc_chain(
+		constraints.extend(QET::double_acc_chain(
 			accdblo1x, accdblo1y, px, py, gx, gy, acco2x, acco2y, lambda2, sp1, sg1, builder,
 		));
-		constraints.extend(qet_double_acc_chain(
+		constraints.extend(QET::double_acc_chain(
 			accdblo2x, accdblo2y, px, py, gx, gy, acco3x, acco3y, lambda3, sp2, sg2, builder,
 		));
 
@@ -957,7 +915,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 			let v1 = builder.mul_extension(lgs, noffy.0[i]);
 			builder.add_extension(v0, v1)
 		}));
-		constraints.extend(qet_double_acc_chain(
+		constraints.extend(QET::double_acc_chain(
 			accdblo3x, accdblo3y, px, py, p2x, p2y, acco4x, acco4y, lambda4, sp3, sg3, builder,
 		));
 
@@ -966,11 +924,11 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct SigGate1Generator {
+pub struct DoubleAdd4xGenerator {
 	row: usize,
 }
 
-impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D> for SigGate1Generator {
+impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D> for DoubleAdd4xGenerator {
 	fn id(&self) -> String {
 		format!("{self:?}")
 	}
@@ -1008,6 +966,68 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D> for Sig
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalPointEw {
+	pub(crate) x: LocalQuinticExtension<Target>,
+	pub(crate) y: LocalQuinticExtension<Target>,
+}
+
+/// All witness targets for a single DoubleAdd4x instance.
+#[derive(Clone)]
+pub(crate) struct DoubleAdd4xTargets {
+	pub(crate) p: LocalPointEw,
+	pub(crate) accin: LocalPointEw,
+	pub(crate) acco4: LocalPointEw,
+	pub(crate) sp: [Target; 4],
+	pub(crate) sg: [Target; 4],
+	// last gate selector
+	pub(crate) lgs: Target,
+	pub(crate) acco1: LocalPointEw,
+	pub(crate) acco2: LocalPointEw,
+	pub(crate) acco3: LocalPointEw,
+	pub(crate) accdblin: LocalPointEw,
+	pub(crate) accdblo1: LocalPointEw,
+	pub(crate) accdblo2: LocalPointEw,
+	pub(crate) accdblo3: LocalPointEw,
+	pub(crate) lambda1: LocalQuinticExtension<Target>,
+	pub(crate) lambda2: LocalQuinticExtension<Target>,
+	pub(crate) lambda3: LocalQuinticExtension<Target>,
+	pub(crate) lambda4: LocalQuinticExtension<Target>,
+}
+
+impl DoubleAdd4xTargets {
+	/// Build targets for all wires of a SigGate1 at the given circuit row.
+	pub(crate) fn from_row(row: usize) -> Self {
+		let point = |base: usize| LocalPointEw {
+			x: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, base + j))),
+			y: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, base + 5 + j))),
+		};
+		DoubleAdd4xTargets {
+			p: point(0),
+			accin: point(10),
+			acco4: point(20),
+			sp: array::from_fn(|j| Target::wire(row, 30 + j)),
+			sg: array::from_fn(|j| Target::wire(row, 35 + j)),
+			lgs: Target::wire(row, 39),
+			acco1: point(40),
+			acco2: point(50),
+			acco3: point(60),
+			accdblin: point(70),
+			accdblo1: point(80),
+			accdblo2: point(90),
+			accdblo3: point(100),
+			lambda1: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, 110 + j))),
+			lambda2: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, 115 + j))),
+			lambda3: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, 120 + j))),
+			lambda4: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, 125 + j))),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+/// Checks w is compressed Point(x,y) and Point(x,y) is on the ecgfp5 curve. Check is applied when
+/// selector is set to 1.
+///
+/// Accomodates `num_ops` instances in a row
 struct CompressionGate {
 	num_ops: usize,
 }
@@ -1117,9 +1137,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for CompressionGat
 			}));
 
 			// compression constraint
-			constraints.extend(assert_equal(w * (adiv3 - x), y));
+			constraints.extend(LocalQuinticExtension::assert_equal(w * (adiv3 - x), y));
 			// is on curve constraint
-			constraints.extend(assert_equal(
+			constraints.extend(LocalQuinticExtension::assert_equal(
 				x.square() * x + (capa * x + capb) * isactive,
 				y.square(),
 			));
@@ -1154,7 +1174,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for CompressionGat
 				vars.local_wires[Self::wire_ith_y_offset(j) + i]
 			}));
 
-			c.extend(qet_assert_equal(
+			c.extend(QET::assert_equal(
 				w.mul(adiv3.sub(x, builder), builder),
 				y,
 				builder,
@@ -1164,7 +1184,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for CompressionGat
 			let capax_capb = QET((capax.add(capb, builder))
 				.0
 				.map(|v| builder.mul_extension(isactv, v)));
-			c.extend(qet_assert_equal(
+			c.extend(QET::assert_equal(
 				x3.add(capax_capb, builder),
 				y.square(builder),
 				builder,
@@ -1224,93 +1244,14 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 
 	fn run_once(
 		&self,
-		witness: &plonky2::iop::witness::PartitionWitness<F>,
-		out_buffer: &mut plonky2::iop::generator::GeneratedValues<F>,
+		_witness: &plonky2::iop::witness::PartitionWitness<F>,
+		_out_buffer: &mut plonky2::iop::generator::GeneratedValues<F>,
 	) -> Result<()> {
-		// let w: [F; 5] = array::from_fn(|j| {
-		//     witness.get_target(Target::wire(
-		//         self.row,
-		//         CompressionGate::wire_ith_w_offset(self.i) + j,
-		//     ))
-		// });
-		// let x: [F; 5] = array::from_fn(|j| {
-		//     witness.get_target(Target::wire(
-		//         self.row,
-		//         CompressionGate::wire_ith_x_offset(self.i) + j,
-		//     ))
-		// });
-		// let y: [F; 5] = array::from_fn(|j| {
-		//     witness.get_target(Target::wire(
-		//         self.row,
-		//         CompressionGate::wire_ith_y_offset(self.i) + j,
-		//     ))
-		// });
-
-		// {
-		//     let capa = LocalQuinticExtension::cap_a();
-		//     let capb = LocalQuinticExtension::cap_b();
-		//     let x = LocalQuinticExtension(x);
-		//     let y = LocalQuinticExtension(y);
-		//     assert_eq!(y.square(), (x.square() * x) + capa * x + capb);
-		// }
-
-		// println!("(witness) R w = {:?}, x = {:?}, y = {:?}", w, x, y,);
-
 		Ok(())
 	}
 }
 
-/// All witness targets for a single DoubleAdd4x instance.
-pub(crate) struct DoubleAdd4xTargets {
-	pub(crate) p: LocalPointEw<Target>,
-	pub(crate) accin: LocalPointEw<Target>,
-	pub(crate) acco4: LocalPointEw<Target>,
-	pub(crate) sp: [Target; 4],
-	pub(crate) sg: [Target; 4],
-	// last gate selector
-	pub(crate) lgs: Target,
-	pub(crate) acco1: LocalPointEw<Target>,
-	pub(crate) acco2: LocalPointEw<Target>,
-	pub(crate) acco3: LocalPointEw<Target>,
-	pub(crate) accdblin: LocalPointEw<Target>,
-	pub(crate) accdblo1: LocalPointEw<Target>,
-	pub(crate) accdblo2: LocalPointEw<Target>,
-	pub(crate) accdblo3: LocalPointEw<Target>,
-	pub(crate) lambda1: LocalQuinticExtension<Target>,
-	pub(crate) lambda2: LocalQuinticExtension<Target>,
-	pub(crate) lambda3: LocalQuinticExtension<Target>,
-	pub(crate) lambda4: LocalQuinticExtension<Target>,
-}
-
-impl DoubleAdd4xTargets {
-	/// Build targets for all wires of a SigGate1 at the given circuit row.
-	pub(crate) fn from_row(row: usize) -> Self {
-		let point = |base: usize| LocalPointEw {
-			x: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, base + j))),
-			y: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, base + 5 + j))),
-		};
-		DoubleAdd4xTargets {
-			p: point(0),
-			accin: point(10),
-			acco4: point(20),
-			sp: array::from_fn(|j| Target::wire(row, 30 + j)),
-			sg: array::from_fn(|j| Target::wire(row, 35 + j)),
-			lgs: Target::wire(row, 39),
-			acco1: point(40),
-			acco2: point(50),
-			acco3: point(60),
-			accdblin: point(70),
-			accdblo1: point(80),
-			accdblo2: point(90),
-			accdblo3: point(100),
-			lambda1: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, 110 + j))),
-			lambda2: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, 115 + j))),
-			lambda3: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, 120 + j))),
-			lambda4: LocalQuinticExtension(array::from_fn(|j| Target::wire(row, 125 + j))),
-		}
-	}
-}
-
+#[derive(Clone)]
 pub(crate) struct SchnorrTargets {
 	/// Compressed R
 	pub(crate) cr: [Target; 5],
@@ -1319,15 +1260,29 @@ pub(crate) struct SchnorrTargets {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct PubkeyTarget<F>(pub(crate) LocalQuinticExtension<F>);
+// TODO: why this is abstract over F, when F always equals Target
+pub(crate) struct PubkeyTarget(pub(crate) LocalQuinticExtension<Target>);
+
+impl PubkeyTarget {
+	pub(crate) fn set_witness<F: Field + Extendable<5>>(
+		&self,
+		pw: &mut PartialWitness<F>,
+		cpk: &crate::schnorr::CompressedPublicKey<F>,
+	) {
+		for (t, v) in self.0.0.iter().zip(cpk.0.w.0.iter()) {
+			pw.set_target(*t, *v).unwrap();
+		}
+	}
+}
 
 /// Build a Schnorr signature verification circuit.
 ///
 /// Verifies `R = sG + eQ` where `e = DropTop2Bits(H(w_R || w_Q || m))`.
-pub(crate) fn schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize>(
+pub(crate) fn conditional_schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize>(
 	builder: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
 	message: HashOutTarget,
-	pubkey: PubkeyTarget<Target>,
+	pubkey: PubkeyTarget,
+	apply_check: BoolTarget,
 ) -> SchnorrTargets {
 	use plonky2::{hash::poseidon::PoseidonHash, iop::target::BoolTarget};
 
@@ -1470,7 +1425,7 @@ pub(crate) fn schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize
 		let reconstructed = builder.mul_add(two_pow_32, hi, lo);
 
 		if k < 4 {
-			builder.connect(reconstructed, e_hash[k]);
+			builder.conditional_assert_eq(apply_check.target, reconstructed, e_hash[k]);
 		} else {
 			// Limb 4: e_hash[4] may have top 2 bits set.
 			// Constrain (e_hash[4] - reconstructed) * (e_hash[4] - reconstructed
@@ -1494,7 +1449,8 @@ pub(crate) fn schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize
 			//     }
 			//     _ => {}
 			// }
-			builder.assert_zero(product);
+			let cond = builder.mul(apply_check.target, product);
+			builder.assert_zero(cond);
 		}
 	}
 
@@ -1504,89 +1460,209 @@ pub(crate) fn schnorr_verify_gadget<F: RichField + Extendable<D>, const D: usize
 	}
 }
 
-/// Targets returned by [`verify_16_messages_gadget`].
-pub(crate) struct Verify16MessagesTargets {
-	/// Per-message Schnorr targets (cr + da4x gates), one entry per message.
-	pub(crate) schnorr: Box<[SchnorrTargets; 16]>,
-	/// The 16 × 4 message element targets fed into the circuit.
-	pub(crate) messages: [HashOutTarget; 16],
+struct DoubleAdd4xGateWitness<F: RichField + Extendable<5>> {
+	accdblin: PointEw<F>,
+	acco1: PointEw<F>,
+	accdblo1: PointEw<F>,
+	acco2: PointEw<F>,
+	accdblo2: PointEw<F>,
+	acco3: PointEw<F>,
+	accdblo3: PointEw<F>,
+	acco4: PointEw<F>,
+	lambda1: QuinticExtension<F>,
+	lambda2: QuinticExtension<F>,
+	lambda3: QuinticExtension<F>,
+	lambda4: QuinticExtension<F>,
 }
 
-/// Build a circuit that:
-/// 1. Verifies a Schnorr signature on each of 16 messages (each a `HashOutTarget` — 4 `F` elements)
-///    against a single public key.
-/// 2. Computes `PoseidonHash(msg_0 || … || msg_15)` over all 64 elements and registers each of the
-///    4 digest elements as a public input.
-pub(crate) fn verify_16_messages_gadget<F: RichField + Extendable<D>, const D: usize>(
-	builder: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
-	pubkey: PubkeyTarget<Target>,
-) -> Verify16MessagesTargets {
-	use plonky2::hash::poseidon::PoseidonHash;
-
-	// Allocate virtual HashOutTargets for all 16 messages.
-	let messages: [HashOutTarget; 16] = std::array::from_fn(|_| builder.add_virtual_hash());
-
-	// Verify the Schnorr signature for each message.
-	let schnorr: Box<[SchnorrTargets; 16]> = Box::new(std::array::from_fn(|i| {
-		schnorr_verify_gadget(builder, messages[i], pubkey)
-	}));
-
-	// Hash all message elements via Poseidon.
-	let digests = messages
-		.iter()
-		.map(|m| builder.hash_n_to_hash_no_pad::<PoseidonHash>(m.elements.to_vec()))
-		.collect_vec();
-
-	// Register each of the 4 digest elements as a public input.
-	for elem in digests {
-		builder.register_public_inputs(elem.elements.as_slice());
+fn compute_gate_witness<F: RichField + Extendable<5>>(
+	sp: [F; 4],
+	sg: [F; 4],
+	p: PointEw<F>,
+	accin: PointEw<F>,
+	is_last: bool,
+) -> DoubleAdd4xGateWitness<F> {
+	let g = PointEw::generator();
+	let neg_off = PointEw::from(OFFSET_NEG_319);
+	if is_last {
+		assert!(sp[3] == F::ZERO && sg[3] == F::ONE);
 	}
 
-	Verify16MessagesTargets {
-		schnorr,
-		messages,
+	let step = |acc: PointEw<F>,
+	            spi: F,
+	            sgi: F,
+	            index: usize|
+	 -> (PointEw<F>, PointEw<F>, QuinticExtension<F>) {
+		let accdbl = if is_last && index == 3 {
+			acc
+		} else {
+			acc.double()
+		};
+		let p2 = if is_last && index == 3 { neg_off } else { g };
+		let lambda = accdbl.tangent(&p);
+
+		let acco = match (spi.is_one(), sgi.is_one()) {
+			(false, false) => accdbl,
+			(true, false) => accdbl.add(&p),
+			(false, true) => accdbl.add(&p2),
+			(true, true) => accdbl.add(&p).add(&p2),
+		};
+
+		(accdbl, acco, lambda)
+	};
+
+	let (accdbl, acco1, lambda1) = step(accin, sp[0], sg[0], 0);
+	let (accdblo1, acco2, lambda2) = step(acco1, sp[1], sg[1], 1);
+	let (accdblo2, acco3, lambda3) = step(acco2, sp[2], sg[2], 2);
+	let (accdblo3, acco4, lambda4) = step(acco3, sp[3], sg[3], 3);
+
+	DoubleAdd4xGateWitness {
+		accdblin: accdbl,
+		acco1,
+		accdblo1,
+		acco2,
+		accdblo2,
+		acco3,
+		accdblo3,
+		acco4,
+		lambda1,
+		lambda2,
+		lambda3,
+		lambda4,
 	}
+}
+
+pub(crate) fn set_schnorr_witness<F: RichField + Legendre + Extendable<5>>(
+	pw: &mut PartialWitness<F>,
+	targets: &SchnorrTargets,
+	q: PointEw<F>,
+	cr: CompressedPoint<F>,
+	e: Scalar,
+	s: Scalar,
+) {
+	set_gfp5(pw, targets.cr, cr.w.0);
+
+	let mut e_bits = e.to_bit_arr();
+	let mut s_bits = s.to_bit_arr();
+	e_bits.reverse();
+	s_bits.reverse();
+
+	let mut accin: PointEw<F> = OFFSET.into();
+	for gate_idx in 0..80usize {
+		let gate_targets = &targets.da4x[gate_idx];
+
+		let sp: [F; 4] = array::from_fn(|k| {
+			let bit_idx = 4 * gate_idx + k;
+			if bit_idx < 319 {
+				if e_bits[bit_idx] { F::ONE } else { F::ZERO }
+			} else {
+				F::ZERO
+			}
+		});
+		let sg: [F; 4] = array::from_fn(|k| {
+			let bit_idx = 4 * gate_idx + k;
+			if bit_idx < 319 {
+				if s_bits[bit_idx] { F::ONE } else { F::ZERO }
+			} else {
+				F::ONE
+			}
+		});
+
+		let w = compute_gate_witness(sp, sg, q, accin, gate_idx == 79);
+		set_dbladd4x_gate_witness(pw, gate_targets, q, accin, sp, sg, gate_idx == 79, &w);
+		accin = w.acco4;
+	}
+	assert_eq!(accin.encode(), cr);
+}
+
+fn set_dbladd4x_gate_witness<F: RichField + Extendable<5>>(
+	pw: &mut PartialWitness<F>,
+	t: &DoubleAdd4xTargets,
+	p: PointEw<F>,
+	accin: PointEw<F>,
+	sp: [F; 4],
+	sg: [F; 4],
+	lgs: bool,
+	w: &DoubleAdd4xGateWitness<F>,
+) {
+	let lgs = if lgs { F::ONE } else { F::ZERO };
+	set_gfp5(pw, t.p.x.0, p.x.0);
+	set_gfp5(pw, t.p.y.0, p.y.0);
+	set_gfp5(pw, t.accin.x.0, accin.x.0);
+	set_gfp5(pw, t.accin.y.0, accin.y.0);
+	set_gfp5(pw, t.acco4.x.0, w.acco4.x.0);
+	set_gfp5(pw, t.acco4.y.0, w.acco4.y.0);
+	izip!(t.sp.iter(), sp.iter()).for_each(|(&tgt, &v)| pw.set_target(tgt, v).unwrap());
+	izip!(t.sg.iter(), sg.iter()).for_each(|(&tgt, &v)| pw.set_target(tgt, v).unwrap());
+	pw.set_target(t.lgs, lgs).unwrap();
+	set_gfp5(pw, t.acco1.x.0, w.acco1.x.0);
+	set_gfp5(pw, t.acco1.y.0, w.acco1.y.0);
+	set_gfp5(pw, t.acco2.x.0, w.acco2.x.0);
+	set_gfp5(pw, t.acco2.y.0, w.acco2.y.0);
+	set_gfp5(pw, t.acco3.x.0, w.acco3.x.0);
+	set_gfp5(pw, t.acco3.y.0, w.acco3.y.0);
+	set_gfp5(pw, t.accdblin.x.0, w.accdblin.x.0);
+	set_gfp5(pw, t.accdblin.y.0, w.accdblin.y.0);
+	set_gfp5(pw, t.accdblo1.x.0, w.accdblo1.x.0);
+	set_gfp5(pw, t.accdblo1.y.0, w.accdblo1.y.0);
+	set_gfp5(pw, t.accdblo2.x.0, w.accdblo2.x.0);
+	set_gfp5(pw, t.accdblo2.y.0, w.accdblo2.y.0);
+	set_gfp5(pw, t.accdblo3.x.0, w.accdblo3.x.0);
+	set_gfp5(pw, t.accdblo3.y.0, w.accdblo3.y.0);
+	set_gfp5(pw, t.lambda1.0, w.lambda1.0);
+	set_gfp5(pw, t.lambda2.0, w.lambda2.0);
+	set_gfp5(pw, t.lambda3.0, w.lambda3.0);
+	set_gfp5(pw, t.lambda4.0, w.lambda4.0);
 }
 
 #[cfg(test)]
 mod tests {
 	use plonky2::{
-		gates::gate_testing::{self, test_low_degree},
-		iop::{target, witness::PartialWitness},
-		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
+		gates::gate_testing::{test_eval_fns, test_low_degree},
+		hash::{hashing::hash_n_to_m_no_pad, poseidon::PoseidonHash},
+		iop::witness::PartialWitness,
+		plonk::{
+			circuit_builder::CircuitBuilder,
+			circuit_data::CircuitConfig,
+			config::{GenericConfig, Hasher, PoseidonGoldilocksConfig},
+		},
 	};
+	use plonky2_field::goldilocks_field::GoldilocksField;
+	use rand::{RngExt, rng};
 
 	use super::*;
 	use crate::{
-		ecgfp5::{CompressedPoint, Legendre, PointEw},
-		p2::tests::{print_circuit_config, print_common_data},
+		ecgfp5::{CompressedPoint, PointEw},
+		plonky2_gadgets::tests::print_common_data,
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
+		time,
 	};
 
-	/// Time `$expr`, print `"$label: <duration>"`, and return the result.
-	macro_rules! time {
-		($label:expr, $expr:expr) => {{
-			let _t = std::time::Instant::now();
-			let _res = $expr;
-			println!("{}: {:?}", $label, _t.elapsed());
-			_res
-		}};
-	}
-	use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
-	use plonky2_field::goldilocks_field::GoldilocksField;
-	use rand::{Rng, RngExt, rng};
+	const D: usize = 2;
+	type C = PoseidonGoldilocksConfig;
+	type F = <C as GenericConfig<D>>::F;
 
 	#[test]
-	fn sig2_gate1_low_degree() {
+	fn doubleadd4x_low_degree() {
 		test_low_degree::<GoldilocksField, _, 2>(DoubleAdd4x::new());
 	}
 
 	#[test]
-	fn test_compression_gate() {
-		const D: usize = 2;
-		type C = PoseidonGoldilocksConfig;
-		type F = <C as GenericConfig<D>>::F;
+	fn doubleadd4x_eval_fns() {
+		test_eval_fns::<GoldilocksField, C, _, D>(DoubleAdd4x::new())
+			.expect("DoubleAdd4x eval_fns failed");
+	}
 
+	#[test]
+	fn compressiongate_eval_fns() {
+		test_eval_fns::<GoldilocksField, C, _, D>(CompressionGate::new_from_config(
+			&CircuitConfig::standard_recursion_config(),
+		))
+		.expect("CompressionGate eval_fns failed");
+	}
+
+	#[test]
+	fn test_compression_gate() {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
@@ -1617,78 +1693,16 @@ mod tests {
 		assert!(p.is_on_curve());
 
 		let mut pw = PartialWitness::new();
-		set_gfp5_target(&mut pw, cp, p.encode().into());
-		set_gfp5_target(&mut pw, px, p.x.into());
-		set_gfp5_target(&mut pw, py, p.y.into());
+		set_gfp5(&mut pw, cp, p.encode().w.0);
+		set_gfp5(&mut pw, px, p.x.0);
+		set_gfp5(&mut pw, py, p.y.0);
 		pw.set_target(actv0, F::ONE).unwrap();
 
 		let proof = data.prove(pw).expect("proof generation failed");
 		data.verify(proof).expect("verification failed");
 	}
 
-	fn set_gfp5_target<F: Field>(
-		pw: &mut PartialWitness<F>,
-		targets: [Target; 5],
-		v: LocalQuinticExtension<F>,
-	) {
-		assert_eq!(targets.len(), v.0.len());
-		izip!(targets.into_iter(), v.0.into_iter()).for_each(|(t0, v0)| {
-			pw.set_target(t0, v0).unwrap();
-		});
-	}
-
-	fn set_gfp5<F: Field>(
-		pw: &mut PartialWitness<F>,
-		row: usize,
-		offset: usize,
-		v: LocalQuinticExtension<F>,
-	) {
-		for (i, &val) in v.0.iter().enumerate() {
-			pw.set_target(Target::wire(row, offset + i), val).unwrap();
-		}
-	}
-
-	fn set_signle_gate_witness<F: RichField + Extendable<5>>(
-		pw: &mut PartialWitness<F>,
-		t: &DoubleAdd4xTargets,
-		p: PointEw<F>,
-		accin: PointEw<F>,
-		sp: [F; 4],
-		sg: [F; 4],
-		lgs: bool,
-		w: &GateWitness<F>,
-	) {
-		let lgs = if lgs { F::ONE } else { F::ZERO };
-		set_gfp5_target(pw, t.p.x.0, p.x.into());
-		set_gfp5_target(pw, t.p.y.0, p.y.into());
-		set_gfp5_target(pw, t.accin.x.0, accin.x.into());
-		set_gfp5_target(pw, t.accin.y.0, accin.y.into());
-		set_gfp5_target(pw, t.acco4.x.0, w.acco4.x.into());
-		set_gfp5_target(pw, t.acco4.y.0, w.acco4.y.into());
-		izip!(t.sp.iter(), sp.iter()).for_each(|(&tgt, &v)| pw.set_target(tgt, v).unwrap());
-		izip!(t.sg.iter(), sg.iter()).for_each(|(&tgt, &v)| pw.set_target(tgt, v).unwrap());
-		pw.set_target(t.lgs, lgs).unwrap();
-		set_gfp5_target(pw, t.acco1.x.0, w.acco1.x.into());
-		set_gfp5_target(pw, t.acco1.y.0, w.acco1.y.into());
-		set_gfp5_target(pw, t.acco2.x.0, w.acco2.x.into());
-		set_gfp5_target(pw, t.acco2.y.0, w.acco2.y.into());
-		set_gfp5_target(pw, t.acco3.x.0, w.acco3.x.into());
-		set_gfp5_target(pw, t.acco3.y.0, w.acco3.y.into());
-		set_gfp5_target(pw, t.accdblin.x.0, w.accdblin.x.into());
-		set_gfp5_target(pw, t.accdblin.y.0, w.accdblin.y.into());
-		set_gfp5_target(pw, t.accdblo1.x.0, w.accdblo1.x.into());
-		set_gfp5_target(pw, t.accdblo1.y.0, w.accdblo1.y.into());
-		set_gfp5_target(pw, t.accdblo2.x.0, w.accdblo2.x.into());
-		set_gfp5_target(pw, t.accdblo2.y.0, w.accdblo2.y.into());
-		set_gfp5_target(pw, t.accdblo3.x.0, w.accdblo3.x.into());
-		set_gfp5_target(pw, t.accdblo3.y.0, w.accdblo3.y.into());
-		set_gfp5_target(pw, t.lambda1.0, w.lambda1.into());
-		set_gfp5_target(pw, t.lambda2.0, w.lambda2.into());
-		set_gfp5_target(pw, t.lambda3.0, w.lambda3.into());
-		set_gfp5_target(pw, t.lambda4.0, w.lambda4.into());
-	}
-
-	/// Helper to build and prove a single SigGate1 with given selector bits for
+	/// Helper to build and prove a single DoubleAdd4x gate with given selector bits for
 	/// fixed P
 	fn prove_single_gate(sp: [GoldilocksField; 4], sg: [GoldilocksField; 4]) {
 		const D: usize = 2;
@@ -1723,14 +1737,14 @@ mod tests {
 		let data = builder.build::<C>();
 
 		let mut pw = PartialWitness::new();
-		set_signle_gate_witness(&mut pw, &gate_targets, p1, accin, sp, sg, false, &w);
+		set_dbladd4x_gate_witness(&mut pw, &gate_targets, p1, accin, sp, sg, false, &w);
 
 		let proof = data.prove(pw).expect("proof generation failed");
 		data.verify(proof).expect("verification failed");
 	}
 
 	#[test]
-	fn tt() {
+	fn doubleadd4x_prove_multi_random() {
 		type F = GoldilocksField;
 		let mut rng = rng();
 		for _ in 0..10 {
@@ -1741,37 +1755,19 @@ mod tests {
 	}
 
 	#[test]
-	fn sig2_gate1_prove_case0() {
+	fn doubleadd4x_prove_case0() {
 		type F = GoldilocksField;
 		prove_single_gate([F::ZERO; 4], [F::ZERO; 4]);
 	}
 
 	#[test]
-	fn sig2_gate1_prove_case1() {
+	fn doubleadd4x_prove_case1() {
 		type F = GoldilocksField;
 		prove_single_gate([F::ONE, F::ZERO, F::ZERO, F::ZERO], [F::ZERO; 4]);
 	}
 
 	#[test]
-	fn sig2_gate1_eval_fns() {
-		use plonky2::gates::gate_testing::test_eval_fns;
-		type C = PoseidonGoldilocksConfig;
-		const D: usize = 2;
-		test_eval_fns::<GoldilocksField, C, _, D>(DoubleAdd4x::new())
-			.expect("SigGate1 eval_fns failed");
-		// test_eval_fns::<GoldilocksField, C, _,
-		// D>(CompressionGate::new_from_config(
-		//     &CircuitConfig::standard_recursion_config(),
-		// ))
-		// .expect("CompressionGate eval_fns failed");
-	}
-
-	#[test]
-	fn sig2_gate1_recursive_verify() {
-		const D: usize = 2;
-		type C = PoseidonGoldilocksConfig;
-		type F = <C as GenericConfig<D>>::F;
-
+	fn doubleadd4x_recursive_verify() {
 		// Build and prove the inner circuit (single SigGate1, all-zero selectors).
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config.clone());
@@ -1795,7 +1791,7 @@ mod tests {
 		let w = compute_gate_witness(sp, sg, p1, accin, false);
 
 		let mut inner_pw = PartialWitness::new();
-		set_signle_gate_witness(&mut inner_pw, &gate_targets, p1, accin, sp, sg, false, &w);
+		set_dbladd4x_gate_witness(&mut inner_pw, &gate_targets, p1, accin, sp, sg, false, &w);
 		let inner_proof = time!(
 			"inner prove",
 			inner_data.prove(inner_pw).expect("inner proof failed")
@@ -1845,92 +1841,8 @@ mod tests {
 		);
 	}
 
-	struct GateWitness<F: RichField + Extendable<5>> {
-		accdblin: PointEw<F>,
-		acco1: PointEw<F>,
-		accdblo1: PointEw<F>,
-		acco2: PointEw<F>,
-		accdblo2: PointEw<F>,
-		acco3: PointEw<F>,
-		accdblo3: PointEw<F>,
-		acco4: PointEw<F>,
-		lambda1: QuinticExtension<F>,
-		lambda2: QuinticExtension<F>,
-		lambda3: QuinticExtension<F>,
-		lambda4: QuinticExtension<F>,
-	}
-
-	fn compute_gate_witness<F: RichField + Extendable<5>>(
-		sp: [F; 4],
-		sg: [F; 4],
-		p: PointEw<F>,
-		accin: PointEw<F>,
-		is_last: bool,
-	) -> GateWitness<F> {
-		let g = PointEw::generator();
-		let neg_off = PointEw::from(OFFSET_NEG_319);
-		if is_last {
-			assert!(sp[3] == F::ZERO && sg[3] == F::ONE);
-		}
-
-		let step = |acc: PointEw<F>,
-		            spi: F,
-		            sgi: F,
-		            index: usize|
-		 -> (PointEw<F>, PointEw<F>, QuinticExtension<F>) {
-			let accdbl = if is_last && index == 3 {
-				acc
-			} else {
-				acc.double()
-			};
-			let p2 = if is_last && index == 3 { neg_off } else { g };
-			let lambda = accdbl.tangent(&p);
-
-			let acco = match (spi.is_one(), sgi.is_one()) {
-				(false, false) => accdbl,
-				(true, false) => accdbl.add(&p),
-				(false, true) => accdbl.add(&p2),
-				(true, true) => accdbl.add(&p).add(&p2),
-			};
-
-			(accdbl, acco, lambda)
-		};
-
-		let (accdbl, acco1, lambda1) = step(accin, sp[0], sg[0], 0);
-		let (accdblo1, acco2, lambda2) = step(acco1, sp[1], sg[1], 1);
-		let (accdblo2, acco3, lambda3) = step(acco2, sp[2], sg[2], 2);
-		let (accdblo3, acco4, lambda4) = step(acco3, sp[3], sg[3], 3);
-
-		GateWitness {
-			accdblin: accdbl,
-			acco1,
-			accdblo1,
-			acco2,
-			accdblo2,
-			acco3,
-			accdblo3,
-			acco4,
-			lambda1,
-			lambda2,
-			lambda3,
-			lambda4,
-		}
-	}
-
 	#[test]
 	fn test_schnorr_verify_gadget() {
-		use plonky2::{
-			hash::{hashing::hash_n_to_m_no_pad, poseidon::PoseidonHash},
-			plonk::config::Hasher,
-		};
-		use plonky2_field::types::{Field, PrimeField64};
-
-		use crate::schnorr::{PrivateKey, Scalar, schnorr_sign};
-
-		const D: usize = 2;
-		type C = PoseidonGoldilocksConfig;
-		type F = <C as GenericConfig<D>>::F;
-
 		// Generate keys and sign
 		let d = Scalar::from_raw([
 			5400142491657709732,
@@ -1957,7 +1869,7 @@ mod tests {
 			11398871370327264211,
 			958391180505708567,
 		]);
-		let sig = schnorr_sign(&privkey, &pubkey, &message, k);
+		let sig = schnorr_sign(&privkey, &message, k);
 		let r = sig.r;
 		let s = sig.s;
 
@@ -1987,18 +1899,15 @@ mod tests {
 		let result = sg.add(&eq);
 		assert_eq!(result.encode(), r.encode(), "native verification failed");
 
-		let mut e_bits = e.to_bit_arr(); // 319 bits
-		e_bits.reverse();
-		let mut s_bits = s.to_bit_arr(); // 319 bits
-		s_bits.reverse();
-
 		// Build inner circuit
 		let config = CircuitConfig::standard_recursion_config();
 		// print_circuit_config(&config, "inner verifier config");
 		let mut builder = CircuitBuilder::<F, D>::new(config);
+		let tr = builder._true();
 		let message_target = builder.add_virtual_hash();
 		let pubkey_target = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
-		let targets = schnorr_verify_gadget(&mut builder, message_target, pubkey_target);
+		let targets =
+			conditional_schnorr_verify_gadget(&mut builder, message_target, pubkey_target, tr);
 		let inner_data = time!("inner build", builder.build::<C>());
 		print_common_data(&inner_data.common, "inner common data");
 
@@ -2006,8 +1915,8 @@ mod tests {
 		let mut pw = PartialWitness::new();
 		{
 			// Set pubkey Q and R
-			set_gfp5_target(&mut pw, pubkey_target.0.0, cq.into());
-			set_gfp5_target(&mut pw, targets.cr, cr.into());
+			set_gfp5(&mut pw, pubkey_target.0.0, cq.w.0);
+			set_gfp5(&mut pw, targets.cr, cr.w.0);
 
 			// Set message
 			for j in 0..4 {
@@ -2015,58 +1924,8 @@ mod tests {
 					.unwrap();
 			}
 
-			let mut accin: PointEw<GoldilocksField> = OFFSET.into();
-
-			for gate_idx in 0..80usize {
-				let gate_targets = &targets.da4x[gate_idx];
-
-				// p selectors (e bits)
-				let sp: [F; 4] = array::from_fn(|k| {
-					let bit_idx = 4 * gate_idx + k;
-					// Scalar only has 319 bits
-					if bit_idx < 319 {
-						if e_bits[bit_idx] { F::ONE } else { F::ZERO }
-					} else {
-						F::ZERO
-					}
-				});
-
-				// g selectors (s bits)
-				let sg: [F; 4] = array::from_fn(|k| {
-					let bit_idx = 4 * gate_idx + k;
-					if bit_idx < 319 {
-						if s_bits[bit_idx] { F::ONE } else { F::ZERO }
-					} else {
-						// set to 1 to cancel offset
-						F::ONE
-					}
-				});
-
-				// let sp: [F; 4] = [F::ZERO; 4];
-				// let sg: [F; 4] = [F::ZERO; 4];
-
-				let w = compute_gate_witness(sp, sg, q, accin, gate_idx == 79);
-				set_signle_gate_witness(
-					&mut pw,
-					gate_targets,
-					q,
-					accin,
-					sp,
-					sg,
-					gate_idx == 79,
-					&w,
-				);
-
-				accin = w.acco4
-			}
-
+			set_schnorr_witness(&mut pw, &targets, q, cr, e, s);
 			// println!("for R w = {:?}, x = {:?}, y = {:?}", r.encode().w, r.x, r.y,);
-
-			assert_eq!(
-				accin.encode(),
-				r.encode(),
-				"accumulated result should equal R"
-			);
 		}
 
 		// Inner prove and verify
@@ -2119,220 +1978,89 @@ mod tests {
 		);
 	}
 
-	// #[test]
-	// fn generate_offset_neg_320() {
-	//     let p = PointEw::<GoldilocksField>::from(OFFSET);
-
-	//     let mut p319 = p;
-	//     for _ in 0..319 {
-	//         p319 = p319.double();
-	//     }
-
-	//     println!("2^319*P = {:?}", -p319);
-	// }
-
-	/// Helper: fill the witness for one `SchnorrTargets` given the native
-	/// signature data for a single message.
-	fn set_schnorr_witness<F: RichField + Legendre + Extendable<5>>(
-		pw: &mut PartialWitness<F>,
-		targets: &SchnorrTargets,
-		q: PointEw<F>,
-		cr: CompressedPoint<F>,
-		e: Scalar,
-		s: Scalar,
-	) {
-		set_gfp5_target(pw, targets.cr, cr.w.into());
-
-		let mut e_bits = e.to_bit_arr();
-		let mut s_bits = s.to_bit_arr();
-		e_bits.reverse();
-		s_bits.reverse();
-
-		let mut accin: PointEw<F> = OFFSET.into();
-		for gate_idx in 0..80usize {
-			let gate_targets = &targets.da4x[gate_idx];
-
-			let sp: [F; 4] = array::from_fn(|k| {
-				let bit_idx = 4 * gate_idx + k;
-				if bit_idx < 319 {
-					if e_bits[bit_idx] { F::ONE } else { F::ZERO }
-				} else {
-					F::ZERO
-				}
-			});
-			let sg: [F; 4] = array::from_fn(|k| {
-				let bit_idx = 4 * gate_idx + k;
-				if bit_idx < 319 {
-					if s_bits[bit_idx] { F::ONE } else { F::ZERO }
-				} else {
-					F::ONE
-				}
-			});
-
-			let w = compute_gate_witness(sp, sg, q, accin, gate_idx == 79);
-			set_signle_gate_witness(pw, gate_targets, q, accin, sp, sg, gate_idx == 79, &w);
-			accin = w.acco4;
-		}
-		// Sanity: the accumulated point must equal R (cr decoded).
-		assert_eq!(accin.encode(), cr);
-	}
-
+	/// Demonstrates that `conditional_schnorr_verify_gadget` with `apply_check = false` accepts
+	/// an arbitrary (fake) signature.  We pick e, s freely, compute R = s·G + e·Q so that the
+	/// EC arithmetic in the DoubleAdd4x gates is satisfied, then prove without the hash check.
 	#[test]
-	// TODO: This is here only temporarily
-	fn test_verify_16_messages_gadget() {
-		use plonky2::{
-			hash::{hashing::hash_n_to_hash_no_pad, poseidon::PoseidonHash},
-			plonk::config::Hasher,
-		};
+	fn test_conditional_schnorr_verify_apply_check_false() {
 		use plonky2_field::types::Field;
 
 		const D: usize = 2;
 		type C = PoseidonGoldilocksConfig;
 		type F = <C as GenericConfig<D>>::F;
 
-		// --- Key generation ---
-		let privkey = PrivateKey::from_raw([
+		// Use a known private key to get a valid curve point Q.
+		let d = Scalar::from_raw([
 			5400142491657709732,
 			15846706413025839610,
 			1661266468596303141,
 			17577886881415715269,
 			7270009582106593884,
 		]);
+		let privkey = PrivateKey::new(d);
 		let pubkey = privkey.public_key::<F>();
 		let q = pubkey.as_point();
-		let cq: LocalQuinticExtension<F> = q.encode().into();
+		let cq = q.encode();
 
-		// 16 distinct messages (each 4 F elements) and 16 distinct nonces.
-		let messages: [[F; 4]; 16] =
-			array::from_fn(|i| array::from_fn(|j| F::from_canonical_u64((i * 4 + j + 1) as u64)));
+		// Arbitrary scalars — NOT derived from hashing any message.
+		let e = Scalar::from_raw([42, 0, 0, 0, 0]);
+		let s = Scalar::from_raw([7, 0, 0, 0, 0]);
 
-		// Use a different nonce k for each message to avoid nonce reuse.
-		let base_k = Scalar::from_raw([
-			12539254003028696409,
-			15524144070600887654,
-			15092036948424041984,
-			11398871370327264211,
-			958391180505708567,
-		]);
-		let nonces: [Scalar; 16] =
-			array::from_fn(|i| base_k + Scalar::from_raw([i as u64 + 1, 0, 0, 0, 0]));
+		// Compute R = s·G + e·Q natively.  This is exactly what the 80 DoubleAdd4x
+		// gates evaluate, so the EC-arithmetic witness will be consistent.
+		let g = PointEw::<F>::generator();
+		let sg = g.scalar_mul(&s);
+		let eq = q.scalar_mul(&e);
+		let r = sg.add(&eq);
+		let cr = r.encode();
 
-		// Sign each message natively.
-		let sigs: [_; 16] =
-			array::from_fn(|i| schnorr_sign(&privkey, &pubkey, &messages[i], nonces[i]));
-
-		// Pre-compute e / s bits for each signature (needed for gate witness).
-		use plonky2::hash::hashing::hash_n_to_m_no_pad;
-		let sig_bits: [(Scalar, Scalar); 16] = array::from_fn(|i| {
-			let sig = &sigs[i];
-			let cr = sig.r.encode();
-
-			let mut hash_input = Vec::new();
-			hash_input.extend_from_slice(&cr.w.0);
-			hash_input.extend_from_slice(&cq.0);
-			hash_input.extend_from_slice(&messages[i]);
-
-			let hash_out =
-				hash_n_to_m_no_pad::<F, <PoseidonHash as Hasher<F>>::Permutation>(&hash_input, 5);
-			let e = Scalar::from_hash([
-				hash_out[0],
-				hash_out[1],
-				hash_out[2],
-				hash_out[3],
-				hash_out[4],
-			]);
-
-			(e, sig.s)
-		});
-
-		// --- Build circuit ---
-		let config = CircuitConfig::standard_recursion_zk_config();
+		// Build circuit with a virtual apply_check target.
+		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
+		let apply_check = builder.add_virtual_bool_target_safe();
+		let message_target = builder.add_virtual_hash();
 		let pubkey_target = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
-		let targets = verify_16_messages_gadget(&mut builder, pubkey_target);
-		let data = time!("inner build", builder.build::<C>());
-		print_common_data(&data.common, "inner common data");
+		let targets = conditional_schnorr_verify_gadget(
+			&mut builder,
+			message_target,
+			pubkey_target,
+			apply_check,
+		);
+		let data = builder.build::<C>();
 
-		// --- Set witness ---
+		// Fill witness.
 		let mut pw = PartialWitness::new();
 
-		// Public key
-		set_gfp5_target(&mut pw, pubkey_target.0.0, cq);
+		// Disable the hash check.
+		pw.set_bool_target(apply_check, false).unwrap();
 
-		for i in 0..16 {
-			// Message elements
-			for j in 0..4 {
-				pw.set_target(targets.messages[i].elements[j], messages[i][j])
-					.unwrap();
-			}
+		// Public key Q and compressed R.
+		set_gfp5(&mut pw, pubkey_target.0.0, cq.w.0);
+		set_gfp5(&mut pw, targets.cr, cr.w.0);
 
-			let (e, s) = sig_bits[i];
-			let cr = sigs[i].r.encode();
-			set_schnorr_witness(&mut pw, &targets.schnorr[i], q, cr, e, s);
+		// Message can be anything: it will not be hash-checked.
+		for j in 0..4 {
+			pw.set_target(message_target.elements[j], F::TWO).unwrap();
 		}
 
-		// --- Prove and verify ---
-		let proof = time!(
-			"inner prove",
-			data.prove(pw).expect("inner proof generation failed")
-		);
-		time!(
-			"inner verify",
-			data.verify(proof.clone()).expect("verification failed")
-		);
+		// Fill the 80 DoubleAdd4x gate witnesses.  Internally this verifies that the
+		// accumulated EC result encodes to `cr`, so R = s·G + e·Q must hold natively.
+		set_schnorr_witness(&mut pw, &targets, q, cr, e, s);
 
-		// --- Check public inputs match native Poseidon hash of all messages ---
-		assert_eq!(
-			proof.public_inputs.len(),
-			16 * 4,
-			"expected 4 public inputs"
-		);
-		for k in 0..16 {
-			let m = messages[k];
-			let dgst = <PoseidonHash as Hasher<F>>::hash_no_pad(m.as_slice());
-			for l in 0..4 {
-				assert_eq!(
-					proof.public_inputs[k * 4 + l],
-					dgst.elements[l],
-					"public input[{k}] mismatch"
-				);
-			}
+		let proof = data
+			.prove(pw)
+			.expect("proof must succeed: apply_check=false skips hash check");
+		data.verify(proof).expect("verification failed");
+	}
+
+	fn generate_offset_neg_319() {
+		let p = PointEw::<GoldilocksField>::from(OFFSET);
+
+		let mut p319 = p;
+		for _ in 0..319 {
+			p319 = p319.double();
 		}
 
-		// --- Recursive verification ---
-		let mut rec_builder =
-			CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
-		let proof_target = rec_builder.add_virtual_proof_with_pis(&data.common);
-		let verifier_target =
-			rec_builder.add_virtual_verifier_data(data.common.config.fri_config.cap_height);
-		rec_builder.verify_proof::<C>(&proof_target, &verifier_target, &data.common);
-		let rec_data = time!("rec build", rec_builder.build::<C>());
-		print_common_data(&rec_data.common, "rec common data");
-
-		let mut rec_pw = PartialWitness::new();
-		rec_pw
-			.set_proof_with_pis_target(&proof_target, &proof)
-			.unwrap();
-		rec_pw
-			.set_cap_target(
-				&verifier_target.constants_sigmas_cap,
-				&data.verifier_only.constants_sigmas_cap,
-			)
-			.unwrap();
-		rec_pw
-			.set_hash_target(
-				verifier_target.circuit_digest,
-				data.verifier_only.circuit_digest,
-			)
-			.unwrap();
-
-		let rec_proof = time!(
-			"rec prove",
-			rec_data.prove(rec_pw).expect("recursive proof failed")
-		);
-		time!(
-			"rec verify",
-			rec_data.verify(rec_proof).expect("recursive verify failed")
-		);
+		println!("2^319*P = {:?}", -p319);
 	}
 }

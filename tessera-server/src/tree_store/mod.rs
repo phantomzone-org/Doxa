@@ -448,7 +448,7 @@ fn atomic_write(dir: &Path, dst: &Path, contents: &[u8]) -> Result<()> {
 mod tests {
 	use rand::{rngs::StdRng, SeedableRng};
 	use tessera_trees::tree::{
-		hasher::{Hash, NewRandom},
+		hasher::{HashOutput, NewRandom},
 		CommitmentTree,
 	};
 
@@ -468,10 +468,10 @@ mod tests {
 		let base = unique_test_dir("upgrade_v1");
 		fs::create_dir_all(base.join("notes_commitment"))?;
 
-		let mut state = CommitmentTree::<Hash>::new(4);
+		let mut state = CommitmentTree::<HashOutput>::new(4);
 		// Build a non-empty tree and persist it as legacy snapshot format.
 		let mut rng = StdRng::from_seed([3u8; 32]);
-		let leaf = Hash::new_random(&mut rng);
+		let leaf = HashOutput::new_random(&mut rng);
 		let _ = state.insert_batch(vec![leaf, leaf])?;
 
 		let legacy_snapshot = Snapshot {
@@ -489,14 +489,14 @@ mod tests {
 			legacy_bytes,
 		)?;
 
-		let mut store = TreeStore::<CommitmentTree<Hash>>::open(&base, TreeId::NotesCommitment, 1)?;
+		let mut store = TreeStore::<CommitmentTree<HashOutput>>::open(&base, TreeId::NotesCommitment, 1)?;
 		let (loaded_state, meta) = store.load_or_init(|| CommitmentTree::new(4))?;
 		assert_eq!(meta.snapshot_version, SNAPSHOT_VERSION_V1);
 		assert_eq!(loaded_state.num_leaves(), 2);
 
 		store.force_checkpoint(&loaded_state, &meta)?;
 		let snap_bytes = fs::read(base.join("notes_commitment").join("snapshot.bin"))?;
-		let snap: Snapshot<CommitmentTree<Hash>> = bincode::deserialize(&snap_bytes)?;
+		let snap: Snapshot<CommitmentTree<HashOutput>> = bincode::deserialize(&snap_bytes)?;
 		assert_eq!(snap.version, CURRENT_SNAPSHOT_VERSION);
 		assert_eq!(meta.snapshot_version, SNAPSHOT_VERSION_V1);
 
@@ -508,13 +508,13 @@ mod tests {
 	fn fresh_snapshot_written_as_current_version() -> Result<()> {
 		let base = unique_test_dir("fresh_v2");
 		let mut store =
-			TreeStore::<CommitmentTree<Hash>>::open(&base, TreeId::AccountsCommitment, 1)?;
+			TreeStore::<CommitmentTree<HashOutput>>::open(&base, TreeId::AccountsCommitment, 1)?;
 		let (state, meta) = store.load_or_init(|| CommitmentTree::new(4))?;
 		assert_eq!(meta.snapshot_version, CURRENT_SNAPSHOT_VERSION);
 
 		store.force_checkpoint(&state, &meta)?;
 		let snap_bytes = fs::read(base.join("accounts_commitment").join("snapshot.bin"))?;
-		let snap: Snapshot<CommitmentTree<Hash>> = bincode::deserialize(&snap_bytes)?;
+		let snap: Snapshot<CommitmentTree<HashOutput>> = bincode::deserialize(&snap_bytes)?;
 		assert_eq!(snap.version, CURRENT_SNAPSHOT_VERSION);
 
 		let _ = fs::remove_dir_all(&base);
