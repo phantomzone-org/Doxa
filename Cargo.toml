@@ -25,3 +25,9 @@ dotenvy = "0.15"
 axum = "0.8.8"
 itertools = "0.14.0"
 primitive-types = "0.14.0"
+
+# Uncomment to use local plonky2 checkout instead of git (for debugging).
+[patch."https://github.com/phantomzone-org/plonky2.git"]
+plonky2       = { path = "/home/janmjaya/Desktop/plonky2/plonky2/plonky2" }
+plonky2_field = { path = "/home/janmjaya/Desktop/plonky2/plonky2/field" }
+starky        = { path = "/home/janmjaya/Desktop/plonky2/plonky2/starky" }

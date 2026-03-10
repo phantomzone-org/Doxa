@@ -109,14 +109,14 @@ pub fn sample_batch_commitment_tree_proof(
 ) -> Result<(
 	CircuitDataNative,
 	ProofNative,
-	BatchCommitmentProof<Hash>,
-	Vec<Hash>,
+	BatchCommitmentProof<HashOutput>,
+	Vec<HashOutput>,
 )> {
 	const DEPTH: usize = 32;
 
 	print!("Alloc tree 2^{DEPTH}: ");
 	let now = Instant::now();
-	let mut tree: CommitmentTree<Hash> = CommitmentTree::new(TREE_DEPTH);
+	let mut tree: CommitmentTree<HashOutput> = CommitmentTree::new(TREE_DEPTH);
 	println!("{:?}", now.elapsed());
 
 	let mut rng: StdRng = StdRng::from_seed(seed);
@@ -142,13 +142,13 @@ pub fn sample_batch_commitment_tree_proof(
 
 	print!("Connect: ");
 	let now: Instant = Instant::now();
-	targets.connect::<Hash, F, D>(&mut builder);
+	targets.connect::<HashOutput, F, D>(&mut builder);
 	println!("{:?}", now.elapsed());
 
 	print!("Set Witnesses: ");
 	let now: Instant = Instant::now();
 	let mut pw: PartialWitness<F> = PartialWitness::new();
-	targets.set::<Hash, F, DEPTH>(&mut pw, &batch_proof)?;
+	targets.set::<HashOutput, F, DEPTH>(&mut pw, &batch_proof)?;
 	println!("{:?}", now.elapsed());
 
 	print!("Build: ");
@@ -221,13 +221,13 @@ pub fn sample_batch_nullifier_tree_proof(
 
 	print!("Connect: ");
 	let now: Instant = Instant::now();
-	targets.connect::<Hash, F, D>(&mut builder);
+	targets.connect::<HashOutput, F, D>(&mut builder);
 	println!("{:?}", now.elapsed());
 
 	print!("Set Witnesses: ");
 	let now: Instant = Instant::now();
 	let mut pw: PartialWitness<F> = PartialWitness::new();
-	targets.set::<Hash, F, DEPTH>(&mut pw, &batch_proof)?;
+	targets.set::<HashOutput, F, DEPTH>(&mut pw, &batch_proof)?;
 	println!("{:?}", now.elapsed());
 
 	print!("Build: ");

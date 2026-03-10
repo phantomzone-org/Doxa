@@ -10,7 +10,7 @@ use alloy::{
 	signers::{local::PrivateKeySigner, Signer},
 };
 use anyhow::Context;
-use tessera_trees::tree::{hasher::Hash, CommitmentTree, NullifierTree};
+use tessera_trees::tree::{hasher::HashOutput, CommitmentTree, NullifierTree};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -117,13 +117,13 @@ pub struct Sequencer {
 	pub notes_nullifier_state: NullifierTreeState,
 	pub accounts_commitment_state: CommitmentTreeState,
 	pub accounts_nullifier_state: NullifierTreeState,
-	notes_commitment_store: Option<TreeStore<CommitmentTree<Hash>>>,
+	notes_commitment_store: Option<TreeStore<CommitmentTree<HashOutput>>>,
 	notes_commitment_meta: Option<StoreMeta>,
-	notes_nullifier_store: Option<TreeStore<NullifierTree<Hash>>>,
+	notes_nullifier_store: Option<TreeStore<NullifierTree<HashOutput>>>,
 	notes_nullifier_meta: Option<StoreMeta>,
-	accounts_commitment_store: Option<TreeStore<CommitmentTree<Hash>>>,
+	accounts_commitment_store: Option<TreeStore<CommitmentTree<HashOutput>>>,
 	accounts_commitment_meta: Option<StoreMeta>,
-	accounts_nullifier_store: Option<TreeStore<NullifierTree<Hash>>>,
+	accounts_nullifier_store: Option<TreeStore<NullifierTree<HashOutput>>>,
 	accounts_nullifier_meta: Option<StoreMeta>,
 	prover_client: Option<HttpProverClient>,
 	result_tx: Option<mpsc::Sender<ProveOutcome>>,

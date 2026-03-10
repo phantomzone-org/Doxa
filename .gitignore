@@ -1,11 +1,13 @@
 */target
 */examples/tmp
+/tmp
 # Generated artifacts (any module)
 **/artifacts/
 *.pprof
 /target
 Cargo.lock
 scripts/logs/
+*.claude
 
 #submodule
 tessera-solidity/lib/forge-std

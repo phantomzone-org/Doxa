@@ -306,7 +306,7 @@ mod test {
 		let now = Instant::now();
 		let mut proofs = Vec::with_capacity(BATCH_SIZE);
 		for i in 0..BATCH_SIZE {
-			let value = Hash::new_from_u64((i + 1) as u64 * 1000);
+			let value = HashOutput::new_from_u64((i + 1) as u64 * 1000);
 			let proof = tree.insert(value)?;
 			proofs.push(proof);
 		}

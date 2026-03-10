@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use digest::{Digest, Output};
 use serde::{Deserialize, Serialize};
 use tessera_client::NoteCommitment;
-use tessera_trees::tree::hasher::Hash;
+use tessera_trees::tree::hasher::HashOutput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Deposit {
@@ -62,11 +62,11 @@ impl Deposit {
 		out
 	}
 
-	pub fn as_field_hash<H: Digest>(&self) -> Hash {
+	pub fn as_field_hash<H: Digest>(&self) -> HashOutput {
 		let digest = self.hash::<H>();
 		let mut bytes = [0u8; 32];
 		bytes.copy_from_slice(&digest[..32]);
-		Hash::from_32bytes_digest(bytes)
+		HashOutput::from_32bytes_digest(bytes)
 	}
 }
 
@@ -139,7 +139,7 @@ impl DepositsBatch {
 		self.deposits.iter().map(|d| d.hash::<H>()).collect()
 	}
 
-	pub fn leaves_as_field_hashes<H: Digest>(&self) -> Vec<Hash> {
+	pub fn leaves_as_field_hashes<H: Digest>(&self) -> Vec<HashOutput> {
 		self.deposits
 			.iter()
 			.map(|d| d.as_field_hash::<H>())
@@ -149,5 +149,5 @@ impl DepositsBatch {
 
 pub struct DepositBatchReady {
 	pub batch: DepositsBatch,
-	pub new_root: Hash,
+	pub new_root: HashOutput,
 }

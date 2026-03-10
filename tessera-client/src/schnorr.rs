@@ -6,12 +6,15 @@ use plonky2_field::{
 	goldilocks_field::GoldilocksField,
 	types::{Field, PrimeField64},
 };
+use tessera_trees::F;
 
-use crate::ecgfp5::PointEw;
+use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 
 /// A scalar (integer modulo the prime group order n).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Scalar([u64; 5]);
+
+// TODO: ack Thomas Pornin
 
 impl Scalar {
 	pub const BITS: usize = 319;
@@ -38,7 +41,6 @@ impl Scalar {
 	]);
 	// Group order n is slightly below 2^319. We store values over five
 	// 64-bit limbs.
-
 	pub const ZERO: Self = Self([0, 0, 0, 0, 0]);
 
 	/// Create a scalar from raw limbs (for testing purposes).
@@ -135,6 +137,19 @@ impl Scalar {
 		self.montymul(Self::R2).montymul(rhs)
 	}
 
+	/// Sample a uniformly random scalar in `[0, N)` using rejection sampling.
+	// TODO: I don't know whether this is secure.
+	pub(crate) fn sample<R: rand::Rng>(rng: &mut R) -> Self {
+		loop {
+			let mut limbs: [u64; 5] = std::array::from_fn(|_| rng.next_u64());
+			limbs[4] &= 0x7FFFFFFFFFFFFFFF; // N < 2^319; clear bit 63
+			let candidate = Self(limbs);
+			if candidate.sub_inner(Self::N).1 == 1 {
+				return candidate;
+			}
+		}
+	}
+
 	/// Reduce 5 Goldilocks field elements (320 bits) to scalar < N.
 	/// Circuit-friendly: just a conditional subtraction.
 	pub(crate) fn from_hash(elements: [GoldilocksField; 5]) -> Self {
@@ -214,6 +229,15 @@ impl PrivateKey {
 	// }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct CompressedPublicKey<F: Extendable<5>>(pub(crate) CompressedPoint<F>);
+
+impl<F: PrimeField64 + Legendre + Extendable<5>> From<PublicKey<F>> for CompressedPublicKey<F> {
+	fn from(value: PublicKey<F>) -> Self {
+		CompressedPublicKey(value.0.encode())
+	}
+}
+
 /// A public key for Schnorr signatures.
 ///
 /// This is a point on the curve that corresponds to a private key.
@@ -239,7 +263,6 @@ pub(crate) struct Signature {
 
 fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar {
 	use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
-
 	let mut out = [GoldilocksField::ZERO; 5];
 	out.copy_from_slice(
 		hash_n_to_m_no_pad::<_, <PoseidonHash as Hasher<GoldilocksField>>::Permutation>(
@@ -247,14 +270,23 @@ fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar {
 		)
 		.as_slice(),
 	);
-
 	Scalar::from_hash(out)
 }
 
-/// Sign: R = k*G, e = H(R || Q || m), s = k + d*e
+pub(crate) fn schnorr_challenge(
+	cr: &CompressedPoint<F>,
+	cq: &CompressedPoint<F>,
+	m: &[F],
+) -> Scalar {
+	let mut h: Vec<F> = cr.w.0.to_vec();
+	h.extend_from_slice(&cq.w.0);
+	h.extend_from_slice(m);
+	poseidon_hash_to_scalar(&h)
+}
+
+/// Sign: R = k*G, e = H(R || Q || m), s = k + d*-e
 pub(crate) fn schnorr_sign(
 	privkey: &PrivateKey,
-	pubkey: &PublicKey<GoldilocksField>,
 	message: &[GoldilocksField],
 	k: Scalar,
 ) -> Signature {
@@ -262,13 +294,10 @@ pub(crate) fn schnorr_sign(
 	let r = g.scalar_mul(&k);
 
 	let r_encoded = r.encode();
-	let q_encoded = pubkey.0.encode();
-	let mut hash_input = Vec::new();
-	hash_input.extend_from_slice(&r_encoded.w.0);
-	hash_input.extend_from_slice(&q_encoded.w.0);
-	hash_input.extend_from_slice(message);
+	let q_encoded = privkey.public_key().as_point().encode();
 
-	let e = poseidon_hash_to_scalar(&hash_input);
+	let e = schnorr_challenge(&r_encoded, &q_encoded, message);
+
 	let s = k + privkey.0 * -e;
 
 	Signature {
@@ -277,7 +306,7 @@ pub(crate) fn schnorr_sign(
 	}
 }
 
-/// Verify: s*G - e*Q == R
+/// Verify: s*G + e*Q == R
 pub(crate) fn schnorr_verify(
 	pubkey: &PublicKey<GoldilocksField>,
 	message: &[GoldilocksField],
@@ -285,12 +314,8 @@ pub(crate) fn schnorr_verify(
 ) -> bool {
 	let r_encoded = sig.r.encode();
 	let q_encoded = pubkey.0.encode();
-	let mut hash_input = Vec::new();
-	hash_input.extend_from_slice(&r_encoded.w.0);
-	hash_input.extend_from_slice(&q_encoded.w.0);
-	hash_input.extend_from_slice(message);
 
-	let e = poseidon_hash_to_scalar(&hash_input);
+	let e = schnorr_challenge(&r_encoded, &q_encoded, message);
 
 	let g = PointEw::generator();
 	let sg = g.scalar_mul(&sig.s);
@@ -337,7 +362,7 @@ mod tests {
 		]);
 
 		// Sign
-		let sig = schnorr_sign(&privkey, &pubkey, &message, k);
+		let sig = schnorr_sign(&privkey, &message, k);
 		assert!(!sig.r.at_inf, "R should not be at infinity");
 
 		// Verify: correct message should pass

@@ -40,7 +40,7 @@ use crate::tree::{
 /// - only the insertion slot was updated to obtain `new_root`
 /// - the ordering invariant `pred.value < new_value < pred.old_next_value` holds
 ///
-/// No Merkle multiproofs are required.  
+/// No Merkle multiproofs are required.
 /// Soundness is achieved by:
 /// - reusing identical Merkle paths and siblings across root transitions, and
 /// - explicitly re-authenticating an untouched path (the empty slot).
@@ -528,7 +528,7 @@ mod test {
 
 	use crate::tree::{
 		NullifierInsertProofTargets, NullifierTree,
-		hasher::{Hash, NewFromU64},
+		hasher::{HashOutput, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -541,13 +541,13 @@ mod test {
 
 		print!("Alloc tree 2^{DEPTH}: ");
 		let now = Instant::now();
-		let mut tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::<HashOutput>::new(DEPTH);
 		println!("{:?}", now.elapsed());
 
 		// Insert a value to get a valid proof
 		print!("Insert value: ");
 		let now = Instant::now();
-		let value = Hash::new_from_u64(42);
+		let value = HashOutput::new_from_u64(42);
 		let proof = tree.insert(value)?;
 		println!("{:?}", now.elapsed());
 
@@ -568,13 +568,13 @@ mod test {
 
 		print!("Connect: ");
 		let now = Instant::now();
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		println!("{:?}", now.elapsed());
 
 		print!("Set Witnesses: ");
 		let now = Instant::now();
 		let mut pw = PartialWitness::new();
-		targets.set::<Hash, F, DEPTH>(&mut pw, &proof)?;
+		targets.set::<HashOutput, F, DEPTH>(&mut pw, &proof)?;
 		println!("{:?}", now.elapsed());
 
 		print!("Build: ");

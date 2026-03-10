@@ -554,7 +554,7 @@ mod tests {
 	use super::StreamingAggregator;
 	use crate::tree::{
 		NullifierInsertProof, NullifierInsertProofTargets, NullifierTree,
-		hasher::{Hash, NewFromU64},
+		hasher::{HashOutput, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -572,7 +572,7 @@ mod tests {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let targets = NullifierInsertProofTargets::new(&mut builder, depth, true, true);
-		targets.connect::<Hash, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		let circuit_data = builder.build::<C>();
 		(circuit_data, targets)
 	}
@@ -588,11 +588,11 @@ mod tests {
 		// 1. Generate leaf proofs
 		println!("Step 1: Generating {} insertion proofs", NUM_PROOFS);
 		let now = Instant::now();
-		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
-		let mut insert_proofs: Vec<NullifierInsertProof<Hash>> = Vec::with_capacity(NUM_PROOFS);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
+		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> = Vec::with_capacity(NUM_PROOFS);
 
 		for i in 0..NUM_PROOFS {
-			let value = Hash::new_from_u64((i + 1) as u64 * 100);
+			let value = HashOutput::new_from_u64((i + 1) as u64 * 100);
 			let proof = tree.insert(value)?;
 			insert_proofs.push(proof);
 		}
@@ -624,7 +624,7 @@ mod tests {
 
 		for (i, proof) in insert_proofs.iter().enumerate() {
 			let mut pw = PartialWitness::new();
-			targets.set::<Hash, F, DEPTH>(&mut pw, proof)?;
+			targets.set::<HashOutput, F, DEPTH>(&mut pw, proof)?;
 			let circuit_proof = leaf_circuit_data.prove(pw)?;
 
 			println!("  Submitting proof {}", i);
@@ -685,17 +685,17 @@ mod tests {
 		println!("=== Streaming Aggregator Test (Eager) ===\n");
 
 		// 1. Generate leaf proofs
-		let mut tree: NullifierTree<Hash> = NullifierTree::new(DEPTH);
-		let mut insert_proofs: Vec<NullifierInsertProof<Hash>> = Vec::with_capacity(NUM_PROOFS);
+		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
+		let mut insert_proofs: Vec<NullifierInsertProof<HashOutput>> = Vec::with_capacity(NUM_PROOFS);
 
 		for i in 0..NUM_PROOFS {
-			let value = Hash::new_from_u64((i + 1) as u64 * 100);
+			let value = HashOutput::new_from_u64((i + 1) as u64 * 100);
 			let proof = tree.insert(value)?;
 			insert_proofs.push(proof);
 		}
 
-		let initial_root: Hash = insert_proofs[0].old_root;
-		let final_root: Hash = insert_proofs.last().unwrap().new_root;
+		let initial_root: HashOutput = insert_proofs[0].old_root;
+		let final_root: HashOutput = insert_proofs.last().unwrap().new_root;
 
 		// 2. Build leaf circuit
 		let (leaf_circuit_data, targets) = build_insert_circuit(DEPTH);
@@ -724,7 +724,7 @@ mod tests {
 		let now = Instant::now();
 		for (i, proof) in insert_proofs.iter().enumerate() {
 			let mut pw = PartialWitness::new();
-			targets.set::<Hash, F, DEPTH>(&mut pw, proof)?;
+			targets.set::<HashOutput, F, DEPTH>(&mut pw, proof)?;
 			let circuit_proof = leaf_circuit_data.prove(pw)?;
 			aggregator.submit(circuit_proof);
 			println!("  Proof {} submitted", i);

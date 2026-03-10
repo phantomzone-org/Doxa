@@ -3,7 +3,7 @@
 
 use alloy::{primitives::B256, sol};
 use plonky2::field::types::Field;
-use tessera_trees::{tree::hasher::Hash, F};
+use tessera_trees::{tree::hasher::HashOutput, F};
 
 sol! {
 	#[sol(rpc)]
@@ -171,7 +171,7 @@ sol! {
 ///
 /// Encoding: each element as 8-byte big-endian uint64, concatenated.
 /// Matches the convention in `groth16_wrapper.rs` and `DepositsRollupBridge.sol`.
-pub fn hash_to_bytes32(h: &Hash) -> B256 {
+pub fn hash_to_bytes32(h: &HashOutput) -> B256 {
 	let mut bytes = [0u8; 32];
 	for i in 0..4 {
 		bytes[i * 8..(i + 1) * 8].copy_from_slice(&h.0[i].0.to_be_bytes());
@@ -192,7 +192,7 @@ pub const GOLDILOCKS_PRIME: u64 = 0xFFFF_FFFF_0000_0001;
 /// (2^64 - 2^32 + 1). Such values are outside the Goldilocks field and would
 /// silently produce an incorrect element if passed to
 /// `F::from_canonical_u64`, breaking root derivation and proof verification.
-pub fn bytes32_to_hash(b: &B256) -> anyhow::Result<Hash> {
+pub fn bytes32_to_hash(b: &B256) -> anyhow::Result<HashOutput> {
 	let bytes = b.as_slice();
 	let mut elems = [F::ZERO; 4];
 	for i in 0..4 {
@@ -210,7 +210,7 @@ pub fn bytes32_to_hash(b: &B256) -> anyhow::Result<Hash> {
 		);
 		elems[i] = F::from_canonical_u64(val);
 	}
-	Ok(Hash(elems))
+	Ok(HashOutput(elems))
 }
 
 /// Convert a slice of raw 32-byte commitments to validated Goldilocks `Hash`
@@ -218,7 +218,7 @@ pub fn bytes32_to_hash(b: &B256) -> anyhow::Result<Hash> {
 ///
 /// This is the preferred helper for the many `.map(bytes32_to_hash).collect()`
 /// patterns in the sequencer so that error propagation is uniform.
-pub fn bytes_slice_to_hashes(raw: &[[u8; 32]]) -> anyhow::Result<Vec<Hash>> {
+pub fn bytes_slice_to_hashes(raw: &[[u8; 32]]) -> anyhow::Result<Vec<HashOutput>> {
 	raw.iter()
 		.map(|b| bytes32_to_hash(&B256::from(*b)))
 		.collect()

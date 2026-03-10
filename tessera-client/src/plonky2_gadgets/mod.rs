@@ -1,9 +1,65 @@
+use plonky2::{
+	hash::hash_types::HashOutTarget,
+	iop::{
+		target::Target,
+		witness::{PartialWitness, WitnessWrite},
+	},
+};
+use plonky2_field::types::Field;
+
+pub(crate) mod deposit_tx;
 pub(crate) mod merkle;
+pub(crate) mod priv_tx;
 pub(crate) mod signature;
+pub(crate) mod targets;
+pub(crate) mod u256;
+
+pub(crate) fn set_hash<F: Field>(pw: &mut PartialWitness<F>, t: HashOutTarget, v: [F; 4]) {
+	for (i, &x) in v.iter().enumerate() {
+		pw.set_target(t.elements[i], x).unwrap();
+	}
+}
+
+pub(crate) fn set_gfp5<F: Field>(pw: &mut PartialWitness<F>, targets: [Target; 5], v: [F; 5]) {
+	for (t, x) in targets.iter().zip(v.iter()) {
+		pw.set_target(*t, *x).unwrap();
+	}
+}
+
+pub(crate) fn set_u256_zero<F: Field>(
+	pw: &mut PartialWitness<F>,
+	t: &crate::plonky2_gadgets::u256::U256Target,
+) {
+	for u in t.0 {
+		pw.set_target(u.0, F::ZERO).unwrap();
+	}
+}
+
+pub(crate) fn set_u256<F: Field>(
+	pw: &mut PartialWitness<F>,
+	target: &crate::plonky2_gadgets::u256::U256Target,
+	value: [u32; 8],
+) {
+	for (i, &w) in value.iter().enumerate() {
+		pw.set_target(target.0[i].0, F::from_canonical_u32(w))
+			.unwrap();
+	}
+}
 
 mod tests {
 	use plonky2::{hash::hash_types::RichField, plonk::circuit_data::CircuitConfig};
 	use plonky2_field::extension::Extendable;
+
+	/// Time `$expr`, print `"$label: <duration>"`, and return the result.
+	#[macro_export]
+	macro_rules! time {
+		($label:expr, $expr:expr) => {{
+			let _t = std::time::Instant::now();
+			let _res = $expr;
+			println!("{}: {:?}", $label, _t.elapsed());
+			_res
+		}};
+	}
 
 	pub(crate) fn avg(times: &[std::time::Duration]) -> std::time::Duration {
 		times.iter().sum::<std::time::Duration>() / times.len() as u32
