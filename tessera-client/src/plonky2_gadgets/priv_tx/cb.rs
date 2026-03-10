@@ -417,6 +417,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		let mut verify_key_proof =
 			|key: PubkeyTarget| -> ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH> {
 				let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
+				// TODO: change this from conditional to compute
 				let mt = conditional_merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(
 					self,
 					leaf_hash,

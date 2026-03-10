@@ -12,8 +12,8 @@ use tessera_trees::{F, tree::hasher::HashOutput};
 use super::{double_hash_native, targets::TxCircuitTargets};
 use crate::{
 	ACT_DEPTH, AccountAddress, AssetId, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH,
-	NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, PrivateIdentifier, StandardAccount,
-	SubpoolId,
+	NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, PrivateIdentifier, SpendAuth,
+	StandardAccount, SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
 	derive_priv_tx_hash,
 	ecgfp5::{CompressedPoint, PointEw},
@@ -24,7 +24,7 @@ use crate::{
 		signature::set_schnorr_witness,
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::{CompressedPublicKey, Scalar, Signature, schnorr_challenge},
+	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_challenge},
 	tree::CommitmentTreeMerkleProof,
 };
 
@@ -404,7 +404,7 @@ pub(crate) fn set_fake_tx_witness(
 	pw.set_bool_target(t.is_update_auth, false).unwrap();
 	pw.set_bool_target(t.is_priv_tx, false).unwrap();
 
-	// ── Tree roots (all zero) ─────────────────────────────────────────────────
+	// ── Tree roots ─────────────────────────────────────────────────-----------
 	set_hash(pw, t.mainpool_config_root.0, mainpool_config_root.0);
 	set_hash(pw, t.act_root.0, act_root.0);
 	set_hash(pw, t.nct_root.0, nct_root.0);

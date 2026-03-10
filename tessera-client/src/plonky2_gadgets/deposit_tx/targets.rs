@@ -65,6 +65,8 @@ pub(crate) struct DepositTxSignatureTargets {
 // ----- Top-level DepositTxTargets -----
 
 pub(crate) struct DepositTxTargets {
+	// Tx flags
+	pub(crate) not_fake_tx: BoolTarget,
 	// tree roots
 	pub(crate) act_root: ActRootTarget,
 	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
