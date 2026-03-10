@@ -637,7 +637,7 @@ impl<const D: usize> QET<D> {
 }
 
 #[derive(Debug)]
-struct DoubleAdd4x {}
+pub(super) struct DoubleAdd4x {}
 
 impl DoubleAdd4x {
 	const DOUBLE_ACC_CHAIN_CONSTRAINT_COUNT: usize = 47;
@@ -696,7 +696,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 	where
 		Self: Sized,
 	{
-		todo!()
+		Ok(Self {})
 	}
 
 	fn serialize(
@@ -704,7 +704,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for DoubleAdd4x {
 		_dst: &mut Vec<u8>,
 		_common_data: &plonky2::plonk::circuit_data::CommonCircuitData<F, D>,
 	) -> plonky2::util::serialization::IoResult<()> {
-		todo!()
+		Ok(())
 	}
 
 	fn eval_unfiltered(
@@ -1028,7 +1028,7 @@ impl DoubleAdd4xTargets {
 /// selector is set to 1.
 ///
 /// Accomodates `num_ops` instances in a row
-struct CompressionGate {
+pub(super) struct CompressionGate {
 	num_ops: usize,
 }
 
@@ -1097,21 +1097,24 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for CompressionGat
 	}
 
 	fn deserialize(
-		_src: &mut plonky2::util::serialization::Buffer,
+		src: &mut plonky2::util::serialization::Buffer,
 		_common_data: &plonky2::plonk::circuit_data::CommonCircuitData<F, D>,
 	) -> plonky2::util::serialization::IoResult<Self>
 	where
 		Self: Sized,
 	{
-		todo!()
+		let num_ops = src.read_usize()?;
+		Ok(Self {
+			num_ops,
+		})
 	}
 
 	fn serialize(
 		&self,
-		_dst: &mut Vec<u8>,
+		dst: &mut Vec<u8>,
 		_common_data: &plonky2::plonk::circuit_data::CommonCircuitData<F, D>,
 	) -> plonky2::util::serialization::IoResult<()> {
-		todo!()
+		dst.write_usize(self.num_ops)
 	}
 
 	fn eval_unfiltered(

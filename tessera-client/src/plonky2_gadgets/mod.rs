@@ -14,6 +14,8 @@ pub(crate) mod signature;
 pub(crate) mod targets;
 pub(crate) mod u256;
 
+pub mod serialization;
+
 pub(crate) fn set_hash<F: Field>(pw: &mut PartialWitness<F>, t: HashOutTarget, v: [F; 4]) {
 	for (i, &x) in v.iter().enumerate() {
 		pw.set_target(t.elements[i], x).unwrap();
