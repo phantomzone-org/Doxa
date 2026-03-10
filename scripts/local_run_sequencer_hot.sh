@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fresh-launch the Rust sequencer: wipes local tree state before starting.
-# Use local_run_sequencer_hot.sh to preserve existing state (hot restart).
+# Hot-launch the Rust sequencer: preserves existing local tree state.
+# Use local_run_sequencer.sh for a fresh start (wipes local state).
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
@@ -16,12 +16,6 @@ fi
 if [[ -z "${BRIDGE:-}" ]]; then
   echo "ERROR: BRIDGE not set. Run scripts/local_deploy.sh first or export BRIDGE=<address>." >&2
   exit 1
-fi
-
-# Wipe local tree state so the sequencer starts fresh from on-chain genesis.
-if [[ -d "$TESSERA_TREE_STORE_PATH" ]]; then
-  echo "Removing local tree state: $TESSERA_TREE_STORE_PATH"
-  rm -rf "$TESSERA_TREE_STORE_PATH"
 fi
 
 pushd "$ROOT_DIR/tessera-server" >/dev/null
@@ -39,7 +33,7 @@ LOG_DIR="$ROOT_DIR/scripts/logs"
 mkdir -p "$LOG_DIR"
 SEQ_LOG="$LOG_DIR/sequencer.log"
 
-echo "Starting sequencer (fresh) for bridge: $BRIDGE"
+echo "Starting sequencer for bridge: $BRIDGE"
 echo "Sequencer API: $TESSERA_SEQUENCER_API_URL"
 echo "Prover API: $TESSERA_PROVER_API_URL"
 echo "Logging to: $SEQ_LOG"

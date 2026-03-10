@@ -39,6 +39,12 @@ pub struct PendingRequest {
 /// [`TreeState`], WAL replay, and chain recovery.
 pub trait SequencerTree: Sized {
 	fn new(depth: usize) -> Self;
+	/// Create a tree pre-padded to the given batch alignment.
+	///
+	/// Commitment trees ignore `batch_size` (their leaf count starts at 0 which is already
+	/// aligned). Nullifier trees pre-insert deterministic padding leaves so that `num_leaves() ==
+	/// batch_size`.
+	fn new_padded(depth: usize, batch_size: usize) -> Self;
 	fn get_root(&self) -> Hash;
 	fn num_leaves(&self) -> usize;
 	/// Insert leaves, verify the resulting proof, and return the new root.
@@ -49,6 +55,10 @@ pub trait SequencerTree: Sized {
 
 impl SequencerTree for CommitmentTree<Hash> {
 	fn new(depth: usize) -> Self {
+		CommitmentTree::new(depth)
+	}
+
+	fn new_padded(depth: usize, _batch_size: usize) -> Self {
 		CommitmentTree::new(depth)
 	}
 
@@ -76,6 +86,10 @@ impl SequencerTree for CommitmentTree<Hash> {
 impl SequencerTree for NullifierTree<Hash> {
 	fn new(depth: usize) -> Self {
 		NullifierTree::new(depth)
+	}
+
+	fn new_padded(depth: usize, batch_size: usize) -> Self {
+		NullifierTree::new_with_padding(depth, batch_size)
 	}
 
 	fn get_root(&self) -> Hash {
@@ -114,7 +128,7 @@ impl<T: SequencerTree> Default for TreeState<T> {
 }
 
 impl<T: SequencerTree> TreeState<T> {
-	/// Create a new, empty tree state.
+	/// Create a new, empty tree state (unpadded).
 	pub fn new() -> Self {
 		Self {
 			tree: T::new(TREE_DEPTH),
@@ -123,9 +137,18 @@ impl<T: SequencerTree> TreeState<T> {
 		}
 	}
 
-	/// Return the tree's genesis root (empty tree root).
-	pub fn genesis_root() -> Hash {
-		T::new(TREE_DEPTH).get_root()
+	/// Create a new tree state pre-padded to the given batch alignment.
+	pub fn new_padded(batch_size: usize) -> Self {
+		Self {
+			tree: T::new_padded(TREE_DEPTH, batch_size),
+			pending_requests: BTreeMap::new(),
+			pending_commitments: HashSet::new(),
+		}
+	}
+
+	/// Return the tree's genesis root with padding for the given batch size.
+	pub fn genesis_root(batch_size: usize) -> Hash {
+		T::new_padded(TREE_DEPTH, batch_size).get_root()
 	}
 
 	/// Return current local root.

@@ -12,19 +12,22 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export RPC="http://localhost:8545"
 export OPERATOR_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 export TRUSTED_KEY="0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+export CLIENT_KEY="0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
 
 # New bridge parameters (current contracts).
-export TESSERA_NOTE_BATCH_SIZE="128"
-export TESSERA_ACCOUNT_BATCH_SIZE="16"  # must equal NOTE_BATCH_SIZE / 8
+export TESSERA_NOTE_BATCH_SIZE="1024"
+export TESSERA_ACCOUNT_BATCH_SIZE="128"  # must equal NOTE_BATCH_SIZE / 8
 #
 # Nullifier-tree genesis is NOT the same as commitment-tree genesis.
-# The nullifier tree has a fixed "anchor" leaf/node at initialization, so its empty root differs.
+# Nullifier trees are pre-padded to batch_size alignment with deterministic
+# Keccak-derived leaves, so the genesis root depends on the batch size.
 #
-# Must match the sequencer's local empty-tree root (NullifierTreeState::genesis_root()).
+# Must match the sequencer's local empty-tree root (NullifierTreeState::genesis_root(batch_size)).
+# Regenerate with: TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 cargo run --bin genesis_roots --release
 # If this differs, the sequencer will refuse to run because proofs would not match on-chain state.
-export TESSERA_NOTES_NULLIFIER_ROOT="0x1ef897f4a5c3f5c07cddaf7dec41197f2259296bb1bb56264ca73c3e1b998bf9"
+export TESSERA_NOTES_NULLIFIER_ROOT="0x15e9f8d4eba009e86420baf5b2d3c7159ae560f7227b39aa30acdd1597c98daa"
 export TESSERA_NOTES_COMMITMENT_ROOT="0x5d85139746d173c92bf3543b4c6ce3daf11bdff30e5b44879d216bc5f06256b6"
-export TESSERA_ACCOUNTS_NULLIFIER_ROOT="0x1ef897f4a5c3f5c07cddaf7dec41197f2259296bb1bb56264ca73c3e1b998bf9"
+export TESSERA_ACCOUNTS_NULLIFIER_ROOT="0x50cfce4ae6dc8cd7d64a9c225469076daff4105d4e293547c6acfc8daebea518"
 export TESSERA_ACCOUNTS_COMMITMENT_ROOT="0x5d85139746d173c92bf3543b4c6ce3daf11bdff30e5b44879d216bc5f06256b6"
 
 # Back-compat alias: default request count for E2E flow scripts.
@@ -61,15 +64,6 @@ else
 fi
 unset _agg_dir
 
-# Account-circuit artifacts (8-PI trivial circuit for /accounts/commitment validation).
-_acct_dir="$ROOT_DIR/tessera-server/artifacts/account"
-if [[ -f "$_acct_dir/leaf_common.bin" ]]; then
-  export TESSERA_ACCOUNT_ARTIFACTS_PATH="$_acct_dir"
-else
-  unset TESSERA_ACCOUNT_ARTIFACTS_PATH 2>/dev/null || true
-fi
-unset _acct_dir
-
 echo "Loaded local env:"
 echo "  RPC=$RPC"
 echo "  TESSERA_NOTE_BATCH_SIZE=$TESSERA_NOTE_BATCH_SIZE"
@@ -84,4 +78,3 @@ echo "  TESSERA_PROVER_API_URL=$TESSERA_PROVER_API_URL"
 echo "  TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH=$TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH"
 echo "  TESSERA_CONSUME_ARTIFACTS_PATH=${TESSERA_CONSUME_ARTIFACTS_PATH:-"(not set)"}"
 echo "  TESSERA_AGGREGATOR_ARTIFACTS_PATH=${TESSERA_AGGREGATOR_ARTIFACTS_PATH:-"(not set)"}"
-echo "  TESSERA_ACCOUNT_ARTIFACTS_PATH=${TESSERA_ACCOUNT_ARTIFACTS_PATH:-"(not set)"}"

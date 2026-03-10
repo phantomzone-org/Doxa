@@ -4,7 +4,7 @@ use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof, BatchInsertProof};
 
 /// Sent from Sequencer to Prover via `tokio::mpsc` channel.
 ///
-/// Carries all four tree witnesses + the 16 TX leaf proofs for a single batch.
+/// Carries all four tree witnesses + sorted leaf data for TX proof construction.
 /// The prover proves all five inner circuits and wraps them into a single
 /// SuperAggregator Groth16 proof.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,8 +19,15 @@ pub struct ProveRequest {
 	pub accounts_commitment_proof: BatchCommitmentProof<Hash>,
 	/// Accounts nullifier tree batch-insertion witness.
 	pub accounts_nullifier_proof: BatchInsertProof<Hash>,
-	/// Serialised TX leaf proofs (exactly 16 slots; unused slots = DUMMY_ASSOCIATED_INPUT_PROOF).
-	pub associated_tx_proofs: Vec<Vec<u8>>,
+	/// Sorted leaf bytes for all 4 trees (after padding and sorting).
+	/// Used by the prover to build TX leaf proofs with correct tree data.
+	pub nc_sorted_leaves: Vec<[u8; 32]>,
+	pub nn_sorted_leaves: Vec<[u8; 32]>,
+	pub ac_sorted_leaves: Vec<[u8; 32]>,
+	pub an_sorted_leaves: Vec<[u8; 32]>,
+	/// Indices (in the sorted account-level batch) of slots that are real
+	/// private transactions (is_real=1). Empty for deposit-only batches.
+	pub real_account_slots: Vec<usize>,
 }
 
 /// Sent from Prover back to Sequencer via `tokio::mpsc` channel.

@@ -49,12 +49,15 @@ contract TransactionBatchTest is Test {
     bytes32 constant ROOT_AC_2 = bytes32(uint256(0xC2));
     bytes32 constant ROOT_AN_2 = bytes32(uint256(0xD2));
 
-    // Dummy leaf arrays for note trees (length 1, satisfies 0 < len <= NOTE_BATCH_SIZE).
+    // Full sorted leaf arrays for all 4 trees (exactly batchSize elements each).
     bytes32[] public NOTE_LEAVES_1;
     bytes32[] public NOTE_LEAVES_2;
-    // Dummy leaf arrays for account trees (length 1, satisfies 0 < len <= ACCOUNT_BATCH_SIZE = 1).
     bytes32[] public ACCT_LEAVES_1;
     bytes32[] public ACCT_LEAVES_2;
+    bytes32[] public NN_LEAVES_1;
+    bytes32[] public NN_LEAVES_2;
+    bytes32[] public AN_LEAVES_1;
+    bytes32[] public AN_LEAVES_2;
 
     function setUp() public {
         MockVerifierOk verifierOk = new MockVerifierOk();
@@ -72,10 +75,23 @@ contract TransactionBatchTest is Test {
             address(token)
         );
 
-        NOTE_LEAVES_1.push(bytes32(uint256(0xF1)));
-        NOTE_LEAVES_2.push(bytes32(uint256(0xF2)));
+        // Full sorted note commitment batches (NOTE_BATCH_SIZE = 8 elements, ascending).
+        for (uint256 i = 0; i < NOTE_BATCH_SIZE; i++) {
+            NOTE_LEAVES_1.push(bytes32(uint256(0xF100 + i)));
+            NOTE_LEAVES_2.push(bytes32(uint256(0xF200 + i)));
+        }
+        // Full sorted account commitment batches (ACCOUNT_BATCH_SIZE = 1).
         ACCT_LEAVES_1.push(bytes32(uint256(0xE1)));
         ACCT_LEAVES_2.push(bytes32(uint256(0xE2)));
+
+        // Full sorted nullifier batches (NOTE_BATCH_SIZE = 8 elements, ascending).
+        for (uint256 i = 0; i < NOTE_BATCH_SIZE; i++) {
+            NN_LEAVES_1.push(bytes32(uint256(0x1000 + i)));
+            NN_LEAVES_2.push(bytes32(uint256(0x2000 + i)));
+        }
+        // Account nullifier batches (ACCOUNT_BATCH_SIZE = 1).
+        AN_LEAVES_1.push(bytes32(uint256(0x3001)));
+        AN_LEAVES_2.push(bytes32(uint256(0x3002)));
     }
 
     // -------------------------------------------------------------------------
@@ -99,9 +115,9 @@ contract TransactionBatchTest is Test {
     ) internal returns (uint256) {
         return bridge.registerTransactionBatchUpdate(
             ncRoot, NOTE_LEAVES_1,
-            nnRoot, NOTE_LEAVES_1,
+            nnRoot, NN_LEAVES_1,
             acRoot, ACCT_LEAVES_1,
-            anRoot, ACCT_LEAVES_1
+            anRoot, AN_LEAVES_1
         );
     }
 
@@ -219,15 +235,18 @@ contract TransactionBatchTest is Test {
         vm.prank(user);
         bridge.depositAndRegister(note, amount);
 
-        // Use the tracked note as a noteCommitmentsOut leaf.
-        bytes32[] memory notesOut = new bytes32[](1);
+        // Full sorted NC batch with the tracked note as one leaf (rest are dummies).
+        bytes32[] memory notesOut = new bytes32[](NOTE_BATCH_SIZE);
         notesOut[0] = note;
+        for (uint256 i = 1; i < NOTE_BATCH_SIZE; i++) {
+            notesOut[i] = bytes32(uint256(0xFF00 + i));
+        }
 
         bridge.registerTransactionBatchUpdate(
             ROOT_NC_1, notesOut,
-            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_NN_1, NN_LEAVES_1,
             ROOT_AC_1, ACCT_LEAVES_1,
-            ROOT_AN_1, ACCT_LEAVES_1
+            ROOT_AN_1, AN_LEAVES_1
         );
 
         assertEq(
@@ -240,25 +259,25 @@ contract TransactionBatchTest is Test {
     // registerTransactionBatchUpdate — validation errors (mixed-width)
     // -------------------------------------------------------------------------
 
-    function testRegister_RevertsOnOversizedNoteArray() public {
-        bytes32[] memory big = new bytes32[](NOTE_BATCH_SIZE + 1);
+    function testRegister_RevertsOnWrongSizeNoteArray() public {
+        bytes32[] memory wrong = new bytes32[](NOTE_BATCH_SIZE + 1);
         vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidBatchLength.selector, NOTE_BATCH_SIZE + 1, NOTE_BATCH_SIZE));
         bridge.registerTransactionBatchUpdate(
-            ROOT_NC_1, big,
-            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_NC_1, wrong,
+            ROOT_NN_1, NN_LEAVES_1,
             ROOT_AC_1, ACCT_LEAVES_1,
-            ROOT_AN_1, ACCT_LEAVES_1
+            ROOT_AN_1, AN_LEAVES_1
         );
     }
 
-    function testRegister_RevertsOnOversizedAccountArray() public {
-        bytes32[] memory big = new bytes32[](ACCOUNT_BATCH_SIZE + 1);
+    function testRegister_RevertsOnWrongSizeAccountArray() public {
+        bytes32[] memory wrong = new bytes32[](ACCOUNT_BATCH_SIZE + 1);
         vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidBatchLength.selector, ACCOUNT_BATCH_SIZE + 1, ACCOUNT_BATCH_SIZE));
         bridge.registerTransactionBatchUpdate(
             ROOT_NC_1, NOTE_LEAVES_1,
-            ROOT_NN_1, NOTE_LEAVES_1,
-            ROOT_AC_1, big,
-            ROOT_AN_1, ACCT_LEAVES_1
+            ROOT_NN_1, NN_LEAVES_1,
+            ROOT_AC_1, wrong,
+            ROOT_AN_1, AN_LEAVES_1
         );
     }
 
@@ -275,15 +294,18 @@ contract TransactionBatchTest is Test {
         vm.prank(user);
         bridge.withdrawPendingDeposit(note); // status → Withdrawn
 
-        bytes32[] memory notesOut = new bytes32[](1);
+        bytes32[] memory notesOut = new bytes32[](NOTE_BATCH_SIZE);
         notesOut[0] = note;
+        for (uint256 i = 1; i < NOTE_BATCH_SIZE; i++) {
+            notesOut[i] = bytes32(uint256(0xFF00 + i));
+        }
 
         vm.expectRevert(abi.encodeWithSelector(DepositsRollupBridge.InvalidDepositState.selector, note));
         bridge.registerTransactionBatchUpdate(
             ROOT_NC_1, notesOut,
-            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_NN_1, NN_LEAVES_1,
             ROOT_AC_1, ACCT_LEAVES_1,
-            ROOT_AN_1, ACCT_LEAVES_1
+            ROOT_AN_1, AN_LEAVES_1
         );
     }
 
@@ -442,11 +464,23 @@ contract TransactionBatchTest is Test {
             address(token)
         );
 
+        // Build full sorted batches for the bad-verifier bridge.
+        bytes32[] memory ncFull = new bytes32[](NOTE_BATCH_SIZE);
+        bytes32[] memory nnFull = new bytes32[](NOTE_BATCH_SIZE);
+        bytes32[] memory acFull = new bytes32[](ACCOUNT_BATCH_SIZE);
+        bytes32[] memory anFull = new bytes32[](ACCOUNT_BATCH_SIZE);
+        for (uint256 i = 0; i < NOTE_BATCH_SIZE; i++) {
+            ncFull[i] = bytes32(uint256(0xF100 + i));
+            nnFull[i] = bytes32(uint256(0x1000 + i));
+        }
+        acFull[0] = bytes32(uint256(0xE1));
+        anFull[0] = bytes32(uint256(0x3001));
+
         uint256 id = badBridge.registerTransactionBatchUpdate(
-            ROOT_NC_1, NOTE_LEAVES_1,
-            ROOT_NN_1, NOTE_LEAVES_1,
-            ROOT_AC_1, ACCT_LEAVES_1,
-            ROOT_AN_1, ACCT_LEAVES_1
+            ROOT_NC_1, ncFull,
+            ROOT_NN_1, nnFull,
+            ROOT_AC_1, acFull,
+            ROOT_AN_1, anFull
         );
 
         // Read the exact commitment stored for this batch so the expected revert data matches.
@@ -476,14 +510,17 @@ contract TransactionBatchTest is Test {
         vm.prank(user);
         bridge.depositAndRegister(note, amount);
 
-        // Register batch with this note in noteCommitmentsOut.
-        bytes32[] memory notesOut = new bytes32[](1);
+        // Register batch with this note in noteCommitmentsOut (full sorted batch).
+        bytes32[] memory notesOut = new bytes32[](NOTE_BATCH_SIZE);
         notesOut[0] = note;
+        for (uint256 i = 1; i < NOTE_BATCH_SIZE; i++) {
+            notesOut[i] = bytes32(uint256(0xFF00 + i));
+        }
         bridge.registerTransactionBatchUpdate(
             ROOT_NC_1, notesOut,
-            ROOT_NN_1, NOTE_LEAVES_1,
+            ROOT_NN_1, NN_LEAVES_1,
             ROOT_AC_1, ACCT_LEAVES_1,
-            ROOT_AN_1, ACCT_LEAVES_1
+            ROOT_AN_1, AN_LEAVES_1
         );
 
         // Deposit is now Validated; withdrawal should revert.

@@ -35,10 +35,6 @@ pub struct SequencerConfig {
 	/// When set, the API layer validates /consume-request proof bytes cryptographically.
 	/// Set via `TESSERA_CONSUME_ARTIFACTS_PATH`.
 	pub consume_artifacts_path: Option<PathBuf>,
-	/// Optional path to pre-built account-circuit artifacts.
-	/// When set, the API layer validates /accounts/commitment proof bytes cryptographically.
-	/// Set via `TESSERA_ACCOUNT_ARTIFACTS_PATH`.
-	pub account_artifacts_path: Option<PathBuf>,
 }
 
 /// Configuration for the standalone prover service.
@@ -176,10 +172,6 @@ impl SequencerConfig {
 			.ok()
 			.map(PathBuf::from);
 
-		let account_artifacts_path = std::env::var("TESSERA_ACCOUNT_ARTIFACTS_PATH")
-			.ok()
-			.map(PathBuf::from);
-
 		Ok(Self {
 			rpc_url,
 			operator_private_key,
@@ -194,7 +186,6 @@ impl SequencerConfig {
 			prover_api_timeout_secs,
 			aggregator_artifacts_path,
 			consume_artifacts_path,
-			account_artifacts_path,
 		})
 	}
 }
@@ -206,8 +197,8 @@ impl ProverConfig {
 	/// - `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH`: path to pre-built SuperAggregator artifacts.
 	///
 	/// # Optional env vars (with defaults)
-	/// - `TESSERA_NOTE_BATCH_SIZE` (default `128`): leaf count per note-tree batch.
-	/// - `TESSERA_ACCOUNT_BATCH_SIZE` (default `16`): leaf count per account-tree batch (must be
+	/// - `TESSERA_NOTE_BATCH_SIZE` (default `1024`): leaf count per note-tree batch.
+	/// - `TESSERA_ACCOUNT_BATCH_SIZE` (default `128`): leaf count per account-tree batch (must be
 	///   1/8 of note size).
 	/// - `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`): HTTP listen address.
 	/// - `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): aggregator artifacts path.
@@ -223,11 +214,11 @@ impl ProverConfig {
 				.into();
 
 		let note_batch_size: usize = std::env::var("TESSERA_NOTE_BATCH_SIZE")
-			.unwrap_or_else(|_| "128".to_string())
+			.unwrap_or_else(|_| "1024".to_string())
 			.parse()
 			.context("invalid TESSERA_NOTE_BATCH_SIZE")?;
 		let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
-			.unwrap_or_else(|_| "16".to_string())
+			.unwrap_or_else(|_| "128".to_string())
 			.parse()
 			.context("invalid TESSERA_ACCOUNT_BATCH_SIZE")?;
 		anyhow::ensure!(

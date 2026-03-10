@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::tree::{
 	MerkleTree, Node, NullifierInsertProof,
 	error::{MerkleTreeError, MerkleTreeResult},
-	hasher::MerkleHash,
+	hasher::{Hash, MerkleHash},
 };
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -317,6 +317,64 @@ impl<H: MerkleHash> NullifierTree<H> {
 	}
 }
 
+impl NullifierTree<Hash> {
+	/// Creates a new nullifier tree pre-padded so that `nodes.len() == batch_size`.
+	///
+	/// The tree starts with the sentinel node at index 0, then deterministically
+	/// inserts `batch_size - 1` padding leaves.  Each padding leaf's value is
+	/// derived as:
+	///
+	/// ```text
+	///   value[i] = Hash::from_32bytes_digest(Keccak256(i || H(node[i-1])))
+	/// ```
+	///
+	/// where `H(node[i-1])` is the compute_hash() of the previous node (its
+	/// Poseidon commitment) serialized as 32 big-endian bytes, and `i` is the
+	/// leaf index encoded as a big-endian `u64`.
+	///
+	/// This ensures the genesis root is deterministic and reproducible for any
+	/// given `batch_size`, and the first `insert_batch` call will find
+	/// `nodes.len()` properly aligned.
+	pub fn new_with_padding(depth: usize, batch_size: usize) -> Self {
+		assert!(
+			batch_size.is_power_of_two() && batch_size > 1,
+			"batch_size must be a power of two > 1"
+		);
+
+		let mut tree = Self::new(depth);
+
+		for i in 1..batch_size {
+			let prev_hash = tree.nodes[i - 1].compute_hash();
+			let value = Self::derive_padding_leaf(i, &prev_hash);
+			tree.insert(value)
+				.unwrap_or_else(|e| panic!("padding insert at index {i} failed: {e}"));
+		}
+
+		tree
+	}
+
+	/// Derives a deterministic padding leaf value:
+	///   `Hash::from_32bytes_digest(Keccak256(leaf_index_be8 || node_hash_be32))`
+	fn derive_padding_leaf(leaf_index: usize, prev_node_hash: &Hash) -> Hash {
+		use tiny_keccak::{Hasher, Keccak};
+
+		let mut keccak = Keccak::v256();
+
+		// leaf index as big-endian u64
+		keccak.update(&(leaf_index as u64).to_be_bytes());
+
+		// previous node's compute_hash() as 4 × big-endian u64 (32 bytes)
+		for &elem in &prev_node_hash.0 {
+			keccak.update(&elem.0.to_be_bytes());
+		}
+
+		let mut digest = [0u8; 32];
+		keccak.finalize(&mut digest);
+
+		Hash::from_32bytes_digest(digest)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -337,6 +395,39 @@ mod tests {
 		let tree: NullifierTree<Hash> = NullifierTree::<Hash>::new(DEPTH);
 		assert!(matches!(tree.get_root(), Hash(_)));
 		assert_eq!(tree.nodes.len(), 1);
+	}
+
+	#[test]
+	fn test_new_with_padding() {
+		let tree = NullifierTree::<Hash>::new_with_padding(DEPTH, 16);
+		assert_eq!(tree.nodes.len(), 16);
+		tree.verify().expect("padded tree should be valid");
+
+		// Determinism: same batch_size always yields the same root.
+		let tree2 = NullifierTree::<Hash>::new_with_padding(DEPTH, 16);
+		assert_eq!(tree.get_root(), tree2.get_root());
+
+		// Different batch_size yields a different root.
+		let tree4 = NullifierTree::<Hash>::new_with_padding(DEPTH, 4);
+		assert_eq!(tree4.nodes.len(), 4);
+		assert_ne!(tree.get_root(), tree4.get_root());
+		tree4.verify().expect("padded tree (4) should be valid");
+	}
+
+	#[test]
+	fn test_padded_tree_accepts_batch_insert() {
+		let mut tree = NullifierTree::<Hash>::new_with_padding(DEPTH, 4);
+		assert_eq!(tree.nodes.len(), 4);
+
+		let mut rng: StdRng = StdRng::from_seed([99u8; 32]);
+		let batch: Vec<Hash> = (0..4).map(|_| Hash::new_random(&mut rng)).collect();
+		let proof = tree
+			.insert_batch(batch)
+			.expect("batch insert should succeed");
+		assert!(proof.verify());
+		assert_eq!(tree.nodes.len(), 8);
+		tree.verify()
+			.expect("tree after batch insert should be valid");
 	}
 
 	#[test]

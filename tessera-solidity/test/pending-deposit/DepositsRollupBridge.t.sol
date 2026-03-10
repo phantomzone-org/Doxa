@@ -88,6 +88,33 @@ contract DepositsRollupBridgeTest is Test {
         assertEq(token.balanceOf(address(bridge)), 0);
     }
 
+    /// @dev Build a sorted NN batch of NOTE_BATCH_SIZE ascending values.
+    function _sortedNnBatch() internal pure returns (bytes32[] memory nn) {
+        nn = new bytes32[](NOTE_BATCH_SIZE);
+        for (uint256 i = 0; i < NOTE_BATCH_SIZE; i++) {
+            nn[i] = bytes32(uint256(0x5000 + i));
+        }
+    }
+
+    /// @dev Build a sorted NC batch with up to 2 real notes at the front.
+    function _sortedNcBatch(bytes32 n0, bytes32 n1) internal pure returns (bytes32[] memory nc) {
+        nc = new bytes32[](NOTE_BATCH_SIZE);
+        nc[0] = n0;
+        nc[1] = n1;
+        for (uint256 i = 2; i < NOTE_BATCH_SIZE; i++) {
+            nc[i] = bytes32(uint256(0xAA00 + i));
+        }
+    }
+
+    /// @dev Build a sorted NC batch with 1 real note at the front.
+    function _sortedNcBatchSingle(bytes32 n0) internal pure returns (bytes32[] memory nc) {
+        nc = new bytes32[](NOTE_BATCH_SIZE);
+        nc[0] = n0;
+        for (uint256 i = 1; i < NOTE_BATCH_SIZE; i++) {
+            nc[i] = bytes32(uint256(0xAA00 + i));
+        }
+    }
+
     function testValidateDepositBatch_MovesPendingToValidated() public {
         address user = address(0xCAFE);
         uint256 amount0 = 1e6;
@@ -103,18 +130,14 @@ contract DepositsRollupBridgeTest is Test {
         bridge.depositAndRegister(n1, amount1);
         vm.stopPrank();
 
-        bytes32[] memory notes = new bytes32[](2);
-        notes[0] = n0;
-        notes[1] = n1;
-
-        bytes32[] memory dummy = new bytes32[](1);
-        dummy[0] = bytes32(uint256(1));
+        bytes32[] memory anDummy = new bytes32[](1);
+        anDummy[0] = bytes32(uint256(1));
 
         bridge.registerTransactionBatchUpdate(
-            bytes32(uint256(0x9999)), notes,
-            bytes32(uint256(0x8888)), dummy,
-            bytes32(uint256(0x7777)), dummy,
-            bytes32(uint256(0x6666)), dummy
+            bytes32(uint256(0x9999)), _sortedNcBatch(n0, n1),
+            bytes32(uint256(0x8888)), _sortedNnBatch(),
+            bytes32(uint256(0x7777)), anDummy,
+            bytes32(uint256(0x6666)), anDummy
         );
 
         assertEq(uint256(bridge.getDepositStatus(n0)), uint256(DepositsRollupBridge.DepositStatus.Validated));
@@ -133,25 +156,21 @@ contract DepositsRollupBridgeTest is Test {
         vm.prank(user);
         bridge.depositAndRegister(tracked, amount);
 
-        bytes32[] memory notes = new bytes32[](2);
-        notes[0] = tracked;
-        notes[1] = externalNote;
-
-        bytes32[] memory dummy = new bytes32[](1);
-        dummy[0] = bytes32(uint256(1));
+        bytes32[] memory anDummy = new bytes32[](1);
+        anDummy[0] = bytes32(uint256(1));
 
         bridge.registerTransactionBatchUpdate(
-            bytes32(uint256(0x9999)), notes,
-            bytes32(uint256(0x8888)), dummy,
-            bytes32(uint256(0x7777)), dummy,
-            bytes32(uint256(0x6666)), dummy
+            bytes32(uint256(0x9999)), _sortedNcBatch(tracked, externalNote),
+            bytes32(uint256(0x8888)), _sortedNnBatch(),
+            bytes32(uint256(0x7777)), anDummy,
+            bytes32(uint256(0x6666)), anDummy
         );
 
         assertEq(uint256(bridge.getDepositStatus(tracked)), uint256(DepositsRollupBridge.DepositStatus.Validated));
         assertEq(uint256(bridge.getDepositStatus(externalNote)), uint256(DepositsRollupBridge.DepositStatus.None));
     }
 
-    function testValidateDepositBatch_AllowsPartialBatchAndUpdatesOnlyRealNotes() public {
+    function testValidateDepositBatch_FullBatchAndUpdatesOnlyRealNotes() public {
         address user = address(0xCAFE);
         uint256 amount = 1e6;
         bytes32 tracked = bytes32(uint256(1));
@@ -162,18 +181,15 @@ contract DepositsRollupBridgeTest is Test {
         vm.prank(user);
         bridge.depositAndRegister(tracked, amount);
 
-        bytes32[] memory notes = new bytes32[](1);
-        notes[0] = tracked;
-
-        bytes32[] memory dummy = new bytes32[](1);
-        dummy[0] = bytes32(uint256(1));
+        bytes32[] memory anDummy = new bytes32[](1);
+        anDummy[0] = bytes32(uint256(1));
 
         uint256 beforeLeafCount = bridge.notesCommitmentLeafCount();
         bridge.registerTransactionBatchUpdate(
-            bytes32(uint256(0x9999)), notes,
-            bytes32(uint256(0x8888)), dummy,
-            bytes32(uint256(0x7777)), dummy,
-            bytes32(uint256(0x6666)), dummy
+            bytes32(uint256(0x9999)), _sortedNcBatchSingle(tracked),
+            bytes32(uint256(0x8888)), _sortedNnBatch(),
+            bytes32(uint256(0x7777)), anDummy,
+            bytes32(uint256(0x6666)), anDummy
         );
 
         assertEq(uint256(bridge.getDepositStatus(tracked)), uint256(DepositsRollupBridge.DepositStatus.Validated));

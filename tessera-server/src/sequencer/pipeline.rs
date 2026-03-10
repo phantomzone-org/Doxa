@@ -89,33 +89,6 @@ impl Sequencer {
 		}
 	}
 
-	/// Query the bridge contract and return `true` if `note` can be consumed as a
-	/// nullifier (status is `Validated` or `None`).
-	pub(super) async fn is_note_validated<P: Provider + Clone>(
-		&self,
-		provider: &P,
-		note: &[u8; 32],
-	) -> bool {
-		let bridge = IDepositsRollupBridge::IDepositsRollupBridgeInstance::new(
-			self.config.bridge_address,
-			provider,
-		);
-		let note = alloy::primitives::FixedBytes::<32>::from(*note);
-		match bridge.getDepositStatus(note).call().await {
-			Ok(status) => {
-				matches!(
-					status,
-					IDepositsRollupBridge::DepositStatus::Validated
-						| IDepositsRollupBridge::DepositStatus::None
-				)
-			},
-			Err(e) => {
-				warn!("failed to fetch note status: {e}");
-				false
-			},
-		}
-	}
-
 	/// Evaluate all four pending queues and start a batch when any is ready.
 	///
 	/// A queue is "ready" when [`should_flush_pool`] returns `true`.
@@ -141,21 +114,6 @@ impl Sequencer {
 			note_batch_size,
 			self.notes_commitment_pending_since,
 			batch_timeout,
-		) || Self::should_flush_pool(
-			self.notes_nullifier_state.pending_requests.len(),
-			note_batch_size,
-			self.notes_nullifier_pending_since,
-			batch_timeout,
-		) || Self::should_flush_pool(
-			self.accounts_commitment_state.pending_requests.len(),
-			account_batch_size,
-			self.accounts_commitment_pending_since,
-			batch_timeout,
-		) || Self::should_flush_pool(
-			self.accounts_nullifier_state.pending_requests.len(),
-			account_batch_size,
-			self.accounts_nullifier_pending_since,
-			batch_timeout,
 		);
 
 		if any_ready {
@@ -173,7 +131,7 @@ impl Sequencer {
 	///   `batch_timeout`.
 	///
 	/// Returns `false` if `pending_len == 0` regardless of the other parameters.
-	fn should_flush_pool(
+	pub(super) fn should_flush_pool(
 		pending_len: usize,
 		batch_size: usize,
 		pending_since: Option<std::time::Instant>,
@@ -192,6 +150,9 @@ impl Sequencer {
 
 	/// Start a unified batch covering all four trees simultaneously.
 	///
+	/// Both consume requests (deposits) and private TXs feed into the same pending pools.
+	/// NC fullness or timeout triggers a flush of all 4 trees at once.
+	///
 	/// Steps:
 	/// 1. Pop up to `batch_size` real leaves from each pending queue (empty = all dummies).
 	/// 2. Preflight: verify all four on-chain roots match local state.
@@ -200,8 +161,9 @@ impl Sequencer {
 	/// 5. Compute native batch proofs from tree clones.
 	/// 6. Call `registerTransactionBatchUpdate` on-chain; extract the assigned `batchId`.
 	/// 7. Apply padded inserts to the real local trees (advance roots for subsequent batches).
-	/// 8. Submit a single [`ProveRequest`] via [`submit_prove_request_with_retry`].
-	/// 9. Store a [`TxBatch`] record in `registered_pending_batches`.
+	/// 8. Determine `real_account_slots` from private TX AN leaves in the sorted batch.
+	/// 9. Submit a single [`ProveRequest`] via [`submit_prove_request_with_retry`].
+	/// 10. Store a [`TxBatch`] record in `registered_pending_batches`.
 	///
 	/// # Errors
 	/// Returns `Err` on root mismatch, invalid leaf status, native proof failure, or
@@ -306,63 +268,59 @@ impl Sequencer {
 				note
 			);
 		}
-		for req in &an_requests {
-			let commitment_hash =
-				contract::bytes32_to_hash(&alloy::primitives::B256::from(req.commitment))?;
-			anyhow::ensure!(
-				self.accounts_commitment_state
-					.tree
-					.contains_leaf(&commitment_hash),
-				"preflight failed: AN leaf {:?} not found in accounts commitment tree",
-				alloy::primitives::B256::from(req.commitment)
-			);
-		}
-
-		// 4 & 5. Build padded batches and compute native proofs.
+		// 4 & 5. Build padded batches, sort, and compute native proofs.
 		let nc_real: Vec<[u8; 32]> = nc_requests.iter().map(|r| r.commitment).collect();
 		let nc_start = self.notes_commitment_state.tree.num_leaves();
-		let (nc_padded_bytes, nc_hashes) = build_proving_commitments(
+		let (mut nc_padded_bytes, _) = build_proving_commitments(
 			DummyTreeType::NotesCommitment,
 			nc_start,
 			note_batch_size,
 			&nc_real,
 		)?;
+		nc_padded_bytes.sort();
+		let nc_hashes = contract::bytes_slice_to_hashes(&nc_padded_bytes)?;
 		let mut nc_tmp = self.notes_commitment_state.tree.clone();
 		let nc_proof = nc_tmp.insert_batch(nc_hashes.clone())?;
 		anyhow::ensure!(nc_proof.verify(), "NC native proof verification failed");
 
 		let nn_real: Vec<[u8; 32]> = nn_requests.iter().map(|r| r.commitment).collect();
 		let nn_start = self.notes_nullifier_state.tree.num_leaves();
-		let (nn_padded_bytes, nn_hashes) = build_proving_commitments(
+		let (mut nn_padded_bytes, _) = build_proving_commitments(
 			DummyTreeType::NotesNullifier,
 			nn_start,
 			note_batch_size,
 			&nn_real,
 		)?;
+		nn_padded_bytes.sort();
+		let nn_hashes = contract::bytes_slice_to_hashes(&nn_padded_bytes)?;
 		let mut nn_tmp = self.notes_nullifier_state.tree.clone();
 		let nn_proof = nn_tmp.insert_batch(nn_hashes.clone())?;
 		anyhow::ensure!(nn_proof.verify(), "NN native proof verification failed");
 
 		let ac_real: Vec<[u8; 32]> = ac_requests.iter().map(|r| r.commitment).collect();
 		let ac_start = self.accounts_commitment_state.tree.num_leaves();
-		let (ac_padded_bytes, ac_hashes) = build_proving_commitments(
+		let (mut ac_padded_bytes, _) = build_proving_commitments(
 			DummyTreeType::AccountsCommitment,
 			ac_start,
 			account_batch_size,
 			&ac_real,
 		)?;
+		ac_padded_bytes.sort();
+		let ac_hashes = contract::bytes_slice_to_hashes(&ac_padded_bytes)?;
 		let mut ac_tmp = self.accounts_commitment_state.tree.clone();
 		let ac_proof = ac_tmp.insert_batch(ac_hashes.clone())?;
 		anyhow::ensure!(ac_proof.verify(), "AC native proof verification failed");
 
 		let an_real: Vec<[u8; 32]> = an_requests.iter().map(|r| r.commitment).collect();
 		let an_start = self.accounts_nullifier_state.tree.num_leaves();
-		let (an_padded_bytes, an_hashes) = build_proving_commitments(
+		let (mut an_padded_bytes, _) = build_proving_commitments(
 			DummyTreeType::AccountsNullifier,
 			an_start,
 			account_batch_size,
 			&an_real,
 		)?;
+		an_padded_bytes.sort();
+		let an_hashes = contract::bytes_slice_to_hashes(&an_padded_bytes)?;
 		let mut an_tmp = self.accounts_nullifier_state.tree.clone();
 		let an_proof = an_tmp.insert_batch(an_hashes.clone())?;
 		anyhow::ensure!(an_proof.verify(), "AN native proof verification failed");
@@ -372,23 +330,34 @@ impl Sequencer {
 		let new_ac_root = contract::hash_to_bytes32(&ac_proof.root_new);
 		let new_an_root = contract::hash_to_bytes32(&an_proof.new_root);
 
-		let nc_out: Vec<FixedBytes<32>> =
-			nc_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
-		let nn_in: Vec<FixedBytes<32>> =
-			nn_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
-		let ac_out: Vec<FixedBytes<32>> =
-			ac_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
-		let an_in: Vec<FixedBytes<32>> =
-			an_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
+		// All 4 trees: pass full sorted batches to the contract.
+		// [u8; 32] lexicographic sort matches HashOut<Goldilocks> Ord (both compare
+		// four big-endian u64 limbs in order), which matches the circuit's insert_batch sort.
+		let nc_in: Vec<FixedBytes<32>> = nc_padded_bytes
+			.iter()
+			.map(|b| FixedBytes::<32>::from(*b))
+			.collect();
+		let nn_in: Vec<FixedBytes<32>> = nn_padded_bytes
+			.iter()
+			.map(|b| FixedBytes::<32>::from(*b))
+			.collect();
+		let ac_in: Vec<FixedBytes<32>> = ac_padded_bytes
+			.iter()
+			.map(|b| FixedBytes::<32>::from(*b))
+			.collect();
+		let an_in: Vec<FixedBytes<32>> = an_padded_bytes
+			.iter()
+			.map(|b| FixedBytes::<32>::from(*b))
+			.collect();
 		// 6. Register on-chain.
 		let pending = bridge
 			.registerTransactionBatchUpdate(
 				new_nc_root,
-				nc_out,
+				nc_in,
 				new_nn_root,
 				nn_in,
 				new_ac_root,
-				ac_out,
+				ac_in,
 				new_an_root,
 				an_in,
 			)
@@ -448,17 +417,38 @@ impl Sequencer {
 			.tree
 			.insert_batch(an_hashes.clone())?;
 
-		// 8. Submit single ProveRequest.
+		// 8. Determine which account-level slots are real private TXs after sorting.
+		let real_account_slots: Vec<usize> = an_padded_bytes
+			.iter()
+			.enumerate()
+			.filter_map(|(i, leaf)| {
+				if self.real_private_tx_an_leaves.contains(leaf) {
+					Some(i)
+				} else {
+					None
+				}
+			})
+			.collect();
+		// Remove consumed AN leaves from the tracking set.
+		for req in &an_requests {
+			self.real_private_tx_an_leaves.remove(&req.commitment);
+		}
+
+		// 9. Submit single ProveRequest with sorted leaf data.
 		self.submit_prove_request_with_retry(crate::types::ProveRequest {
 			batch_id,
 			notes_commitment_proof: nc_proof,
 			notes_nullifier_proof: nn_proof,
 			accounts_commitment_proof: ac_proof,
 			accounts_nullifier_proof: an_proof,
-			associated_tx_proofs: vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); account_batch_size],
+			nc_sorted_leaves: nc_padded_bytes.clone(),
+			nn_sorted_leaves: nn_padded_bytes.clone(),
+			ac_sorted_leaves: ac_padded_bytes.clone(),
+			an_sorted_leaves: an_padded_bytes.clone(),
+			real_account_slots,
 		})?;
 
-		// 9. Store TxBatch in the pending map.
+		// 10. Store TxBatch in the pending map.
 		self.registered_pending_batches.insert(
 			batch_id,
 			TxBatch {
@@ -671,28 +661,57 @@ impl Sequencer {
 					}
 				}
 
-				let receipt = bridge
-					.confirmBatch(batch_id_u256, sol_proof)
-					.send()
-					.await
-					.map_err(|e| {
-						anyhow::anyhow!("confirmBatch send failed: {}", humanize_bridge_revert(&e))
-					})?
-					.with_required_confirmations(1)
-					.with_timeout(Some(RECEIPT_TIMEOUT))
-					.get_receipt()
-					.await
-					.map_err(|e| anyhow::anyhow!("confirmBatch receipt error: {e}"))?;
-				anyhow::ensure!(
-					receipt.status(),
-					"confirmBatch reverted on-chain (batch_id={batch_id}, tx={:?})",
-					receipt.transaction_hash
-				);
-				info!(
-					batch_id,
-					tx_hash = ?receipt.transaction_hash,
-					"batch confirmed on-chain"
-				);
+				let confirm_result: Result<_, anyhow::Error> = async {
+					let receipt = bridge
+						.confirmBatch(batch_id_u256, sol_proof)
+						.send()
+						.await
+						.map_err(|e| {
+							anyhow::anyhow!(
+								"confirmBatch send failed: {}",
+								humanize_bridge_revert(&e)
+							)
+						})?
+						.with_required_confirmations(1)
+						.with_timeout(Some(RECEIPT_TIMEOUT))
+						.get_receipt()
+						.await
+						.map_err(|e| anyhow::anyhow!("confirmBatch receipt error: {e}"))?;
+					anyhow::ensure!(
+						receipt.status(),
+						"confirmBatch reverted on-chain (batch_id={batch_id}, tx={:?})",
+						receipt.transaction_hash
+					);
+					Ok(receipt)
+				}
+				.await;
+
+				match confirm_result {
+					Err(e) => {
+						error!(
+							batch_id,
+							error = %e,
+							"on-chain confirmBatch failed; re-queueing requests"
+						);
+						if let Some(batch) = self.registered_pending_batches.remove(&batch_id) {
+							self.notes_commitment_state
+								.reinsert_batch(batch.nc_requests);
+							self.notes_nullifier_state.reinsert_batch(batch.nn_requests);
+							self.accounts_commitment_state
+								.reinsert_batch(batch.ac_requests);
+							self.accounts_nullifier_state
+								.reinsert_batch(batch.an_requests);
+						}
+						return Ok(());
+					},
+					Ok(receipt) => {
+						info!(
+							batch_id,
+							tx_hash = ?receipt.transaction_hash,
+							"batch confirmed on-chain"
+						);
+					},
+				}
 
 				let batch = self
 					.registered_pending_batches
@@ -730,227 +749,6 @@ impl Sequencer {
 				self.log_pool_status("batch confirmed and committed locally");
 			},
 		}
-		Ok(())
-	}
-
-	/// Register a private transaction as an optimistic two-phase batch.
-	///
-	/// Steps:
-	/// 1. Guard against a full pending-batch queue.
-	/// 2. For each of the four trees: pad real leaves to `batch_size` and compute the native batch
-	///    proof from a tree clone.
-	/// 3. Call `registerTransactionBatchUpdate` on-chain; extract the assigned `batchId`.
-	/// 4. Apply the padded inserts to the real local trees.
-	/// 5. Submit a single [`ProveRequest`] containing all four tree proofs and the TX leaf proofs.
-	/// 6. Store a [`TxBatch`] record.
-	#[allow(clippy::too_many_arguments)]
-	pub(super) async fn register_tx_batch<P: Provider + Clone>(
-		&mut self,
-		provider: &P,
-		request: PrivateTxRequest,
-		note_batch_size: usize,
-		account_batch_size: usize,
-	) -> anyhow::Result<()> {
-		if self.registered_pending_batches.len() >= MAX_PENDING_BATCHES {
-			warn!(
-				tx_id = request.tx_id.as_deref().unwrap_or("unknown"),
-				"optimistic register queue full; dropping private tx"
-			);
-			return Err(anyhow::anyhow!("PendingQueueFull"));
-		}
-		let tx_id = request.tx_id.clone().unwrap_or_else(|| "unknown".into());
-		debug!(tx_id = %tx_id, "starting optimistic register for private tx");
-
-		// --- Notes Commitment ---
-		let nc_real = request.output_notes;
-		let (nc_padded, nc_hashes) = build_proving_commitments(
-			DummyTreeType::NotesCommitment,
-			self.notes_commitment_state.tree.num_leaves(),
-			note_batch_size,
-			&nc_real,
-		)?;
-		let mut nc_tmp = self.notes_commitment_state.tree.clone();
-		let nc_proof = nc_tmp.insert_batch(nc_hashes.clone())?;
-		anyhow::ensure!(nc_proof.verify(), "NC native proof failed (private tx)");
-
-		// --- Notes Nullifier ---
-		let nn_real = request.input_notes;
-		let (nn_padded, nn_hashes) = build_proving_commitments(
-			DummyTreeType::NotesNullifier,
-			self.notes_nullifier_state.tree.num_leaves(),
-			note_batch_size,
-			&nn_real,
-		)?;
-		let mut nn_tmp = self.notes_nullifier_state.tree.clone();
-		let nn_proof = nn_tmp.insert_batch(nn_hashes.clone())?;
-		anyhow::ensure!(nn_proof.verify(), "NN native proof failed (private tx)");
-		let new_nn_root = contract::hash_to_bytes32(&nn_proof.new_root);
-
-		// --- Accounts Commitment ---
-		let ac_real = vec![request.output_account_leaf];
-		let (ac_padded, ac_hashes) = build_proving_commitments(
-			DummyTreeType::AccountsCommitment,
-			self.accounts_commitment_state.tree.num_leaves(),
-			account_batch_size,
-			&ac_real,
-		)?;
-		let mut ac_tmp = self.accounts_commitment_state.tree.clone();
-		let ac_proof = ac_tmp.insert_batch(ac_hashes.clone())?;
-		anyhow::ensure!(ac_proof.verify(), "AC native proof failed (private tx)");
-
-		// --- Accounts Nullifier ---
-		let an_real = vec![request.input_account_leaf];
-		let (an_padded, an_hashes) = build_proving_commitments(
-			DummyTreeType::AccountsNullifier,
-			self.accounts_nullifier_state.tree.num_leaves(),
-			account_batch_size,
-			&an_real,
-		)?;
-		let mut an_tmp = self.accounts_nullifier_state.tree.clone();
-		let an_proof = an_tmp.insert_batch(an_hashes.clone())?;
-		anyhow::ensure!(an_proof.verify(), "AN native proof failed (private tx)");
-		let new_an_root = contract::hash_to_bytes32(&an_proof.new_root);
-
-		let new_nc_root = contract::hash_to_bytes32(&nc_proof.root_new);
-		let new_ac_root = contract::hash_to_bytes32(&ac_proof.root_new);
-
-		// Build calldata arrays.
-		let nc_out: Vec<FixedBytes<32>> =
-			nc_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
-		let nn_in: Vec<FixedBytes<32>> =
-			nn_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
-		let ac_out: Vec<FixedBytes<32>> =
-			ac_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
-		let an_in: Vec<FixedBytes<32>> =
-			an_real.iter().map(|b| FixedBytes::<32>::from(*b)).collect();
-		// Register on-chain.
-		let bridge = IDepositsRollupBridge::IDepositsRollupBridgeInstance::new(
-			self.config.bridge_address,
-			provider,
-		);
-		let pending = bridge
-			.registerTransactionBatchUpdate(
-				new_nc_root,
-				nc_out,
-				new_nn_root,
-				nn_in,
-				new_ac_root,
-				ac_out,
-				new_an_root,
-				an_in,
-			)
-			.send()
-			.await
-			.map_err(|e| {
-				anyhow::anyhow!(
-					"registerTransactionBatchUpdate reverted: {}",
-					humanize_bridge_revert(&e)
-				)
-			})?;
-		let receipt = pending
-			.with_required_confirmations(1)
-			.with_timeout(Some(RECEIPT_TIMEOUT))
-			.get_receipt()
-			.await
-			.map_err(|e| anyhow::anyhow!("register receipt timeout/error: {e}"))?;
-		anyhow::ensure!(
-			receipt.status(),
-			"registerTransactionBatchUpdate reverted on-chain (tx={:?})",
-			receipt.transaction_hash
-		);
-
-		let batch_id: u64 = receipt
-			.inner
-			.logs()
-			.iter()
-			.find_map(|log| {
-				log.log_decode::<IDepositsRollupBridge::TransactionBatchRegistered>()
-					.ok()
-					.and_then(|d| d.inner.batchId.try_into().ok())
-			})
-			.ok_or_else(|| {
-				anyhow::anyhow!("TransactionBatchRegistered event not found in receipt")
-			})?;
-
-		info!(
-			tx_id = %tx_id,
-			batch_id,
-			nc_root = ?new_nc_root,
-			nn_root = ?new_nn_root,
-			ac_root = ?new_ac_root,
-			an_root = ?new_an_root,
-			"private tx batch registered on-chain"
-		);
-
-		// Apply inserts to real local trees.
-		self.notes_commitment_state
-			.tree
-			.insert_batch(nc_hashes.clone())?;
-		self.notes_nullifier_state
-			.tree
-			.insert_batch(nn_hashes.clone())?;
-		self.accounts_commitment_state
-			.tree
-			.insert_batch(ac_hashes.clone())?;
-		self.accounts_nullifier_state
-			.tree
-			.insert_batch(an_hashes.clone())?;
-
-		// Build and submit single ProveRequest.
-		// TX leaf proofs: place the real tx_proof in the active slots, dummy elsewhere.
-		let n_active = nc_real
-			.len()
-			.div_ceil(8)
-			.max(nn_real.len().div_ceil(8))
-			.max(1);
-		let mut associated_tx_proofs = vec![request.tx_proof; n_active];
-		associated_tx_proofs.resize(account_batch_size, DUMMY_ASSOCIATED_INPUT_PROOF.to_vec());
-
-		self.submit_prove_request_with_retry(crate::types::ProveRequest {
-			batch_id,
-			notes_commitment_proof: nc_proof,
-			notes_nullifier_proof: nn_proof,
-			accounts_commitment_proof: ac_proof,
-			accounts_nullifier_proof: an_proof,
-			associated_tx_proofs,
-		})?;
-
-		// Store TxBatch.
-		self.registered_pending_batches.insert(
-			batch_id,
-			TxBatch {
-				batch_id,
-				nc_requests: vec![],
-				nn_requests: vec![],
-				ac_requests: vec![],
-				an_requests: vec![],
-				nc_batch: TxPerTreeBatch {
-					real_commitments_bytes: nc_real,
-					proving_commitments_bytes: nc_padded,
-					proving_commitments_hash: nc_hashes,
-				},
-				nn_batch: TxPerTreeBatch {
-					real_commitments_bytes: nn_real,
-					proving_commitments_bytes: nn_padded,
-					proving_commitments_hash: nn_hashes,
-				},
-				ac_batch: TxPerTreeBatch {
-					real_commitments_bytes: ac_real,
-					proving_commitments_bytes: ac_padded,
-					proving_commitments_hash: ac_hashes,
-				},
-				an_batch: TxPerTreeBatch {
-					real_commitments_bytes: an_real,
-					proving_commitments_bytes: an_padded,
-					proving_commitments_hash: an_hashes,
-				},
-			},
-		);
-		info!(
-			batch_id,
-			queue = self.registered_pending_batches.len(),
-			"prove job submitted for registered private-tx batch"
-		);
 		Ok(())
 	}
 }

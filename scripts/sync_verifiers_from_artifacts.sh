@@ -23,7 +23,7 @@ FIXTURE="$ROOT_DIR/tessera-solidity/test/fixtures/VerifierSuperAggregatorArtifac
 
 if [[ ! -f "$SRC" ]]; then
   echo "ERROR: missing super-aggregator verifier artifact: $SRC" >&2
-  echo "Run: TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 cargo run --bin super_aggregator_artifacts --release" >&2
+  echo "Run: TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 cargo run --bin super_aggregator_artifacts --release" >&2
   exit 1
 fi
 

@@ -10,7 +10,7 @@
 //! circuit's `CommonCircuitData` and `VerifierOnlyCircuitData` as constants.
 //!
 //! Usage:
-//!   TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 \
+//!   TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
 //!   cargo run --bin commitment_tree_artifacts --release
 
 use std::{fs, path::PathBuf};
@@ -54,11 +54,11 @@ fn generate_commitment_artifacts(dir_name: &str, batch_size: usize) -> Result<()
 
 fn main() -> Result<()> {
 	let note_batch_size: usize = std::env::var("TESSERA_NOTE_BATCH_SIZE")
-		.unwrap_or_else(|_| "128".to_string())
+		.unwrap_or_else(|_| "1024".to_string())
 		.parse()
 		.expect("TESSERA_NOTE_BATCH_SIZE must be a valid usize");
 	let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
-		.unwrap_or_else(|_| "16".to_string())
+		.unwrap_or_else(|_| "128".to_string())
 		.parse()
 		.expect("TESSERA_ACCOUNT_BATCH_SIZE must be a valid usize");
 

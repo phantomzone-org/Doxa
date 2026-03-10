@@ -33,11 +33,11 @@
 //!
 //! | Circuit | PIs (fields) | Notes |
 //! |---------|-------------|-------|
-//! | NC tree | 520 | old_root[4] + new_root[4] + leaves[128×4] |
-//! | NN tree | 520 | old_root[4] + new_root[4] + values[128×4] |
-//! | AC tree |  72 | old_root[4] + new_root[4] + leaves[16×4] |
-//! | AN tree |  72 | old_root[4] + new_root[4] + values[16×4] |
-//! | TX (in-circuit, not in preimage) | 1168 | 16 × 73 |
+//! | NC tree | 4104 | old_root[4] + new_root[4] + leaves[1024×4] |
+//! | NN tree | 4104 | old_root[4] + new_root[4] + values[1024×4] |
+//! | AC tree |  520 | old_root[4] + new_root[4] + leaves[128×4] |
+//! | AN tree |  520 | old_root[4] + new_root[4] + values[128×4] |
+//! | TX (in-circuit, not in preimage) | 9344 | 128 × 73 |
 //!
 //! # Serializer requirement
 //!
@@ -395,16 +395,15 @@ fn setup_builder(
 	//   [65..69] = account_nullifier        (1 × 4 fields, from AN)
 	//   [69..73] = account_commitment       (1 × 4 fields, from AC)
 	//
-	// is_real is read from the TX proof's own PIs (certified by the TX leaf circuit).
-	// When is_real = 1: expected = tree_t → tx_data_t must equal the tree leaf.
-	// When is_real = 0: expected = 0      → tx_data_t must be zero (canonical padding).
-	// TX PIs are fully captured by the tree PIs; TX is excluded from the Keccak preimage.
+	// is_real is read from the TX proof and asserted boolean (kept as a PI for
+	// downstream use) but does NOT participate in the cross-check.  Every TX
+	// slot (real or dummy) carries the actual sorted tree leaf values, so the
+	// connection is unconditional: tx_data == tree_leaf for all slots.
 	const LEAF_OFFSET: usize = 8; // old_root[4] + new_root[4]
 	const TX_DATA_OFFSET: usize = 1; // PI[0] is is_real; data starts at PI[1]
 	#[allow(clippy::needless_range_loop)]
 	for s in 0..n_tx_slots {
 		let tx_base = s * TX_LEAF_PI_SIZE;
-		let zero = builder.zero();
 		// Read is_real from TX root proof PI[tx_base]; wrap and assert boolean.
 		let is_real = BoolTarget::new_unsafe(tx_proof.public_inputs[tx_base]);
 		builder.assert_bool(is_real);
@@ -415,8 +414,7 @@ fn setup_builder(
 			for k in 0..4 {
 				let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + j * 4 + k];
 				let nn_t = nn_proof.public_inputs[nn_val_base + k];
-				let expected = builder.select(is_real, nn_t, zero);
-				builder.connect(tx_t, expected);
+				builder.connect(tx_t, nn_t);
 			}
 		}
 		// note commitments (TX data[32..64]) — from NC tree
@@ -424,8 +422,7 @@ fn setup_builder(
 			for k in 0..4 {
 				let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 32 + j * 4 + k];
 				let nc_t = nc_proof.public_inputs[LEAF_OFFSET + (s * notes_per_slot + j) * 4 + k];
-				let expected = builder.select(is_real, nc_t, zero);
-				builder.connect(tx_t, expected);
+				builder.connect(tx_t, nc_t);
 			}
 		}
 		// account nullifier (TX data[64..68]) — from AN tree
@@ -433,15 +430,13 @@ fn setup_builder(
 		for k in 0..4 {
 			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 64 + k];
 			let an_t = an_proof.public_inputs[an_val_base + k];
-			let expected = builder.select(is_real, an_t, zero);
-			builder.connect(tx_t, expected);
+			builder.connect(tx_t, an_t);
 		}
 		// account commitment (TX data[68..72]) — from AC tree
 		for k in 0..4 {
 			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 68 + k];
 			let ac_t = ac_proof.public_inputs[LEAF_OFFSET + s * 4 + k];
-			let expected = builder.select(is_real, ac_t, zero);
-			builder.connect(tx_t, expected);
+			builder.connect(tx_t, ac_t);
 		}
 	}
 
@@ -647,8 +642,8 @@ mod tests {
 
 	#[test]
 	fn test_consume_only_is_real_all_false() {
-		// Consume-only batch: NC leaves are non-zero, TX has is_real=0 and all data=0.
-		// Circuit: is_real=0 → expected=0 → tx_data==0 ✓ (NC non-zero doesn't matter).
+		// Consume-only batch: NC leaves are non-zero, TX carries matching tree values.
+		// Circuit: unconditional connect → tx_data must equal tree_data for all slots.
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
 			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
 
@@ -662,8 +657,21 @@ mod tests {
 		let nn_proof = prove_zeros(&nn_cd, &nn_t);
 		let ac_proof = prove_zeros(&ac_cd, &ac_t);
 		let an_proof = prove_zeros(&an_cd, &an_t);
-		// TX: is_real=0 for all slots (PI[s*73]=0), all data zero.
-		let tx_proof = prove_zeros(&tx_cd, &tx_t);
+		// TX: is_real=0 for all slots, but data must match tree leaves.
+		// NC leaves are 42, so TX note_commitments must also be 42.
+		let tx_n_pi = tx_t.len();
+		let mut tx_vals = vec![0u64; tx_n_pi];
+		for s in 0..N_TX_SLOTS {
+			let tx_base = s * 73;
+			// tx_vals[tx_base] = 0; // is_real=false
+			// note_commitments: TX data[32..64] must match NC leaves
+			for j in 0..NOTES_PER_SLOT {
+				for k in 0..4 {
+					tx_vals[tx_base + 1 + 32 + j * 4 + k] = 42;
+				}
+			}
+		}
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
 		let root = super_agg
@@ -733,9 +741,9 @@ mod tests {
 	}
 
 	#[test]
-	fn test_soundness_is_real_false_nonzero_tx_data_should_fail() {
-		// is_real=0 for slot 0, but TX data[0] (note_nullifier word) is non-zero → fail.
-		// Circuit: expected=0 but tx_t=99 → connect fails.
+	fn test_soundness_tx_data_mismatch_tree_data_should_fail() {
+		// TX data for slot 0 differs from tree data → unconditional connect fails.
+		// Tree NN leaf[0][0]=0, TX note_nullifier[0][0]=99 → mismatch.
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
 			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
 
@@ -744,7 +752,7 @@ mod tests {
 		let ac_proof = prove_zeros(&ac_cd, &ac_t);
 		let an_proof = prove_zeros(&an_cd, &an_t);
 
-		// TX slot 0: is_real=0 (PI[0]=0), data[0] (PI[1]) = 99 — note_nullifier word.
+		// TX slot 0: is_real=0, but data[0] = 99 ≠ tree's 0 → connect fails.
 		let tx_n_pi = tx_t.len();
 		let mut tx_vals = vec![0u64; tx_n_pi];
 		tx_vals[1] = 99; // slot 0, TX_DATA_OFFSET=1, note_nullifier[0][0]
@@ -752,7 +760,39 @@ mod tests {
 
 		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
 		let result = super_agg.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_proof);
-		assert!(result.is_err(), "expected prove to fail (soundness check)");
+		assert!(result.is_err(), "expected prove to fail (data mismatch)");
+	}
+
+	#[test]
+	fn test_is_real_false_nonzero_matching_tx_data_should_pass() {
+		// is_real=0 for slot 0, TX data matches tree data (both non-zero) → pass.
+		// After the unconditional-connect change, is_real does not gate the cross-check.
+		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
+			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
+
+		// NN leaf[0][0]=99.
+		let mut nn_vals = vec![0u64; nn_t.len()];
+		nn_vals[8] = 99; // LEAF_OFFSET + 0
+		let nn_proof = prove_with_values(&nn_cd, &nn_t, &nn_vals);
+
+		let nc_proof = prove_zeros(&nc_cd, &nc_t);
+		let ac_proof = prove_zeros(&ac_cd, &ac_t);
+		let an_proof = prove_zeros(&an_cd, &an_t);
+
+		// TX slot 0: is_real=0, note_nullifier[0][0]=99 (matches NN).
+		let tx_n_pi = tx_t.len();
+		let mut tx_vals = vec![0u64; tx_n_pi];
+		// tx_vals[0] = 0; // is_real=false
+		tx_vals[1] = 99; // note_nullifier[0][0] matches NN
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+
+		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
+		let root = super_agg
+			.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_proof)
+			.expect("is_real=false with matching data should pass");
+
+		assert_eq!(root.public_inputs.len(), 8);
+		super_agg.circuit_data.verify(root).expect("verify failed");
 	}
 
 	#[test]
@@ -798,11 +838,12 @@ mod tests {
 	//   PI[tx_base + 1 + 64 + k]       = account_nullifier[k]   (AN)
 	//   PI[tx_base + 1 + 68 + k]       = account_commitment[k]  (AC)
 	//
+	// All four trees share the same PI layout: old_root[4] + new_root[4] + values[batch_size × 4]
+	// LEAF_OFFSET = 8 for all trees (NC, NN, AC, AN).
+	//
 	// Tree offsets (N_TX_SLOTS=2, NOTES_PER_SLOT=8, note_batch_size=16, account_batch_size=2):
-	//   NN (test): build_leaf(72) → values[0..14] at PI[5 + leaf_idx*4]; value[15] at
-	// PI[nn_len-4]=PI[68]   NC: leaves at PI[8 + leaf_idx*4]  (simple sequential layout)
-	//   AN (test): build_leaf(16) → value[0] at PI[5]; value[1] (last, s=1=N-1) at
-	// PI[an_len-4]=PI[12]   AC: leaves at PI[8 + s*4]  (simple sequential layout)
+	//   NC/NN: build_leaf(72) → leaves at PI[8 + leaf_idx*4]
+	//   AC/AN: build_leaf(16) → leaves at PI[8 + s*4]
 
 	#[test]
 	fn test_full_tx_nonzero_values_match() {
@@ -813,24 +854,25 @@ mod tests {
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
 			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
 
+		const LEAF_OFFSET: usize = 8;
+
 		// Slot 0 tree values (word 0 of each field only; rest stay zero).
 		let mut nn_vals = vec![0u64; nn_t.len()];
 		let mut nc_vals = vec![0u64; nc_t.len()];
 		let mut an_vals = vec![0u64; an_t.len()];
 		let mut ac_vals = vec![0u64; ac_t.len()];
 		// Slot 0, note 0, word 0:
-		nn_vals[5] = 101; // NN: NN_LEAF_OFFSET + (0*8+0)*4 + 0
-		nc_vals[8] = 201; // NC: NC_LEAF_OFFSET + (0*8+0)*4 + 0
+		nn_vals[LEAF_OFFSET] = 101; // NN: LEAF_OFFSET + (0*8+0)*4 + 0
+		nc_vals[LEAF_OFFSET] = 201; // NC: LEAF_OFFSET + (0*8+0)*4 + 0
 		// Slot 0, account, word 0:
-		an_vals[5] = 301; // AN: NN_LEAF_OFFSET + 0*4 + 0
-		ac_vals[8] = 401; // AC: NC_LEAF_OFFSET + 0*4 + 0
+		an_vals[LEAF_OFFSET] = 301; // AN: LEAF_OFFSET + 0*4 + 0
+		ac_vals[LEAF_OFFSET] = 401; // AC: LEAF_OFFSET + 0*4 + 0
 		// Slot 1, note 0, word 0:
-		nn_vals[5 + 8 * 4] = 102; // NN: 5 + (1*8+0)*4 = 37
-		nc_vals[8 + 8 * 4] = 202; // NC: 8 + (1*8+0)*4 = 40
-		// Slot 1, account, word 0 (last account, s=1=N-1 → value at an_len-4):
-		// Test AN has build_leaf(16) → an_len=16, an_len-4=12.
-		an_vals[12] = 302; // AN slot 1 (last): value[N-1] at an_len-4 = 16-4 = 12
-		ac_vals[8 + 1 * 4] = 402; // AC: 8 + 1*4 = 12
+		nn_vals[LEAF_OFFSET + 8 * 4] = 102; // NN: 8 + (1*8+0)*4 = 40
+		nc_vals[LEAF_OFFSET + 8 * 4] = 202; // NC: 8 + (1*8+0)*4 = 40
+		// Slot 1, account, word 0:
+		an_vals[LEAF_OFFSET + 1 * 4] = 302; // AN: 8 + 1*4 = 12
+		ac_vals[LEAF_OFFSET + 1 * 4] = 402; // AC: 8 + 1*4 = 12
 
 		let nc_proof = prove_with_values(&nc_cd, &nc_t, &nc_vals);
 		let nn_proof = prove_with_values(&nn_cd, &nn_t, &nn_vals);
@@ -867,23 +909,24 @@ mod tests {
 	#[test]
 	fn test_partial_tx_nonzero_active_slot_and_nonzero_nc_padding() {
 		// Partial TX: slot 0 is_real=1 with matching non-zero values; slot 1 is
-		// padding (is_real=0) but its NC leaf is non-zero (demonstrating that
-		// padding slots correctly ignore tree leaf values).
+		// padding (is_real=0) with non-zero NC leaf — TX data must also carry
+		// the NC value (unconditional connect).
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
 			build_all_leaves(N_TX_SLOTS, NOTES_PER_SLOT);
+
+		const LEAF_OFFSET: usize = 8;
 
 		let mut nn_vals = vec![0u64; nn_t.len()];
 		let mut nc_vals = vec![0u64; nc_t.len()];
 		let mut an_vals = vec![0u64; an_t.len()];
 		let mut ac_vals = vec![0u64; ac_t.len()];
 		// Slot 0 (active): matching values in all four fields.
-		nn_vals[5] = 101;
-		nc_vals[8] = 201;
-		an_vals[5] = 301;
-		ac_vals[8] = 401;
-		// Slot 1 (padding): non-zero NC leaf — TX will still be all-zero because
-		// is_real=0 forces expected=0 regardless of the tree value.
-		nc_vals[8 + 8 * 4] = 999; // NC slot 1, note 0, word 0 = non-zero
+		nn_vals[LEAF_OFFSET] = 101;
+		nc_vals[LEAF_OFFSET] = 201;
+		an_vals[LEAF_OFFSET] = 301;
+		ac_vals[LEAF_OFFSET] = 401;
+		// Slot 1 (padding): non-zero NC leaf.
+		nc_vals[LEAF_OFFSET + 8 * 4] = 999; // NC slot 1, note 0, word 0 = non-zero
 
 		let nc_proof = prove_with_values(&nc_cd, &nc_t, &nc_vals);
 		let nn_proof = prove_with_values(&nn_cd, &nn_t, &nn_vals);
@@ -898,8 +941,10 @@ mod tests {
 		tx_vals[1 + 32] = 201;
 		tx_vals[1 + 64] = 301;
 		tx_vals[1 + 68] = 401;
-		// Slot 1 (tx_base=73): is_real=0, all TX data zero (NC leaf=999 is ignored).
-		// tx_vals[73] = 0; already zero
+		// Slot 1 (tx_base=73): is_real=0, TX data must match tree data.
+		// NC leaf=999, all others=0.
+		// tx_vals[73] = 0; // is_real=false
+		tx_vals[73 + 1 + 32] = 999; // note_commitment[0][0] matches NC slot 1
 
 		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
 
@@ -948,7 +993,7 @@ mod tests {
 
 		// NN leaf slot 0, note 0, word 0 = 55.
 		let mut nn_vals = vec![0u64; nn_t.len()];
-		nn_vals[5] = 55; // NN_LEAF_OFFSET + 0
+		nn_vals[8] = 55; // LEAF_OFFSET + 0
 		let nn_proof = prove_with_values(&nn_cd, &nn_t, &nn_vals);
 
 		let nc_proof = prove_zeros(&nc_cd, &nc_t);
@@ -978,7 +1023,7 @@ mod tests {
 
 		// AN leaf slot 0, word 0 = 77.
 		let mut an_vals = vec![0u64; an_t.len()];
-		an_vals[5] = 77; // NN_LEAF_OFFSET + 0*4 + 0
+		an_vals[8] = 77; // LEAF_OFFSET + 0*4 + 0
 		let an_proof = prove_with_values(&an_cd, &an_t, &an_vals);
 
 		let nc_proof = prove_zeros(&nc_cd, &nc_t);

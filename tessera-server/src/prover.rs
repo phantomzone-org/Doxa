@@ -28,8 +28,6 @@ use crate::{
 	types::{ProveOutcome, ProveRequest, SolidityProof},
 };
 
-const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
-
 /// Encapsulates the commitment-tree proof pipeline (notes or accounts).
 ///
 /// Holds the compiled plonky2 circuit and its public-input targets.
@@ -56,10 +54,12 @@ pub struct NullifierProverService {
 pub struct AssociatedInputAggregatorService {
 	aggregator: Arc<GenericAggregator<F, ConfigNative, D>>,
 	pool: Arc<NodeProverPool<F, ConfigNative, D>>,
-	/// Serialized canonical padding proof (73-PI leaf with is_real=false, all data zero).
-	/// Replaces `DUMMY_ASSOCIATED_INPUT_PROOF` sentinels at padding positions before
-	/// submitting to the aggregation pipeline.
-	canonical_padding_proof: Vec<u8>,
+	/// The trivial TX leaf circuit (73 PIs, no constraints).
+	leaf_circuit: CircuitDataNative,
+	/// Witness target for `is_real` (PI[0]).
+	is_real_target: plonky2::iop::target::BoolTarget,
+	/// Witness targets for the 72 data fields (PI[1..73]).
+	data_targets: Vec<Target>,
 }
 
 /// Merges 5 independent inner Plonky2 proofs into a single Groth16 proof via
@@ -147,12 +147,12 @@ impl AssociatedInputAggregatorService {
 		info!("loading associated input aggregator from artifacts");
 		let aggregator = GenericAggregator::<F, ConfigNative, D>::from_artifacts(path)?;
 
-		// Rebuild the 73-PI leaf circuit (is_real=false, all data zero) to produce
-		// the canonical padding proof.  Replaces DUMMY sentinels at padding positions.
+		// Rebuild the 73-PI leaf circuit (no constraints) so that we can prove
+		// arbitrary TX leaf values at proving time.
 		let n_pi = aggregator.leaf_common().num_public_inputs;
 		info!(
 			n_pi,
-			"generating canonical padding proof for dummy leaf circuit"
+			"building TX leaf circuit for dynamic proof generation"
 		);
 		let leaf_config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(leaf_config);
@@ -165,24 +165,34 @@ impl AssociatedInputAggregatorService {
 			builder.register_public_input(t);
 		}
 		let leaf_circuit = builder.build::<ConfigNative>();
-		let mut pw = PartialWitness::new();
-		pw.set_bool_target(is_real_t, false)?;
-		for &t in &data_targets {
-			pw.set_target(t, F::ZERO)?;
-		}
-		let padding_proof = leaf_circuit.prove(pw)?;
-		leaf_circuit.verify(padding_proof.clone())?;
-		let canonical_padding_proof = padding_proof.to_bytes();
-		info!(
-			bytes = canonical_padding_proof.len(),
-			"canonical padding proof ready"
-		);
+		info!("TX leaf circuit ready");
 
 		Ok(Self {
 			aggregator: Arc::new(aggregator),
 			pool,
-			canonical_padding_proof,
+			leaf_circuit,
+			is_real_target: is_real_t,
+			data_targets,
 		})
+	}
+
+	/// Prove a single TX leaf with the given `is_real` flag and 72 data fields.
+	///
+	/// The leaf circuit is trivial (no constraints), so proving is fast.
+	fn prove_leaf(&self, is_real: bool, data: &[F]) -> Result<Vec<u8>> {
+		anyhow::ensure!(
+			data.len() == self.data_targets.len(),
+			"TX leaf data length mismatch: got {}, expected {}",
+			data.len(),
+			self.data_targets.len()
+		);
+		let mut pw = PartialWitness::new();
+		pw.set_bool_target(self.is_real_target, is_real)?;
+		for (&t, &v) in self.data_targets.iter().zip(data.iter()) {
+			pw.set_target(t, v)?;
+		}
+		let proof = self.leaf_circuit.prove(pw)?;
+		Ok(proof.to_bytes())
 	}
 
 	/// Submit all leaf proof bytes to a streaming session, await the root proof.
@@ -396,49 +406,82 @@ impl ProverRuntime {
 		})
 	}
 
-	/// Aggregate associated input proofs (one per leaf) using the streaming pipeline.
+	/// Build all TX leaf proofs from sorted tree data, then aggregate them.
 	///
-	/// `DUMMY_ASSOCIATED_INPUT_PROOF` sentinels at padding positions are
-	/// expanded to the pre-generated `canonical_padding_proof` before
-	/// submission so the aggregator always receives `expected_count` valid
-	/// plonky2 proofs.
+	/// Each TX leaf proof carries the sorted tree leaf values for its slot
+	/// (real or dummy).  `is_real` is set to `true` only for slots listed in
+	/// `real_account_slots`.
 	///
 	/// Called from a `spawn_blocking` context; uses `Handle::current().block_on(...)` to drive
 	/// the async aggregation pipeline.
-	fn aggregate_associated_input_proofs(
+	#[allow(clippy::too_many_arguments)]
+	fn build_and_aggregate_tx_proofs(
 		aggregator: &Option<AssociatedInputAggregatorService>,
-		associated_input_proofs: &[Vec<u8>],
+		nc_sorted: &[Hash],
+		nn_sorted: &[Hash],
+		ac_sorted: &[Hash],
+		an_sorted: &[Hash],
+		real_account_slots: &[usize],
+		account_batch_size: usize,
+		notes_per_slot: usize,
 	) -> Result<ProofNative> {
 		let Some(agg_service) = aggregator else {
 			anyhow::bail!("no aggregator configured (set TESSERA_AGGREGATOR_ARTIFACTS_PATH)");
 		};
 
-		// Replace DUMMY sentinels with the canonical all-zero padding proof.
-		let mut expanded: Vec<Vec<u8>> = associated_input_proofs
-			.iter()
-			.map(|p| {
-				if p.as_slice() == DUMMY_ASSOCIATED_INPUT_PROOF {
-					agg_service.canonical_padding_proof.clone()
-				} else {
-					p.clone()
-				}
-			})
-			.collect();
+		anyhow::ensure!(
+			nn_sorted.len() == account_batch_size * notes_per_slot,
+			"NN sorted leaves: got {}, expected {}",
+			nn_sorted.len(),
+			account_batch_size * notes_per_slot
+		);
+		anyhow::ensure!(
+			nc_sorted.len() == account_batch_size * notes_per_slot,
+			"NC sorted leaves: got {}, expected {}",
+			nc_sorted.len(),
+			account_batch_size * notes_per_slot
+		);
+		anyhow::ensure!(an_sorted.len() == account_batch_size);
+		anyhow::ensure!(ac_sorted.len() == account_batch_size);
 
-		// Pad to the aggregation tree leaf count.
+		// Build one TX leaf proof per account slot.
+		let mut leaf_proofs = Vec::with_capacity(account_batch_size);
+		for s in 0..account_batch_size {
+			let is_real = real_account_slots.contains(&s);
+			let mut data = Vec::with_capacity(72);
+			// note nullifiers (8 × 4 fields) — from NN
+			for j in 0..notes_per_slot {
+				let leaf_idx = s * notes_per_slot + j;
+				data.extend_from_slice(&nn_sorted[leaf_idx].0);
+			}
+			// note commitments (8 × 4 fields) — from NC
+			for j in 0..notes_per_slot {
+				let leaf_idx = s * notes_per_slot + j;
+				data.extend_from_slice(&nc_sorted[leaf_idx].0);
+			}
+			// account nullifier (1 × 4 fields) — from AN
+			data.extend_from_slice(&an_sorted[s].0);
+			// account commitment (1 × 4 fields) — from AC
+			data.extend_from_slice(&ac_sorted[s].0);
+
+			leaf_proofs.push(agg_service.prove_leaf(is_real, &data)?);
+		}
+
+		// Pad to the aggregation tree leaf count with all-zero padding proofs.
 		let cfg = agg_service.aggregator.config();
 		let n_leaves = cfg.arity.pow(cfg.depth as u32);
 		anyhow::ensure!(
-			expanded.len() <= n_leaves,
+			leaf_proofs.len() <= n_leaves,
 			"batch size ({}) exceeds aggregation tree leaf count ({})",
-			expanded.len(),
+			leaf_proofs.len(),
 			n_leaves
 		);
-		expanded.resize(n_leaves, agg_service.canonical_padding_proof.clone());
+		let padding_proof = agg_service.prove_leaf(false, &vec![F::ZERO; 72])?;
+		leaf_proofs.resize(n_leaves, padding_proof);
 
 		// Bridge the async session into the synchronous context.
-		let root_proof =
-			tokio::runtime::Handle::current().block_on(agg_service.aggregate_bytes(&expanded))?;
+		let root_proof = tokio::runtime::Handle::current()
+			.block_on(agg_service.aggregate_bytes(&leaf_proofs))?;
 
 		Ok(root_proof)
 	}
@@ -495,10 +538,29 @@ impl ProverRuntime {
 			.account_nullifier_prover
 			.prove(&request.accounts_nullifier_proof)?;
 
-		info!(batch_id, "aggregating TX leaf proofs");
-		let tx_agg_root = Self::aggregate_associated_input_proofs(
+		info!(
+			batch_id,
+			"building and aggregating TX leaf proofs from sorted data"
+		);
+		let nc_sorted_hashes = crate::contract::bytes_slice_to_hashes(&request.nc_sorted_leaves)?;
+		let nn_sorted_hashes = crate::contract::bytes_slice_to_hashes(&request.nn_sorted_leaves)?;
+		let ac_sorted_hashes = crate::contract::bytes_slice_to_hashes(&request.ac_sorted_leaves)?;
+		let an_sorted_hashes = crate::contract::bytes_slice_to_hashes(&request.an_sorted_leaves)?;
+		let account_batch_size = request.ac_sorted_leaves.len();
+		let notes_per_slot = if account_batch_size > 0 {
+			request.nc_sorted_leaves.len() / account_batch_size
+		} else {
+			8
+		};
+		let tx_agg_root = Self::build_and_aggregate_tx_proofs(
 			&self.aggregator,
-			&request.associated_tx_proofs,
+			&nc_sorted_hashes,
+			&nn_sorted_hashes,
+			&ac_sorted_hashes,
+			&an_sorted_hashes,
+			&request.real_account_slots,
+			account_batch_size,
+			notes_per_slot,
 		)?;
 
 		info!(batch_id, "running SuperAggregator (BN128 + Groth16)");

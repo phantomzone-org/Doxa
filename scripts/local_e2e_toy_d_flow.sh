@@ -88,6 +88,7 @@ REQ_FILE="$LOG_DIR/tessera_e2e_requests_${TS}.txt"
 # Export env vars expected by the client binary.
 export TESSERA_RPC_URL="$RPC"
 export TESSERA_OPERATOR_KEY="$OPERATOR_KEY"
+export TESSERA_CLIENT_KEY="$CLIENT_KEY"
 export TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS="$BRIDGE"
 export TESSERA_MONITORED_TOKEN="$TOKEN"
 
@@ -154,40 +155,17 @@ echo "confirmedAccountsNullifierRoot before:  $CONF_AN_BEFORE"
 
 # Step 13: Submit a private-tx via the test client.
 #
-# input_notes:  first N_TX committed deposits (Validated in the NC tree) to be nullified.
-# output_notes: fresh private note commitments (status None — not deposits).
-#               Indices start above TOTAL_DEPOSITS to avoid colliding with deposited notes.
-# account leaves: synthetic dummy values beyond the note range.
-# The client generates a Plonky2 proof from TESSERA_AGGREGATOR_ARTIFACTS_PATH when set.
-#
-# The client supports up to 8 input/output notes per call; use the first 8 (or fewer).
-_N_TX=$(( REQUEST_COUNT < 8 ? REQUEST_COUNT : 8 ))
-_IN_NOTES=""
-for _i in $(seq 1 "$_N_TX"); do
-  [[ -n "$_IN_NOTES" ]] && _IN_NOTES+=","
-  _IN_NOTES+=$(printf '0x%064x' "$_i")
-done
-_OUT_NOTES=""
-for _i in $(seq $((TOTAL_DEPOSITS + 1)) $((TOTAL_DEPOSITS + _N_TX))); do
-  [[ -n "$_OUT_NOTES" ]] && _OUT_NOTES+=","
-  _OUT_NOTES+=$(printf '0x%064x' "$_i")
-done
-_IN_ACCOUNT=$(printf '0x%064x' $((TOTAL_DEPOSITS + REQUEST_COUNT + 1)))
-_OUT_ACCOUNT=$(printf '0x%064x' $((TOTAL_DEPOSITS + REQUEST_COUNT + 2)))
-
-echo "Submitting private tx via client ($_N_TX input/output notes)..."
+# The client generates random TX data (nullifiers, commitments, account mutations)
+# and proves a 73-PI circuit proof from TESSERA_AGGREGATOR_ARTIFACTS_PATH.
+echo "Submitting 1 private tx via client (random data)..."
 _resp=$(cargo run --bin client --release --manifest-path "$ROOT_DIR/tessera-server/Cargo.toml" -- \
-  private-tx \
-  --input-notes  "$_IN_NOTES" \
-  --output-notes "$_OUT_NOTES" \
-  --input-account  "$_IN_ACCOUNT" \
-  --output-account "$_OUT_ACCOUNT")
+  private-tx --count 1)
 echo "$_resp"
 if ! echo "$_resp" | grep -qE ': accepted$'; then
   echo "ERROR: /private-tx not accepted." >&2
   exit 1
 fi
-unset _N_TX _IN_NOTES _OUT_NOTES _IN_ACCOUNT _OUT_ACCOUNT _resp _i
+unset _resp
 
 # Step 14: Phase A — poll notesNullifierRoot() until it advances.
 # notesNullifierRoot advances at register time (before any proof).  Only the
@@ -249,7 +227,7 @@ echo "BRIDGE=$BRIDGE"
 echo "TOKEN=$TOKEN"
 echo "NOTES_FILE=$NOTES_FILE"
 echo "REQ_FILE=$REQ_FILE"
-echo "Output notes (up to 8): indices $((TOTAL_DEPOSITS + 1))..$((TOTAL_DEPOSITS + 8 < TOTAL_DEPOSITS + REQUEST_COUNT ? TOTAL_DEPOSITS + 8 : TOTAL_DEPOSITS + REQUEST_COUNT)) — status None (new private notes, not deposits)"
+echo "Output notes: derived by client from random private key (Poseidon-hashed, not sequential indices)"
 
 # Step 18: Print all deposits for manual auditing (status + raw tuple).
 echo ""

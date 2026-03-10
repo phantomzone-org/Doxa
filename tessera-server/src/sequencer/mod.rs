@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+	collections::{BTreeMap, HashSet},
+	sync::Arc,
+	time::Duration,
+};
 
 use alloy::{
 	network::EthereumWallet,
@@ -25,8 +29,6 @@ mod api;
 mod pipeline;
 mod recovery;
 mod revert;
-
-const DUMMY_ASSOCIATED_INPUT_PROOF: &[u8] = &[0x01];
 
 /// Receipt polling timeout for on-chain transactions.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -127,18 +129,15 @@ pub struct Sequencer {
 	result_tx: Option<mpsc::Sender<ProveOutcome>>,
 	result_rx: Option<mpsc::Receiver<ProveOutcome>>,
 	notes_commitment_rx: Option<mpsc::Receiver<NotesCommitmentRequest>>,
-	notes_nullifier_rx: Option<mpsc::Receiver<[u8; 32]>>,
-	accounts_commitment_rx: Option<mpsc::Receiver<[u8; 32]>>,
-	accounts_nullifier_rx: Option<mpsc::Receiver<[u8; 32]>>,
 	/// Registered-but-unconfirmed two-phase batches keyed by on-chain `batchId`.
 	registered_pending_batches: BTreeMap<u64, TxBatch>,
 	/// Receiver end of the private-tx channel for optimistic two-phase register.
 	private_tx_rx: Option<mpsc::Receiver<PrivateTxRequest>>,
+	/// AN commitments from real private TXs currently in the pending pool.
+	/// Used by `start_batch` to compute `real_account_slots` after sorting.
+	real_private_tx_an_leaves: HashSet<[u8; 32]>,
 	api_order_counter: u64,
 	notes_commitment_pending_since: Option<std::time::Instant>,
-	notes_nullifier_pending_since: Option<std::time::Instant>,
-	accounts_commitment_pending_since: Option<std::time::Instant>,
-	accounts_nullifier_pending_since: Option<std::time::Instant>,
 }
 
 impl Sequencer {
@@ -179,8 +178,6 @@ impl Sequencer {
 			reason,
 			notes_commitment_pending = self.notes_commitment_state.pending_requests.len(),
 			notes_nullifier_pending = self.notes_nullifier_state.pending_requests.len(),
-			accounts_commitment_pending = self.accounts_commitment_state.pending_requests.len(),
-			accounts_nullifier_pending = self.accounts_nullifier_state.pending_requests.len(),
 			"sequencer pool status"
 		);
 	}
@@ -209,18 +206,6 @@ impl Sequencer {
 			&mut self.notes_commitment_pending_since,
 			self.notes_commitment_state.pending_requests.len(),
 		);
-		Self::refresh_pending_since(
-			&mut self.notes_nullifier_pending_since,
-			self.notes_nullifier_state.pending_requests.len(),
-		);
-		Self::refresh_pending_since(
-			&mut self.accounts_commitment_pending_since,
-			self.accounts_commitment_state.pending_requests.len(),
-		);
-		Self::refresh_pending_since(
-			&mut self.accounts_nullifier_pending_since,
-			self.accounts_nullifier_state.pending_requests.len(),
-		);
 	}
 
 	pub fn new(config: SequencerConfig) -> Self {
@@ -242,16 +227,11 @@ impl Sequencer {
 			result_tx: None,
 			result_rx: None,
 			notes_commitment_rx: None,
-			notes_nullifier_rx: None,
-			accounts_commitment_rx: None,
-			accounts_nullifier_rx: None,
 			registered_pending_batches: BTreeMap::new(),
 			private_tx_rx: None,
+			real_private_tx_an_leaves: HashSet::new(),
 			api_order_counter: 0,
 			notes_commitment_pending_since: None,
-			notes_nullifier_pending_since: None,
-			accounts_commitment_pending_since: None,
-			accounts_nullifier_pending_since: None,
 		}
 	}
 
@@ -267,6 +247,7 @@ impl Sequencer {
 		let signer = signer.with_chain_id(Some(self.config.chain_id));
 		let wallet = EthereumWallet::from(signer);
 		let provider = ProviderBuilder::new()
+			.with_nonce_management(alloy::providers::fillers::CachedNonceManager::default())
 			.wallet(wallet)
 			.connect_http(self.config.rpc_url.parse()?);
 
@@ -312,11 +293,12 @@ impl Sequencer {
 			TreeId::NotesCommitment,
 			"notes_commitment",
 			self.config.snapshot_every_batches,
+			note_batch_size,
 		)?;
 		self.notes_commitment_state.tree = tree;
 		self.notes_commitment_store = Some(store);
 		self.notes_commitment_meta = Some(meta);
-		self.load_other_trees()?;
+		self.load_other_trees(note_batch_size, account_batch_size)?;
 
 		// Step 3: reconcile local cache with chain by replaying only missing batches.
 		// This is authoritative recovery: if local is behind, we recover leaves from
@@ -368,13 +350,7 @@ impl Sequencer {
 
 		let (notes_commitment_tx, notes_commitment_rx) =
 			mpsc::channel::<NotesCommitmentRequest>(1024);
-		let (notes_nullifier_tx, notes_nullifier_rx) = mpsc::channel::<[u8; 32]>(1024);
-		let (accounts_commitment_tx, accounts_commitment_rx) = mpsc::channel::<[u8; 32]>(1024);
-		let (accounts_nullifier_tx, accounts_nullifier_rx) = mpsc::channel::<[u8; 32]>(1024);
 		self.notes_commitment_rx = Some(notes_commitment_rx);
-		self.notes_nullifier_rx = Some(notes_nullifier_rx);
-		self.accounts_commitment_rx = Some(accounts_commitment_rx);
-		self.accounts_nullifier_rx = Some(accounts_nullifier_rx);
 
 		let private_tx_tx = {
 			let (tx, rx) = mpsc::channel::<PrivateTxRequest>(MAX_PENDING_BATCHES);
@@ -401,22 +377,11 @@ impl Sequencer {
 			.map(|path| api::LeafProofVerifier::from_artifacts(path).map(Arc::new))
 			.transpose()
 			.context("failed to load tx proof verifier from aggregator artifacts")?;
-		let account_proof_verifier = self
-			.config
-			.account_artifacts_path
-			.as_deref()
-			.map(|path| api::LeafProofVerifier::from_artifacts(path).map(Arc::new))
-			.transpose()
-			.context("failed to load account proof verifier from account artifacts")?;
 		let api_state = api::ApiState {
 			notes_commitment_tx,
-			notes_nullifier_tx,
-			accounts_commitment_tx,
-			accounts_nullifier_tx,
 			private_tx_tx: Some(private_tx_tx),
 			consume_proof_verifier,
 			tx_proof_verifier,
-			account_proof_verifier,
 		};
 		let app = api::build_router(api_state);
 		tokio::spawn(async move {
@@ -478,99 +443,6 @@ impl Sequencer {
 					}
 				}
 
-				Some(note) = async {
-					if let Some(rx) = &mut self.notes_nullifier_rx {
-						rx.recv().await
-					} else {
-						None
-					}
-				} => {
-					let note_hash = match contract::bytes32_to_hash(&alloy::primitives::B256::from(note)) {
-						Ok(h) => h,
-						Err(e) => {
-							warn!(note = ?alloy::primitives::B256::from(note), error = %e, "notes nullifier request rejected: invalid leaf encoding");
-							continue;
-						},
-					};
-					if self.notes_nullifier_state.tree.find_node_index_by_value(&note_hash).is_some() {
-						warn!(note = ?alloy::primitives::B256::from(note), "notes nullifier request rejected: leaf already nullified");
-						continue;
-					}
-					if !self.is_note_validated(&provider, &note).await {
-						warn!(note = ?note, "notes nullifier request rejected: note exists on bridge but is not Validated");
-						continue;
-					}
-					let order_key = EventOrderKey {
-						block_number: 0,
-						transaction_index: 0,
-						log_index: self.api_order_counter,
-					};
-					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.notes_nullifier_state.add_consume_request(order_key, note, note_batch_size);
-					self.log_pool_status("accepted notes nullifier leaf");
-					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
-						error!("failed to start next batch: {e}");
-						break;
-					}
-				}
-
-				Some(leaf) = async {
-					if let Some(rx) = &mut self.accounts_commitment_rx {
-						rx.recv().await
-					} else {
-						None
-					}
-				} => {
-					let order_key = EventOrderKey {
-						block_number: 0,
-						transaction_index: 0,
-						log_index: self.api_order_counter,
-					};
-					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.accounts_commitment_state.add_consume_request(
-						order_key,
-						leaf,
-						account_batch_size,
-					);
-					self.log_pool_status("accepted accounts commitment leaf");
-					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
-						error!("failed to start next batch: {e}");
-						break;
-					}
-				}
-
-				Some(leaf) = async {
-					if let Some(rx) = &mut self.accounts_nullifier_rx {
-						rx.recv().await
-					} else {
-						None
-					}
-				} => {
-					let leaf_hash = match contract::bytes32_to_hash(&alloy::primitives::B256::from(leaf)) {
-						Ok(h) => h,
-						Err(e) => {
-							warn!(leaf = ?alloy::primitives::B256::from(leaf), error = %e, "accounts nullifier request rejected: invalid leaf encoding");
-							continue;
-						},
-					};
-					if self.accounts_nullifier_state.tree.find_node_index_by_value(&leaf_hash).is_some() {
-						warn!(leaf = ?alloy::primitives::B256::from(leaf), "accounts nullifier request rejected: leaf already nullified");
-						continue;
-					}
-					let order_key = EventOrderKey {
-						block_number: 0,
-						transaction_index: 0,
-						log_index: self.api_order_counter,
-					};
-					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.accounts_nullifier_state.add_consume_request(order_key, leaf, account_batch_size);
-					self.log_pool_status("accepted accounts nullifier leaf");
-					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
-						error!("failed to start next batch: {e}");
-						break;
-					}
-				}
-
 				Some(outcome) = async {
 					if let Some(rx) = &mut self.result_rx {
 						rx.recv().await
@@ -588,7 +460,8 @@ impl Sequencer {
 					}
 				}
 
-				// Optimistic two-phase register path for private transactions.
+				// Private transactions: enqueue leaves into the 4 pending pools.
+				// The unified `start_batch` will flush them together with consume requests.
 				Some(tx_req) = async {
 					if let Some(rx) = &mut self.private_tx_rx {
 						rx.recv().await
@@ -596,9 +469,107 @@ impl Sequencer {
 						None
 					}
 				} => {
-					if let Err(e) = self.register_tx_batch(&provider, tx_req, note_batch_size, account_batch_size).await {
-						error!("failed to register private tx batch: {e}");
-						// Non-fatal: log and continue processing other requests.
+					let tx_id = tx_req.tx_id.as_deref().unwrap_or("unknown");
+					debug!(tx_id, "validating private tx nullifier leaves");
+
+					// Validate NN: reject if any input note nullifier already exists in tree or pending pool.
+					let mut nn_rejected = false;
+					for note in &tx_req.input_notes {
+						let note_hash = match contract::bytes32_to_hash(&alloy::primitives::B256::from(*note)) {
+							Ok(h) => h,
+							Err(e) => {
+								warn!(tx_id, note = ?alloy::primitives::B256::from(*note), error = %e, "private tx rejected: invalid NN leaf encoding");
+								nn_rejected = true;
+								break;
+							},
+						};
+						if self.notes_nullifier_state.tree.find_node_index_by_value(&note_hash).is_some() {
+							warn!(tx_id, note = ?alloy::primitives::B256::from(*note), "private tx rejected: NN leaf already nullified");
+							nn_rejected = true;
+							break;
+						}
+						if self.notes_nullifier_state.pending_commitments.contains(note) {
+							warn!(tx_id, note = ?alloy::primitives::B256::from(*note), "private tx rejected: NN leaf already pending");
+							nn_rejected = true;
+							break;
+						}
+					}
+					if nn_rejected {
+						continue;
+					}
+
+					// Validate AN: reject if account nullifier already exists in tree or pending pool.
+					let an_leaf = tx_req.input_account_leaf;
+					let an_hash = match contract::bytes32_to_hash(&alloy::primitives::B256::from(an_leaf)) {
+						Ok(h) => h,
+						Err(e) => {
+							warn!(tx_id, error = %e, "private tx rejected: invalid AN leaf encoding");
+							continue;
+						},
+					};
+					if self.accounts_nullifier_state.tree.find_node_index_by_value(&an_hash).is_some() {
+						warn!(tx_id, "private tx rejected: AN leaf already nullified");
+						continue;
+					}
+					if self.accounts_nullifier_state.pending_commitments.contains(&an_leaf) {
+						warn!(tx_id, "private tx rejected: AN leaf already pending");
+						continue;
+					}
+
+					// All checks passed — enqueue into all 4 pools.
+					// NC: output notes
+					for note in &tx_req.output_notes {
+						let order_key = EventOrderKey {
+							block_number: 0,
+							transaction_index: 0,
+							log_index: self.api_order_counter,
+						};
+						self.api_order_counter = self.api_order_counter.saturating_add(1);
+						self.notes_commitment_state.add_consume_request(order_key, *note, note_batch_size);
+					}
+					// NN: input notes (validated above)
+					for note in &tx_req.input_notes {
+						let order_key = EventOrderKey {
+							block_number: 0,
+							transaction_index: 0,
+							log_index: self.api_order_counter,
+						};
+						self.api_order_counter = self.api_order_counter.saturating_add(1);
+						self.notes_nullifier_state.add_consume_request(order_key, *note, note_batch_size);
+					}
+					// AC: output account
+					{
+						let order_key = EventOrderKey {
+							block_number: 0,
+							transaction_index: 0,
+							log_index: self.api_order_counter,
+						};
+						self.api_order_counter = self.api_order_counter.saturating_add(1);
+						self.accounts_commitment_state.add_consume_request(order_key, tx_req.output_account_leaf, account_batch_size);
+					}
+					// AN: input account (validated above)
+					{
+						let order_key = EventOrderKey {
+							block_number: 0,
+							transaction_index: 0,
+							log_index: self.api_order_counter,
+						};
+						self.api_order_counter = self.api_order_counter.saturating_add(1);
+						self.accounts_nullifier_state.add_consume_request(order_key, an_leaf, account_batch_size);
+						self.real_private_tx_an_leaves.insert(an_leaf);
+					}
+
+					info!(
+						tx_id,
+						nc_pending = self.notes_commitment_state.pending_requests.len(),
+						nn_pending = self.notes_nullifier_state.pending_requests.len(),
+						ac_pending = self.accounts_commitment_state.pending_requests.len(),
+						an_pending = self.accounts_nullifier_state.pending_requests.len(),
+						"private tx leaves enqueued"
+					);
+					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
+						error!("failed to start next batch: {e}");
+						break;
 					}
 				}
 

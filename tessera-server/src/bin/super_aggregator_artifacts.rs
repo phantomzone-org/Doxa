@@ -4,11 +4,11 @@
 //! `aggregator_artifacts` have completed successfully.
 //!
 //! Inner PI counts (for reference):
-//!   TX aggregator root: 16 × 73 = 1168 fields (ARITY=2, DEPTH=4, ReducerKind::None)
+//!   TX aggregator root: 128 × 73 = 9344 fields (ARITY=2, DEPTH=7, ReducerKind::None)
 //!     Each TX leaf: is_real(1) + 72 data fields
-//!   NC / NN tree:  (2 + note_batch_size) × 4    fields  (default: 520 with batch_size=128)
-//!   AC / AN tree:  (2 + account_batch_size) × 4  fields  (default:  72 with batch_size=16)
-//!   SuperAggregator Keccak preimage: 1184 fields (TX PIs enforced in-circuit, not hashed)
+//!   NC / NN tree:  (2 + note_batch_size) × 4    fields  (default: 4104 with batch_size=1024)
+//!   AC / AN tree:  (2 + account_batch_size) × 4  fields  (default:  520 with batch_size=128)
+//!   SuperAggregator Keccak preimage: 9248 fields (TX PIs enforced in-circuit, not hashed)
 //!   SuperAggregator output: 8 fields (Keccak-256 digest as 8 × u32)
 //!
 //! Produces:
@@ -17,7 +17,7 @@
 //!   - `artifacts/super-aggregator/groth-artifacts/` (Groth16 proving/verifying keys)
 //!
 //! Usage:
-//!   TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 \
+//!   TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
 //!   cargo run --bin super_aggregator_artifacts --release
 
 use std::{fs, path::PathBuf, time::Instant};
@@ -39,7 +39,7 @@ use tessera_trees::{
 };
 
 const TX_ARITY: usize = 2;
-const TX_DEPTH: usize = 4;
+const TX_DEPTH: usize = 7;
 
 fn debug_enabled() -> bool {
 	std::env::var("TESSERA_DEBUG")
@@ -103,9 +103,8 @@ fn prove_tx_leaf(data_values: &[F]) -> Result<ProofNative> {
 /// TX leaf proofs are constructed with PI values matching the corresponding
 /// tree leaf PIs, satisfying the in-circuit cross-check constraints.
 ///
-/// PI layout constants:
-///   NC/AC (commitment tree): [old_root(4), new_root(4), leaves(...)] → leaves at offset 8
-///   NN/AN (nullifier tree):  [old_root(4), new_node_path(1), values(...)] → values at offset 5
+/// All four trees (NC, NN, AC, AN) share the same PI layout:
+///   old_root[4] + new_root[4] + values[batch_size × 4] → values at offset 8
 fn prove_super(
 	super_agg: &SuperAggregator,
 	tx_agg: &GenericAggregator<F, ConfigNative, D>,
@@ -118,17 +117,11 @@ fn prove_super(
 	let (_, ac_proof, _, _) = sample_batch_commitment_tree_proof(seed, account_batch_size)?;
 	let (_, an_proof, _, _) = sample_batch_nullifier_tree_proof(seed, account_batch_size)?;
 
-	let n_tx_slots = TX_ARITY.pow(TX_DEPTH as u32); // = 16
+	let n_tx_slots = TX_ARITY.pow(TX_DEPTH as u32); // = 128
 	let notes_per_slot = note_batch_size / n_tx_slots; // = 8
 
-	// Leaf offsets within each tree's public_inputs:
-	//   NC/AC: old_root[4] + new_root[4]       → leaves at 8
-	//   NN/AN: [old_root(4), new_node_path(1), values[0..N-2](4 each), new_root(4), value[N-1](4)]
-	//          → values[0..N-2] at offset 5; value[N-1] at nn_len-4 (after new_root)
-	const NC_LEAF_OFFSET: usize = 8;
-	const NN_LEAF_OFFSET: usize = 5;
-	let nn_len = nn_proof.public_inputs.len();
-	let an_len = an_proof.public_inputs.len();
+	// All four trees share PI layout: old_root[4] + new_root[4] + values[batch_size × 4]
+	const LEAF_OFFSET: usize = 8;
 
 	// Build one TX leaf proof per slot with PI values matching the tree leaf PIs.
 	// TX leaf layout (72 fields per slot):
@@ -140,14 +133,9 @@ fn prove_super(
 		.map(|s| {
 			let mut vals = Vec::with_capacity(72);
 			// note nullifiers [0..32]: from NN values
-			// values[0..N-2] at offset 5; value[N-1] at nn_len-4 (after new_root)
 			for j in 0..notes_per_slot {
 				let leaf_idx = s * notes_per_slot + j;
-				let nn_val_base = if leaf_idx < note_batch_size - 1 {
-					NN_LEAF_OFFSET + leaf_idx * 4
-				} else {
-					nn_len - 4
-				};
+				let nn_val_base = LEAF_OFFSET + leaf_idx * 4;
 				for k in 0..4 {
 					vals.push(nn_proof.public_inputs[nn_val_base + k]);
 				}
@@ -156,23 +144,18 @@ fn prove_super(
 			for j in 0..notes_per_slot {
 				for k in 0..4 {
 					vals.push(
-						nc_proof.public_inputs[NC_LEAF_OFFSET + (s * notes_per_slot + j) * 4 + k],
+						nc_proof.public_inputs[LEAF_OFFSET + (s * notes_per_slot + j) * 4 + k],
 					);
 				}
 			}
 			// account nullifier [64..68]: from AN values
-			// value[N-1] at an_len-4 (after new_root)
-			let an_val_base = if s < account_batch_size - 1 {
-				NN_LEAF_OFFSET + s * 4
-			} else {
-				an_len - 4
-			};
+			let an_val_base = LEAF_OFFSET + s * 4;
 			for k in 0..4 {
 				vals.push(an_proof.public_inputs[an_val_base + k]);
 			}
 			// account commitment [68..72]: from AC leaves
 			for k in 0..4 {
-				vals.push(ac_proof.public_inputs[NC_LEAF_OFFSET + s * 4 + k]);
+				vals.push(ac_proof.public_inputs[LEAF_OFFSET + s * 4 + k]);
 			}
 			prove_tx_leaf(&vals)
 		})
@@ -188,11 +171,11 @@ fn prove_super(
 
 fn main() -> Result<()> {
 	let note_batch_size: usize = std::env::var("TESSERA_NOTE_BATCH_SIZE")
-		.unwrap_or_else(|_| "128".to_string())
+		.unwrap_or_else(|_| "1024".to_string())
 		.parse()
 		.expect("TESSERA_NOTE_BATCH_SIZE must be a valid usize");
 	let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
-		.unwrap_or_else(|_| "16".to_string())
+		.unwrap_or_else(|_| "128".to_string())
 		.parse()
 		.expect("TESSERA_ACCOUNT_BATCH_SIZE must be a valid usize");
 

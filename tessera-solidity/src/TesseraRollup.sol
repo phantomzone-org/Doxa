@@ -230,6 +230,7 @@ contract DepositsRollupBridge {
     error SlotConflict(uint256 slotIndex);
     error UnknownBatch(uint256 batchId);
     error BatchAlreadyConfirmed(uint256 batchId);
+    error NotSorted(uint256 index);
 
     /// @notice Deploy bridge with verifier address, initial roots, and access-control parameters.
     /// @dev Why these parameters exist:
@@ -273,11 +274,14 @@ contract DepositsRollupBridge {
         // Batch sizes are circuit-defined and must match the prover configuration.
         noteBatchSize    = _noteBatchSize;
         accountBatchSize = _accountBatchSize;
-        // Commitment trees start empty; nullifier trees start with one sentinel node.
+        // Commitment trees start empty; nullifier trees are pre-padded to batch_size
+        // alignment (1 sentinel + batch_size-1 deterministic padding leaves) so the
+        // first real batch starts at index batch_size.  Must match the Rust sequencer's
+        // NullifierTree::new_with_padding(depth, batch_size).num_leaves().
         notesCommitmentLeafCount = 0;
-        notesNullifierLeafCount = 1;
+        notesNullifierLeafCount = _noteBatchSize;
         accountsCommitmentLeafCount = 0;
-        accountsNullifierLeafCount = 1;
+        accountsNullifierLeafCount = _accountBatchSize;
 
         // Token escrow configuration.
         monitoredToken = _monitoredToken;
@@ -469,11 +473,14 @@ contract DepositsRollupBridge {
     /// @param newNotesCommitmentRoot  New notes-commitment tree root after appending noteCommitmentsOut.
     /// @param noteCommitmentsOut      Note commitments added to the commitment tree (proof order).
     /// @param newNotesNullifierRoot   New notes-nullifier tree root after consuming noteNullifiersIn.
-    /// @param noteNullifiersIn        Note nullifiers consumed in this batch.
+    /// @param noteNullifiersIn        Full sorted note-nullifier batch (exactly noteBatchSize elements,
+    ///        pre-sorted ascending by uint256 value, including deterministic dummies).
+    ///        The sequencer computes dummies and sorts; the contract only verifies sort order.
     /// @param newAccountsCommitmentRoot New accounts-commitment tree root.
     /// @param accountCommitmentsOut   Account commitments added to the commitment tree.
     /// @param newAccountsNullifierRoot  New accounts-nullifier tree root.
-    /// @param accountNullifiersIn     Account nullifiers consumed in this batch.
+    /// @param accountNullifiersIn     Full sorted account-nullifier batch (exactly accountBatchSize
+    ///        elements, pre-sorted ascending, including deterministic dummies).
     /// @return batchId  Unique 1-based ID assigned to this batch.
     function registerTransactionBatchUpdate(
         bytes32 newNotesCommitmentRoot,
@@ -487,15 +494,14 @@ contract DepositsRollupBridge {
     ) external onlyOperator whenNotPaused returns (uint256 batchId) {
         if (_pendingCount == MAX_PENDING_BATCHES) revert PendingQueueFull();
 
-        // Batch-length checks: arrays may be empty (all-dummy batch for that tree) but must not
-        // exceed the configured batch size.  Zero is valid — _reconstructBatchWithDummies handles it.
+        // Batch-length checks: all 4 arrays must be exactly batch_size (full sorted batches).
         {
             uint256 nbs = noteBatchSize;
             uint256 abs_ = accountBatchSize;
-            if (noteCommitmentsOut.length  > nbs)  revert InvalidBatchLength(noteCommitmentsOut.length,  nbs);
-            if (noteNullifiersIn.length    > nbs)  revert InvalidBatchLength(noteNullifiersIn.length,    nbs);
-            if (accountCommitmentsOut.length > abs_) revert InvalidBatchLength(accountCommitmentsOut.length, abs_);
-            if (accountNullifiersIn.length   > abs_) revert InvalidBatchLength(accountNullifiersIn.length,   abs_);
+            if (noteCommitmentsOut.length  != nbs)  revert InvalidBatchLength(noteCommitmentsOut.length,  nbs);
+            if (noteNullifiersIn.length    != nbs)  revert InvalidBatchLength(noteNullifiersIn.length,    nbs);
+            if (accountCommitmentsOut.length != abs_) revert InvalidBatchLength(accountCommitmentsOut.length, abs_);
+            if (accountNullifiersIn.length   != abs_) revert InvalidBatchLength(accountNullifiersIn.length,   abs_);
         }
 
         // Notes-commitment: check deposit state for tracked notes, then validate them.
@@ -524,45 +530,33 @@ contract DepositsRollupBridge {
         // Defensive: slot should always be free if _pendingCount < MAX_PENDING_BATCHES.
         if (pendingBatches[slotIndex].batchId != 0) revert SlotConflict(slotIndex);
 
-        // Compute the super-PI commitment over the four tree PI vectors only.
-        // TX PIs are enforced in-circuit by the SuperAggregator (TX slot values must equal
-        // the corresponding tree leaf values), so they are excluded from the Keccak preimage.
-        // Full batches are reconstructed with dummies using pre-increment leaf counts so the
-        // on-chain keccak matches the circuit's keccak over the same preimage.
-        bytes32 superPiCommitment;
-        {
-            bytes32[] memory ncFull = _reconstructBatchWithDummies(
-                TreeType.NotesCommitment, notesCommitmentLeafCount, noteCommitmentsOut);
-            bytes32[] memory nnFull = _reconstructBatchWithDummies(
-                TreeType.NotesNullifier, notesNullifierLeafCount, noteNullifiersIn);
-            bytes32[] memory acFull = _reconstructBatchWithDummies(
-                TreeType.AccountsCommitment, accountsCommitmentLeafCount, accountCommitmentsOut);
-            bytes32[] memory anFull = _reconstructBatchWithDummies(
-                TreeType.AccountsNullifier, accountsNullifierLeafCount, accountNullifiersIn);
-            bytes memory ncPacked = _packBytes32ArrayMemory(ncFull);
-            bytes memory nnPacked = _packBytes32ArrayMemory(nnFull);
-            bytes memory acPacked = _packBytes32ArrayMemory(acFull);
-            bytes memory anPacked = _packBytes32ArrayMemory(anFull);
-            // Use latest (optimistic) roots as old_root, NOT confirmed roots.
-            // The prover's tree proofs prove: old_root → new_root. When batches are
-            // pipelined (batch N+1 registered before batch N is confirmed), the
-            // confirmed roots still point to batch N-1, but the prover already
-            // advanced the tree to batch N's new_root. The latest roots (advanced
-            // during each registerTransactionBatchUpdate) track the prover's state.
-            superPiCommitment = keccak256(abi.encodePacked(
-                notesCommitmentRoot,    newNotesCommitmentRoot,    ncPacked,
-                notesNullifierRoot,     newNotesNullifierRoot,     nnPacked,
-                accountsCommitmentRoot, newAccountsCommitmentRoot, acPacked,
-                accountsNullifierRoot,  newAccountsNullifierRoot,  anPacked
-            ));
-            emit SuperPiDebug(
-                keccak256(abi.encodePacked(notesCommitmentRoot,    newNotesCommitmentRoot,    ncPacked)),
-                keccak256(abi.encodePacked(notesNullifierRoot,     newNotesNullifierRoot,     nnPacked)),
-                keccak256(abi.encodePacked(accountsCommitmentRoot, newAccountsCommitmentRoot, acPacked)),
-                keccak256(abi.encodePacked(accountsNullifierRoot,  newAccountsNullifierRoot,  anPacked)),
-                superPiCommitment
-            );
-        }
+        // Nullifier batches: verify ascending order (NN and AN).
+        _requireSorted(noteNullifiersIn);
+        _requireSorted(accountNullifiersIn);
+
+        // Pack each tree's PI: old_root || new_root || leaves (matches circuit Keccak preimage).
+        // All 4 arrays are full sorted batches passed directly from calldata.
+        bytes memory ncPacked = _packBytes32Array(noteCommitmentsOut);
+        bytes memory nnPacked = _packBytes32Array(noteNullifiersIn);
+        bytes memory acPacked = _packBytes32Array(accountCommitmentsOut);
+        bytes memory anPacked = _packBytes32Array(accountNullifiersIn);
+
+        // Compute superPiCommitment: keccak256(nc_pis || nn_pis || ac_pis || an_pis).
+        bytes32 superPiCommitment = keccak256(abi.encodePacked(
+            notesCommitmentRoot, newNotesCommitmentRoot, ncPacked,
+            notesNullifierRoot, newNotesNullifierRoot, nnPacked,
+            accountsCommitmentRoot, newAccountsCommitmentRoot, acPacked,
+            accountsNullifierRoot, newAccountsNullifierRoot, anPacked
+        ));
+
+        // Debug: per-tree sub-hashes for mismatch diagnosis.
+        emit SuperPiDebug(
+            keccak256(abi.encodePacked(notesCommitmentRoot, newNotesCommitmentRoot, ncPacked)),
+            keccak256(abi.encodePacked(notesNullifierRoot, newNotesNullifierRoot, nnPacked)),
+            keccak256(abi.encodePacked(accountsCommitmentRoot, newAccountsCommitmentRoot, acPacked)),
+            keccak256(abi.encodePacked(accountsNullifierRoot, newAccountsNullifierRoot, anPacked)),
+            superPiCommitment
+        );
 
         // Write pending record into the pre-warmed slot.
         PendingBatch storage slot = pendingBatches[slotIndex];
@@ -659,40 +653,14 @@ contract DepositsRollupBridge {
         }
     }
 
-    function _packBytes32ArrayMemory(bytes32[] memory arr) internal pure returns (bytes memory out) {
-        out = new bytes(arr.length * 32);
-        for (uint256 i = 0; i < arr.length; i++) {
-            bytes32 v = arr[i];
-            assembly {
-                mstore(add(add(out, 32), mul(i, 32)), v)
-            }
-        }
-    }
 
-    function _reconstructBatchWithDummies(
-        TreeType treeType,
-        uint256 batchStartIndex,
-        bytes32[] calldata realLeaves
-    ) internal view returns (bytes32[] memory out) {
-        uint256 effectiveSize = (treeType == TreeType.NotesCommitment || treeType == TreeType.NotesNullifier)
-            ? noteBatchSize
-            : accountBatchSize;
-        uint256 realLen = realLeaves.length;
-        out = new bytes32[](effectiveSize);
-        for (uint256 i = 0; i < realLen; i++) {
-            out[i] = realLeaves[i];
-        }
-        if (realLen == effectiveSize) {
-            return out;
-        }
-
-        bytes32 packedHash = keccak256(
-            abi.encodePacked(uint8(treeType), batchStartIndex, _packBytes32Array(realLeaves))
-        );
-        for (uint256 i = realLen; i < effectiveSize; i++) {
-            uint256 leafIndex = batchStartIndex + i;
-            bytes32 raw = keccak256(abi.encodePacked(leafIndex, packedHash));
-            out[i] = _fieldSafeDigest(raw);
+    /// @dev Verifies that a calldata bytes32[] is sorted in ascending uint256 order.
+    ///      Reverts with `NotSorted(i)` at the first out-of-order pair.
+    ///      O(n) — one comparison per element.
+    function _requireSorted(bytes32[] calldata arr) internal pure {
+        uint256 n = arr.length;
+        for (uint256 i = 1; i < n; i++) {
+            if (uint256(arr[i]) < uint256(arr[i - 1])) revert NotSorted(i);
         }
     }
 

@@ -7,29 +7,25 @@ Flow:
 2. consume requests are pushed to sequencer API (`POST /consume-request` or `POST /notes/commitment`)
    - each request must include `input_proof` — a hex-encoded Plonky2 **4-PI** leaf proof; validated cryptographically when `TESSERA_CONSUME_ARTIFACTS_PATH` is set; falls back to accepting any non-empty bytes otherwise
    - the `client consume` binary generates real 4-PI proofs on-the-fly from the consume artifacts
-3. account registration is pushed via `POST /accounts/commitment` with body `{"leaf":"0x...","input_proof":"0x..."}`:
-   - requires `input_proof` — a hex-encoded Plonky2 **8-PI** leaf proof; validated when `TESSERA_ACCOUNT_ARTIFACTS_PATH` is set
-   - the `client register-account` binary generates real 8-PI proofs on-the-fly from the account artifacts
-4. other tree leaves can be pushed via:
+3. other tree leaves can be pushed via:
 - `POST /notes/nullifier` with body `{"leaf":"0x..."}`
-- `POST /accounts/nullifier` with body `{"leaf":"0x..."}`
-5. private-tx payloads can be pushed via:
+4. private-tx payloads can be pushed via:
 - `POST /private-tx` (or `/private-tx/notes`) with body:
   - `input_notes[]` (max 8)
   - `output_notes[]` (max 8)
   - `input_account_commitment`
   - `output_account_commitment`
   - `tx_proof` (hex-encoded Plonky2 **72-PI** `ProofWithPublicInputs` bytes)
-- the `client private-tx` binary derives nullifiers, output commitments, and dummy padding automatically, then generates real 72-PI proofs on-the-fly from the aggregator artifacts
-6. sequencer batches, proves (single SuperAggregator Groth16 proof), then records on-chain:
+- the `client private-tx` binary generates random TX data (nullifiers, commitments, account mutations) and proves real 73-PI proofs on-the-fly from the aggregator artifacts
+5. sequencer batches, proves (single SuperAggregator Groth16 proof), then records on-chain:
    - Phase A: `registerTransactionBatchUpdate(newNCRoot, ncLeaves, newNNRoot, nnLeaves, newACRoot, acLeaves, newANRoot, anLeaves)` — all 4 optimistic roots advance immediately
    - Phase B: `confirmBatch(batchId, superAggregatorProof)` — all 4 confirmed roots advance atomically
 
 ## Scripts
 
 - `local_env.sh`
-  - Loads local defaults (`RPC`, keys, `TESSERA_NOTE_BATCH_SIZE` (128), `TESSERA_ACCOUNT_BATCH_SIZE` (16), artifact paths, sequencer API address).
-  - Sets `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH` (required by prover), `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (optional, for 72-PI TX leaf proof validation), `TESSERA_CONSUME_ARTIFACTS_PATH` (optional, for 4-PI consume proof validation), and `TESSERA_ACCOUNT_ARTIFACTS_PATH` (optional, for 8-PI account proof validation).
+  - Loads local defaults (`RPC`, keys, `TESSERA_NOTE_BATCH_SIZE` (1024), `TESSERA_ACCOUNT_BATCH_SIZE` (128), artifact paths, sequencer API address).
+  - Sets `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH` (required by prover), `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (optional, for 72-PI TX leaf proof validation), and `TESSERA_CONSUME_ARTIFACTS_PATH` (optional, for 4-PI consume proof validation).
   - Artifact paths are **guarded**: only exported when the corresponding `leaf_common.bin` file exists on disk.
 
 - `local_deploy.sh`
@@ -58,7 +54,7 @@ Flow:
   - Re-submits consumed notes to API (negative check).
 
 - `local_request_leaf.sh <endpoint> <0x-leaf>`
-  - Posts a single leaf to a non-deposit tree endpoint (`/notes/nullifier`, `/accounts/commitment`, `/accounts/nullifier`).
+  - Posts a single leaf to a non-deposit tree endpoint (`/notes/nullifier`).
 
 - `sync_verifiers_from_artifacts.sh`
   - Copies the freshly generated Groth16 verifier Solidity contract from the SuperAggregator artifact directory into `tessera-solidity/src/`:
@@ -68,17 +64,17 @@ Flow:
 ## Artifact Binaries
 
 The `tessera-server` crate provides artifact generator binaries that must be run in dependency order.
-All require `--release`. Default batch sizes: `TESSERA_NOTE_BATCH_SIZE=128`, `TESSERA_ACCOUNT_BATCH_SIZE=16`.
+All require `--release`. Default batch sizes: `TESSERA_NOTE_BATCH_SIZE=1024`, `TESSERA_ACCOUNT_BATCH_SIZE=128`.
 
 ```bash
 # Step 1 — commitment tree artifacts (NC + AC; no dependencies)
 #   → tessera-server/artifacts/commitment-tree/
-TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 \
+TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
 cargo run --bin commitment_tree_artifacts --release --manifest-path tessera-server/Cargo.toml
 
 # Step 2 — nullifier tree artifacts (NN + AN; no dependencies)
 #   → tessera-server/artifacts/nullifier-tree/
-TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 \
+TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
 cargo run --bin nullifier_tree_artifacts --release --manifest-path tessera-server/Cargo.toml
 
 # Step 3 — TX leaf aggregator artifacts (72-PI; no dependencies)
@@ -89,21 +85,17 @@ cargo run --bin aggregator_artifacts --release --manifest-path tessera-server/Ca
 #   → tessera-server/artifacts/consume/
 cargo run --bin consume_artifacts --release --manifest-path tessera-server/Cargo.toml
 
-# Step 5 — account circuit artifacts (8-PI; no dependencies)
-#   → tessera-server/artifacts/account/
-cargo run --bin account_artifacts --release --manifest-path tessera-server/Cargo.toml
-
-# Step 6 — SuperAggregator artifacts (Groth16; requires steps 1–4)
+# Step 5 — SuperAggregator artifacts (Groth16; requires steps 1–4)
 #   → tessera-server/artifacts/super-aggregator/
-TESSERA_NOTE_BATCH_SIZE=128 TESSERA_ACCOUNT_BATCH_SIZE=16 \
+TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
 cargo run --bin super_aggregator_artifacts --release --manifest-path tessera-server/Cargo.toml
 
-# Step 7 — copy Groth16 Verifier.sol into tessera-solidity/src/
+# Step 6 — copy Groth16 Verifier.sol into tessera-solidity/src/
 scripts/sync_verifiers_from_artifacts.sh
 ```
 
 After running these, `local_env.sh` will auto-detect and export `TESSERA_CONSUME_ARTIFACTS_PATH`,
-`TESSERA_AGGREGATOR_ARTIFACTS_PATH`, `TESSERA_ACCOUNT_ARTIFACTS_PATH`, and `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH`.
+`TESSERA_AGGREGATOR_ARTIFACTS_PATH`, and `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH`.
 
 ## E2E Client Binary
 
@@ -114,7 +106,7 @@ source scripts/local_env.sh
 ```
 
 ```bash
-# Register N deposits on-chain (requires TESSERA_RPC_URL, TESSERA_OPERATOR_KEY,
+# Register N deposits on-chain (requires TESSERA_RPC_URL, TESSERA_CLIENT_KEY,
 # TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS, TESSERA_MONITORED_TOKEN)
 cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
   deposit --count 256 --start-index 1 --amount 1
@@ -124,26 +116,15 @@ cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
 cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
   consume --count 16 --start-index 1
 
-# Register an account (requires TESSERA_ACCOUNT_ARTIFACTS_PATH,
-# TESSERA_SEQUENCER_API_URL)
-cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
-  register-account \
-  --private-key 0xdeadbeef \
-  --balance 0 \
-  --nonce 0
-
-# Submit a private transaction (2 real notes, auto-padded to 8; requires
+# Submit N private transactions with random data (requires
 # TESSERA_AGGREGATOR_ARTIFACTS_PATH, TESSERA_SEQUENCER_API_URL)
 cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
-  private-tx \
-  --input-notes 0x01,0x02 \
-  --account-commitment 0x31bf45cf6f5b386aa7a4d226030c9afbeb8f17ad565c377b9f6eae96bbdd7f6f \
-  --private-key 0xdeadbeef
+  private-tx --count 128
 ```
 
 ## Full E2E Walkthrough
 
-256 deposits → validate all → 16 private transactions each consuming 8 deposits (128 total).
+256 deposits → validate all → private transactions each consuming 8 deposits.
 
 ### Prerequisites
 
@@ -174,7 +155,7 @@ scripts/local_e2e_toy_c_sequencer.sh scripts/logs/tessera_e2e_latest.env
 
 ### 2 — Register 256 deposits on-chain
 
-The client auto-loads `tessera-server/.env` (`TESSERA_RPC_URL`, `TESSERA_OPERATOR_KEY`,
+The client auto-loads `tessera-server/.env` (`TESSERA_RPC_URL`, `TESSERA_CLIENT_KEY`,
 `TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS`). Source the remaining env before each terminal session:
 
 ```bash
@@ -199,40 +180,27 @@ cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
   consume --count 256 --start-index 1
 ```
 
-With `TESSERA_NOTE_BATCH_SIZE=128` this produces **two batches** of 128 leaves each.
-The sequencer runs Phase A then Phase B for each batch (`ValidatedBatchFinalized` events).
-Wait for both Phase B confirmations in the sequencer log before continuing.
+With `TESSERA_NOTE_BATCH_SIZE=1024` and only 256 deposits, this produces **one batch** of 1024 leaves (256 real + 768 padding).
+The sequencer runs Phase A then Phase B for the batch (`ValidatedBatchFinalized` event).
+Wait for the Phase B confirmation in the sequencer log before continuing.
 
 Optional: verify note statuses after each batch:
 ```bash
 scripts/local_status.sh 1 256
 ```
 
-### 4 — Register accounts and submit 16 private transactions
+### 4 — Submit private transactions
 
-First register an account, then submit 16 private transactions. Each call spends 8
-validated note commitments and auto-derives nullifiers, output commitments, and dummy padding.
+Each call generates random TX data and a valid 73-PI proof.
 
 ```bash
-# Register an account (one-time)
+# Submit 32 private transactions with random data
 cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
-  register-account --private-key 0xdeadbeef --balance 0 --nonce 0
-# Note the printed "account commitment: 0x..." value.
-
-# 16 private transactions, each consuming 8 deposits
-for i in $(seq 0 15); do
-  _in_start=$((1 + i * 8))
-  _IN=$(for n in $(seq $_in_start $((_in_start + 7))); do printf "0x%064x," $n; done | sed 's/,$//')
-  cargo run --bin client --release --manifest-path tessera-server/Cargo.toml -- \
-    private-tx \
-    --input-notes "$_IN" \
-    --account-commitment 0x<commitment-from-register> \
-    --private-key 0xdeadbeef
-done
+  private-tx --count 32
 ```
 
-The 16 calls accumulate leaves across all 4 trees (NC, NN, AC, AN).
-Wait for the resulting `ValidatedBatchFinalized` in the sequencer log.
+The calls accumulate leaves across all 4 trees (NC, NN, AC, AN).
+Wait for the resulting `TransactionBatchConfirmed` in the sequencer log.
 
 ## Console-Split E2E (Toy)
 

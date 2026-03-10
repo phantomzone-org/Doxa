@@ -31,12 +31,13 @@ pub(super) fn load_tree_from_store<T>(
 	tree_id: TreeId,
 	tree_name: &str,
 	snapshot_every_batches: u64,
+	batch_size: usize,
 ) -> anyhow::Result<(T, TreeStore<T>, StoreMeta)>
 where
 	T: SequencerTree + Serialize + for<'de> Deserialize<'de> + Clone,
 {
 	let mut store = TreeStore::<T>::open(tree_store_path, tree_id, snapshot_every_batches)?;
-	let (mut tree, meta0) = store.load_or_init(|| T::new(TREE_DEPTH))?;
+	let (mut tree, meta0) = store.load_or_init(|| T::new_padded(TREE_DEPTH, batch_size))?;
 	let (wal_pos, replayed) = store.replay_wal_since_snapshot(&mut tree, &meta0, |t, vals| {
 		let hashes = contract::bytes_slice_to_hashes(&vals)?;
 		t.insert_verified(hashes)?;
@@ -171,12 +172,17 @@ impl Sequencer {
 	/// Maximum block range per `eth_getLogs` call.
 	const LOG_FETCH_CHUNK_BLOCKS: u64 = 1_000;
 
-	pub(super) fn load_other_trees(&mut self) -> anyhow::Result<()> {
+	pub(super) fn load_other_trees(
+		&mut self,
+		note_batch_size: usize,
+		account_batch_size: usize,
+	) -> anyhow::Result<()> {
 		let (tree, store, meta) = load_tree_from_store::<NullifierTree<Hash>>(
 			&self.config.tree_store_path,
 			TreeId::NotesNullifier,
 			"notes_nullifier",
 			self.config.snapshot_every_batches,
+			note_batch_size,
 		)?;
 		self.notes_nullifier_state.tree = tree;
 		self.notes_nullifier_store = Some(store);
@@ -187,6 +193,7 @@ impl Sequencer {
 			TreeId::AccountsCommitment,
 			"accounts_commitment",
 			self.config.snapshot_every_batches,
+			account_batch_size,
 		)?;
 		self.accounts_commitment_state.tree = tree;
 		self.accounts_commitment_store = Some(store);
@@ -197,6 +204,7 @@ impl Sequencer {
 			TreeId::AccountsNullifier,
 			"accounts_nullifier",
 			self.config.snapshot_every_batches,
+			account_batch_size,
 		)?;
 		self.accounts_nullifier_state.tree = tree;
 		self.accounts_nullifier_store = Some(store);
@@ -640,12 +648,14 @@ impl Sequencer {
 	) -> anyhow::Result<bool> {
 		use crate::types::ProveRequest;
 
-		let (nc_padded, nc_hashes) = build_proving_commitments(
+		let (mut nc_padded, _) = build_proving_commitments(
 			DummyTreeType::NotesCommitment,
 			self.notes_commitment_state.tree.num_leaves(),
 			note_batch_size,
 			&nc_real,
 		)?;
+		nc_padded.sort();
+		let nc_hashes = contract::bytes_slice_to_hashes(&nc_padded)?;
 		let nc_proof = self
 			.notes_commitment_state
 			.tree
@@ -655,12 +665,14 @@ impl Sequencer {
 			"NC native proof failed during recovery (batch {batch_id})"
 		);
 
-		let (nn_padded, nn_hashes) = build_proving_commitments(
+		let (mut nn_padded, _) = build_proving_commitments(
 			DummyTreeType::NotesNullifier,
 			self.notes_nullifier_state.tree.num_leaves(),
 			note_batch_size,
 			&nn_real,
 		)?;
+		nn_padded.sort();
+		let nn_hashes = contract::bytes_slice_to_hashes(&nn_padded)?;
 		let nn_proof = self
 			.notes_nullifier_state
 			.tree
@@ -670,12 +682,14 @@ impl Sequencer {
 			"NN native proof failed during recovery (batch {batch_id})"
 		);
 
-		let (ac_padded, ac_hashes) = build_proving_commitments(
+		let (mut ac_padded, _) = build_proving_commitments(
 			DummyTreeType::AccountsCommitment,
 			self.accounts_commitment_state.tree.num_leaves(),
 			account_batch_size,
 			&ac_real,
 		)?;
+		ac_padded.sort();
+		let ac_hashes = contract::bytes_slice_to_hashes(&ac_padded)?;
 		let ac_proof = self
 			.accounts_commitment_state
 			.tree
@@ -685,12 +699,14 @@ impl Sequencer {
 			"AC native proof failed during recovery (batch {batch_id})"
 		);
 
-		let (an_padded, an_hashes) = build_proving_commitments(
+		let (mut an_padded, _) = build_proving_commitments(
 			DummyTreeType::AccountsNullifier,
 			self.accounts_nullifier_state.tree.num_leaves(),
 			account_batch_size,
 			&an_real,
 		)?;
+		an_padded.sort();
+		let an_hashes = contract::bytes_slice_to_hashes(&an_padded)?;
 		let an_proof = self
 			.accounts_nullifier_state
 			.tree
@@ -737,14 +753,29 @@ impl Sequencer {
 			},
 		);
 
-		let associated_tx_proofs = vec![DUMMY_ASSOCIATED_INPUT_PROOF.to_vec(); account_batch_size];
 		self.submit_prove_request_with_retry(ProveRequest {
 			batch_id,
 			notes_commitment_proof: nc_proof,
 			notes_nullifier_proof: nn_proof,
 			accounts_commitment_proof: ac_proof,
 			accounts_nullifier_proof: an_proof,
-			associated_tx_proofs,
+			nc_sorted_leaves: self.registered_pending_batches[&batch_id]
+				.nc_batch
+				.proving_commitments_bytes
+				.clone(),
+			nn_sorted_leaves: self.registered_pending_batches[&batch_id]
+				.nn_batch
+				.proving_commitments_bytes
+				.clone(),
+			ac_sorted_leaves: self.registered_pending_batches[&batch_id]
+				.ac_batch
+				.proving_commitments_bytes
+				.clone(),
+			an_sorted_leaves: self.registered_pending_batches[&batch_id]
+				.an_batch
+				.proving_commitments_bytes
+				.clone(),
+			real_account_slots: vec![], // recovery: treat all as dummy
 		})?;
 
 		Ok(true)

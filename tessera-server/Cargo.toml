@@ -60,6 +60,3 @@ path = "src/bin/consume_artifacts.rs"
 name = "client"
 path = "src/bin/client.rs"
 
-[[bin]]
-name = "account_artifacts"
-path = "src/bin/account_artifacts.rs"

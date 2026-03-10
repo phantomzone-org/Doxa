@@ -1,8 +1,8 @@
 //! Generate Aggregator artifacts for the [`PrivateTx`].
 //!
-//! Produces a native Plonky2 `GenericAggregator` (ARITY=2, DEPTH=4,
-//! [`ReducerKind::None`]) that aggregates 16 leaf proofs and exposes their
-//! 1168 raw public inputs (16×73) as the root proof's public inputs.
+//! Produces a native Plonky2 `GenericAggregator` (ARITY=2, DEPTH=7,
+//! [`ReducerKind::None`]) that aggregates 128 leaf proofs and exposes their
+//! 9344 raw public inputs (128×73) as the root proof's public inputs.
 //! Each TX leaf has 73 fields: is_real(1) + 8 note nullifiers + 8 note commitments +
 //! 1 account nullifier + 1 account commitment (4 Goldilocks fields each).
 //! No BN128/Groth16 wrapping is done here — the SuperAggregator wraps all 5
@@ -46,7 +46,7 @@ fn debug_log(msg: &str) {
 }
 
 const ARITY: usize = 2;
-const DEPTH: usize = 4;
+const DEPTH: usize = 7;
 const TX_DATA_PI: usize = 72; // 8 nullifiers + 8 commitments + 1+1 accounts (×4)
 const TX_LEAF_PI: usize = TX_DATA_PI + 1; // +1 for is_real boolean at PI[0]
 
@@ -90,7 +90,7 @@ fn main() -> Result<()> {
 	//
 	// Scripts look up $NOTE.hex from this directory to supply a real plonky2
 	// leaf proof with each consume-request / private-tx submission.  One
-	// distinct proof per note index ensures each slot in the 16-leaf
+	// distinct proof per note index ensures each slot in the 128-leaf
 	// aggregation tree carries unique public inputs.
 	//
 	// 256 entries covers the default TOTAL_DEPOSITS=256 in the test scripts.
@@ -134,7 +134,7 @@ fn main() -> Result<()> {
 	agg.verify_root(&root.proof)?;
 
 	// With ReducerKind::None the root proof passes all leaf PIs through unchanged:
-	// n_leaves × TX_LEAF_PI = 16 × 73 = 1168 raw Goldilocks field elements.
+	// n_leaves × TX_LEAF_PI = 128 × 73 = 9344 raw Goldilocks field elements.
 	assert_eq!(
 		root.proof.public_inputs.len(),
 		n_leaves * TX_LEAF_PI,

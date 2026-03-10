@@ -16,6 +16,10 @@ export TESSERA_PROVER_API_ADDR="$TESSERA_PROVER_API_ADDR"
 # Unset or absent → leaf proof validation disabled (prover accepts dummy proofs only).
 export TESSERA_AGGREGATOR_ARTIFACTS_PATH="${TESSERA_AGGREGATOR_ARTIFACTS_PATH:-}"
 
+LOG_DIR="$ROOT_DIR/scripts/logs"
+mkdir -p "$LOG_DIR"
+PROVER_LOG="$LOG_DIR/prover.log"
+
 echo "Starting prover service on: $TESSERA_PROVER_API_URL"
 echo "  SuperAggregator artifacts: $TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH"
 if [[ -n "${TESSERA_AGGREGATOR_ARTIFACTS_PATH:-}" ]]; then
@@ -23,5 +27,6 @@ if [[ -n "${TESSERA_AGGREGATOR_ARTIFACTS_PATH:-}" ]]; then
 else
   echo "  TX aggregator: disabled (TESSERA_AGGREGATOR_ARTIFACTS_PATH not set)"
 fi
-cargo run --bin prover --release
+echo "Logging to: $PROVER_LOG"
+cargo run --bin prover --release 2>&1 | tee "$PROVER_LOG"
 popd >/dev/null

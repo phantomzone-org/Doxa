@@ -193,9 +193,9 @@ pub fn sample_batch_nullifier_tree_proof(
 )> {
 	const DEPTH: usize = 32;
 
-	print!("Alloc tree 2^{DEPTH}: ");
+	print!("Alloc tree with padding (batch_size={batch_size}): ");
 	let now = Instant::now();
-	let mut tree = NullifierTree::new(TREE_DEPTH);
+	let mut tree = NullifierTree::new_with_padding(TREE_DEPTH, batch_size);
 	println!("{:?}", now.elapsed());
 
 	let mut rng: StdRng = StdRng::from_seed(seed);

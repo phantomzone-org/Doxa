@@ -68,9 +68,6 @@ impl LeafProofVerifier {
 #[derive(Clone)]
 pub(super) struct ApiState {
 	pub(super) notes_commitment_tx: mpsc::Sender<NotesCommitmentRequest>,
-	pub(super) notes_nullifier_tx: mpsc::Sender<[u8; 32]>,
-	pub(super) accounts_commitment_tx: mpsc::Sender<[u8; 32]>,
-	pub(super) accounts_nullifier_tx: mpsc::Sender<[u8; 32]>,
 	/// When `Some`, `/private-tx` uses the optimistic two-phase register path.
 	/// When `None`, falls back to the per-tree fan-out (deposit-only) path.
 	pub(super) private_tx_tx: Option<mpsc::Sender<super::PrivateTxRequest>>,
@@ -78,8 +75,6 @@ pub(super) struct ApiState {
 	pub(super) consume_proof_verifier: Option<Arc<LeafProofVerifier>>,
 	/// 72-PI verifier for `/private-tx`. `None` = accept any non-empty proof.
 	pub(super) tx_proof_verifier: Option<Arc<LeafProofVerifier>>,
-	/// 8-PI verifier for `/accounts/commitment`. `None` = accept bare leaf without proof.
-	pub(super) account_proof_verifier: Option<Arc<LeafProofVerifier>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,17 +96,6 @@ struct InvalidProofTx {
 }
 
 #[derive(Debug, Deserialize)]
-struct LeafBody {
-	leaf: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AccountRegisterBody {
-	leaf: String,
-	input_proof: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct PrivateTxBody {
 	input_notes: Vec<String>,
 	output_notes: Vec<String>,
@@ -127,9 +111,6 @@ pub(super) fn build_router(state: ApiState) -> Router {
 		.route("/notes/commitment", post(consume_request_handler))
 		.route("/private-tx", post(private_tx_notes_handler))
 		.route("/private-tx/notes", post(private_tx_notes_handler))
-		.route("/notes/nullifier", post(notes_nullifier_handler))
-		.route("/accounts/commitment", post(accounts_commitment_handler))
-		.route("/accounts/nullifier", post(accounts_nullifier_handler))
 		.with_state(state)
 }
 
@@ -271,87 +252,6 @@ async fn private_tx_notes_handler(
 		enqueued_notes_commitment = output_notes_count,
 		"accepted private tx via optimistic register path"
 	);
-	Ok(Json(ConsumeRequestResponse {
-		accepted: true,
-		invalid_proof_tx: None,
-	}))
-}
-
-async fn notes_nullifier_handler(
-	State(state): State<ApiState>,
-	Json(body): Json<LeafBody>,
-) -> Result<Json<ConsumeRequestResponse>, axum::http::StatusCode> {
-	let leaf = parse_note_hex(&body.leaf).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-	state
-		.notes_nullifier_tx
-		.send(leaf)
-		.await
-		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	info!(leaf = ?B256::from(leaf), "accepted notes nullifier leaf");
-	Ok(Json(ConsumeRequestResponse {
-		accepted: true,
-		invalid_proof_tx: None,
-	}))
-}
-
-async fn accounts_commitment_handler(
-	State(state): State<ApiState>,
-	Json(body): Json<AccountRegisterBody>,
-) -> Result<Json<ConsumeRequestResponse>, axum::http::StatusCode> {
-	let proof = match parse_input_proof_hex(&body.input_proof) {
-		Ok(v) => v,
-		Err(_) => {
-			warn!("rejecting account registration: invalid input proof hex");
-			return Ok(Json(ConsumeRequestResponse {
-				accepted: false,
-				invalid_proof_tx: Some(InvalidProofTx {
-					tx_id: None,
-					reason: "input proof is not valid hex".to_string(),
-				}),
-			}));
-		},
-	};
-	if let Err(e) = verify_associated_tx_proof(&proof, state.account_proof_verifier.as_deref()) {
-		warn!(
-			reason = %e,
-			"rejecting account registration: proof verification failed"
-		);
-		return Ok(Json(ConsumeRequestResponse {
-			accepted: false,
-			invalid_proof_tx: Some(InvalidProofTx {
-				tx_id: None,
-				reason: e.to_string(),
-			}),
-		}));
-	}
-	info!(
-		proof_len = proof.len(),
-		"account registration proof verified"
-	);
-	let leaf = parse_note_hex(&body.leaf).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-	state
-		.accounts_commitment_tx
-		.send(leaf)
-		.await
-		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	info!(leaf = ?B256::from(leaf), "accepted accounts commitment leaf");
-	Ok(Json(ConsumeRequestResponse {
-		accepted: true,
-		invalid_proof_tx: None,
-	}))
-}
-
-async fn accounts_nullifier_handler(
-	State(state): State<ApiState>,
-	Json(body): Json<LeafBody>,
-) -> Result<Json<ConsumeRequestResponse>, axum::http::StatusCode> {
-	let leaf = parse_note_hex(&body.leaf).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-	state
-		.accounts_nullifier_tx
-		.send(leaf)
-		.await
-		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-	info!(leaf = ?B256::from(leaf), "accepted accounts nullifier leaf");
 	Ok(Json(ConsumeRequestResponse {
 		accepted: true,
 		invalid_proof_tx: None,
