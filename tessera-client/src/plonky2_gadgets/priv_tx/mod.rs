@@ -294,7 +294,6 @@ pub fn priv_tx_circuit<
 		inotes,
 		inotes_pos,
 		inotes_isactive,
-		inotes_comm,
 		onotes,
 		onotes_isactive,
 		dinotes,

@@ -18,8 +18,9 @@ use crate::{
 	DS_NULLIFIER_KEY, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
 		merkle::{
-			CommitmentTreeMerkleTarget, ConditionalMerkleTarget,
-			conditional_merkle_verify_commitment_tree_gadget, conditional_merkle_verify_gadget,
+			CommitmentTreeMerkleTarget, ComputeMerkleRootTarget, ConditionalMerkleTarget,
+			compute_merkle_root_gagdet, conditional_merkle_verify_commitment_tree_gadget,
+			conditional_merkle_verify_gadget,
 		},
 		priv_tx::targets::{
 			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, ActRootTarget,
@@ -95,7 +96,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		amt: U256Target,
 		acc_ast_root: HashOutTarget,
 		selector: BoolTarget,
-	) -> ConditionalMerkleTarget<ACC_AST_DEPTH>;
+	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH>;
 
 	fn assert_ast_update(
 		&mut self,
@@ -106,7 +107,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accout: AccountTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
-	) -> ConditionalMerkleTarget<ACC_AST_DEPTH>;
+	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH>;
 
 	// ---- Note related methods ----
 
@@ -366,7 +367,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		amt: U256Target,
 		acc_ast_root: HashOutTarget,
 		selector: BoolTarget,
-	) -> ConditionalMerkleTarget<ACC_AST_DEPTH> {
+	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH> {
 		let tr = self._true();
 		// derive asset leaf
 		let leaf = {
@@ -380,15 +381,15 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 			core::array::from_fn(|i| self.constant(F::from_canonical_u64(AST_DEFAULT_LEAF[i])));
 		let exists_or_default: [Target; HASH_SIZE] =
 			core::array::from_fn(|i| self._if(selector, leaf.elements[i], default_leaf[i]));
-		// TODO: change from conditional to normal
-		let merkletargets = conditional_merkle_verify_gadget::<F, D, ACC_AST_DEPTH>(
+
+		let merkletargets = compute_merkle_root_gagdet::<F, D, ACC_AST_DEPTH>(
 			self,
 			HashOutTarget {
 				elements: exists_or_default,
 			},
-			acc_ast_root,
-			tr,
 		);
+		// computed ast root must equal acc_ast_root
+		self.connect_hashes(merkletargets.root, acc_ast_root);
 
 		// if selector == 0 then amt must be 0
 		let not_sel = self.not(selector);
@@ -461,7 +462,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		accout: AccountTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
-	) -> ConditionalMerkleTarget<ACC_AST_DEPTH> {
+	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH> {
 		let accin_merkletrgts = self.assert_asset_amt_or_default_in_ast(
 			asset_id,
 			accin_amt,

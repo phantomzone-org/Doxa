@@ -138,7 +138,7 @@ pub fn deposit_tx_circuit<F: RichField + Extendable<D> + Poseidon, const D: usiz
 	DepositTxCircuitBuilder::assert_account_invariants(builder, accin, accout);
 
 	// AST update: verify asset/amt proofs and enforce same leaf position
-	let (accin_ast_merkle, accout_ast_merkle) = builder.assert_ast_update(
+	let accin_ast_merkle = builder.assert_ast_update(
 		asset_id,
 		accin_amt,
 		accout_amt,

@@ -205,7 +205,7 @@ pub(crate) struct TxCircuitTargets {
 	pub(crate) accin_pos: Target,
 	// merkle targets
 	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<ACT_DEPTH>,
-	pub(crate) accin_ast_merkle: ConditionalMerkleTarget<ACC_AST_DEPTH>,
+	pub(crate) accin_ast_merkle: ComputeMerkleRootTarget<ACC_AST_DEPTH>,
 	pub(crate) inotes_nct_merkle: [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH], /* inotes NCT merkle
 	                                                                                    * proofs (one per
 	                                                                                    * inote) */
@@ -213,7 +213,6 @@ pub(crate) struct TxCircuitTargets {
 	pub(crate) inotes: [NoteTarget; NOTE_BATCH],
 	pub(crate) inotes_pos: [Target; NOTE_BATCH],
 	pub(crate) inotes_isactive: [BoolTarget; NOTE_BATCH],
-	pub(crate) inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 	pub(crate) onotes: [NoteTarget; NOTE_BATCH],
 	pub(crate) onotes_isactive: [BoolTarget; NOTE_BATCH],
 	pub(crate) dinotes: [DummyNoteTarget; NOTE_BATCH],
