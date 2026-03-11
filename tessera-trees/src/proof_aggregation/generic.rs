@@ -55,7 +55,7 @@ use plonky2::{
 		config::{AlgebraicHasher, GenericConfig},
 		proof::{ProofWithPublicInputs, ProofWithPublicInputsTarget},
 	},
-	util::serialization::DefaultGateSerializer,
+	util::serialization::{DefaultGateSerializer, GateSerializer},
 };
 use serde::{Deserialize, Serialize};
 
@@ -196,11 +196,11 @@ struct AggregatorManifest {
 /// ```ignore
 /// // Fresh build (compiles all level circuits — may be slow).
 /// let agg = GenericAggregator::new(config, leaf_common, leaf_verifier)?;
-/// agg.store_artifacts(Path::new("artifacts/aggregator"))?;
+/// agg.store_artifacts(Path::new("artifacts/aggregator"), &gate_ser)?;
 ///
 /// // Fast reload from disk (no recompilation).
 /// let agg = GenericAggregator::<F, ConfigNative, D>::from_artifacts(
-///     Path::new("artifacts/aggregator"),
+///     Path::new("artifacts/aggregator"), &gate_ser,
 /// )?;
 /// let root = agg.aggregate(leaf_proofs)?;
 /// ```
@@ -417,7 +417,16 @@ impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
 	///
 	/// Creates the directory if it does not exist.  Overwrites any existing
 	/// artifacts.  Delete `path` before calling if you need a clean rebuild.
-	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
+	///
+	/// `leaf_gate_ser` is the gate serializer used for `leaf_common.bin`.
+	/// Pass `&DefaultGateSerializer` when the leaf circuit uses only standard
+	/// plonky2 gates, or a custom serializer (e.g. `TesseraGateSerializer`)
+	/// when the leaf circuit contains custom gates.
+	pub fn store_artifacts(
+		&self,
+		path: &Path,
+		leaf_gate_ser: &dyn GateSerializer<crate::F, 2>,
+	) -> Result<()> {
 		fs::create_dir_all(path)?;
 
 		let manifest = AggregatorManifest {
@@ -437,7 +446,7 @@ impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
 
 		let common_bytes = self
 			.leaf_common
-			.to_bytes(&gate_ser)
+			.to_bytes(leaf_gate_ser)
 			.map_err(|_| anyhow!("serialize leaf_common failed"))?;
 		fs::write(path.join(LEAF_COMMON_PATH), common_bytes)?;
 
@@ -469,7 +478,13 @@ impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
 	/// Follows the required bottom-up loading order: level-N's circuit was built
 	/// against level-(N-1)'s `CommonCircuitData`, so targets are rebuilt in the
 	/// same order to obtain correct wire indices.
-	pub fn from_artifacts(path: &Path) -> Result<Self> {
+	///
+	/// `leaf_gate_ser` is the gate serializer used for `leaf_common.bin`.
+	/// Must match the serializer used in [`store_artifacts`].
+	pub fn from_artifacts(
+		path: &Path,
+		leaf_gate_ser: &dyn GateSerializer<crate::F, 2>,
+	) -> Result<Self> {
 		let manifest_path = path.join(MANIFEST_PATH);
 		let manifest: AggregatorManifest = serde_json::from_str(
 			&fs::read_to_string(&manifest_path)
@@ -498,7 +513,7 @@ impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
 		let leaf_common_bytes = fs::read(&leaf_common_path)
 			.map_err(|e| anyhow!("failed to read '{}': {e}", leaf_common_path.display()))?;
 		let leaf_common: CommonCircuitData<crate::F, 2> =
-			CommonCircuitData::from_bytes(&leaf_common_bytes, &gate_ser).map_err(|_| {
+			CommonCircuitData::from_bytes(&leaf_common_bytes, leaf_gate_ser).map_err(|_| {
 				anyhow!(
 					"deserialize leaf_common from '{}' failed",
 					leaf_common_path.display()
@@ -1092,7 +1107,7 @@ mod tests {
 			leaf_circuit.common.clone(),
 			leaf_circuit.verifier_only.clone(),
 		)?;
-		agg_fresh.store_artifacts(&dir)?;
+		agg_fresh.store_artifacts(&dir, &DefaultGateSerializer)?;
 
 		assert!(
 			GenericAggregator::<F, ConfigNative, D>::has_full_artifacts(&dir)?,
@@ -1100,7 +1115,8 @@ mod tests {
 		);
 
 		// Reload from artifacts.
-		let agg_loaded = GenericAggregator::<F, ConfigNative, D>::from_artifacts(&dir)?;
+		let agg_loaded =
+			GenericAggregator::<F, ConfigNative, D>::from_artifacts(&dir, &DefaultGateSerializer)?;
 
 		// Both aggregators must produce identical public inputs for the same inputs.
 		let proof0 = prove_leaf(&leaf_circuit, &targets, &[10, 20, 30])?;
@@ -1304,7 +1320,7 @@ mod tests {
 			leaf_circuit.common.clone(),
 			leaf_circuit.verifier_only.clone(),
 		)?;
-		agg_fresh.store_artifacts(&dir)?;
+		agg_fresh.store_artifacts(&dir, &DefaultGateSerializer)?;
 
 		assert!(
 			GenericAggregator::<F, ConfigNative, D>::has_full_artifacts(&dir)?,
@@ -1312,7 +1328,8 @@ mod tests {
 		);
 
 		// Reload from artifacts — no circuit recompilation.
-		let agg_loaded = GenericAggregator::<F, ConfigNative, D>::from_artifacts(&dir)?;
+		let agg_loaded =
+			GenericAggregator::<F, ConfigNative, D>::from_artifacts(&dir, &DefaultGateSerializer)?;
 
 		// 16 leaf proofs.
 		let proofs: Vec<_> = (0..N_LEAVES as u64)

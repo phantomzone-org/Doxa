@@ -3,7 +3,7 @@
 //! Subcommands:
 //!   deposit          — mint ERC20, approve bridge, call depositAndRegister N times
 //!   consume          — load 4-PI circuit, prove, POST /consume-request N times
-//!   private-tx       — generate random TX data, prove 75-PI, POST /private-tx
+//!   private-tx       — generate random TX data, prove 77-PI, POST /private-tx
 
 use std::{fs, path::Path};
 
@@ -261,35 +261,47 @@ async fn cmd_private_tx(count: usize) -> Result<()> {
 	let sequencer_url =
 		std::env::var("TESSERA_SEQUENCER_API_URL").unwrap_or("http://127.0.0.1:8081".to_string());
 
-	// Build the inner PrivTx circuit and generate a real proof (not_fake_tx=1).
-	// The server will wrap this in its recursive leaf circuit during aggregation.
-	println!("building inner PrivTx circuit + real proof...");
-	let (_inner_circuit, real_proof) =
-		tokio::task::spawn_blocking(tessera_client::build_circuit_and_real_proof).await?;
-	let proof_bytes = real_proof.to_bytes();
-	println!(
-		"  inner proof: {} bytes, {} PIs",
-		proof_bytes.len(),
-		real_proof.public_inputs.len()
-	);
-
-	// Extract PI data from the proof to populate the request body.
-	// PI layout: [0]=subpool_id_in, [1]=subpool_id_out, [2]=not_fake_tx,
-	//            [3..7]=AN, [7..11]=AC, [11..43]=NN(8×4), [43..75]=NC(8×4)
-	let pis = &real_proof.public_inputs;
-	let account_nullifier = pi_hash_to_b256(&pis[3..7]);
-	let account_commitment = pi_hash_to_b256(&pis[7..11]);
-	let note_nullifiers: Vec<B256> = (0..8)
-		.map(|i| pi_hash_to_b256(&pis[11 + i * 4..11 + (i + 1) * 4]))
-		.collect();
-	let note_commitments: Vec<B256> = (0..8)
-		.map(|i| pi_hash_to_b256(&pis[43 + i * 4..43 + (i + 1) * 4]))
-		.collect();
+	// Build the PrivTx circuit once (shared across all proofs).
+	println!("building inner PrivTx circuit...");
+	let (circuit, targets) =
+		tokio::task::spawn_blocking(tessera_client::build_priv_tx_circuit).await?;
+	let circuit = std::sync::Arc::new(circuit);
+	let targets = std::sync::Arc::new(targets);
 
 	let http = reqwest::Client::new();
 	let norm_b256 = |b: &B256| -> String { format!("0x{}", hex::encode(b.as_slice())) };
 
 	for tx_idx in 0..count {
+		// Generate a unique proof per transaction (different seed → different
+		// nullifiers/commitments).
+		let seed = 0xDEAD_BEEF_0000_0000u64.wrapping_add(tx_idx as u64);
+		let c = circuit.clone();
+		let t = targets.clone();
+		let real_proof =
+			tokio::task::spawn_blocking(move || tessera_client::prove_real_priv_tx(&c, &t, seed))
+				.await?;
+		let proof_bytes = real_proof.to_bytes();
+		println!(
+			"  tx {tx_idx}: proof {} bytes, {} PIs",
+			proof_bytes.len(),
+			real_proof.public_inputs.len()
+		);
+
+		// Extract PI data from the proof to populate the request body.
+		// PI layout (77 total: 75 explicit + 2 lookup metadata):
+		//   [0]=subpool_id_in, [1]=subpool_id_out, [2]=not_fake_tx,
+		//   [3..7]=AN, [7..11]=AC, [11..43]=NN(8×4), [43..75]=NC(8×4), [75..77]=lookup
+		// subpool_ids are implicitly registered by add_virtual_account_target.
+		let pis = &real_proof.public_inputs;
+		let account_nullifier = pi_hash_to_b256(&pis[3..7]);
+		let account_commitment = pi_hash_to_b256(&pis[7..11]);
+		let note_nullifiers: Vec<B256> = (0..8)
+			.map(|i| pi_hash_to_b256(&pis[11 + i * 4..11 + (i + 1) * 4]))
+			.collect();
+		let note_commitments: Vec<B256> = (0..8)
+			.map(|i| pi_hash_to_b256(&pis[43 + i * 4..43 + (i + 1) * 4]))
+			.collect();
+
 		let proof_hex = format!("0x{}", hex::encode(&proof_bytes));
 		let body = PrivateTxBody {
 			input_notes: note_nullifiers.iter().map(&norm_b256).collect(),

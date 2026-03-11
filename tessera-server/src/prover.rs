@@ -3,11 +3,9 @@ use std::{path::Path, sync::Arc, time::Duration};
 use anyhow::Result;
 use plonky2::{
 	field::types::PrimeField64,
-	iop::witness::{PartialWitness, WitnessWrite},
+	iop::witness::PartialWitness,
 	plonk::{
-		circuit_builder::CircuitBuilder,
-		circuit_data::{CircuitConfig, VerifierCircuitTarget},
-		proof::{ProofWithPublicInputs, ProofWithPublicInputsTarget},
+		circuit_builder::CircuitBuilder, circuit_data::CircuitConfig, proof::ProofWithPublicInputs,
 	},
 };
 use tessera_trees::{
@@ -55,16 +53,10 @@ pub struct NullifierProverService {
 pub struct AssociatedInputAggregatorService {
 	aggregator: Arc<GenericAggregator<F, ConfigNative, D>>,
 	pool: Arc<NodeProverPool<F, ConfigNative, D>>,
-	/// The recursive TX leaf circuit (verifies one inner PrivTx proof, 75 PIs).
-	leaf_circuit: CircuitDataNative,
-	/// Witness target for the inner PrivTx proof being verified.
-	inner_proof_target: ProofWithPublicInputsTarget<D>,
-	/// Witness target for the inner circuit's verifier data (constant in circuit).
-	inner_verifier_target: VerifierCircuitTarget,
-	/// The inner PrivTx circuit data (needed for deserialization and witness setting).
+	/// The inner PrivTx circuit data (needed for proof deserialization and dummy proving).
 	inner_circuit: CircuitDataNative,
-	/// Pre-generated dummy inner proof (not_fake_tx=0) used for padding slots.
-	dummy_inner_proof: ProofWithPublicInputs<F, ConfigNative, D>,
+	/// The inner PrivTx circuit targets (needed for dummy proving with overrides).
+	inner_targets: tessera_client::PrivTxTargets<D>,
 }
 
 /// Merges 5 independent inner Plonky2 proofs into a single Groth16 proof via
@@ -152,93 +144,59 @@ impl AssociatedInputAggregatorService {
 			));
 		}
 		info!("loading associated input aggregator from artifacts");
-		let aggregator = GenericAggregator::<F, ConfigNative, D>::from_artifacts(path)?;
+		let aggregator = GenericAggregator::<F, ConfigNative, D>::from_artifacts(
+			path,
+			&tessera_client::TesseraGateSerializer,
+		)?;
 
 		// Rebuild the inner PrivTx circuit deterministically (same as artifact generation).
-		info!("building inner PrivTx circuit for recursive leaf verification");
-		let (inner_circuit, _dummy_from_build) = tessera_client::build_circuit_and_dummy_proof();
+		info!("building inner PrivTx circuit for proof deserialization + dummy proving");
+		let (inner_circuit, inner_targets) = tessera_client::build_priv_tx_circuit();
 		info!(
 			inner_pi = inner_circuit.common.num_public_inputs,
 			inner_degree_bits = inner_circuit.common.degree_bits(),
 			"inner PrivTx circuit ready"
 		);
 
-		// Load the pre-generated dummy inner proof from artifacts.
-		let dummy_proof_path = path.join("dummy_inner_proof.bin");
-		let dummy_proof_bytes = std::fs::read(&dummy_proof_path).map_err(|e| {
-			anyhow::anyhow!(
-				"failed to read dummy_inner_proof.bin at {:?}: {}. \
-				 Run `cargo run --bin aggregator_artifacts --release` first.",
-				dummy_proof_path,
-				e
-			)
-		})?;
-		let dummy_inner_proof = ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
-			dummy_proof_bytes,
-			&inner_circuit.common,
-		)?;
-		info!("loaded dummy inner proof from artifacts");
-
-		// Rebuild the recursive leaf circuit (must match artifact generation).
-		info!("building recursive TX leaf circuit");
-		let config = CircuitConfig::standard_recursion_config();
-		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let inner_proof_target = builder.add_virtual_proof_with_pis(&inner_circuit.common);
-		let inner_verifier_target = builder.constant_verifier_data(&inner_circuit.verifier_only);
-		builder.verify_proof::<ConfigNative>(
-			&inner_proof_target,
-			&inner_verifier_target,
-			&inner_circuit.common,
-		);
-		for &pi in &inner_proof_target.public_inputs {
-			builder.register_public_input(pi);
-		}
-		let leaf_circuit = builder.build::<ConfigNative>();
-		info!(
-			leaf_pi = leaf_circuit.common.num_public_inputs,
-			leaf_degree_bits = leaf_circuit.common.degree_bits(),
-			"recursive TX leaf circuit ready"
-		);
-
 		Ok(Self {
 			aggregator: Arc::new(aggregator),
 			pool,
-			leaf_circuit,
-			inner_proof_target,
-			inner_verifier_target,
 			inner_circuit,
-			dummy_inner_proof,
+			inner_targets,
 		})
 	}
 
-	/// Prove a single recursive TX leaf by verifying the given inner PrivTx proof.
+	/// Deserialize an inner PrivTx proof and return it as leaf proof bytes.
 	///
-	/// The inner proof bytes are deserialized and then verified inside the
-	/// recursive leaf circuit, which forwards the inner proof's 75 PIs.
+	/// With the recursive leaf removed, the inner proof IS the leaf proof.
+	/// Deserialization validates the proof structure against the inner circuit.
 	fn prove_leaf(&self, inner_proof_bytes: &[u8]) -> Result<Vec<u8>> {
-		let inner_proof = ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
+		// Deserialize to validate structure; re-serialize for the aggregator.
+		let _inner_proof = ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
 			inner_proof_bytes.to_vec(),
 			&self.inner_circuit.common,
 		)?;
-		let mut pw = PartialWitness::new();
-		pw.set_verifier_data_target(
-			&self.inner_verifier_target,
-			&self.inner_circuit.verifier_only,
-		)?;
-		pw.set_proof_with_pis_target(&self.inner_proof_target, &inner_proof)?;
-		let proof = self.leaf_circuit.prove(pw)?;
-		Ok(proof.to_bytes())
+		Ok(inner_proof_bytes.to_vec())
 	}
 
-	/// Prove a single recursive TX leaf using the pre-generated dummy inner proof.
-	fn prove_dummy_leaf(&self) -> Result<Vec<u8>> {
-		let mut pw = PartialWitness::new();
-		pw.set_verifier_data_target(
-			&self.inner_verifier_target,
-			&self.inner_circuit.verifier_only,
-		)?;
-		pw.set_proof_with_pis_target(&self.inner_proof_target, &self.dummy_inner_proof)?;
-		let proof = self.leaf_circuit.prove(pw)?;
+	/// Generate a dummy inner proof with specific AN/NN override values.
+	///
+	/// The override values become the proof's public inputs for the
+	/// account-nullifier and note-nullifier fields, matching the tree
+	/// padding so the SuperAggregator's multi-set equality passes.
+	fn prove_dummy_leaf(
+		&self,
+		seed: u64,
+		override_an: [F; 4],
+		override_nn: [[F; 4]; tessera_client::NOTE_BATCH],
+	) -> Result<Vec<u8>> {
+		let proof = tessera_client::prove_dummy_priv_tx(
+			&self.inner_circuit,
+			&self.inner_targets,
+			seed,
+			override_an,
+			override_nn,
+		);
 		Ok(proof.to_bytes())
 	}
 
@@ -366,6 +324,7 @@ pub fn build_pool(
 		if GenericAggregator::<F, ConfigNative, D>::has_full_artifacts(path)? {
 			let agg = Arc::new(GenericAggregator::<F, ConfigNative, D>::from_artifacts(
 				path,
+				&tessera_client::TesseraGateSerializer,
 			)?);
 
 			provers.push(Arc::new(LocalAsyncNodeProver::new(agg.clone())));
@@ -457,22 +416,28 @@ impl ProverRuntime {
 	///
 	/// For each account slot:
 	/// - Real private TX slots (in `real_account_slots`): uses the client-supplied PrivTx proof
-	///   from `tx_proofs_by_slot`, wrapped in the recursive leaf circuit.
-	/// - Deposit/inactive slots: uses the pre-generated dummy inner proof (not_fake_tx=0).
+	///   from `tx_proofs_by_slot`.
+	/// - Deposit/inactive slots: generates a dummy proof with AN/NN overrides matching the tree
+	///   padding values (required for the SA's ungated multi-set equality).
 	///
 	/// Called from a `spawn_blocking` context; uses `Handle::current().block_on(...)` to drive
 	/// the async aggregation pipeline.
+	#[allow(clippy::too_many_arguments)]
 	fn build_and_aggregate_tx_proofs(
 		aggregator: &Option<AssociatedInputAggregatorService>,
 		account_batch_size: usize,
 		real_account_slots: &[usize],
 		tx_proofs_by_slot: &std::collections::HashMap<usize, Vec<u8>>,
+		an_sorted_leaves: &[[u8; 32]],
+		nn_sorted_leaves: &[[u8; 32]],
 	) -> Result<ProofNative> {
 		let Some(agg_service) = aggregator else {
 			anyhow::bail!("no aggregator configured (set TESSERA_AGGREGATOR_ARTIFACTS_PATH)");
 		};
 
-		// Build one recursive TX leaf proof per account slot.
+		let notes_per_slot = tessera_client::NOTE_BATCH;
+
+		// Build one TX leaf proof per account slot.
 		let mut leaf_proofs = Vec::with_capacity(account_batch_size);
 		for s in 0..account_batch_size {
 			if real_account_slots.contains(&s) {
@@ -482,8 +447,16 @@ impl ProverRuntime {
 				})?;
 				leaf_proofs.push(agg_service.prove_leaf(inner_proof_bytes)?);
 			} else {
-				// Deposit or inactive slot: use dummy inner proof.
-				leaf_proofs.push(agg_service.prove_dummy_leaf()?);
+				// Deposit or inactive slot: generate dummy proof with AN/NN matching tree padding.
+				let override_an = bytes32_to_f4(&an_sorted_leaves[s]);
+				let override_nn: [[F; 4]; tessera_client::NOTE_BATCH] = core::array::from_fn(|j| {
+					bytes32_to_f4(&nn_sorted_leaves[s * notes_per_slot + j])
+				});
+				leaf_proofs.push(agg_service.prove_dummy_leaf(
+					s as u64,
+					override_an,
+					override_nn,
+				)?);
 			}
 		}
 
@@ -496,8 +469,12 @@ impl ProverRuntime {
 			leaf_proofs.len(),
 			n_leaves
 		);
-		let padding_proof = agg_service.prove_dummy_leaf()?;
-		leaf_proofs.resize(n_leaves, padding_proof);
+		for s in leaf_proofs.len()..n_leaves {
+			let override_an = bytes32_to_f4(&an_sorted_leaves[s]);
+			let override_nn: [[F; 4]; tessera_client::NOTE_BATCH] =
+				core::array::from_fn(|j| bytes32_to_f4(&nn_sorted_leaves[s * notes_per_slot + j]));
+			leaf_proofs.push(agg_service.prove_dummy_leaf(s as u64, override_an, override_nn)?);
+		}
 
 		// Bridge the async session into the synchronous context.
 		let root_proof = tokio::runtime::Handle::current()
@@ -565,6 +542,8 @@ impl ProverRuntime {
 			account_batch_size,
 			&request.real_account_slots,
 			&request.tx_proofs_by_slot,
+			&request.an_sorted_leaves,
+			&request.nn_sorted_leaves,
 		)?;
 
 		info!(batch_id, "running SuperAggregator (BN128 + Groth16)");
@@ -641,6 +620,19 @@ fn log_super_pi_preimage_debug(
 		full_hash,
 		"native Keccak preimage sub-hashes (compare with on-chain SuperPiDebug event)"
 	);
+}
+
+/// Convert a 32-byte tree leaf to 4 Goldilocks field elements.
+///
+/// Each 8-byte big-endian chunk becomes one field element, matching
+/// `contract::bytes32_to_hash` but returning a plain `[F; 4]` array
+/// suitable for the PrivTx override interface.
+fn bytes32_to_f4(b: &[u8; 32]) -> [F; 4] {
+	use plonky2::field::types::Field;
+	core::array::from_fn(|i| {
+		let val = u64::from_be_bytes(b[i * 8..(i + 1) * 8].try_into().unwrap());
+		F::from_canonical_u64(val)
+	})
 }
 
 /// Parse the Groth16 JSON output produced by [`Groth16Wrapper::proof_to_solidity_json`]

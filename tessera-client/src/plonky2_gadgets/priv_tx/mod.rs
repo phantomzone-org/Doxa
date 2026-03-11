@@ -32,6 +32,10 @@ mod freshacc;
 mod spend;
 pub(crate) mod targets;
 
+/// Public alias for the PrivTx circuit targets, used with [`build_priv_tx_circuit`]
+/// and [`prove_real_priv_tx`].
+pub type PrivTxTargets<const D: usize> = targets::TxCircuitTargets;
+
 fn double_hash_native(elems: [F; 4]) -> [F; 4] {
 	use plonky2::plonk::config::Hasher;
 	let h0 = <PoseidonHash as Hasher<F>>::hash_no_pad(&elems).elements;
@@ -224,6 +228,36 @@ pub fn priv_tx_circuit<
 		accout_comm,
 	);
 
+	// Override targets for nullifier-tree PIs (AN, NN).
+	// When not_fake_tx=0, these replace the derived values so dummy TX proofs
+	// can match tree padding (required for ungated multi-set equality).
+	// AC/NC (commitment trees) use conditional connects in the SuperAggregator
+	// instead, so no overrides are needed for those.
+	let override_an = builder.add_virtual_hash();
+	let override_nn: [[Target; 4]; NOTE_BATCH] =
+		core::array::from_fn(|_| core::array::from_fn(|_| builder.add_virtual_target()));
+
+	let final_an = AccountNullifierTarget(HashOutTarget {
+		elements: core::array::from_fn(|i| {
+			builder._if(
+				not_fake_tx,
+				accin_null.0.elements[i],
+				override_an.elements[i],
+			)
+		}),
+	});
+	let final_nn: [NoteNullifierTarget; NOTE_BATCH] = core::array::from_fn(|i| {
+		NoteNullifierTarget(HashOutTarget {
+			elements: core::array::from_fn(|j| {
+				builder._if(
+					not_fake_tx,
+					effective_inotes_null[i].0.elements[j],
+					override_nn[i][j],
+				)
+			}),
+		})
+	});
+
 	// Validate authorization //
 
 	// Verify SubpoolFullProof: 3 authority key proofs (depth-2) + main pool proof (depth-20)
@@ -247,17 +281,21 @@ pub fn priv_tx_circuit<
 		not_fake_tx,
 	);
 
-	// Declare public inputs:
-	//  - effective input note nullifiers
-	//  - effective output note commitments
-	//  - AIn Nullifier
-	//  - AOut commitment
-	//  - not_is_fake bool target
+	// Declare public inputs (75 explicit + 2 lookup metadata = 77 total):
+	//  PI[0]     = subpool_id_in
+	//  PI[1]     = subpool_id_out
+	//  PI[2]     = not_fake_tx (is_real)
+	//  PI[3..7]  = AN (account nullifier)
+	//  PI[7..11] = AC (account commitment)
+	//  PI[11..43]= NN (note nullifiers, 8×4)
+	//  PI[43..75]= NC (note commitments, 8×4)
+	builder.register_public_input(accin.subpool_id.0);
+	builder.register_public_input(accout.subpool_id.0);
 	builder.register_public_input(not_fake_tx.target);
-	builder.register_public_inputs(&accin_null.0.elements);
+	builder.register_public_inputs(&final_an.0.elements);
 	builder.register_public_inputs(&accout_comm.0.elements);
 	builder.register_public_inputs(
-		effective_inotes_null
+		final_nn
 			.iter()
 			.flat_map(|v| v.0.elements)
 			.collect_vec()
@@ -303,6 +341,8 @@ pub fn priv_tx_circuit<
 		subpool_proof_targets,
 		sig_targets,
 		inotes_nct_merkle: inotes_mrkltrgt,
+		override_an,
+		override_nn,
 	}
 }
 
@@ -315,12 +355,37 @@ pub fn priv_tx_circuit<
 fn build_circuit_and_proof_inner(
 	not_fake_tx: bool,
 ) -> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+	build_circuit_and_proof_seeded(not_fake_tx, 0xDEAD_BEEF_CAFE_0000)
+}
+
+fn build_circuit_and_proof_seeded(
+	not_fake_tx: bool,
+	seed: u64,
+) -> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+	use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
+	use tessera_trees::tree::hasher::HashOutput;
+
+	let config = CircuitConfig::standard_recursion_config();
+	let mut builder = CircuitBuilder::<F, { tessera_trees::D }>::new(config);
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder);
+	let circuit = builder.build::<tessera_trees::ConfigNative>();
+	let proof = prove_priv_tx(&circuit, &t, not_fake_tx, seed);
+	(circuit, proof)
+}
+
+/// Generate a PrivTx proof for the given circuit with a specific RNG seed.
+///
+/// Different seeds produce different accounts, notes, nullifiers, and commitments,
+/// ensuring each proof is unique.
+fn prove_priv_tx(
+	circuit: &tessera_trees::CircuitDataNative,
+	t: &PrivTxTargets<{ tessera_trees::D }>,
+	not_fake_tx: bool,
+	seed: u64,
+) -> tessera_trees::ProofNative {
 	use std::array;
 
-	use plonky2::{
-		iop::witness::PartialWitness,
-		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
-	};
+	use plonky2::iop::witness::PartialWitness;
 	use plonky2_field::types::Field;
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
@@ -333,14 +398,7 @@ fn build_circuit_and_proof_inner(
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
 	};
 
-	// 1. Build circuit
-	let config = CircuitConfig::standard_recursion_config();
-	let mut builder = CircuitBuilder::<F, { tessera_trees::D }>::new(config);
-	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder);
-	let circuit = builder.build::<tessera_trees::ConfigNative>();
-
-	// 2. Setup witness data (FreshAcc)
-	let mut rng = ChaCha8Rng::seed_from_u64(0xDEAD_BEEF_CAFE_0000);
+	let mut rng = ChaCha8Rng::seed_from_u64(seed);
 	// Use Scalar::sample to ensure keys are properly reduced modulo the curve order.
 	// PrivateKey::from_raw with arbitrary u64s can produce unreduced scalars that
 	// break the Montgomery multiplication in Schnorr signature arithmetic.
@@ -391,11 +449,10 @@ fn build_circuit_and_proof_inner(
 	let k = Scalar::from_raw(array::from_fn(|_| 1u64));
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
 
-	// 3. Fill witness
 	let mut pw = PartialWitness::new();
 	freshacc::set_freshacc_tx_witness(
 		&mut pw,
-		&t,
+		t,
 		not_fake_tx,
 		&accin,
 		new_spend_auth,
@@ -410,9 +467,10 @@ fn build_circuit_and_proof_inner(
 		approval_sig,
 		dinotes,
 		donotes,
+		[F::ZERO; 4],
+		[[F::ZERO; 4]; crate::NOTE_BATCH],
 	);
 
-	// 4. Prove & verify
 	let label = if not_fake_tx { "real" } else { "dummy" };
 	let proof = circuit
 		.prove(pw)
@@ -421,7 +479,7 @@ fn build_circuit_and_proof_inner(
 		.verify(proof.clone())
 		.unwrap_or_else(|e| panic!("{label} PrivTx proof verification failed: {e}"));
 
-	(circuit, proof)
+	proof
 }
 
 /// Build the PrivTx plonky2 circuit and generate a dummy proof with `not_fake_tx=0`.
@@ -444,4 +502,146 @@ pub fn build_circuit_and_dummy_proof()
 pub fn build_circuit_and_real_proof()
 -> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
 	build_circuit_and_proof_inner(true)
+}
+
+/// Build the PrivTx circuit and generate a real proof with a specific RNG seed.
+///
+/// Different seeds produce unique accounts, notes, nullifiers, and commitments.
+/// The circuit is rebuilt each time; if generating many proofs, prefer
+/// [`build_priv_tx_circuit`] + [`prove_real_priv_tx`] to reuse the circuit.
+pub fn build_circuit_and_real_proof_seeded(
+	seed: u64,
+) -> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+	build_circuit_and_proof_seeded(true, seed)
+}
+
+/// Build the PrivTx plonky2 circuit without generating a proof.
+///
+/// Returns `(circuit_data, targets)` for use with [`prove_real_priv_tx`].
+pub fn build_priv_tx_circuit() -> (
+	tessera_trees::CircuitDataNative,
+	PrivTxTargets<{ tessera_trees::D }>,
+) {
+	use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
+	use tessera_trees::tree::hasher::HashOutput;
+
+	let config = CircuitConfig::standard_recursion_config();
+	let mut builder = CircuitBuilder::<F, { tessera_trees::D }>::new(config);
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder);
+	let circuit = builder.build::<tessera_trees::ConfigNative>();
+	(circuit, t)
+}
+
+/// Generate a real PrivTx proof (`not_fake_tx=1`) for a pre-built circuit with a
+/// specific RNG seed. Each seed produces unique nullifiers/commitments.
+pub fn prove_real_priv_tx(
+	circuit: &tessera_trees::CircuitDataNative,
+	targets: &PrivTxTargets<{ tessera_trees::D }>,
+	seed: u64,
+) -> tessera_trees::ProofNative {
+	prove_priv_tx(circuit, targets, true, seed)
+}
+
+/// Generate a dummy PrivTx proof (`not_fake_tx=0`) with specific AN/NN override
+/// values. The override values become the proof's public inputs for the
+/// account-nullifier and note-nullifier fields, allowing alignment with
+/// nullifier-tree padding leaves.
+///
+/// `seed` controls the RNG for all other witness data (accounts, notes, keys).
+pub fn prove_dummy_priv_tx(
+	circuit: &tessera_trees::CircuitDataNative,
+	targets: &PrivTxTargets<{ tessera_trees::D }>,
+	seed: u64,
+	override_an: [F; 4],
+	override_nn: [[F; 4]; NOTE_BATCH],
+) -> tessera_trees::ProofNative {
+	prove_dummy_priv_tx_inner(circuit, targets, seed, override_an, override_nn)
+}
+
+fn prove_dummy_priv_tx_inner(
+	circuit: &tessera_trees::CircuitDataNative,
+	t: &PrivTxTargets<{ tessera_trees::D }>,
+	seed: u64,
+	override_an: [F; 4],
+	override_nn: [[F; 4]; NOTE_BATCH],
+) -> tessera_trees::ProofNative {
+	use std::array;
+
+	use plonky2::iop::witness::PartialWitness;
+	use plonky2_field::types::Field;
+	use rand::SeedableRng;
+	use rand_chacha::ChaCha8Rng;
+	use tessera_trees::tree::hasher::HashOutput;
+
+	use crate::{
+		ConsumeAuth, Nonce, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
+		derive_priv_tx_hash,
+		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+		schnorr::{PrivateKey, Scalar, schnorr_sign},
+	};
+
+	let mut rng = ChaCha8Rng::seed_from_u64(seed);
+	let approval_sk = PrivateKey::new(Scalar::sample(&mut rng));
+	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
+	let rejection_sk = PrivateKey::new(Scalar::sample(&mut rng));
+	let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
+	let consume_sk = PrivateKey::new(Scalar::sample(&mut rng));
+	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
+
+	let subpool = SubpoolConfigTree::new(approval_cpk, rejection_cpk, consume_cpk);
+	let subpool_id = SubpoolId(F::ONE);
+	let mut main_pool = MainPoolConfigTree::new();
+	main_pool.set_subpool(0, subpool_id, subpool.root());
+
+	let accin = StandardAccount::sample(&mut rng, subpool_id);
+
+	let (dinotes, donotes) = sample_dummy_notes(&mut rng);
+	let dinote_nulls: [NoteNullifier; NOTE_BATCH] =
+		array::from_fn(|i| NoteNullifier(double_hash_native(dinotes[i]).into()));
+	let donote_comms: [NoteCommitment; NOTE_BATCH] =
+		array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
+
+	let mut accout = accin.clone();
+	accout.nonce = Nonce(F::ONE);
+	accout.spend_auth = SpendAuth::default();
+	accout.consume_auth = ConsumeAuth::default();
+	let tx_hash = derive_priv_tx_hash(
+		accin.nullifier(None),
+		accout.commitment(),
+		dinote_nulls,
+		donote_comms,
+	);
+	let k = Scalar::from_raw(array::from_fn(|_| 1u64));
+	let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
+
+	let mut pw = PartialWitness::new();
+	freshacc::set_freshacc_tx_witness(
+		&mut pw,
+		t,
+		false,
+		&accin,
+		SpendAuth::default(),
+		ConsumeAuth::default(),
+		HashOutput([F::ZERO; 4]),
+		HashOutput([F::ZERO; 4]),
+		approval_cpk,
+		rejection_cpk,
+		consume_cpk,
+		subpool_id,
+		&main_pool,
+		approval_sig,
+		dinotes,
+		donotes,
+		override_an,
+		override_nn,
+	);
+
+	let proof = circuit
+		.prove(pw)
+		.unwrap_or_else(|e| panic!("dummy PrivTx proof generation failed: {e}"));
+	circuit
+		.verify(proof.clone())
+		.unwrap_or_else(|e| panic!("dummy PrivTx proof verification failed: {e}"));
+
+	proof
 }

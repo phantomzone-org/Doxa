@@ -40,7 +40,7 @@ impl LeafProofVerifier {
 	/// (no proving), so this is fast (~1s).
 	///
 	/// This verifies raw client-submitted PrivTx proofs at the API layer,
-	/// before they reach the prover's recursive leaf circuit.
+	/// before they reach the aggregator.
 	pub(super) fn from_inner_circuit() -> Self {
 		let (circuit, _dummy_proof) = tessera_client::build_circuit_and_dummy_proof();
 		Self {

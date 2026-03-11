@@ -271,13 +271,14 @@ impl Sequencer {
 		// 4 & 5. Build padded batches, sort, and compute native proofs.
 		let nc_real: Vec<[u8; 32]> = nc_requests.iter().map(|r| r.commitment).collect();
 		let nc_start = self.notes_commitment_state.tree.num_leaves();
-		let (mut nc_padded_bytes, _) = build_proving_commitments(
+		let (nc_padded_bytes, _) = build_proving_commitments(
 			DummyTreeType::NotesCommitment,
 			nc_start,
 			note_batch_size,
 			&nc_real,
 		)?;
-		nc_padded_bytes.sort();
+		// Commitment trees: do NOT sort — leaves must stay in insertion order
+		// so positional cross-checks in the SuperAggregator match TX slot order.
 		let nc_hashes = contract::bytes_slice_to_hashes(&nc_padded_bytes)?;
 		let mut nc_tmp = self.notes_commitment_state.tree.clone();
 		let nc_proof = nc_tmp.insert_batch(nc_hashes.clone())?;
@@ -299,13 +300,13 @@ impl Sequencer {
 
 		let ac_real: Vec<[u8; 32]> = ac_requests.iter().map(|r| r.commitment).collect();
 		let ac_start = self.accounts_commitment_state.tree.num_leaves();
-		let (mut ac_padded_bytes, _) = build_proving_commitments(
+		let (ac_padded_bytes, _) = build_proving_commitments(
 			DummyTreeType::AccountsCommitment,
 			ac_start,
 			account_batch_size,
 			&ac_real,
 		)?;
-		ac_padded_bytes.sort();
+		// Commitment trees: do NOT sort — same as NC above.
 		let ac_hashes = contract::bytes_slice_to_hashes(&ac_padded_bytes)?;
 		let mut ac_tmp = self.accounts_commitment_state.tree.clone();
 		let ac_proof = ac_tmp.insert_batch(ac_hashes.clone())?;
@@ -330,9 +331,10 @@ impl Sequencer {
 		let new_ac_root = contract::hash_to_bytes32(&ac_proof.root_new);
 		let new_an_root = contract::hash_to_bytes32(&an_proof.new_root);
 
-		// All 4 trees: pass full sorted batches to the contract.
-		// [u8; 32] lexicographic sort matches HashOut<Goldilocks> Ord (both compare
-		// four big-endian u64 limbs in order), which matches the circuit's insert_batch sort.
+		// AN/NN: sorted (nullifier trees sort internally; lexicographic [u8;32]
+		// matches HashOut<Goldilocks> Ord).
+		// NC/AC: insertion order (commitment trees do not sort; positional
+		// cross-checks in the SA require slot-grouped ordering).
 		let nc_in: Vec<FixedBytes<32>> = nc_padded_bytes
 			.iter()
 			.map(|b| FixedBytes::<32>::from(*b))

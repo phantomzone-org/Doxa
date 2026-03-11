@@ -42,6 +42,7 @@ use crate::{
 ///
 /// `nct_root` and `act_root` are [F::ZERO; 4] for a normal FreshAcc (no notes,
 /// account not yet in ACT).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn set_freshacc_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
@@ -59,6 +60,8 @@ pub(crate) fn set_freshacc_tx_witness(
 	approval_sig: Signature,
 	dinotes: [[F; 4]; NOTE_BATCH],
 	donotes: [[F; 4]; NOTE_BATCH],
+	override_an: [F; 4],
+	override_nn: [[F; 4]; NOTE_BATCH],
 ) {
 	// ── Build accout ──────────────────────────────────────────────────────────
 	let mut accout = accin.clone();
@@ -156,6 +159,18 @@ pub(crate) fn set_freshacc_tx_witness(
 		for j in 0..4 {
 			pw.set_target(t.dinotes[i].0[j], dinotes[i][j]).unwrap();
 			pw.set_target(t.donotes[i].0[j], donotes[i][j]).unwrap();
+		}
+	}
+
+	// ── AN/NN override targets (used when not_fake_tx=0) ─────────────────────
+	for k in 0..4 {
+		pw.set_target(t.override_an.elements[k], override_an[k])
+			.unwrap();
+	}
+	for i in 0..NOTE_BATCH {
+		for k in 0..4 {
+			pw.set_target(t.override_nn[i][k], override_nn[i][k])
+				.unwrap();
 		}
 	}
 
@@ -345,6 +360,8 @@ mod tests {
 			approval_sig,
 			dinotes,
 			donotes,
+			[F::ZERO; 4],                      // override_an (ignored for real proof)
+			[[F::ZERO; 4]; crate::NOTE_BATCH], // override_nn (ignored for real proof)
 		);
 
 		// ── Prove & verify ────────────────────────────────────────────────────

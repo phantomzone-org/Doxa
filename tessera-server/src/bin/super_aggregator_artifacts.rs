@@ -4,8 +4,8 @@
 //! `aggregator_artifacts` have completed successfully.
 //!
 //! Inner PI counts (for reference):
-//!   TX aggregator root: 128 × 75 = 9600 fields (ARITY=2, DEPTH=7, ReducerKind::None)
-//!     Each TX leaf: subpool_id_in(1) + subpool_id_out(1) + is_real(1) + 72 data fields
+//!   TX aggregator root: 128 × 77 = 9856 fields (ARITY=2, DEPTH=7, ReducerKind::None)
+//!     Each TX leaf: 75 explicit PIs + 2 plonky2 lookup-table metadata
 //!   NC / NN tree:  (2 + note_batch_size) × 4    fields  (default: 4104 with batch_size=1024)
 //!   AC / AN tree:  (2 + account_batch_size) × 4  fields  (default:  520 with batch_size=128)
 //!   SuperAggregator Keccak preimage: 9248 fields (TX PIs enforced in-circuit, not hashed)
@@ -23,24 +23,14 @@
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::{ensure, Result};
-use plonky2::{
-	iop::witness::{PartialWitness, WitnessWrite},
-	plonk::{
-		circuit_builder::CircuitBuilder,
-		circuit_data::{CircuitConfig, VerifierCircuitTarget},
-		proof::{ProofWithPublicInputs, ProofWithPublicInputsTarget},
-	},
-	util::serialization::DefaultGateSerializer,
-};
+use plonky2::plonk::proof::ProofWithPublicInputs;
+use tessera_client::TesseraGateSerializer;
 use tessera_server::{sample_batch_commitment_tree_proof, sample_batch_nullifier_tree_proof};
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper, TesseraGeneratorSerializer},
 	proof_aggregation::{GenericAggregator, SuperAggregator, SuperAggregatorCircuitData},
 	CircuitDataNative, ConfigNative, ProofBN128, ProofNative, D, F,
 };
-
-const TX_ARITY: usize = 2;
-const TX_DEPTH: usize = 7;
 
 fn debug_enabled() -> bool {
 	std::env::var("TESSERA_DEBUG")
@@ -55,7 +45,7 @@ fn debug_log(msg: &str) {
 }
 
 fn load_native_circuit_data(path: &std::path::Path) -> Result<CircuitDataNative> {
-	let gate_ser = DefaultGateSerializer;
+	let gate_ser = plonky2::util::serialization::DefaultGateSerializer;
 	let bytes =
 		fs::read(path).map_err(|e| anyhow::anyhow!("failed to read '{}': {e}", path.display()))?;
 	CircuitDataNative::from_bytes(&bytes, &gate_ser, &TesseraGeneratorSerializer).map_err(|_| {
@@ -65,96 +55,6 @@ fn load_native_circuit_data(path: &std::path::Path) -> Result<CircuitDataNative>
 			path.display()
 		)
 	})
-}
-
-/// Build a recursive leaf circuit that verifies an inner PrivTx proof and forwards its PIs.
-/// Returns the circuit, proof target, and verifier target.
-fn build_recursive_leaf_circuit(
-	inner_circuit: &CircuitDataNative,
-) -> (
-	CircuitDataNative,
-	ProofWithPublicInputsTarget<D>,
-	VerifierCircuitTarget,
-) {
-	let config = CircuitConfig::standard_recursion_config();
-	let mut builder = CircuitBuilder::<F, D>::new(config);
-	let inner_proof_target = builder.add_virtual_proof_with_pis(&inner_circuit.common);
-	let inner_verifier_target = builder.constant_verifier_data(&inner_circuit.verifier_only);
-	builder.verify_proof::<ConfigNative>(
-		&inner_proof_target,
-		&inner_verifier_target,
-		&inner_circuit.common,
-	);
-	for &pi in &inner_proof_target.public_inputs {
-		builder.register_public_input(pi);
-	}
-	let circuit = builder.build::<ConfigNative>();
-	(circuit, inner_proof_target, inner_verifier_target)
-}
-
-/// Prove a recursive leaf by wrapping an inner PrivTx proof.
-fn prove_recursive_leaf(
-	leaf_circuit: &CircuitDataNative,
-	inner_proof_target: &ProofWithPublicInputsTarget<D>,
-	inner_verifier_target: &VerifierCircuitTarget,
-	inner_circuit: &CircuitDataNative,
-	inner_proof: &ProofWithPublicInputs<F, ConfigNative, D>,
-) -> Result<ProofNative> {
-	let mut pw = PartialWitness::new();
-	pw.set_verifier_data_target(inner_verifier_target, &inner_circuit.verifier_only)?;
-	pw.set_proof_with_pis_target(inner_proof_target, inner_proof)?;
-	let proof = leaf_circuit.prove(pw)?;
-	Ok(proof)
-}
-
-/// Generate one complete set of 5 inner proofs and prove the SuperAggregator.
-///
-/// TX leaf proofs use dummy inner PrivTx proofs (not_fake_tx=0) for all slots.
-/// Since is_real=false for all dummy proofs, the SuperAggregator skips cross-check
-/// constraints, making this valid for artifact generation and testing.
-#[allow(clippy::too_many_arguments)]
-fn prove_super(
-	super_agg: &SuperAggregator,
-	tx_agg: &GenericAggregator<F, ConfigNative, D>,
-	inner_circuit: &CircuitDataNative,
-	dummy_inner_proof: &ProofWithPublicInputs<F, ConfigNative, D>,
-	leaf_circuit: &CircuitDataNative,
-	inner_proof_target: &ProofWithPublicInputsTarget<D>,
-	inner_verifier_target: &VerifierCircuitTarget,
-	note_batch_size: usize,
-	account_batch_size: usize,
-	seed: [u8; 32],
-) -> Result<ProofNative> {
-	let (_, nc_proof, _, _) = sample_batch_commitment_tree_proof(seed, note_batch_size)?;
-	let (_, nn_proof, _, _) = sample_batch_nullifier_tree_proof(seed, note_batch_size)?;
-	let (_, ac_proof, _, _) = sample_batch_commitment_tree_proof(seed, account_batch_size)?;
-	let (_, an_proof, _, _) = sample_batch_nullifier_tree_proof(seed, account_batch_size)?;
-
-	let n_tx_slots = TX_ARITY.pow(TX_DEPTH as u32); // = 128
-
-	// All TX leaf proofs wrap the dummy inner proof (not_fake_tx=0).
-	let leaf_proofs: Vec<ProofNative> = (0..n_tx_slots)
-		.map(|i| {
-			let proof = prove_recursive_leaf(
-				leaf_circuit,
-				inner_proof_target,
-				inner_verifier_target,
-				inner_circuit,
-				dummy_inner_proof,
-			);
-			if (i + 1) % 16 == 0 {
-				println!("  proved recursive leaf {}/{}", i + 1, n_tx_slots);
-			}
-			proof
-		})
-		.collect::<Result<_>>()?;
-
-	let tx_result = tx_agg.aggregate(leaf_proofs)?;
-
-	let now = Instant::now();
-	let proof = super_agg.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_result.proof)?;
-	println!("  SuperAggregator prove: {:?}", now.elapsed());
-	Ok(proof)
 }
 
 fn main() -> Result<()> {
@@ -196,25 +96,22 @@ fn main() -> Result<()> {
 		&artifacts_root.join("nullifier-tree/accounts/native_circuit_data.bin"),
 	)?;
 
+	let tx_agg_dir = artifacts_root.join("associated-input-aggregator");
 	let tx_agg: GenericAggregator<F, ConfigNative, D> =
-		GenericAggregator::from_artifacts(&artifacts_root.join("associated-input-aggregator"))?;
-	let tx_root = tx_agg.level_circuit(TX_DEPTH - 1)?;
+		GenericAggregator::from_artifacts(&tx_agg_dir, &TesseraGateSerializer)?;
+	let tx_root = tx_agg.level_circuit(tx_agg.config().depth - 1)?;
 
-	// --- Build inner PrivTx circuit + dummy proof + recursive leaf circuit ---
-	println!("\nBuilding inner PrivTx circuit + recursive leaf circuit...");
-	let (inner_circuit, dummy_inner_proof) = tessera_client::build_circuit_and_dummy_proof();
-	let (leaf_circuit, inner_proof_target, inner_verifier_target) =
-		build_recursive_leaf_circuit(&inner_circuit);
-	println!(
-		"  inner PrivTx: {} PIs, degree_bits={}",
-		inner_circuit.common.num_public_inputs,
-		inner_circuit.common.degree_bits()
-	);
-	println!(
-		"  recursive leaf: {} PIs, degree_bits={}",
-		leaf_circuit.common.num_public_inputs,
-		leaf_circuit.common.degree_bits()
-	);
+	// --- Load serialized TX aggregator root proof (generated by aggregator_artifacts) ---
+	println!("\nLoading serialized TX root proof...");
+	let tx_root_proof_bytes = fs::read(tx_agg_dir.join("dummy_root_proof.bin")).map_err(|e| {
+		anyhow::anyhow!(
+			"failed to read dummy_root_proof.bin: {e}. \
+			 Run `cargo run --bin aggregator_artifacts --release` first."
+		)
+	})?;
+	let tx_root_proof: ProofNative =
+		ProofWithPublicInputs::from_bytes(tx_root_proof_bytes, &tx_root.circuit_data.common)?;
+	println!("  TX root proof: {} PIs", tx_root_proof.public_inputs.len());
 
 	// --- Build SuperAggregator ---
 	println!("\nBuilding SuperAggregator circuit...");
@@ -234,20 +131,17 @@ fn main() -> Result<()> {
 	let super_agg = SuperAggregator::build(inner)?;
 	println!("  circuit built: {:?}", now.elapsed());
 
-	// --- Initial prove (needed for BN128 circuit derivation and artifact storage) ---
-	println!("\nGenerating dummy inner proofs (seed=0)...");
-	let dummy_proof = prove_super(
-		&super_agg,
-		&tx_agg,
-		&inner_circuit,
-		&dummy_inner_proof,
-		&leaf_circuit,
-		&inner_proof_target,
-		&inner_verifier_target,
-		note_batch_size,
-		account_batch_size,
-		[0u8; 32],
-	)?;
+	// --- Prove SuperAggregator with loaded TX root proof + fresh tree proofs ---
+	println!("\nProving SuperAggregator...");
+	let (_, nc_proof, _, _) = sample_batch_commitment_tree_proof([0u8; 32], note_batch_size)?;
+	let (_, nn_proof, _, _) = sample_batch_nullifier_tree_proof([0u8; 32], note_batch_size)?;
+	let (_, ac_proof, _, _) = sample_batch_commitment_tree_proof([0u8; 32], account_batch_size)?;
+	let (_, an_proof, _, _) = sample_batch_nullifier_tree_proof([0u8; 32], account_batch_size)?;
+
+	let now = Instant::now();
+	let dummy_proof = super_agg.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_root_proof)?;
+	println!("  SuperAggregator prove: {:?}", now.elapsed());
+
 	super_agg.circuit_data.verify(dummy_proof.clone())?;
 	assert_eq!(
 		dummy_proof.public_inputs.len(),
@@ -256,14 +150,20 @@ fn main() -> Result<()> {
 	);
 	println!("  root proof verified ok");
 
-	// --- Store SuperAggregator Plonky2 artifacts ---
+	// --- Store SuperAggregator Plonky2 artifacts + serialized proof ---
 	fs::create_dir_all(&super_dir)?;
 	super_agg.store_artifacts(&super_dir)?;
-	println!("stored SuperAggregator artifacts: {}", super_dir.display());
+	let dummy_proof_bytes = dummy_proof.to_bytes();
+	fs::write(super_dir.join("dummy_super_proof.bin"), &dummy_proof_bytes)?;
+	println!(
+		"stored SuperAggregator artifacts: {} (proof {} bytes)",
+		super_dir.display(),
+		dummy_proof_bytes.len()
+	);
 
 	// --- BN128 wrap ---
 	debug_log("Instantiate BN128Wrapper");
-	let bn128_wrapper = BN128Wrapper::new(super_agg.circuit_data.clone(), dummy_proof)?;
+	let bn128_wrapper = BN128Wrapper::new(super_agg.circuit_data.clone(), dummy_proof.clone())?;
 
 	if !BN128Wrapper::has_full_artifacts(&plonky2_path) {
 		println!("writing plonky2 circuit data");
@@ -284,23 +184,11 @@ fn main() -> Result<()> {
 	let result: String = Groth16Wrapper::check_init();
 	debug_log(&format!("check_init result: {result}"));
 
-	// --- Groth16 round-trip test ---
-	println!("\nGenerating Groth16 proof (seed=1)...");
-	let super_proof2 = prove_super(
-		&super_agg,
-		&tx_agg,
-		&inner_circuit,
-		&dummy_inner_proof,
-		&leaf_circuit,
-		&inner_proof_target,
-		&inner_verifier_target,
-		note_batch_size,
-		account_batch_size,
-		[1u8; 32],
-	)?;
+	// --- Groth16 round-trip test (reuses the serialized dummy proof) ---
+	println!("\nGroth16 round-trip test (reusing dummy proof)...");
 
 	let start = Instant::now();
-	let proof_bn128: ProofBN128 = bn128_wrapper.wrap_proof_to_bn128(super_proof2)?;
+	let proof_bn128: ProofBN128 = bn128_wrapper.wrap_proof_to_bn128(dummy_proof)?;
 	debug_log(&format!("[TIME] bn128 wrap: {:?}", start.elapsed()));
 
 	let start = Instant::now();

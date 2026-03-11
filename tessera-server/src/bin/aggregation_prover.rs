@@ -92,7 +92,10 @@ async fn main() -> Result<()> {
 	let config = AggregatorProverConfig::from_env()?;
 
 	info!(path = %config.artifacts_path.display(), "loading aggregator artifacts");
-	let agg = GenericAggregator::<F, ConfigNative, D>::from_artifacts(&config.artifacts_path)?;
+	let agg = GenericAggregator::<F, ConfigNative, D>::from_artifacts(
+		&config.artifacts_path,
+		&tessera_client::TesseraGateSerializer,
+	)?;
 	let state = AppState {
 		aggregator: Arc::new(agg),
 	};
