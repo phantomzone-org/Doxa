@@ -251,7 +251,11 @@ pub fn priv_tx_circuit<
 	//  - AIn Nullifier
 	//  - AOut commitment
 	//  - not_is_fake bool target
+	//  - NCT root
+	//  - ACT root
 	builder.register_public_input(not_fake_tx.target);
+	builder.register_public_inputs(&act_root.0.elements);
+	builder.register_public_inputs(&nct_root.0.elements);
 	builder.register_public_inputs(&accin_null.0.elements);
 	builder.register_public_inputs(&accout_comm.0.elements);
 	builder.register_public_inputs(

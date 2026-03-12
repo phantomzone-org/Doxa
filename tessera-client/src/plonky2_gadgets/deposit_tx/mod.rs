@@ -196,17 +196,21 @@ pub fn deposit_tx_circuit<
 
 	// Register public inputs
 	//   - not_fake_tx
+	//   - ACT root
 	//   - AccIn nullifier
 	//   - AccOut Commitment
 	//   - deposit note commitment
 	//   - eth_address
 	//   - deposit note amount
+	//   - deposit note asset_id
 	builder.register_public_input(not_fake_tx.target);
+	builder.register_public_inputs(&act_root.0.elements);
 	builder.register_public_inputs(&accin_null.0.elements);
 	builder.register_public_inputs(&accout_comm.0.elements);
 	builder.register_public_inputs(&deposit_note_comm.0.elements);
 	builder.register_public_inputs(&eth_address);
 	builder.register_public_inputs(&deposit_note.amount.0.map(|v| v.0));
+	builder.register_public_input(asset_id.0);
 
 	DepositTxTargets {
 		not_fake_tx,
