@@ -78,14 +78,22 @@ impl LeafProofVerifier {
 
 	/// Deserialize and verify `proof_bytes` against the circuit.
 	fn verify_bytes(&self, proof_bytes: &[u8]) -> anyhow::Result<()> {
+		self.verify_and_extract_pis(proof_bytes)?;
+		Ok(())
+	}
+
+	/// Deserialize, verify, and return the public inputs from a proof.
+	fn verify_and_extract_pis(&self, proof_bytes: &[u8]) -> anyhow::Result<Vec<F>> {
 		let proof = ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
 			proof_bytes.to_vec(),
 			&self.verifier_data.common,
 		)
 		.map_err(|e| anyhow::anyhow!("proof deserialization failed: {e:?}"))?;
+		let pis = proof.public_inputs.clone();
 		self.verifier_data
 			.verify(proof)
-			.map_err(|e| anyhow::anyhow!("proof verification failed: {e:?}"))
+			.map_err(|e| anyhow::anyhow!("proof verification failed: {e:?}"))?;
+		Ok(pis)
 	}
 }
 
@@ -120,6 +128,7 @@ struct InvalidProofTx {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct PrivateTxBody {
 	input_notes: Vec<String>,
 	output_notes: Vec<String>,
@@ -215,45 +224,41 @@ async fn private_tx_notes_handler(
 			}));
 		},
 	};
-	if let Err(e) = verify_associated_tx_proof(&tx_proof, state.tx_proof_verifier.as_deref()) {
+	// Verify proof AND extract leaf values from PIs (single source of truth).
+	// The verifier MUST be configured — without it we cannot trust leaf values.
+	let Some(verifier) = state.tx_proof_verifier.as_deref() else {
 		warn!(
 			tx_id = body.tx_id.as_deref().unwrap_or("unknown"),
-			reason = %e,
-			"rejecting private tx: proof verification failed"
+			"rejecting private tx: no TX proof verifier configured"
 		);
-		return Ok(Json(ConsumeRequestResponse {
-			accepted: false,
-			invalid_proof_tx: Some(InvalidProofTx {
-				tx_id: body.tx_id,
-				reason: e.to_string(),
-			}),
-		}));
-	}
+		return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+	};
+	let pis = match verifier.verify_and_extract_pis(&tx_proof) {
+		Ok(pis) => pis,
+		Err(e) => {
+			warn!(
+				tx_id = body.tx_id.as_deref().unwrap_or("unknown"),
+				reason = %e,
+				"rejecting private tx: proof verification failed"
+			);
+			return Ok(Json(ConsumeRequestResponse {
+				accepted: false,
+				invalid_proof_tx: Some(InvalidProofTx {
+					tx_id: body.tx_id,
+					reason: e.to_string(),
+				}),
+			}));
+		},
+	};
 	info!(
 		tx_id = body.tx_id.as_deref().unwrap_or("unknown"),
 		proof_len = tx_proof.len(),
-		"private tx proof verified"
+		"private tx proof verified, leaves extracted from PIs"
 	);
-	if body.input_notes.is_empty() && body.output_notes.is_empty() {
-		return Err(axum::http::StatusCode::BAD_REQUEST);
-	}
 
-	let input_notes: Vec<[u8; 32]> = body
-		.input_notes
-		.into_iter()
-		.map(|n| parse_note_hex(&n))
-		.collect::<Result<Vec<_>, _>>()
-		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-	let output_notes: Vec<[u8; 32]> = body
-		.output_notes
-		.into_iter()
-		.map(|n| parse_note_hex(&n))
-		.collect::<Result<Vec<_>, _>>()
-		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-	let input_account_leaf = parse_note_hex(&body.input_account_commitment)
-		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-	let output_account_leaf = parse_note_hex(&body.output_account_commitment)
-		.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+	// Extract AN, AC, NN, NC from proof public inputs.
+	let (input_account_leaf, output_account_leaf, input_notes, output_notes) =
+		extract_leaves_from_pis(&pis);
 	let input_notes_count = input_notes.len();
 	let output_notes_count = output_notes.len();
 
@@ -320,4 +325,47 @@ fn verify_associated_tx_proof(
 		v.verify_bytes(proof)?;
 	}
 	Ok(())
+}
+
+/// Extract the four tree-leaf groups from already-verified TX proof public inputs.
+///
+/// Returns `(an, ac, nn, nc)` — the single source of truth for leaf values.
+#[allow(clippy::type_complexity)]
+fn extract_leaves_from_pis(pis: &[F]) -> ([u8; 32], [u8; 32], Vec<[u8; 32]>, Vec<[u8; 32]>) {
+	use plonky2::field::types::PrimeField64;
+	// Inner TX proof PI layout (77 fields total):
+	//   PI[0..2]   = plonky2 LUT metadata (auto-registered)
+	//   PI[2]      = subpool_id_in
+	//   PI[3]      = subpool_id_out
+	//   PI[4]      = is_real
+	//   PI[5..9]   = AN  (4 fields)
+	//   PI[9..13]  = AC  (4 fields)
+	//   PI[13..45] = NN  (8×4 fields)
+	//   PI[45..77] = NC  (8×4 fields)
+	use tessera_trees::proof_aggregation::TX_DATA_OFFSET;
+
+	let f4_to_bytes32 = |fields: &[F]| -> [u8; 32] {
+		let mut out = [0u8; 32];
+		for (i, f) in fields.iter().enumerate().take(4) {
+			out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+		}
+		out
+	};
+
+	let an_off = TX_DATA_OFFSET;
+	let ac_off = TX_DATA_OFFSET + 4;
+	let nn_off = TX_DATA_OFFSET + 8;
+	let nc_off = TX_DATA_OFFSET + 40;
+
+	let an = f4_to_bytes32(&pis[an_off..an_off + 4]);
+	let ac = f4_to_bytes32(&pis[ac_off..ac_off + 4]);
+
+	let nn: Vec<[u8; 32]> = (0..8)
+		.map(|j| f4_to_bytes32(&pis[nn_off + j * 4..nn_off + (j + 1) * 4]))
+		.collect();
+	let nc: Vec<[u8; 32]> = (0..8)
+		.map(|j| f4_to_bytes32(&pis[nc_off + j * 4..nc_off + (j + 1) * 4]))
+		.collect();
+
+	(an, ac, nn, nc)
 }

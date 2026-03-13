@@ -12,8 +12,7 @@ use tracing::{debug, info, warn};
 
 use super::*;
 use crate::{
-	contract,
-	dummy::{self, DummyTreeType},
+	contract, dummy,
 	states::{SequencerTree, TreeState},
 	tree_store::{StoreMeta, TreeId, TreeStore},
 };
@@ -68,7 +67,6 @@ fn apply_recovered_batch_for_tree<T>(
 	state: &mut TreeState<T>,
 	store: &mut Option<TreeStore<T>>,
 	meta: &mut Option<StoreMeta>,
-	dummy_type: DummyTreeType,
 	tree_name: &str,
 	old_root: alloy::primitives::FixedBytes<32>,
 	new_root: alloy::primitives::FixedBytes<32>,
@@ -95,7 +93,7 @@ where
 		);
 		let batch_start_index = state.tree.num_leaves();
 		let commitments_bytes = dummy::pad_leaves(
-			dummy_type,
+			current_root.as_ref(),
 			batch_start_index,
 			batch_size,
 			real_commitments_bytes,
@@ -477,7 +475,6 @@ impl Sequencer {
 				&mut self.notes_commitment_state,
 				&mut self.notes_commitment_store,
 				&mut self.notes_commitment_meta,
-				DummyTreeType::NotesCommitment,
 				"notes_commitment",
 				old_root,
 				new_root,
@@ -489,7 +486,6 @@ impl Sequencer {
 				&mut self.notes_nullifier_state,
 				&mut self.notes_nullifier_store,
 				&mut self.notes_nullifier_meta,
-				DummyTreeType::NotesNullifier,
 				"notes_nullifier",
 				old_root,
 				new_root,
@@ -501,7 +497,6 @@ impl Sequencer {
 				&mut self.accounts_commitment_state,
 				&mut self.accounts_commitment_store,
 				&mut self.accounts_commitment_meta,
-				DummyTreeType::AccountsCommitment,
 				"accounts_commitment",
 				old_root,
 				new_root,
@@ -513,7 +508,6 @@ impl Sequencer {
 				&mut self.accounts_nullifier_state,
 				&mut self.accounts_nullifier_store,
 				&mut self.accounts_nullifier_meta,
-				DummyTreeType::AccountsNullifier,
 				"accounts_nullifier",
 				old_root,
 				new_root,
@@ -649,8 +643,9 @@ impl Sequencer {
 	) -> anyhow::Result<bool> {
 		use crate::types::ProveRequest;
 
+		let nc_root = contract::hash_to_bytes32(&self.notes_commitment_state.current_root()).0;
 		let (mut nc_padded, _) = build_proving_commitments(
-			DummyTreeType::NotesCommitment,
+			&nc_root,
 			self.notes_commitment_state.tree.num_leaves(),
 			note_batch_size,
 			&nc_real,
@@ -666,8 +661,9 @@ impl Sequencer {
 			"NC native proof failed during recovery (batch {batch_id})"
 		);
 
+		let nn_root = contract::hash_to_bytes32(&self.notes_nullifier_state.current_root()).0;
 		let (mut nn_padded, _) = build_proving_commitments(
-			DummyTreeType::NotesNullifier,
+			&nn_root,
 			self.notes_nullifier_state.tree.num_leaves(),
 			note_batch_size,
 			&nn_real,
@@ -683,8 +679,9 @@ impl Sequencer {
 			"NN native proof failed during recovery (batch {batch_id})"
 		);
 
+		let ac_root = contract::hash_to_bytes32(&self.accounts_commitment_state.current_root()).0;
 		let (mut ac_padded, _) = build_proving_commitments(
-			DummyTreeType::AccountsCommitment,
+			&ac_root,
 			self.accounts_commitment_state.tree.num_leaves(),
 			account_batch_size,
 			&ac_real,
@@ -700,8 +697,9 @@ impl Sequencer {
 			"AC native proof failed during recovery (batch {batch_id})"
 		);
 
+		let an_root = contract::hash_to_bytes32(&self.accounts_nullifier_state.current_root()).0;
 		let (mut an_padded, _) = build_proving_commitments(
-			DummyTreeType::AccountsNullifier,
+			&an_root,
 			self.accounts_nullifier_state.tree.num_leaves(),
 			account_batch_size,
 			&an_real,
@@ -727,30 +725,12 @@ impl Sequencer {
 			batch_id,
 			TxBatch {
 				batch_id,
-				nc_requests: vec![],
-				nn_requests: vec![],
-				ac_requests: vec![],
-				an_requests: vec![],
-				nc_batch: TxPerTreeBatch {
-					real_commitments_bytes: nc_real,
-					proving_commitments_bytes: nc_padded,
-					proving_commitments_hash: nc_hashes,
-				},
-				nn_batch: TxPerTreeBatch {
-					real_commitments_bytes: nn_real,
-					proving_commitments_bytes: nn_padded,
-					proving_commitments_hash: nn_hashes,
-				},
-				ac_batch: TxPerTreeBatch {
-					real_commitments_bytes: ac_real,
-					proving_commitments_bytes: ac_padded,
-					proving_commitments_hash: ac_hashes,
-				},
-				an_batch: TxPerTreeBatch {
-					real_commitments_bytes: an_real,
-					proving_commitments_bytes: an_padded,
-					proving_commitments_hash: an_hashes,
-				},
+				private_tx_reqs: vec![],
+				deposit_notes: vec![],
+				nc_padded: nc_padded.clone(),
+				nn_padded: nn_padded.clone(),
+				ac_padded: ac_padded.clone(),
+				an_padded: an_padded.clone(),
 			},
 		);
 
@@ -760,24 +740,14 @@ impl Sequencer {
 			notes_nullifier_proof: nn_proof,
 			accounts_commitment_proof: ac_proof,
 			accounts_nullifier_proof: an_proof,
-			nc_sorted_leaves: self.registered_pending_batches[&batch_id]
-				.nc_batch
-				.proving_commitments_bytes
-				.clone(),
-			nn_sorted_leaves: self.registered_pending_batches[&batch_id]
-				.nn_batch
-				.proving_commitments_bytes
-				.clone(),
-			ac_sorted_leaves: self.registered_pending_batches[&batch_id]
-				.ac_batch
-				.proving_commitments_bytes
-				.clone(),
-			an_sorted_leaves: self.registered_pending_batches[&batch_id]
-				.an_batch
-				.proving_commitments_bytes
-				.clone(),
-			real_account_slots: vec![], // recovery: treat all as dummy
-			tx_proofs_by_slot: std::collections::HashMap::new(),
+			nc_sorted_leaves: nc_padded.clone(),
+			nn_sorted_leaves: nn_padded.clone(),
+			ac_sorted_leaves: ac_padded,
+			an_sorted_leaves: an_padded.clone(),
+			// Recovery: all slots are dummy, so sorted == unsorted → identity permutation.
+			an_sort_perm: (0..an_padded.len()).collect(),
+			nn_sort_perm: (0..nn_padded.len()).collect(),
+			tx_proofs_by_slot: std::collections::HashMap::new(), // recovery: treat all as dummy
 		})?;
 
 		Ok(true)

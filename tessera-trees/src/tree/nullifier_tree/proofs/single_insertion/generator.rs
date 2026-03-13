@@ -13,7 +13,7 @@ use plonky2::{
 
 use crate::tree::{
 	NullifierInsertProof, NullifierInsertProofTargets,
-	hasher::{MerkleHash, MerkleHashCircuit, ToHashOut},
+	hasher::{MerkleHash, MerkleHashCircuit, MerkleHashTarget},
 };
 
 /// A reusable STARK proof generator for leaf insertions.
@@ -48,21 +48,20 @@ pub struct ProofGenerator<
 	C: GenericConfig<D, F = F>,
 	const D: usize,
 	const DEPTH: usize,
-> where
-	<H as MerkleHash>::Digest: ToHashOut<F>,
-{
+	const N: usize,
+> {
 	/// The pre-built circuit data
 	pub circuit_data: CircuitData<F, C, D>,
 	/// The circuit targets for setting witnesses
-	targets: NullifierInsertProofTargets,
+	targets: NullifierInsertProofTargets<N>,
 	/// Phantom data for the hash type
 	_phantom: std::marker::PhantomData<H>,
 }
 
-impl<H, F, C, const D: usize, const DEPTH: usize> ProofGenerator<H, F, C, D, DEPTH>
+impl<H, F, C, const D: usize, const DEPTH: usize, const N: usize>
+	ProofGenerator<H, F, C, D, DEPTH, N>
 where
-	H: MerkleHash + MerkleHashCircuit<F, D>,
-	<H as MerkleHash>::Digest: ToHashOut<F>,
+	H: MerkleHash + MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 	F: RichField + Extendable<D>,
 	C: GenericConfig<D, F = F>,
 	C::Hasher: AlgebraicHasher<F>,
@@ -82,12 +81,14 @@ where
 	pub fn with_config(config: CircuitConfig) -> Self {
 		let mut builder: CircuitBuilder<F, D> = CircuitBuilder::<F, D>::new(config);
 
+		let ctx = H::register_luts(&mut builder);
+
 		// Allocate targets
-		let targets: NullifierInsertProofTargets =
-			NullifierInsertProofTargets::new(&mut builder, DEPTH, true, true);
+		let targets: NullifierInsertProofTargets<N> =
+			NullifierInsertProofTargets::new::<H, F, D>(&mut builder, DEPTH, true, true);
 
 		// Connect constraints
-		targets.connect::<H, F, D>(&mut builder);
+		targets.connect::<H, F, D>(&mut builder, &ctx);
 
 		// Build the circuit
 		let circuit_data: CircuitData<F, C, D> = builder.build::<C>();
@@ -111,7 +112,7 @@ where
 	/// Returns an error if witness setting or proving fails.
 	pub fn prove(&self, proof: &NullifierInsertProof<H>) -> Result<ProofWithPublicInputs<F, C, D>> {
 		let mut pw: PartialWitness<F> = PartialWitness::new();
-		self.targets.set::<H, F, DEPTH>(&mut pw, proof)?;
+		self.targets.set::<H, F, D, DEPTH>(&mut pw, proof)?;
 		let circuit_proof: ProofWithPublicInputs<F, C, D> = self.circuit_data.prove(pw)?;
 		Ok(circuit_proof)
 	}
@@ -144,10 +145,10 @@ where
 	}
 }
 
-impl<H, F, C, const D: usize, const DEPTH: usize> Default for ProofGenerator<H, F, C, D, DEPTH>
+impl<H, F, C, const D: usize, const DEPTH: usize, const N: usize> Default
+	for ProofGenerator<H, F, C, D, DEPTH, N>
 where
-	H: MerkleHash + MerkleHashCircuit<F, D>,
-	<H as MerkleHash>::Digest: ToHashOut<F>,
+	H: MerkleHash + MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 	F: RichField + Extendable<D>,
 	C: GenericConfig<D, F = F>,
 	C::Hasher: AlgebraicHasher<F>,
@@ -190,7 +191,7 @@ mod test {
 		// Create generator (this builds the circuit once)
 		print!("Create generator (build circuit): ");
 		let now = Instant::now();
-		let generator = ProofGenerator::<HashOutput, F, C, D, DEPTH>::new();
+		let generator = ProofGenerator::<HashOutput, F, C, D, DEPTH, 4>::new();
 		println!("{:?}", now.elapsed());
 
 		// Insert multiple values and generate STARK proofs
@@ -237,7 +238,7 @@ mod test {
 
 		// Create tree and generator
 		let mut tree: NullifierTree<HashOutput> = NullifierTree::new(DEPTH);
-		let generator = ProofGenerator::<HashOutput, F, C, D, DEPTH>::new();
+		let generator = ProofGenerator::<HashOutput, F, C, D, DEPTH, 4>::new();
 
 		// Create aggregator using the generator's circuit data
 		let aggregator = StreamingAggregator::<F, C, D>::new(

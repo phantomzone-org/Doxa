@@ -1,8 +1,4 @@
-use std::{
-	collections::{BTreeMap, HashMap, HashSet},
-	sync::Arc,
-	time::Duration,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use alloy::{
 	network::EthereumWallet,
@@ -17,15 +13,15 @@ use tracing::{debug, error, info, warn};
 use crate::{
 	config::SequencerConfig,
 	contract::{self, IDepositsRollupBridge},
-	dummy::DummyTreeType,
 	prover_client::HttpProverClient,
-	states::{CommitmentTreeState, EventOrderKey, NullifierTreeState, PendingRequest},
+	states::{CommitmentTreeState, NullifierTreeState},
 	tree_store::{StoreMeta, TreeId, TreeStore},
 	types::ProveOutcome,
 	TREE_DEPTH,
 };
 
 mod api;
+pub mod batch;
 mod pipeline;
 mod recovery;
 mod revert;
@@ -36,33 +32,20 @@ const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Mirror of `MAX_PENDING_BATCHES` in `TesseraRollup.sol`.
 const MAX_PENDING_BATCHES: usize = 128;
 
-/// Per-tree batch data stored in a pending two-phase batch.
-/// Used for WAL commits after on-chain `confirmBatch` succeeds.
-#[allow(dead_code)]
-struct TxPerTreeBatch {
-	real_commitments_bytes: Vec<[u8; 32]>,
-	proving_commitments_bytes: Vec<[u8; 32]>,
-	proving_commitments_hash: Vec<HashOutput>,
-}
-
 /// A batch registered on-chain and awaiting a single SuperAggregator proof
 /// via `confirmBatch`.  Stored in `registered_pending_batches` until confirmed.
 #[allow(dead_code)]
 struct TxBatch {
 	batch_id: u64,
-	/// Pending queue requests popped for notes-commitment tree (for requeue on failure).
-	nc_requests: Vec<PendingRequest>,
-	/// Pending queue requests popped for notes-nullifier tree (for requeue on failure).
-	nn_requests: Vec<PendingRequest>,
-	/// Pending queue requests popped for accounts-commitment tree (for requeue on failure).
-	ac_requests: Vec<PendingRequest>,
-	/// Pending queue requests popped for accounts-nullifier tree (for requeue on failure).
-	an_requests: Vec<PendingRequest>,
-	/// Batch data for WAL commit after confirmation.
-	nc_batch: TxPerTreeBatch,
-	nn_batch: TxPerTreeBatch,
-	ac_batch: TxPerTreeBatch,
-	an_batch: TxPerTreeBatch,
+	/// Original private TX requests for requeue on proof failure.
+	private_tx_reqs: Vec<PrivateTxRequest>,
+	/// Original deposit NC notes for requeue on proof failure.
+	deposit_notes: Vec<[u8; 32]>,
+	/// Padded leaf arrays for WAL commit after on-chain confirmation.
+	nc_padded: Vec<[u8; 32]>,
+	nn_padded: Vec<[u8; 32]>,
+	ac_padded: Vec<[u8; 32]>,
+	an_padded: Vec<[u8; 32]>,
 }
 
 /// A decoded private transaction forwarded from the API to the sequencer's
@@ -99,13 +82,13 @@ pub(super) struct NotesCommitmentRequest {
 /// Pad `real_bytes` to `batch_size` with deterministic dummy leaves, then convert
 /// the result to the native `HashOutput` type expected by the plonky2 circuit.
 fn build_proving_commitments(
-	dummy_type: DummyTreeType,
+	current_root: &[u8; 32],
 	batch_start_index: usize,
 	batch_size: usize,
 	real_bytes: &[[u8; 32]],
 ) -> anyhow::Result<(Vec<[u8; 32]>, Vec<HashOutput>)> {
 	let proving_bytes =
-		crate::dummy::pad_leaves(dummy_type, batch_start_index, batch_size, real_bytes)?;
+		crate::dummy::pad_leaves(current_root, batch_start_index, batch_size, real_bytes)?;
 	let proving_hashes = contract::bytes_slice_to_hashes(&proving_bytes)?;
 	Ok((proving_bytes, proving_hashes))
 }
@@ -133,82 +116,54 @@ pub struct Sequencer {
 	registered_pending_batches: BTreeMap<u64, TxBatch>,
 	/// Receiver end of the private-tx channel for optimistic two-phase register.
 	private_tx_rx: Option<mpsc::Receiver<PrivateTxRequest>>,
-	/// AN commitments from real private TXs currently in the pending pool.
-	/// Used by `start_batch` to compute `real_account_slots` after sorting.
-	real_private_tx_an_leaves: HashSet<[u8; 32]>,
-	/// Client-submitted TX proof bytes, keyed by AN leaf.
-	/// Consumed by `start_batch` when building the `ProveRequest`.
-	tx_proofs_by_an_leaf: HashMap<[u8; 32], Vec<u8>>,
-	api_order_counter: u64,
-	notes_commitment_pending_since: Option<std::time::Instant>,
+	/// Slot-centric batch builder. Created lazily when the first TX/deposit
+	/// arrives; consumed on `flush_batch`.
+	batch_builder: Option<batch::BatchBuilder>,
+	/// Instant when the first item was added to the current `batch_builder`.
+	/// Used for timeout-based partial-batch flushing.
+	batch_pending_since: Option<std::time::Instant>,
 }
 
 impl Sequencer {
-	/// Attempt to start the next proving batch when the pending-batch queue is not full.
+	/// Attempt to flush the batch if it is full or has timed out.
 	///
 	/// Convenience wrapper called at the tail of every leaf-accept arm in the main event
 	/// loop, so that a newly enqueued leaf can immediately trigger a batch flush without
 	/// waiting for the next poll-interval tick.
-	///
-	/// # Parameters
-	/// - `provider`: Ethereum provider forwarded to `maybe_start_next_batch`.
-	/// - `note_batch_size`: circuit batch width for note trees.
-	/// - `account_batch_size`: circuit batch width for account trees.
-	/// - `batch_timeout`: maximum idle time before flushing a partial batch.
-	///
-	/// # Errors
-	/// Returns `Err` if `maybe_start_next_batch` fails (fatal: caller should `break` the loop).
-	///
-	/// # Side effects
-	/// May submit an async prove request and register a batch on-chain.
-	async fn try_start_batch_if_idle<P: Provider + Clone>(
+	async fn try_flush_batch_if_ready<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
-		note_batch_size: usize,
 		account_batch_size: usize,
 		batch_timeout: std::time::Duration,
 	) -> anyhow::Result<()> {
-		self.maybe_start_next_batch(provider, note_batch_size, account_batch_size, batch_timeout)
+		self.maybe_flush_batch(provider, account_batch_size, batch_timeout)
 			.await
 	}
 
-	/// Emit a `debug!` log showing the current pending-request count for all four trees.
-	///
-	/// Called at key decision points (batch scheduling, batch completion, leaf acceptance)
-	/// to provide an operational snapshot of queue depth.
+	/// Emit a `debug!` log showing the current batch builder state.
 	pub(super) fn log_pool_status(&self, reason: &str) {
+		let batch_slots = self.batch_builder.as_ref().map_or(0, |b| b.len());
 		debug!(
 			reason,
-			notes_commitment_pending = self.notes_commitment_state.pending_requests.len(),
-			notes_nullifier_pending = self.notes_nullifier_state.pending_requests.len(),
+			batch_slots,
+			pending_batches = self.registered_pending_batches.len(),
 			"sequencer pool status"
 		);
 	}
 
-	/// Update a single `pending_since` timer slot.
-	///
-	/// - If `pending_len == 0`: clear the slot (`None`), resetting the timeout clock.
-	/// - If `pending_len > 0` and the slot is `None`: record the current instant as the start of
-	///   the non-empty window.
-	/// - If `pending_len > 0` and the slot is already `Some`: no-op (clock keeps running).
-	fn refresh_pending_since(slot: &mut Option<std::time::Instant>, pending_len: usize) {
-		if pending_len == 0 {
-			*slot = None;
-		} else if slot.is_none() {
-			*slot = Some(std::time::Instant::now());
+	/// Lazily create a `BatchBuilder` if one doesn't exist.
+	fn ensure_batch_builder(&mut self, account_batch_size: usize) -> &mut batch::BatchBuilder {
+		if self.batch_builder.is_none() {
+			self.batch_builder = Some(batch::BatchBuilder::new(
+				account_batch_size,
+				&self.accounts_commitment_state.tree,
+				&self.accounts_nullifier_state.tree,
+				&self.notes_commitment_state.tree,
+				&self.notes_nullifier_state.tree,
+			));
+			self.batch_pending_since = Some(std::time::Instant::now());
 		}
-	}
-
-	/// Refresh the `pending_since` timer slots for all four trees.
-	///
-	/// Calls [`refresh_pending_since`] for each tree using the current pending-queue length.
-	/// Should be called whenever the queue lengths may have changed (leaf acceptance,
-	/// batch start, batch completion).
-	fn refresh_pending_timers(&mut self) {
-		Self::refresh_pending_since(
-			&mut self.notes_commitment_pending_since,
-			self.notes_commitment_state.pending_requests.len(),
-		);
+		self.batch_builder.as_mut().unwrap()
 	}
 
 	pub fn new(config: SequencerConfig) -> Self {
@@ -232,10 +187,8 @@ impl Sequencer {
 			notes_commitment_rx: None,
 			registered_pending_batches: BTreeMap::new(),
 			private_tx_rx: None,
-			real_private_tx_an_leaves: HashSet::new(),
-			tx_proofs_by_an_leaf: HashMap::new(),
-			api_order_counter: 0,
-			notes_commitment_pending_since: None,
+			batch_builder: None,
+			batch_pending_since: None,
 		}
 	}
 
@@ -414,12 +367,13 @@ impl Sequencer {
 		loop {
 			tokio::select! {
 				_ = interval.tick() => {
-					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
-						error!("failed to start next batch: {e}");
+					if let Err(e) = self.try_flush_batch_if_ready(&provider, account_batch_size, batch_timeout).await {
+						error!("failed to flush batch: {e}");
 						break;
 					}
 				}
 
+				// Deposit: add NC note to the batch builder.
 				Some(req) = async {
 					if let Some(rx) = &mut self.notes_commitment_rx {
 						rx.recv().await
@@ -429,23 +383,17 @@ impl Sequencer {
 				} => {
 					let note = req.note;
 					if !self.is_note_available(&provider, &note).await {
-						warn!(note = ?note, "notes commitment request rejected: note exists on bridge but is not Pending");
+						warn!(note = ?note, "deposit rejected: note not Pending on bridge");
 						continue;
 					}
-					let order_key = EventOrderKey {
-						block_number: 0,
-						transaction_index: 0,
-						log_index: self.api_order_counter,
-					};
-					self.api_order_counter = self.api_order_counter.saturating_add(1);
-					self.notes_commitment_state.add_consume_request(
-						order_key,
-						note,
-						note_batch_size,
-					);
-					self.log_pool_status("accepted notes commitment leaf");
-					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
-						error!("failed to start next batch: {e}");
+					let bb = self.ensure_batch_builder(account_batch_size);
+					if let Err(e) = bb.add_deposit(note) {
+						warn!(error = %e, "deposit rejected: batch builder error");
+						continue;
+					}
+					self.log_pool_status("accepted deposit note");
+					if let Err(e) = self.try_flush_batch_if_ready(&provider, account_batch_size, batch_timeout).await {
+						error!("failed to flush batch: {e}");
 						break;
 					}
 				}
@@ -461,14 +409,13 @@ impl Sequencer {
 						error!("fatal sequencer error while finalizing batch: {e}");
 						break;
 					}
-					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
-						error!("failed to start next batch: {e}");
+					if let Err(e) = self.try_flush_batch_if_ready(&provider, account_batch_size, batch_timeout).await {
+						error!("failed to flush batch: {e}");
 						break;
 					}
 				}
 
-				// Private transactions: enqueue leaves into the 4 pending pools.
-				// The unified `start_batch` will flush them together with consume requests.
+				// Private transactions: validate nullifiers, then add to batch builder.
 				Some(tx_req) = async {
 					if let Some(rx) = &mut self.private_tx_rx {
 						rx.recv().await
@@ -479,7 +426,7 @@ impl Sequencer {
 					let tx_id = tx_req.tx_id.as_deref().unwrap_or("unknown");
 					debug!(tx_id, "validating private tx nullifier leaves");
 
-					// Validate NN: reject if any input note nullifier already exists in tree or pending pool.
+					// Validate NN: reject if any input note nullifier already in tree or current batch.
 					let mut nn_rejected = false;
 					for note in &tx_req.input_notes {
 						let note_hash = match contract::bytes32_to_hash(&alloy::primitives::B256::from(*note)) {
@@ -495,8 +442,8 @@ impl Sequencer {
 							nn_rejected = true;
 							break;
 						}
-						if self.notes_nullifier_state.pending_commitments.contains(note) {
-							warn!(tx_id, note = ?alloy::primitives::B256::from(*note), "private tx rejected: NN leaf already pending");
+						if self.batch_builder.as_ref().is_some_and(|b| b.contains_nn(note)) {
+							warn!(tx_id, note = ?alloy::primitives::B256::from(*note), "private tx rejected: NN leaf already in batch");
 							nn_rejected = true;
 							break;
 						}
@@ -505,7 +452,7 @@ impl Sequencer {
 						continue;
 					}
 
-					// Validate AN: reject if account nullifier already exists in tree or pending pool.
+					// Validate AN: reject if account nullifier already in tree or current batch.
 					let an_leaf = tx_req.input_account_leaf;
 					let an_hash = match contract::bytes32_to_hash(&alloy::primitives::B256::from(an_leaf)) {
 						Ok(h) => h,
@@ -518,65 +465,46 @@ impl Sequencer {
 						warn!(tx_id, "private tx rejected: AN leaf already nullified");
 						continue;
 					}
-					if self.accounts_nullifier_state.pending_commitments.contains(&an_leaf) {
-						warn!(tx_id, "private tx rejected: AN leaf already pending");
+					if self.batch_builder.as_ref().is_some_and(|b| b.contains_an(&an_leaf)) {
+						warn!(tx_id, "private tx rejected: AN leaf already in batch");
 						continue;
 					}
 
-					// All checks passed — enqueue into all 4 pools.
-					// NC: output notes
-					for note in &tx_req.output_notes {
-						let order_key = EventOrderKey {
-							block_number: 0,
-							transaction_index: 0,
-							log_index: self.api_order_counter,
-						};
-						self.api_order_counter = self.api_order_counter.saturating_add(1);
-						self.notes_commitment_state.add_consume_request(order_key, *note, note_batch_size);
-					}
-					// NN: input notes (validated above)
-					for note in &tx_req.input_notes {
-						let order_key = EventOrderKey {
-							block_number: 0,
-							transaction_index: 0,
-							log_index: self.api_order_counter,
-						};
-						self.api_order_counter = self.api_order_counter.saturating_add(1);
-						self.notes_nullifier_state.add_consume_request(order_key, *note, note_batch_size);
-					}
-					// AC: output account
-					{
-						let order_key = EventOrderKey {
-							block_number: 0,
-							transaction_index: 0,
-							log_index: self.api_order_counter,
-						};
-						self.api_order_counter = self.api_order_counter.saturating_add(1);
-						self.accounts_commitment_state.add_consume_request(order_key, tx_req.output_account_leaf, account_batch_size);
-					}
-					// AN: input account (validated above)
-					{
-						let order_key = EventOrderKey {
-							block_number: 0,
-							transaction_index: 0,
-							log_index: self.api_order_counter,
-						};
-						self.api_order_counter = self.api_order_counter.saturating_add(1);
-						self.accounts_nullifier_state.add_consume_request(order_key, an_leaf, account_batch_size);
-						self.real_private_tx_an_leaves.insert(an_leaf);
-						self.tx_proofs_by_an_leaf.insert(an_leaf, tx_req.tx_proof);
+					// All checks passed — add to batch builder.
+					let nc: [[u8; 32]; 8] = {
+						let mut arr = [[0u8; 32]; 8];
+						for (i, note) in tx_req.output_notes.iter().enumerate().take(8) {
+							arr[i] = *note;
+						}
+						arr
+					};
+					let nn: [[u8; 32]; 8] = {
+						let mut arr = [[0u8; 32]; 8];
+						for (i, note) in tx_req.input_notes.iter().enumerate().take(8) {
+							arr[i] = *note;
+						}
+						arr
+					};
+
+					let bb = self.ensure_batch_builder(account_batch_size);
+					if let Err(e) = bb.add_private_tx(
+						tx_req.tx_proof,
+						tx_req.output_account_leaf,
+						an_leaf,
+						nc,
+						nn,
+					) {
+						warn!(tx_id, error = %e, "private tx rejected: batch builder error");
+						continue;
 					}
 
 					info!(
 						tx_id,
-						nc_pending = self.notes_commitment_state.pending_requests.len(),
-						nn_pending = self.notes_nullifier_state.pending_requests.len(),
-						ac_pending = self.accounts_commitment_state.pending_requests.len(),
-						an_pending = self.accounts_nullifier_state.pending_requests.len(),
-						"private tx leaves enqueued"
+						batch_slots = self.batch_builder.as_ref().map_or(0, |b| b.len()),
+						"private tx added to batch"
 					);
-					if let Err(e) = self.try_start_batch_if_idle(&provider, note_batch_size, account_batch_size, batch_timeout).await {
-						error!("failed to start next batch: {e}");
+					if let Err(e) = self.try_flush_batch_if_ready(&provider, account_batch_size, batch_timeout).await {
+						error!("failed to flush batch: {e}");
 						break;
 					}
 				}

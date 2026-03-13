@@ -30,7 +30,7 @@ use plonky2::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tessera_trees::{
 	tree::{
-		hasher::{HashOutput, NewRandom},
+		hasher::{HashOutput, MerkleHashCircuit, NewRandom},
 		BatchCommitmentProof, BatchCommitmentProofTargets, BatchInsertProof,
 		BatchNullifierInsertProofTargets, CommitmentTree, NullifierTree,
 	},
@@ -136,19 +136,20 @@ pub fn sample_batch_commitment_tree_proof(
 
 	print!("Alloc Targets: ");
 	let now: Instant = Instant::now();
-	let targets: BatchCommitmentProofTargets =
-		BatchCommitmentProofTargets::new::<F, D>(&mut builder, DEPTH, batch_size);
+	let ctx = HashOutput::register_luts(&mut builder);
+	let targets: BatchCommitmentProofTargets<4> =
+		BatchCommitmentProofTargets::new::<HashOutput, F, D>(&mut builder, DEPTH, batch_size);
 	println!("{:?}", now.elapsed());
 
 	print!("Connect: ");
 	let now: Instant = Instant::now();
-	targets.connect::<HashOutput, F, D>(&mut builder);
+	targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
 	println!("{:?}", now.elapsed());
 
 	print!("Set Witnesses: ");
 	let now: Instant = Instant::now();
 	let mut pw: PartialWitness<F> = PartialWitness::new();
-	targets.set::<HashOutput, F, DEPTH>(&mut pw, &batch_proof)?;
+	targets.set::<HashOutput, F, D, DEPTH>(&mut pw, &batch_proof)?;
 	println!("{:?}", now.elapsed());
 
 	print!("Build: ");
@@ -215,19 +216,20 @@ pub fn sample_batch_nullifier_tree_proof(
 
 	print!("Alloc Targets: ");
 	let now: Instant = Instant::now();
-	let targets: BatchNullifierInsertProofTargets =
-		BatchNullifierInsertProofTargets::new::<F, D>(&mut builder, DEPTH, batch_size);
+	let ctx = HashOutput::register_luts(&mut builder);
+	let targets: BatchNullifierInsertProofTargets<4> =
+		BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(&mut builder, DEPTH, batch_size);
 	println!("{:?}", now.elapsed());
 
 	print!("Connect: ");
 	let now: Instant = Instant::now();
-	targets.connect::<HashOutput, F, D>(&mut builder);
+	targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
 	println!("{:?}", now.elapsed());
 
 	print!("Set Witnesses: ");
 	let now: Instant = Instant::now();
 	let mut pw: PartialWitness<F> = PartialWitness::new();
-	targets.set::<HashOutput, F, DEPTH>(&mut pw, &batch_proof)?;
+	targets.set::<HashOutput, F, D>(&mut pw, &batch_proof)?;
 	println!("{:?}", now.elapsed());
 
 	print!("Build: ");

@@ -42,21 +42,21 @@ use plonky2::{
 use crate::tree::{
 	NullifierChainedInsertProof, NullifierInsertProofTargets,
 	error::MerkleTreeError,
-	hasher::{MerkleHash, MerkleHashCircuit, ToHashOut},
+	hasher::{MerkleHash, MerkleHashCircuit, MerkleHashTarget},
 };
 
 /// Circuit targets for verifying a chained insertion proof.
 ///
 /// This structure holds targets for multiple insertions and connects them
 /// with chaining constraints.
-pub struct ChainedInsertProofTargets {
+pub struct ChainedInsertProofTargets<const N: usize> {
 	/// Targets for each individual insertion
-	insertions: Vec<NullifierInsertProofTargets>,
+	insertions: Vec<NullifierInsertProofTargets<N>>,
 	/// Tree depth
 	depth: usize,
 }
 
-impl ChainedInsertProofTargets {
+impl<const N: usize> ChainedInsertProofTargets<N> {
 	/// Allocates circuit targets for a chained insertion proof.
 	///
 	/// # Arguments
@@ -66,21 +66,29 @@ impl ChainedInsertProofTargets {
 	///
 	/// # Public Inputs
 	///
-	/// `old_root[4]`, `new_node_path[1]` (starting chain index), all inserted
-	/// `values[batch_size × 4]`, and `new_root[4]` are exposed directly.
-	/// Total: `4 × batch_size + 9` Goldilocks field elements.
-	pub fn new<F, const D: usize>(
+	/// `old_root[N]`, `new_node_path[1]` (starting chain index), all inserted
+	/// `values[batch_size × N]`, and `new_root[N]` are exposed directly.
+	/// Total: `N × batch_size + 2*N + 1` Goldilocks field elements.
+	pub fn new<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
 		depth: usize,
 		batch_size: usize,
 	) -> Self
 	where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		assert!(batch_size > 0, "batch_size must be at least 1");
 
-		let insertions: Vec<NullifierInsertProofTargets> = (0..batch_size)
-			.map(|i| NullifierInsertProofTargets::new(builder, depth, i == 0, i == batch_size - 1))
+		let insertions: Vec<NullifierInsertProofTargets<N>> = (0..batch_size)
+			.map(|i| {
+				NullifierInsertProofTargets::new::<H, F, D>(
+					builder,
+					depth,
+					i == 0,
+					i == batch_size - 1,
+				)
+			})
 			.collect();
 
 		Self {
@@ -105,14 +113,17 @@ impl ChainedInsertProofTargets {
 	/// 1. Each individual insertion proof's constraints
 	/// 2. Chaining constraints: new_root[i] == old_root[i+1]
 	/// 3. Chaining constraints: index[i]+1 == index[i+1]
-	pub fn connect<H, F, const D: usize>(&self, builder: &mut CircuitBuilder<F, D>)
-	where
-		H: MerkleHashCircuit<F, D>,
+	pub fn connect<H, F, const D: usize>(
+		&self,
+		builder: &mut CircuitBuilder<F, D>,
+		ctx: &H::CircuitContext,
+	) where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		// Connect individual insertion constraints
 		for insertion in &self.insertions {
-			insertion.connect::<H, F, D>(builder);
+			insertion.connect::<H, F, D>(builder, ctx);
 		}
 
 		let one: Target = builder.one();
@@ -120,7 +131,11 @@ impl ChainedInsertProofTargets {
 		// Connect chaining constraints
 		for i in 0..self.insertions.len() - 1 {
 			// Root chaining: new_root[i] == old_root[i+1]
-			builder.connect_hashes(self.insertions[i].new_root, self.insertions[i + 1].old_root);
+			H::connect_hashes(
+				builder,
+				&self.insertions[i].new_root,
+				&self.insertions[i + 1].old_root,
+			);
 
 			// num_leaves chaining: index[i]+1 == index[i+1]
 			let next_node_path = builder.add(self.insertions[i].new_node_path, one);
@@ -129,15 +144,14 @@ impl ChainedInsertProofTargets {
 	}
 
 	/// Sets all witness values from a ChainedInsertProof.
-	pub fn set<H, F, const DEPTH: usize>(
+	pub fn set<H, F, const D: usize, const DEPTH: usize>(
 		&self,
 		pw: &mut PartialWitness<F>,
 		proof: &NullifierChainedInsertProof<H>,
 	) -> Result<()>
 	where
-		H: MerkleHash,
-		H::Digest: ToHashOut<F>,
-		F: Field + PrimeField64,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
+		F: Field + PrimeField64 + RichField + Extendable<D>,
 	{
 		assert_eq!(
 			proof.len(),
@@ -153,7 +167,7 @@ impl ChainedInsertProofTargets {
 		);
 
 		for (i, insertion_targets) in self.insertions.iter().enumerate() {
-			insertion_targets.set::<H, F, DEPTH>(pw, &proof.proofs[i])?;
+			insertion_targets.set::<H, F, D, DEPTH>(pw, &proof.proofs[i])?;
 		}
 
 		Ok(())
@@ -171,22 +185,20 @@ pub struct ChainedInsertProofGenerator<
 	const D: usize,
 	const DEPTH: usize,
 	const BATCH_SIZE: usize,
-> where
-	<H as MerkleHash>::Digest: ToHashOut<F>,
-{
+	const N: usize,
+> {
 	/// The pre-built circuit data
 	pub circuit_data: CircuitData<F, C, D>,
 	/// The circuit targets
-	targets: ChainedInsertProofTargets,
+	targets: ChainedInsertProofTargets<N>,
 	/// Phantom data for the hash type
 	_phantom: std::marker::PhantomData<H>,
 }
 
-impl<H, F, C, const D: usize, const DEPTH: usize, const BATCH_SIZE: usize>
-	ChainedInsertProofGenerator<H, F, C, D, DEPTH, BATCH_SIZE>
+impl<H, F, C, const D: usize, const DEPTH: usize, const BATCH_SIZE: usize, const N: usize>
+	ChainedInsertProofGenerator<H, F, C, D, DEPTH, BATCH_SIZE, N>
 where
-	H: MerkleHash + MerkleHashCircuit<F, D>,
-	<H as MerkleHash>::Digest: ToHashOut<F>,
+	H: MerkleHash + MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 	F: RichField + Extendable<D>,
 	C: GenericConfig<D, F = F>,
 	C::Hasher: AlgebraicHasher<F>,
@@ -200,11 +212,13 @@ where
 	pub fn with_config(config: CircuitConfig) -> Self {
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
+		let ctx = H::register_luts(&mut builder);
+
 		// Allocate targets
-		let targets = ChainedInsertProofTargets::new(&mut builder, DEPTH, BATCH_SIZE);
+		let targets = ChainedInsertProofTargets::new::<H, F, D>(&mut builder, DEPTH, BATCH_SIZE);
 
 		// Connect constraints
-		targets.connect::<H, F, D>(&mut builder);
+		targets.connect::<H, F, D>(&mut builder, &ctx);
 
 		// Build the circuit
 		let circuit_data = builder.build::<C>();
@@ -228,7 +242,7 @@ where
 			))));
 		}
 		let mut pw = PartialWitness::new();
-		self.targets.set::<H, F, DEPTH>(&mut pw, proof)?;
+		self.targets.set::<H, F, D, DEPTH>(&mut pw, proof)?;
 		let circuit_proof = self.circuit_data.prove(pw)?;
 		Ok(circuit_proof)
 	}
@@ -260,11 +274,10 @@ where
 	}
 }
 
-impl<H, F, C, const D: usize, const DEPTH: usize, const BATCH_SIZE: usize> Default
-	for ChainedInsertProofGenerator<H, F, C, D, DEPTH, BATCH_SIZE>
+impl<H, F, C, const D: usize, const DEPTH: usize, const BATCH_SIZE: usize, const N: usize> Default
+	for ChainedInsertProofGenerator<H, F, C, D, DEPTH, BATCH_SIZE, N>
 where
-	H: MerkleHash + MerkleHashCircuit<F, D>,
-	<H as MerkleHash>::Digest: ToHashOut<F>,
+	H: MerkleHash + MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 	F: RichField + Extendable<D>,
 	C: GenericConfig<D, F = F>,
 	C::Hasher: AlgebraicHasher<F>,
@@ -322,7 +335,7 @@ mod test {
 		print!("Build circuit: ");
 		let now = Instant::now();
 		let generator =
-			ChainedInsertProofGenerator::<HashOutput, F, C, D, DEPTH, BATCH_SIZE>::new();
+			ChainedInsertProofGenerator::<HashOutput, F, C, D, DEPTH, BATCH_SIZE, 4>::new();
 		println!("{:?}", now.elapsed());
 
 		print!("Generate STARK proof: ");
@@ -331,7 +344,7 @@ mod test {
 		println!("{:?}", now.elapsed());
 
 		// Raw PI layout: old_root[4] + new_node_path[1] + values[BATCH_SIZE×4] + new_root[4]
-		// = 4*BATCH_SIZE + 9 = 265
+		// = 4*BATCH_SIZE + 9
 		assert_eq!(stark_proof.public_inputs.len(), 4 * BATCH_SIZE + 9);
 
 		print!("Verify STARK proof: ");

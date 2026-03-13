@@ -21,17 +21,22 @@ pub struct ProveRequest {
 	pub accounts_commitment_proof: BatchCommitmentProof<HashOutput>,
 	/// Accounts nullifier tree batch-insertion witness.
 	pub accounts_nullifier_proof: BatchInsertProof<HashOutput>,
-	/// Sorted leaf bytes for all 4 trees (after padding and sorting).
-	/// Used by the prover to build TX leaf proofs with correct tree data.
+	/// Leaf bytes for all 4 trees (after padding).
+	/// Sorted variants are used for nullifier tree proofs and off-circuit checks.
+	/// Unsorted variants (arrival order) are used for dummy TX override values.
 	pub nc_sorted_leaves: Vec<[u8; 32]>,
 	pub nn_sorted_leaves: Vec<[u8; 32]>,
 	pub ac_sorted_leaves: Vec<[u8; 32]>,
 	pub an_sorted_leaves: Vec<[u8; 32]>,
-	/// Indices (in the sorted account-level batch) of slots that are real
-	/// private transactions (is_real=1). Empty for deposit-only batches.
-	pub real_account_slots: Vec<usize>,
-	/// Client-submitted TX proof bytes keyed by sorted account slot index.
-	/// Only present for real private TX slots; absent slots use dummy proofs.
+	/// Sorting permutation for AN: `an_sort_perm[slot] = sorted_position`.
+	/// Allows the prover to recover the original slot→value mapping:
+	/// `override_an = an_sorted_leaves[an_sort_perm[s]]`.
+	pub an_sort_perm: Vec<usize>,
+	/// Sorting permutation for NN: `nn_sort_perm[slot] = sorted_position`.
+	pub nn_sort_perm: Vec<usize>,
+	/// Client-submitted TX proof bytes keyed by account slot index.
+	/// Slots present in this map are real private TXs (is_real=1);
+	/// absent slots use dummy proofs.
 	pub tx_proofs_by_slot: HashMap<usize, Vec<u8>>,
 }
 

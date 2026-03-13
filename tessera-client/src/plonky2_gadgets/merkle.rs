@@ -28,7 +28,7 @@ use tessera_trees::{
 	F,
 	tree::{
 		HASH_SIZE,
-		hasher::{HashOutput, MerkleHashCircuit},
+		hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 	},
 };
 
@@ -230,7 +230,7 @@ pub fn compute_merkle_root_gagdet<
 /// For the root, the hash function computes H(num_leaves | left | right) (not H(left, right)).
 /// Hence, merkle path verification of CommitmentTree requires a distinct gadget
 pub fn conditional_merkle_verify_commitment_tree_gadget<
-	H: MerkleHashCircuit<F, D>,
+	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 	const DEPTH: usize,
@@ -239,37 +239,30 @@ pub fn conditional_merkle_verify_commitment_tree_gadget<
 	leaf: HashOutTarget,
 	expected_root: HashOutTarget,
 	selector: BoolTarget,
+	ctx: &H::CircuitContext,
 ) -> CommitmentTreeMerkleTarget<DEPTH> {
 	let siblings: [HashOutTarget; DEPTH] = core::array::from_fn(|_| builder.add_virtual_hash());
 	let bits: [BoolTarget; DEPTH] =
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 	let num_leaves = builder.add_virtual_target();
 
-	let mut current = leaf;
+	let mut current = MerkleHashTarget::from_hash_out_target(leaf);
 	for level in 0..DEPTH {
 		if level == DEPTH - 1 {
 			let dir = bits[DEPTH - 1];
-			let sibling = siblings[DEPTH - 1];
-			let left = HashOutTarget {
-				elements: core::array::from_fn(|i| {
-					builder.select(dir, sibling.elements[i], current.elements[i])
-				}),
-			};
-			let right = HashOutTarget {
-				elements: core::array::from_fn(|i| {
-					builder.select(dir, current.elements[i], sibling.elements[i])
-				}),
-			};
-			current = H::hash_root_circuit(builder, num_leaves, left, right);
+			let sib = MerkleHashTarget::from_hash_out_target(siblings[DEPTH - 1]);
+			let left = H::select_hash(builder, dir, &sib, &current);
+			let right = H::select_hash(builder, dir, &current, &sib);
+			current = H::hash_root_circuit(builder, ctx, num_leaves, left, right);
 		} else {
-			current = H::hash_2_to_1_circuit(builder, current, siblings[level], bits[level]);
+			let sib = MerkleHashTarget::from_hash_out_target(siblings[level]);
+			current = H::hash_2_to_1_circuit(builder, ctx, current, sib, bits[level]);
 		}
 	}
 
 	// Selector-gated root equality
-	izip!(current.elements.iter(), expected_root.elements.iter()).for_each(|(a, b)| {
-		builder.conditional_assert_eq(selector.target, *a, *b);
-	});
+	let expected = MerkleHashTarget::from_hash_out_target(expected_root);
+	MerkleHashTarget::conditional_connect(builder, selector, &current, &expected);
 
 	CommitmentTreeMerkleTarget {
 		siblings,

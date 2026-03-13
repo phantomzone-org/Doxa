@@ -9,7 +9,10 @@ use plonky2::{
 };
 use plonky2_field::{extension::Extendable, types::Field};
 use rand::{CryptoRng, Rng};
-use tessera_trees::{F, tree::hasher::MerkleHashCircuit};
+use tessera_trees::{
+	F,
+	tree::hasher::{MerkleHashCircuit, MerkleHashTarget},
+};
 
 use crate::{
 	DS_PUBLIC_IDENTIFIER, NOTE_BATCH,
@@ -29,7 +32,7 @@ use crate::{
 
 pub(crate) mod cb;
 mod freshacc;
-mod spend;
+pub mod spend;
 pub(crate) mod targets;
 
 /// Public alias for the PrivTx circuit targets, used with [`build_priv_tx_circuit`]
@@ -53,11 +56,12 @@ pub(crate) fn sample_dummy_notes<R: CryptoRng>(
 }
 
 pub fn priv_tx_circuit<
-	H: MerkleHashCircuit<F, D>,
+	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
+	ctx: &H::CircuitContext,
 ) -> TxCircuitTargets {
 	// Mint constants
 	// let ds_nullifier_key = builder.constant(F::from_canonical_u64(DS_NULLIFIER_KEY));
@@ -117,7 +121,7 @@ pub fn priv_tx_circuit<
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
 	let check_act = builder.and(not_is_fresh_acc, not_fake_tx);
 	let accin_merkletrgts = builder.conditionally_assert_account_commitment_exists_in_act::<H>(
-		accin_comm, act_root, check_act,
+		accin_comm, act_root, check_act, ctx,
 	);
 
 	// AccIn nullifier — select fresh vs regular based on is_fresh_acc
@@ -183,6 +187,7 @@ pub fn priv_tx_circuit<
 		public_identifier,
 		subpool_id,
 		nct_root,
+		ctx,
 	);
 
 	// Balance invariant: AccIn.amt + Sum([INote.amt]) == AccOut.amt + Sum([Onote.amt]) //
@@ -281,14 +286,15 @@ pub fn priv_tx_circuit<
 		not_fake_tx,
 	);
 
-	// Declare public inputs (75 explicit + 2 lookup metadata = 77 total):
-	//  PI[0]     = subpool_id_in
-	//  PI[1]     = subpool_id_out
-	//  PI[2]     = not_fake_tx (is_real)
-	//  PI[3..7]  = AN (account nullifier)
-	//  PI[7..11] = AC (account commitment)
-	//  PI[11..43]= NN (note nullifiers, 8×4)
-	//  PI[43..75]= NC (note commitments, 8×4)
+	// Declare public inputs (75 explicit + 2 LUT metadata = 77 total):
+	//  PI[0..2]  = plonky2 LUT metadata (auto-registered, not set by user)
+	//  PI[2]     = subpool_id_in
+	//  PI[3]     = subpool_id_out
+	//  PI[4]     = not_fake_tx (is_real)          [IS_REAL_OFFSET]
+	//  PI[5..9]  = AN (account nullifier)         [TX_DATA_OFFSET]
+	//  PI[9..13] = AC (account commitment)
+	//  PI[13..45]= NN (note nullifiers, 8×4)
+	//  PI[45..77]= NC (note commitments, 8×4)
 	builder.register_public_input(accin.subpool_id.0);
 	builder.register_public_input(accout.subpool_id.0);
 	builder.register_public_input(not_fake_tx.target);
@@ -367,7 +373,8 @@ fn build_circuit_and_proof_seeded(
 
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, { tessera_trees::D }>::new(config);
-	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder);
+	let ctx = HashOutput::register_luts(&mut builder);
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder, &ctx);
 	let circuit = builder.build::<tessera_trees::ConfigNative>();
 	let proof = prove_priv_tx(&circuit, &t, not_fake_tx, seed);
 	(circuit, proof)
@@ -450,26 +457,50 @@ fn prove_priv_tx(
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
 
 	let mut pw = PartialWitness::new();
-	freshacc::set_freshacc_tx_witness(
-		&mut pw,
-		t,
-		not_fake_tx,
-		&accin,
-		new_spend_auth,
-		new_consume_auth,
-		HashOutput([F::ZERO; 4]),
-		HashOutput([F::ZERO; 4]),
-		approval_cpk,
-		rejection_cpk,
-		consume_cpk,
-		subpool_id,
-		&main_pool,
-		approval_sig,
-		dinotes,
-		donotes,
-		[F::ZERO; 4],
-		[[F::ZERO; 4]; crate::NOTE_BATCH],
-	);
+	if not_fake_tx {
+		freshacc::set_freshacc_tx_witness(
+			&mut pw,
+			t,
+			true,
+			&accin,
+			new_spend_auth,
+			new_consume_auth,
+			HashOutput([F::ZERO; 4]),
+			HashOutput([F::ZERO; 4]),
+			approval_cpk,
+			rejection_cpk,
+			consume_cpk,
+			subpool_id,
+			&main_pool,
+			approval_sig,
+			dinotes,
+			donotes,
+			[F::ZERO; 4],
+			[[F::ZERO; 4]; crate::NOTE_BATCH],
+		);
+	} else {
+		// For dummy proofs, use set_fake_tx_witness which sets is_fresh_acc=false.
+		// The circuit has a constraint is_fresh_acc → not_fake_tx, so using
+		// set_freshacc_tx_witness (is_fresh_acc=true) with not_fake_tx=false
+		// causes the prover to force PI[2]=1.
+		spend::set_fake_tx_witness(
+			&mut pw,
+			t,
+			HashOutput([F::ZERO; 4]),
+			HashOutput([F::ZERO; 4]),
+			HashOutput([F::ZERO; 4]),
+		);
+		// Set override targets (unused for this path, but must be populated).
+		use plonky2::iop::witness::WitnessWrite;
+		for k in 0..4 {
+			pw.set_target(t.override_an.elements[k], F::ZERO).unwrap();
+		}
+		for i in 0..crate::NOTE_BATCH {
+			for k in 0..4 {
+				pw.set_target(t.override_nn[i][k], F::ZERO).unwrap();
+			}
+		}
+	}
 
 	let label = if not_fake_tx { "real" } else { "dummy" };
 	let proof = circuit
@@ -527,7 +558,8 @@ pub fn build_priv_tx_circuit() -> (
 
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, { tessera_trees::D }>::new(config);
-	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder);
+	let ctx = HashOutput::register_luts(&mut builder);
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder, &ctx);
 	let circuit = builder.build::<tessera_trees::ConfigNative>();
 	(circuit, t)
 }
@@ -561,80 +593,33 @@ pub fn prove_dummy_priv_tx(
 fn prove_dummy_priv_tx_inner(
 	circuit: &tessera_trees::CircuitDataNative,
 	t: &PrivTxTargets<{ tessera_trees::D }>,
-	seed: u64,
+	_seed: u64,
 	override_an: [F; 4],
 	override_nn: [[F; 4]; NOTE_BATCH],
 ) -> tessera_trees::ProofNative {
-	use std::array;
-
-	use plonky2::iop::witness::PartialWitness;
-	use plonky2_field::types::Field;
-	use rand::SeedableRng;
-	use rand_chacha::ChaCha8Rng;
+	use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 	use tessera_trees::tree::hasher::HashOutput;
 
-	use crate::{
-		ConsumeAuth, Nonce, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
-		derive_priv_tx_hash,
-		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-		schnorr::{PrivateKey, Scalar, schnorr_sign},
-	};
-
-	let mut rng = ChaCha8Rng::seed_from_u64(seed);
-	let approval_sk = PrivateKey::new(Scalar::sample(&mut rng));
-	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
-	let rejection_sk = PrivateKey::new(Scalar::sample(&mut rng));
-	let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
-	let consume_sk = PrivateKey::new(Scalar::sample(&mut rng));
-	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
-
-	let subpool = SubpoolConfigTree::new(approval_cpk, rejection_cpk, consume_cpk);
-	let subpool_id = SubpoolId(F::ONE);
-	let mut main_pool = MainPoolConfigTree::new();
-	main_pool.set_subpool(0, subpool_id, subpool.root());
-
-	let accin = StandardAccount::sample(&mut rng, subpool_id);
-
-	let (dinotes, donotes) = sample_dummy_notes(&mut rng);
-	let dinote_nulls: [NoteNullifier; NOTE_BATCH] =
-		array::from_fn(|i| NoteNullifier(double_hash_native(dinotes[i]).into()));
-	let donote_comms: [NoteCommitment; NOTE_BATCH] =
-		array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
-
-	let mut accout = accin.clone();
-	accout.nonce = Nonce(F::ONE);
-	accout.spend_auth = SpendAuth::default();
-	accout.consume_auth = ConsumeAuth::default();
-	let tx_hash = derive_priv_tx_hash(
-		accin.nullifier(None),
-		accout.commitment(),
-		dinote_nulls,
-		donote_comms,
-	);
-	let k = Scalar::from_raw(array::from_fn(|_| 1u64));
-	let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
-
 	let mut pw = PartialWitness::new();
-	freshacc::set_freshacc_tx_witness(
+	spend::set_fake_tx_witness(
 		&mut pw,
 		t,
-		false,
-		&accin,
-		SpendAuth::default(),
-		ConsumeAuth::default(),
 		HashOutput([F::ZERO; 4]),
 		HashOutput([F::ZERO; 4]),
-		approval_cpk,
-		rejection_cpk,
-		consume_cpk,
-		subpool_id,
-		&main_pool,
-		approval_sig,
-		dinotes,
-		donotes,
-		override_an,
-		override_nn,
+		HashOutput([F::ZERO; 4]),
 	);
+
+	// Set AN/NN override targets (used when not_fake_tx=0).
+	for k in 0..4 {
+		pw.set_target(t.override_an.elements[k], override_an[k])
+			.unwrap();
+	}
+	for i in 0..NOTE_BATCH {
+		for k in 0..4 {
+			pw.set_target(t.override_nn[i][k], override_nn[i][k])
+				.unwrap();
+		}
+	}
 
 	let proof = circuit
 		.prove(pw)
@@ -644,4 +629,73 @@ fn prove_dummy_priv_tx_inner(
 		.unwrap_or_else(|e| panic!("dummy PrivTx proof verification failed: {e}"));
 
 	proof
+}
+
+#[cfg(test)]
+mod tests {
+	use plonky2_field::types::{Field, PrimeField64};
+
+	use super::*;
+
+	/// Dummy proofs must have PI[IS_REAL_OFFSET] (not_fake_tx) = 0.
+	/// Regression: set_freshacc_tx_witness sets is_fresh_acc=true, which
+	/// has a circuit constraint is_fresh_acc → not_fake_tx, forcing is_real=1.
+	/// Fix: dummy proofs use set_fake_tx_witness (is_fresh_acc=false).
+	#[test]
+	fn dummy_proof_has_not_fake_tx_zero() {
+		use tessera_trees::proof_aggregation::IS_REAL_OFFSET;
+
+		let (circuit, targets) = build_priv_tx_circuit();
+		let proof = prove_dummy_priv_tx(
+			&circuit,
+			&targets,
+			42,
+			[F::ZERO; 4],
+			[[F::ZERO; 4]; NOTE_BATCH],
+		);
+		assert_eq!(
+			proof.public_inputs[IS_REAL_OFFSET].to_canonical_u64(),
+			0,
+			"prove_dummy_priv_tx PI[IS_REAL_OFFSET] should be 0 (not_fake_tx=false)"
+		);
+
+		let (_circuit2, proof2) = build_circuit_and_dummy_proof();
+		assert_eq!(
+			proof2.public_inputs[IS_REAL_OFFSET].to_canonical_u64(),
+			0,
+			"build_circuit_and_dummy_proof PI[IS_REAL_OFFSET] should be 0 (not_fake_tx=false)"
+		);
+	}
+
+	/// Dummy proofs' AN PIs must equal override_an at TX_DATA_OFFSET.
+	#[test]
+	fn dummy_proof_an_override_matches_pi() {
+		use tessera_trees::proof_aggregation::TX_DATA_OFFSET;
+
+		let (circuit, targets) = build_priv_tx_circuit();
+		let override_an = [
+			F::from_canonical_u64(111),
+			F::from_canonical_u64(222),
+			F::from_canonical_u64(333),
+			F::from_canonical_u64(444),
+		];
+		let proof = prove_dummy_priv_tx(
+			&circuit,
+			&targets,
+			0,
+			override_an,
+			[[F::ZERO; 4]; NOTE_BATCH],
+		);
+		let pis = &proof.public_inputs;
+		for k in 0..4 {
+			assert_eq!(
+				pis[TX_DATA_OFFSET + k].to_canonical_u64(),
+				override_an[k].to_canonical_u64(),
+				"dummy proof AN PI[{}] mismatch: got {} expected {}",
+				TX_DATA_OFFSET + k,
+				pis[TX_DATA_OFFSET + k].to_canonical_u64(),
+				override_an[k].to_canonical_u64(),
+			);
+		}
+	}
 }

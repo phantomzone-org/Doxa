@@ -208,7 +208,7 @@ mod tests {
 	use super::aggregate_to_tree;
 	use crate::tree::{
 		NullifierInsertProof, NullifierInsertProofTargets, NullifierTree,
-		hasher::{HashOutput, NewFromU64},
+		hasher::{HashOutput, MerkleHashCircuit, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -222,12 +222,14 @@ mod tests {
 		depth: usize,
 	) -> (
 		plonky2::plonk::circuit_data::CircuitData<F, C, D>,
-		NullifierInsertProofTargets,
+		NullifierInsertProofTargets<4>,
 	) {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let targets = NullifierInsertProofTargets::new(&mut builder, depth, true, true);
-		targets.connect::<HashOutput, F, D>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let targets =
+			NullifierInsertProofTargets::new::<HashOutput, F, D>(&mut builder, depth, true, true);
+		targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
 		let circuit_data = builder.build::<C>();
 		(circuit_data, targets)
 	}
@@ -289,7 +291,7 @@ mod tests {
 
 		for (i, proof) in insert_proofs.iter().enumerate() {
 			let mut pw = PartialWitness::new();
-			targets.set::<HashOutput, F, DEPTH>(&mut pw, proof)?;
+			targets.set::<HashOutput, F, D, DEPTH>(&mut pw, proof)?;
 			let circuit_proof = leaf_circuit_data.prove(pw)?;
 			leaf_circuit_proofs.push(circuit_proof);
 			println!("  Proof {} generated", i);
@@ -375,11 +377,11 @@ mod tests {
 		let (leaf_circuit_data, targets) = build_insert_circuit(DEPTH);
 
 		let mut pw1 = PartialWitness::new();
-		targets.set::<HashOutput, F, DEPTH>(&mut pw1, &proof1)?;
+		targets.set::<HashOutput, F, D, DEPTH>(&mut pw1, &proof1)?;
 		let circuit_proof1 = leaf_circuit_data.prove(pw1)?;
 
 		let mut pw2 = PartialWitness::new();
-		targets.set::<HashOutput, F, DEPTH>(&mut pw2, &proof2)?;
+		targets.set::<HashOutput, F, D, DEPTH>(&mut pw2, &proof2)?;
 		let circuit_proof2 = leaf_circuit_data.prove(pw2)?;
 
 		// Aggregate

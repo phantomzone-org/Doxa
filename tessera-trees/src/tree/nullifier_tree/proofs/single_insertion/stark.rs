@@ -4,7 +4,7 @@ use plonky2::{
 		extension::Extendable,
 		types::{Field, PrimeField64},
 	},
-	hash::hash_types::{HashOutTarget, RichField},
+	hash::hash_types::RichField,
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
@@ -14,7 +14,7 @@ use plonky2::{
 
 use crate::tree::{
 	NullifierInsertProof,
-	hasher::{HASH_SIZE, MerkleHash, MerkleHashCircuit, ToHashOut},
+	hasher::{HASH_SIZE, MerkleHashCircuit, MerkleHashTarget},
 	utils::{inclusion, populate_inclusion_witness},
 };
 
@@ -44,19 +44,19 @@ use crate::tree::{
 /// Soundness is achieved by:
 /// - reusing identical Merkle paths and siblings across root transitions, and
 /// - explicitly re-authenticating an untouched path (the empty slot).
-pub struct NullifierInsertProofTargets {
+pub struct NullifierInsertProofTargets<const N: usize> {
 	// ============================================================
 	// Public inputs
 	// ============================================================
 	/// Merkle root of the tree *before* insertion.
 	///
 	/// All predecessor and emptiness checks are anchored to this root.
-	pub old_root: HashOutTarget,
+	pub old_root: MerkleHashTarget<N>,
 
 	/// Merkle root of the tree *after* insertion.
 	///
 	/// This is the final committed root produced by the circuit.
-	pub new_root: HashOutTarget,
+	pub new_root: MerkleHashTarget<N>,
 
 	// ============================================================
 	// Private witnesses — predecessor leaf
@@ -68,16 +68,16 @@ pub struct NullifierInsertProofTargets {
 
 	/// Merkle authentication siblings for the predecessor leaf,
 	/// anchored to `old_root`.
-	pub pred_siblings: Vec<HashOutTarget>,
+	pub pred_siblings: Vec<MerkleHashTarget<N>>,
 
 	/// Value stored in the predecessor leaf.
-	pub pred_value: HashOutTarget,
+	pub pred_value: MerkleHashTarget<N>,
 
-	/// Index of the predecessor’s successor *before* insertion.
+	/// Index of the predecessor's successor *before* insertion.
 	pub pred_old_next_index: Target,
 
-	/// Value of the predecessor’s successor *before* insertion.
-	pub pred_old_next_value: HashOutTarget,
+	/// Value of the predecessor's successor *before* insertion.
+	pub pred_old_next_value: MerkleHashTarget<N>,
 
 	// ============================================================
 	// Private witnesses — insertion slot / new node
@@ -88,15 +88,15 @@ pub struct NullifierInsertProofTargets {
 	/// Value being inserted.
 	///
 	/// This is public because it defines the nullifier / indexed key.
-	pub new_node_value: HashOutTarget,
+	pub new_node_value: MerkleHashTarget<N>,
 
 	/// Merkle siblings authenticating that the insertion slot
 	/// was empty in `old_root`.
-	pub new_node_siblings_before_pred_update: Vec<HashOutTarget>,
+	pub new_node_siblings_before_pred_update: Vec<MerkleHashTarget<N>>,
 
 	/// Merkle siblings authenticating that the insertion slot
 	/// remained empty in `mid_root` (after predecessor update).
-	pub new_node_siblings_after_pred_update: Vec<HashOutTarget>,
+	pub new_node_siblings_after_pred_update: Vec<MerkleHashTarget<N>>,
 
 	// ============================================================
 	// Range-check witnesses for non-membership
@@ -114,7 +114,7 @@ pub struct NullifierInsertProofTargets {
 	pub c_xb: Vec<BoolTarget>,
 }
 
-impl NullifierInsertProofTargets {
+impl<const N: usize> NullifierInsertProofTargets<N> {
 	/// Allocates all circuit targets required to verify a single insertion.
 	///
 	/// # Arguments
@@ -124,26 +124,27 @@ impl NullifierInsertProofTargets {
 	/// - `is_last`: whether `new_root` is a public input
 	///
 	/// This flexibility allows chaining multiple insertions in one circuit.
-	pub fn new<F, const D: usize>(
+	pub fn new<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
 		depth: usize,
 		is_first: bool,
 		is_last: bool,
 	) -> Self
 	where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		// Roots are public only at the boundaries of a chain
 		let old_root = if is_first {
-			builder.add_virtual_hash_public_input()
+			H::add_virtual_hash_public_input(builder)
 		} else {
-			builder.add_virtual_hash()
+			H::add_virtual_hash(builder)
 		};
 
 		let new_root = if is_last {
-			builder.add_virtual_hash_public_input()
+			H::add_virtual_hash_public_input(builder)
 		} else {
-			builder.add_virtual_hash()
+			H::add_virtual_hash(builder)
 		};
 
 		// Predecessor witnesses
@@ -151,11 +152,11 @@ impl NullifierInsertProofTargets {
 			.map(|_| builder.add_virtual_bool_target_safe())
 			.collect();
 
-		let pred_value: HashOutTarget = builder.add_virtual_hash();
+		let pred_value = H::add_virtual_hash(builder);
 		let pred_old_next_index: Target = builder.add_virtual_target();
-		let pred_old_next_value: HashOutTarget = builder.add_virtual_hash();
-		let pred_siblings: Vec<HashOutTarget> =
-			(0..depth).map(|_| builder.add_virtual_hash()).collect();
+		let pred_old_next_value = H::add_virtual_hash(builder);
+		let pred_siblings: Vec<MerkleHashTarget<N>> =
+			(0..depth).map(|_| H::add_virtual_hash(builder)).collect();
 
 		// Insertion witnesses
 		let new_node_path: Target = if is_first {
@@ -164,13 +165,13 @@ impl NullifierInsertProofTargets {
 			builder.add_virtual_target()
 		};
 
-		let new_node_value: HashOutTarget = builder.add_virtual_hash_public_input();
+		let new_node_value = H::add_virtual_hash_public_input(builder);
 
 		let new_node_siblings_before_pred_update =
-			(0..depth).map(|_| builder.add_virtual_hash()).collect();
+			(0..depth).map(|_| H::add_virtual_hash(builder)).collect();
 
 		let new_node_siblings_after_pred_update =
-			(0..depth).map(|_| builder.add_virtual_hash()).collect();
+			(0..depth).map(|_| H::add_virtual_hash(builder)).collect();
 
 		// Range-check witnesses
 		let u = (0..2 * HASH_SIZE)
@@ -209,37 +210,38 @@ impl NullifierInsertProofTargets {
 	///
 	/// This is used with commitment-based proofs where all inputs are hashed
 	/// and only the commitment is public.
-	pub fn new_all_private<F, const D: usize>(
+	pub fn new_all_private<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
 		depth: usize,
 	) -> Self
 	where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		// All targets are private
-		let old_root = builder.add_virtual_hash();
-		let new_root = builder.add_virtual_hash();
+		let old_root = H::add_virtual_hash(builder);
+		let new_root = H::add_virtual_hash(builder);
 
 		// Predecessor witnesses
 		let pred_path = (0..depth)
 			.map(|_| builder.add_virtual_bool_target_safe())
 			.collect();
 
-		let pred_value: HashOutTarget = builder.add_virtual_hash();
+		let pred_value = H::add_virtual_hash(builder);
 		let pred_old_next_index: Target = builder.add_virtual_target();
-		let pred_old_next_value: HashOutTarget = builder.add_virtual_hash();
-		let pred_siblings: Vec<HashOutTarget> =
-			(0..depth).map(|_| builder.add_virtual_hash()).collect();
+		let pred_old_next_value = H::add_virtual_hash(builder);
+		let pred_siblings: Vec<MerkleHashTarget<N>> =
+			(0..depth).map(|_| H::add_virtual_hash(builder)).collect();
 
 		// Insertion witnesses - all private
 		let new_node_path: Target = builder.add_virtual_target();
-		let new_node_value: HashOutTarget = builder.add_virtual_hash();
+		let new_node_value = H::add_virtual_hash(builder);
 
 		let new_node_siblings_before_pred_update =
-			(0..depth).map(|_| builder.add_virtual_hash()).collect();
+			(0..depth).map(|_| H::add_virtual_hash(builder)).collect();
 
 		let new_node_siblings_after_pred_update =
-			(0..depth).map(|_| builder.add_virtual_hash()).collect();
+			(0..depth).map(|_| H::add_virtual_hash(builder)).collect();
 
 		// Range-check witnesses
 		let u = (0..2 * HASH_SIZE)
@@ -286,15 +288,18 @@ impl NullifierInsertProofTargets {
 	/// The key invariant enforced is:
 	/// > each root transition reuses the same Merkle path and siblings,
 	/// > differing only in the leaf hash.
-	pub fn connect<H, F, const D: usize>(&self, builder: &mut CircuitBuilder<F, D>)
-	where
-		H: MerkleHashCircuit<F, D>,
+	pub fn connect<H, F, const D: usize>(
+		&self,
+		builder: &mut CircuitBuilder<F, D>,
+		ctx: &H::CircuitContext,
+	) where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		// Empty leaf hash.
 		//
 		// IMPORTANT: must match the native tree's empty leaf representation.
-		let head = builder.constant_hash(H::HEAD);
+		let head = H::constant_hash(builder, &H::HEAD);
 		let depth = self.depth();
 
 		// new_node_path (index) == new_node_path
@@ -304,45 +309,50 @@ impl NullifierInsertProofTargets {
 		// ------------------------------------------------------------
 		// 1. Authenticate predecessor in old_root
 		// ------------------------------------------------------------
-		let old_pred_hash: HashOutTarget = H::commit_node_circuit(
+		let old_pred_hash = H::commit_node_circuit(
 			builder,
+			ctx,
 			self.pred_value,
 			self.pred_old_next_index,
 			self.pred_old_next_value,
 		);
-		let computed_old_root_from_pred: HashOutTarget = Self::compute_root_circuit::<H, F, D>(
+		let computed_old_root_from_pred = Self::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			old_pred_hash,
 			&self.pred_siblings,
 			&self.pred_path,
 			self.new_node_path,
 		);
-		builder.connect_hashes(computed_old_root_from_pred, self.old_root);
+		H::connect_hashes(builder, &computed_old_root_from_pred, &self.old_root);
 
 		// ------------------------------------------------------------
 		// 2. Authenticate emptiness in old_root
 		// ------------------------------------------------------------
 		let computed_old_root_from_empty = Self::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			head,
 			&self.new_node_siblings_before_pred_update,
 			&node_path_bits,
 			self.new_node_path,
 		);
-		builder.connect_hashes(computed_old_root_from_empty, self.old_root);
+		H::connect_hashes(builder, &computed_old_root_from_empty, &self.old_root);
 
 		// ------------------------------------------------------------
 		// 3. Update predecessor → mid_root
 		// Tree size hasn't changed yet (just updating existing node).
 		// ------------------------------------------------------------
-		let new_pred_hash: HashOutTarget = H::commit_node_circuit(
+		let new_pred_hash = H::commit_node_circuit(
 			builder,
+			ctx,
 			self.pred_value,
 			self.new_node_path,
 			self.new_node_value,
 		);
-		let mid_root: HashOutTarget = Self::compute_root_circuit::<H, F, D>(
+		let mid_root = Self::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			new_pred_hash,
 			&self.pred_siblings,
 			&self.pred_path,
@@ -355,31 +365,34 @@ impl NullifierInsertProofTargets {
 		// ------------------------------------------------------------
 		let computed_mid_root = Self::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			head,
 			&self.new_node_siblings_after_pred_update,
 			&node_path_bits,
 			self.new_node_path,
 		);
-		builder.connect_hashes(computed_mid_root, mid_root);
+		H::connect_hashes(builder, &computed_mid_root, &mid_root);
 
 		// ------------------------------------------------------------
 		// 5. Insert new node → new_root
 		// Now tree size increases to num_leaves_new.
 		// ------------------------------------------------------------
-		let new_node_hash: HashOutTarget = H::commit_node_circuit(
+		let new_node_hash = H::commit_node_circuit(
 			builder,
+			ctx,
 			self.new_node_value,
 			self.pred_old_next_index,
 			self.pred_old_next_value,
 		);
-		let computed_new_root: HashOutTarget = Self::compute_root_circuit::<H, F, D>(
+		let computed_new_root = Self::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			new_node_hash,
 			&self.new_node_siblings_after_pred_update,
 			&node_path_bits,
 			num_leaves_new,
 		);
-		builder.connect_hashes(computed_new_root, self.new_root);
+		H::connect_hashes(builder, &computed_new_root, &self.new_root);
 
 		// ------------------------------------------------------------
 		// 6. Range / non-membership constraint
@@ -404,13 +417,14 @@ impl NullifierInsertProofTargets {
 	/// At the final level, uses `hash_root_circuit` to commit `num_leaves`.
 	fn compute_root_circuit<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
-		leaf_hash: HashOutTarget,
-		siblings: &[HashOutTarget],
+		ctx: &H::CircuitContext,
+		leaf_hash: MerkleHashTarget<N>,
+		siblings: &[MerkleHashTarget<N>],
 		path: &[BoolTarget],
 		num_leaves: Target,
-	) -> HashOutTarget
+	) -> MerkleHashTarget<N>
 	where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let depth = siblings.len();
@@ -420,19 +434,11 @@ impl NullifierInsertProofTargets {
 			// At the final level, use hash_root_circuit to commit num_leaves
 			if level == depth - 1 {
 				// Select left and right based on direction
-				let left = HashOutTarget {
-					elements: core::array::from_fn(|i| {
-						builder.select(dir, sibling.elements[i], current.elements[i])
-					}),
-				};
-				let right = HashOutTarget {
-					elements: core::array::from_fn(|i| {
-						builder.select(dir, current.elements[i], sibling.elements[i])
-					}),
-				};
-				current = H::hash_root_circuit(builder, num_leaves, left, right);
+				let left = MerkleHashTarget::<N>::select(builder, dir, sibling, &current);
+				let right = MerkleHashTarget::<N>::select(builder, dir, &current, sibling);
+				current = H::hash_root_circuit(builder, ctx, num_leaves, left, right);
 			} else {
-				current = H::hash_2_to_1_circuit(builder, current, *sibling, dir);
+				current = H::hash_2_to_1_circuit(builder, ctx, current, *sibling, dir);
 			}
 		}
 		current
@@ -443,15 +449,14 @@ impl NullifierInsertProofTargets {
 	/// This method assumes:
 	/// - identical bit ordering between native and circuit paths
 	/// - identical empty-leaf hash
-	pub fn set<H, F, const DEPTH: usize>(
+	pub fn set<H, F, const D: usize, const DEPTH: usize>(
 		&self,
 		pw: &mut PartialWitness<F>,
 		proof: &NullifierInsertProof<H>,
 	) -> Result<()>
 	where
-		H: MerkleHash,
-		H::Digest: ToHashOut<F>,
-		F: Field + PrimeField64,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
+		F: Field + PrimeField64 + RichField + Extendable<D>,
 	{
 		assert_eq!(
 			proof.depth(),
@@ -460,34 +465,33 @@ impl NullifierInsertProofTargets {
 		);
 
 		// Public inputs
-		pw.set_hash_target(self.old_root, proof.old_root.to_hash_out())?;
-		pw.set_hash_target(self.new_root, proof.new_root.to_hash_out())?;
+		H::set_hash_witness(pw, &self.old_root, &proof.old_root)?;
+		H::set_hash_witness(pw, &self.new_root, &proof.new_root)?;
 
 		// Predecessor node data
-		pw.set_hash_target(self.pred_value, proof.pred_value.to_hash_out())?;
+		H::set_hash_witness(pw, &self.pred_value, &proof.pred_value)?;
 		pw.set_target(
 			self.pred_old_next_index,
 			F::from_canonical_u64(proof.pred_old_next_index as u64),
 		)?;
-		pw.set_hash_target(
-			self.pred_old_next_value,
-			proof.pred_old_next_value.to_hash_out(),
-		)?;
+		H::set_hash_witness(pw, &self.pred_old_next_value, &proof.pred_old_next_value)?;
 		for (i, sibling) in proof.pred_old_siblings.iter().enumerate() {
-			pw.set_hash_target(self.pred_siblings[i], sibling.to_hash_out())?;
+			H::set_hash_witness(pw, &self.pred_siblings[i], sibling)?;
 			pw.set_bool_target(self.pred_path[i], ((proof.pred_path >> i) & 1) == 1)?;
 		}
 
 		// New node data
-		pw.set_hash_target(self.new_node_value, proof.new_node_value.to_hash_out())?;
+		H::set_hash_witness(pw, &self.new_node_value, &proof.new_node_value)?;
 		for i in 0..DEPTH {
-			pw.set_hash_target(
-				self.new_node_siblings_before_pred_update[i],
-				proof.new_node_siblings_before_pred_update[i].to_hash_out(),
+			H::set_hash_witness(
+				pw,
+				&self.new_node_siblings_before_pred_update[i],
+				&proof.new_node_siblings_before_pred_update[i],
 			)?;
-			pw.set_hash_target(
-				self.new_node_siblings_after_pred_update[i],
-				proof.new_node_siblings_after_pred_update[i].to_hash_out(),
+			H::set_hash_witness(
+				pw,
+				&self.new_node_siblings_after_pred_update[i],
+				&proof.new_node_siblings_after_pred_update[i],
 			)?;
 		}
 
@@ -499,9 +503,9 @@ impl NullifierInsertProofTargets {
 		// Range check witnesses for non-membership
 		populate_inclusion_witness(
 			pw,
-			&proof.pred_value.to_hash_out().elements,
-			&proof.new_node_value.to_hash_out().elements,
-			&proof.pred_old_next_value.to_hash_out().elements,
+			H::digest_elements(&proof.pred_value),
+			H::digest_elements(&proof.new_node_value),
+			H::digest_elements(&proof.pred_old_next_value),
 			&self.u,
 			&self.v,
 			&self.c_ax,
@@ -528,7 +532,7 @@ mod test {
 
 	use crate::tree::{
 		NullifierInsertProofTargets, NullifierTree,
-		hasher::{HashOutput, NewFromU64},
+		hasher::{HashOutput, MerkleHashCircuit, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -561,20 +565,23 @@ mod test {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder: CircuitBuilder<F, D> = CircuitBuilder::<F, D>::new(config);
 
+		let ctx = HashOutput::register_luts(&mut builder);
+
 		print!("Alloc Targets: ");
 		let now = Instant::now();
-		let targets = NullifierInsertProofTargets::new(&mut builder, DEPTH, true, true);
+		let targets =
+			NullifierInsertProofTargets::new::<HashOutput, F, D>(&mut builder, DEPTH, true, true);
 		println!("{:?}", now.elapsed());
 
 		print!("Connect: ");
 		let now = Instant::now();
-		targets.connect::<HashOutput, F, D>(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
 		println!("{:?}", now.elapsed());
 
 		print!("Set Witnesses: ");
 		let now = Instant::now();
 		let mut pw = PartialWitness::new();
-		targets.set::<HashOutput, F, DEPTH>(&mut pw, &proof)?;
+		targets.set::<HashOutput, F, D, DEPTH>(&mut pw, &proof)?;
 		println!("{:?}", now.elapsed());
 
 		print!("Build: ");

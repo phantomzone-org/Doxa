@@ -17,6 +17,7 @@
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::Result;
+use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use tessera_client::TesseraGateSerializer;
 use tessera_trees::proof_aggregation::{GenericAggregator, GenericAggregatorConfig, ReducerKind};
 
@@ -85,19 +86,30 @@ fn main() -> Result<()> {
 	debug_log("Store GenericAggregator");
 	agg.store_artifacts(&tmp_dir, &TesseraGateSerializer)?;
 
-	// 3. Full aggregation of 128 dummy leaves and serialize the root proof. This proof is reused by
-	//    super_aggregator_artifacts (avoids re-proving).
-	let n_leaves = ARITY.pow(DEPTH as u32);
-	println!("\nAggregating {n_leaves} dummy leaves...");
-	let now = Instant::now();
-	let leaf_proofs = vec![dummy_inner_proof; n_leaves];
-	let result = agg.aggregate(leaf_proofs)?;
-	println!("  aggregation took: {:?}", now.elapsed());
+	// 3. Generate a dummy root proof by proving one node per level with duplicated sibling proofs.
+	//    This requires only DEPTH proofs instead of arity^DEPTH - 1, giving an ~18× speedup for
+	//    ARITY=2, DEPTH=7.
+	println!("\nGenerating dummy root proof ({DEPTH} levels, 1 proof per level)...");
+	let total_now = Instant::now();
+	let mut current_proof = dummy_inner_proof;
+	for level_idx in 0..DEPTH {
+		let level = agg.get_circuit(level_idx)?;
+		let inner_verifier = agg.inner_verifier_for_level(level_idx);
+		let mut pw = PartialWitness::new();
+		pw.set_verifier_data_target(&level.verifier_target, inner_verifier)?;
+		for i in 0..ARITY {
+			pw.set_proof_with_pis_target(&level.proof_targets[i], &current_proof)?;
+		}
+		let now = Instant::now();
+		current_proof = level.circuit_data.prove(pw)?;
+		println!("  level {level_idx}: {:?}", now.elapsed());
+	}
+	println!("  total: {:?}", total_now.elapsed());
 
-	agg.verify_root(&result.proof)?;
+	agg.verify_root(&current_proof)?;
 	println!("  root proof verified ok");
 
-	let root_proof_bytes = result.proof.to_bytes();
+	let root_proof_bytes = current_proof.to_bytes();
 	fs::write(tmp_dir.join("dummy_root_proof.bin"), &root_proof_bytes)?;
 	println!(
 		"  wrote: dummy_root_proof.bin ({} bytes)",

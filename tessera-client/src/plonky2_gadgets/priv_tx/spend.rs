@@ -7,7 +7,10 @@ use plonky2::{
 };
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
-use tessera_trees::{F, tree::hasher::HashOutput};
+use tessera_trees::{
+	F,
+	tree::hasher::{HashOutput, MerkleHashCircuit},
+};
 
 use super::{double_hash_native, targets::TxCircuitTargets};
 use crate::{
@@ -71,7 +74,7 @@ fn circuit_merkle_root<const DEPTH: usize>(
 /// computed `accout`.
 ///
 /// The ACT/NCT circuit-compatible roots are computed from the supplied proofs.
-pub(crate) fn set_spend_tx_witness(
+pub fn set_spend_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
 	accin: &StandardAccount,
@@ -380,7 +383,7 @@ pub(crate) fn set_spend_tx_witness(
 ///
 /// All notes are inactive and all signatures are fake constants. The circuit will not
 /// enforce any of these because `not_fake_tx = false`.
-pub(crate) fn set_fake_tx_witness(
+pub fn set_fake_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
 	nct_root: HashOutput,
@@ -740,7 +743,8 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_zk_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let inner_data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 
@@ -828,7 +832,8 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 

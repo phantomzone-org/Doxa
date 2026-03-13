@@ -4,7 +4,7 @@ use plonky2::{
 		extension::Extendable,
 		types::{Field, PrimeField64},
 	},
-	hash::hash_types::{HashOutTarget, RichField},
+	hash::hash_types::RichField,
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
@@ -14,19 +14,19 @@ use plonky2::{
 
 use crate::tree::{
 	BatchCommitmentProof,
-	hasher::{MerkleHash, MerkleHashCircuit, ToHashOut},
+	hasher::{MerkleHashCircuit, MerkleHashTarget},
 };
 
-pub struct BatchCommitmentProofTargets {
-	pub leaves: Vec<HashOutTarget>,
-	pub root_old: HashOutTarget,
-	pub root_new: HashOutTarget,
+pub struct BatchCommitmentProofTargets<const N: usize> {
+	pub leaves: Vec<MerkleHashTarget<N>>,
+	pub root_old: MerkleHashTarget<N>,
+	pub root_new: MerkleHashTarget<N>,
 	pub start_index: Target,
-	pub upper_siblings_old: Vec<HashOutTarget>,
-	pub upper_siblings_new: Vec<HashOutTarget>,
+	pub upper_siblings_old: Vec<MerkleHashTarget<N>>,
+	pub upper_siblings_new: Vec<MerkleHashTarget<N>>,
 }
 
-impl BatchCommitmentProofTargets {
+impl<const N: usize> BatchCommitmentProofTargets<N> {
 	/// Allocates circuit targets for a batch commitment proof.
 	///
 	/// # Arguments
@@ -37,13 +37,14 @@ impl BatchCommitmentProofTargets {
 	/// # Public Inputs
 	///
 	/// `root_old`, `root_new`, and all leaves are exposed directly as public inputs.
-	/// Total: `(batch_size + 2) × 4` Goldilocks field elements.
-	pub fn new<F, const D: usize>(
+	/// Total: `(batch_size + 2) × N` Goldilocks field elements.
+	pub fn new<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
 		depth: usize,
 		batch_size: usize,
 	) -> Self
 	where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		assert!(batch_size.is_power_of_two());
@@ -51,18 +52,27 @@ impl BatchCommitmentProofTargets {
 		let log_batch: usize = batch_size.trailing_zeros() as usize;
 
 		Self {
-			root_old: builder.add_virtual_hash_public_input(),
-			root_new: builder.add_virtual_hash_public_input(),
-			leaves: builder.add_virtual_hashes_public_input(batch_size),
+			root_old: H::add_virtual_hash_public_input(builder),
+			root_new: H::add_virtual_hash_public_input(builder),
+			leaves: (0..batch_size)
+				.map(|_| H::add_virtual_hash_public_input(builder))
+				.collect(),
 			start_index: builder.add_virtual_target(),
-			upper_siblings_old: builder.add_virtual_hashes(depth - log_batch),
-			upper_siblings_new: builder.add_virtual_hashes(depth - log_batch),
+			upper_siblings_old: (0..depth - log_batch)
+				.map(|_| H::add_virtual_hash(builder))
+				.collect(),
+			upper_siblings_new: (0..depth - log_batch)
+				.map(|_| H::add_virtual_hash(builder))
+				.collect(),
 		}
 	}
 
-	pub fn connect<H, F, const D: usize>(&self, builder: &mut CircuitBuilder<F, D>)
-	where
-		H: MerkleHashCircuit<F, D>,
+	pub fn connect<H, F, const D: usize>(
+		&self,
+		builder: &mut CircuitBuilder<F, D>,
+		ctx: &H::CircuitContext,
+	) where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let f: BoolTarget = builder._false();
@@ -84,10 +94,11 @@ impl BatchCommitmentProofTargets {
 		}
 
 		// 1) Verifies against old root
-		let mut empty_batch_root = builder.constant_hash(H::HEAD);
+		let mut empty_batch_root = H::constant_hash(builder, &H::HEAD);
 		for _ in 0..batch_depth {
 			empty_batch_root =
-				H::hash_2_to_1_circuit(builder, empty_batch_root, empty_batch_root, f) // TODO add specific circuit to avoid bool target
+				H::hash_2_to_1_circuit(builder, ctx, empty_batch_root, empty_batch_root, f)
+			// TODO add specific circuit to avoid bool target
 		}
 
 		empty_batch_root = Self::compute_root_circuit::<H, F, D>(
@@ -96,19 +107,21 @@ impl BatchCommitmentProofTargets {
 			&self.upper_siblings_old,
 			&path[batch_depth..],
 			self.start_index,
+			ctx,
 		);
 
-		builder.connect_hashes(empty_batch_root, self.root_old);
+		H::connect_hashes(builder, &empty_batch_root, &self.root_old);
 
 		// 2) Verify against new root
-		let mut leaves: Vec<HashOutTarget> = self.leaves.to_vec();
+		let mut leaves: Vec<MerkleHashTarget<N>> = self.leaves.to_vec();
 
 		while leaves.len() > 1 {
 			let parent_len = leaves.len() >> 1;
 			for i in 0..parent_len {
-				let left: HashOutTarget = leaves[2 * i];
-				let right: HashOutTarget = leaves[2 * i + 1];
-				leaves[i] = H::hash_2_to_1_circuit(builder, left, right, f); // TODO add specific circuit to avoid bool target
+				let left: MerkleHashTarget<N> = leaves[2 * i];
+				let right: MerkleHashTarget<N> = leaves[2 * i + 1];
+				leaves[i] = H::hash_2_to_1_circuit(builder, ctx, left, right, f);
+				// TODO add specific circuit to avoid bool target
 			}
 			leaves.truncate(parent_len);
 		}
@@ -119,20 +132,22 @@ impl BatchCommitmentProofTargets {
 			&self.upper_siblings_new,
 			&path[batch_depth..],
 			new_index,
+			ctx,
 		);
 
-		builder.connect_hashes(new_batch_root, self.root_new);
+		H::connect_hashes(builder, &new_batch_root, &self.root_new);
 	}
 
 	fn compute_root_circuit<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
-		leaf_hash: HashOutTarget,
-		siblings: &[HashOutTarget],
+		leaf_hash: MerkleHashTarget<N>,
+		siblings: &[MerkleHashTarget<N>],
 		path: &[BoolTarget],
 		num_leaves: Target,
-	) -> HashOutTarget
+		ctx: &H::CircuitContext,
+	) -> MerkleHashTarget<N>
 	where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let depth = siblings.len();
@@ -144,33 +159,24 @@ impl BatchCommitmentProofTargets {
 			// At the final level, use hash_root_circuit to commit num_leaves
 			if level == depth - 1 {
 				// Select left and right based on direction
-				let left = HashOutTarget {
-					elements: core::array::from_fn(|i| {
-						builder.select(dir, sibling.elements[i], current.elements[i])
-					}),
-				};
-				let right = HashOutTarget {
-					elements: core::array::from_fn(|i| {
-						builder.select(dir, current.elements[i], sibling.elements[i])
-					}),
-				};
-				current = H::hash_root_circuit(builder, num_leaves, left, right);
+				let left = H::select_hash(builder, dir, sibling, &current);
+				let right = H::select_hash(builder, dir, &current, sibling);
+				current = H::hash_root_circuit(builder, ctx, num_leaves, left, right);
 			} else {
-				current = H::hash_2_to_1_circuit(builder, current, *sibling, dir);
+				current = H::hash_2_to_1_circuit(builder, ctx, current, *sibling, dir);
 			}
 		}
 		current
 	}
 
-	pub fn set<H, F, const DEPTH: usize>(
+	pub fn set<H, F, const D: usize, const DEPTH: usize>(
 		&self,
 		pw: &mut PartialWitness<F>,
 		proof: &BatchCommitmentProof<H>,
 	) -> Result<()>
 	where
-		H: MerkleHash,
-		H::Digest: ToHashOut<F>,
-		F: Field + PrimeField64,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
+		F: Field + PrimeField64 + RichField + Extendable<D>,
 	{
 		assert_eq!(
 			self.upper_siblings_new.len(),
@@ -182,26 +188,28 @@ impl BatchCommitmentProofTargets {
 		);
 		assert_eq!(self.leaves.len(), proof.leaves.len());
 
-		pw.set_hash_target(self.root_new, proof.root_new.to_hash_out())?;
-		pw.set_hash_target(self.root_old, proof.root_old.to_hash_out())?;
+		H::set_hash_witness(pw, &self.root_new, &proof.root_new)?;
+		H::set_hash_witness(pw, &self.root_old, &proof.root_old)?;
 		pw.set_target(
 			self.start_index,
 			F::from_canonical_u64(proof.start_index as u64),
 		)?;
 
 		for i in 0..self.upper_siblings_new.len() {
-			pw.set_hash_target(
-				self.upper_siblings_new[i],
-				proof.upper_siblings_new[i].to_hash_out(),
+			H::set_hash_witness(
+				pw,
+				&self.upper_siblings_new[i],
+				&proof.upper_siblings_new[i],
 			)?;
-			pw.set_hash_target(
-				self.upper_siblings_old[i],
-				proof.upper_siblings_old[i].to_hash_out(),
+			H::set_hash_witness(
+				pw,
+				&self.upper_siblings_old[i],
+				&proof.upper_siblings_old[i],
 			)?;
 		}
 
 		for i in 0..self.leaves.len() {
-			pw.set_hash_target(self.leaves[i], proof.leaves[i].to_hash_out())?;
+			H::set_hash_witness(pw, &self.leaves[i], &proof.leaves[i])?;
 		}
 
 		Ok(())
@@ -225,7 +233,7 @@ mod test {
 
 	use crate::tree::{
 		BatchCommitmentProofTargets, CommitmentTree,
-		hasher::{HashOutput, NewRandom},
+		hasher::{HashOutput, MerkleHashCircuit, NewRandom},
 	};
 
 	const D: usize = 2;
@@ -262,19 +270,20 @@ mod test {
 
 		print!("Alloc Targets: ");
 		let now: Instant = Instant::now();
-		let targets: BatchCommitmentProofTargets =
-			BatchCommitmentProofTargets::new(&mut builder, DEPTH, BATCH_SIZE);
+		let targets: BatchCommitmentProofTargets<4> =
+			BatchCommitmentProofTargets::new::<HashOutput, F, D>(&mut builder, DEPTH, BATCH_SIZE);
 		println!("{:?}", now.elapsed());
 
 		print!("Connect: ");
 		let now: Instant = Instant::now();
-		targets.connect::<HashOutput, F, D>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
 		println!("{:?}", now.elapsed());
 
 		print!("Set Witnesses: ");
 		let now: Instant = Instant::now();
 		let mut pw: PartialWitness<GoldilocksField> = PartialWitness::new();
-		targets.set::<HashOutput, F, DEPTH>(&mut pw, &proof)?;
+		targets.set::<HashOutput, F, D, DEPTH>(&mut pw, &proof)?;
 		println!("{:?}", now.elapsed());
 
 		print!("Build: ");

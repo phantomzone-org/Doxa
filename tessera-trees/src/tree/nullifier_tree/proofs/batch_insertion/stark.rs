@@ -4,7 +4,7 @@ use plonky2::{
 		extension::Extendable,
 		types::{Field, PrimeField64},
 	},
-	hash::hash_types::{HashOutTarget, RichField},
+	hash::hash_types::RichField,
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
@@ -14,42 +14,43 @@ use plonky2::{
 
 use super::BatchInsertProof;
 use crate::tree::{
-	hasher::{HASH_SIZE, MerkleHash, MerkleHashCircuit, ToHashOut},
+	hasher::{HASH_SIZE, MerkleHashCircuit, MerkleHashTarget},
 	utils::{inclusion, populate_inclusion_witness},
 };
 
 /// Top-level circuit targets for the batch nullifier insertion proof.
-pub struct BatchNullifierInsertProofTargets {
+pub struct BatchNullifierInsertProofTargets<const N: usize> {
 	// Public inputs
-	pub old_root: HashOutTarget,
-	pub new_root: HashOutTarget,
+	pub old_root: MerkleHashTarget<N>,
+	pub new_root: MerkleHashTarget<N>,
 	pub start_index: Target,
 
 	// Per-leaf links
-	pub links: Vec<BatchInsertionLinkTargets>,
+	pub links: Vec<BatchInsertionLinkTargets<N>>,
 
 	// Upper siblings for batch subtree → new_root walk (depth - log_batch_size)
-	pub upper_siblings_after_pred_update: Vec<HashOutTarget>,
+	pub upper_siblings_after_pred_update: Vec<MerkleHashTarget<N>>,
 }
 
-impl BatchNullifierInsertProofTargets {
-	pub fn new<F, const D: usize>(
+impl<const N: usize> BatchNullifierInsertProofTargets<N> {
+	pub fn new<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
 		depth: usize,
 		batch_size: usize,
 	) -> Self
 	where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		assert!(batch_size.is_power_of_two());
 		let log_batch = batch_size.trailing_zeros() as usize;
 		let upper_depth = depth - log_batch;
 
-		let old_root = builder.add_virtual_hash_public_input();
-		let new_root = builder.add_virtual_hash_public_input();
+		let old_root = H::add_virtual_hash_public_input(builder);
+		let new_root = H::add_virtual_hash_public_input(builder);
 
-		let links: Vec<BatchInsertionLinkTargets> = (0..batch_size)
-			.map(|_| BatchInsertionLinkTargets::new(builder, depth))
+		let links: Vec<BatchInsertionLinkTargets<N>> = (0..batch_size)
+			.map(|_| BatchInsertionLinkTargets::new::<H, F, D>(builder, depth))
 			.collect();
 
 		// Register leaf values as public inputs (after old_root, new_root)
@@ -64,7 +65,9 @@ impl BatchNullifierInsertProofTargets {
 
 			links,
 
-			upper_siblings_after_pred_update: builder.add_virtual_hashes(upper_depth),
+			upper_siblings_after_pred_update: (0..upper_depth)
+				.map(|_| H::add_virtual_hash(builder))
+				.collect(),
 		}
 	}
 
@@ -73,14 +76,17 @@ impl BatchNullifierInsertProofTargets {
 	}
 
 	/// Connects all phases (A, B, C) of the batch insertion proof.
-	pub fn connect<H, F, const D: usize>(&self, builder: &mut CircuitBuilder<F, D>)
-	where
-		H: MerkleHashCircuit<F, D>,
+	pub fn connect<H, F, const D: usize>(
+		&self,
+		builder: &mut CircuitBuilder<F, D>,
+		ctx: &H::CircuitContext,
+	) where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
-		self.connect_phase_a::<H, F, D>(builder);
-		self.connect_phase_b::<H, F, D>(builder);
-		self.connect_phase_c::<H, F, D>(builder);
+		self.connect_phase_a::<H, F, D>(builder, ctx);
+		self.connect_phase_b::<H, F, D>(builder, ctx);
+		self.connect_phase_c::<H, F, D>(builder, ctx);
 	}
 
 	/// Connects Phase A constraints: old_root → mid_root (predecessor updates).
@@ -89,33 +95,37 @@ impl BatchNullifierInsertProofTargets {
 	pub fn connect_phase_a<H, F, const D: usize>(
 		&self,
 		builder: &mut CircuitBuilder<F, D>,
-	) -> HashOutTarget
+		ctx: &H::CircuitContext,
+	) -> MerkleHashTarget<N>
 	where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		// Derive mid_root from link[0]'s pred_new authentication.
 		// This also constrains link[0]'s pred_new path, so we skip it below.
-		let mid_root = self.links[0].compute_mid_root::<H, F, D>(builder, self.start_index);
+		let mid_root = self.links[0].compute_mid_root::<H, F, D>(builder, ctx, self.start_index);
 
 		// All links: authenticate pred_old against old_root
 		for link in &self.links {
-			link.connect_pred_old_auth::<H, F, D>(builder, self.old_root, self.start_index);
+			link.connect_pred_old_auth::<H, F, D>(builder, ctx, self.old_root, self.start_index);
 		}
 
 		// Links[1..]: authenticate pred_new against mid_root
 		// (link[0] is skipped — its pred_new auth is tautological with compute_mid_root)
 		for link in &self.links[1..] {
-			link.connect_pred_new_auth::<H, F, D>(builder, mid_root, self.start_index);
+			link.connect_pred_new_auth::<H, F, D>(builder, ctx, mid_root, self.start_index);
 		}
 
 		mid_root
 	}
 
 	/// Connects Phase B: linked-list constraints.
-	pub fn connect_phase_b<H, F, const D: usize>(&self, builder: &mut CircuitBuilder<F, D>)
-	where
-		H: MerkleHashCircuit<F, D>,
+	pub fn connect_phase_b<H, F, const D: usize>(
+		&self,
+		builder: &mut CircuitBuilder<F, D>,
+		ctx: &H::CircuitContext,
+	) where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let batch_size = self.batch_size();
@@ -123,7 +133,7 @@ impl BatchNullifierInsertProofTargets {
 		self.links[0].connect_first_link(builder);
 
 		for link in &self.links {
-			link.connect_link_constraints::<H, F, D>(builder);
+			link.connect_link_constraints::<H, F, D>(builder, ctx);
 		}
 
 		for i in 0..batch_size - 1 {
@@ -134,9 +144,12 @@ impl BatchNullifierInsertProofTargets {
 	}
 
 	/// Connects Phase C: batch subtree → new_root.
-	pub fn connect_phase_c<H, F, const D: usize>(&self, builder: &mut CircuitBuilder<F, D>)
-	where
-		H: MerkleHashCircuit<F, D>,
+	pub fn connect_phase_c<H, F, const D: usize>(
+		&self,
+		builder: &mut CircuitBuilder<F, D>,
+		ctx: &H::CircuitContext,
+	) where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let batch_size = self.batch_size();
@@ -165,17 +178,17 @@ impl BatchNullifierInsertProofTargets {
 		// ============================================================
 
 		// Compute leaf hashes
-		let mut level: Vec<HashOutTarget> = self
+		let mut level: Vec<MerkleHashTarget<N>> = self
 			.links
 			.iter()
-			.map(|link| link.leaf_hash_circuit::<H, F, D>(builder))
+			.map(|link| link.leaf_hash_circuit::<H, F, D>(builder, ctx))
 			.collect();
 
 		// Build subtree bottom-up
 		for _ in 0..log_batch {
 			let parent_len = level.len() >> 1;
 			for j in 0..parent_len {
-				level[j] = H::hash_2_to_1_circuit(builder, level[2 * j], level[2 * j + 1], f);
+				level[j] = H::hash_2_to_1_circuit(builder, ctx, level[2 * j], level[2 * j + 1], f);
 			}
 			level.truncate(parent_len);
 		}
@@ -185,28 +198,31 @@ impl BatchNullifierInsertProofTargets {
 		// Walk subtree root through upper siblings to new_root
 		let computed_new_root = Self::compute_upper_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			batch_subtree_root,
 			&self.upper_siblings_after_pred_update,
 			&upper_path[..upper_depth],
 			new_num_leaves,
 		);
-		builder.connect_hashes(computed_new_root, self.new_root);
+		H::connect_hashes(builder, &computed_new_root, &self.new_root);
 	}
 
 	/// Computes a subtree root up through upper siblings to the tree root.
 	fn compute_upper_root_circuit<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
-		subtree_root: HashOutTarget,
-		upper_siblings: &[HashOutTarget],
+		ctx: &H::CircuitContext,
+		subtree_root: MerkleHashTarget<N>,
+		upper_siblings: &[MerkleHashTarget<N>],
 		upper_path: &[BoolTarget],
 		num_leaves: Target,
-	) -> HashOutTarget
+	) -> MerkleHashTarget<N>
 	where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		BatchInsertionLinkTargets::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			subtree_root,
 			upper_siblings,
 			upper_path,
@@ -215,22 +231,21 @@ impl BatchNullifierInsertProofTargets {
 	}
 
 	/// Populates all witnesses from a native `BatchInsertProof`.
-	pub fn set<H, F, const DEPTH: usize>(
+	pub fn set<H, F, const D: usize>(
 		&self,
 		pw: &mut PartialWitness<F>,
 		proof: &BatchInsertProof<H>,
 	) -> Result<()>
 	where
-		H: MerkleHash,
-		H::Digest: ToHashOut<F>,
-		F: Field + PrimeField64,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
+		F: Field + PrimeField64 + RichField + Extendable<D>,
 	{
 		let batch_size = self.links.len();
 		assert_eq!(proof.links.len(), batch_size);
 
 		// Public inputs
-		pw.set_hash_target(self.old_root, proof.old_root.to_hash_out())?;
-		pw.set_hash_target(self.new_root, proof.new_root.to_hash_out())?;
+		H::set_hash_witness(pw, &self.old_root, &proof.old_root)?;
+		H::set_hash_witness(pw, &self.new_root, &proof.new_root)?;
 		pw.set_target(
 			self.start_index,
 			F::from_canonical_u64(proof.start_index as u64),
@@ -238,15 +253,16 @@ impl BatchNullifierInsertProofTargets {
 
 		// Upper siblings
 		for (i, target) in self.upper_siblings_after_pred_update.iter().enumerate() {
-			pw.set_hash_target(
-				*target,
-				proof.new_node_upper_siblings_after_pred_update[i].to_hash_out(),
+			H::set_hash_witness(
+				pw,
+				target,
+				&proof.new_node_upper_siblings_after_pred_update[i],
 			)?;
 		}
 
 		// Per-link witnesses
 		for (link_targets, link) in self.links.iter().zip(proof.links.iter()) {
-			link_targets.set(pw, link)?;
+			link_targets.set::<H, F, D>(pw, link)?;
 		}
 
 		Ok(())
@@ -254,24 +270,24 @@ impl BatchNullifierInsertProofTargets {
 }
 
 /// Circuit targets for a single link (row) of the batch insertion trace.
-pub struct BatchInsertionLinkTargets {
+pub struct BatchInsertionLinkTargets<const N: usize> {
 	pub mask: BoolTarget,
 
 	// New leaf
 	pub leaf_index: Target,
-	pub leaf_value: HashOutTarget,
+	pub leaf_value: MerkleHashTarget<N>,
 	pub leaf_next_index: Target,
-	pub leaf_next_value: HashOutTarget,
+	pub leaf_next_value: MerkleHashTarget<N>,
 
 	// Predecessor
 	pub pred_path: Vec<BoolTarget>,
-	pub pred_value: HashOutTarget,
+	pub pred_value: MerkleHashTarget<N>,
 	pub pred_old_next_index: Target,
-	pub pred_old_next_value: HashOutTarget,
+	pub pred_old_next_value: MerkleHashTarget<N>,
 	pub pred_new_next_index: Target,
-	pub pred_new_next_value: HashOutTarget,
-	pub pred_old_siblings: Vec<HashOutTarget>,
-	pub pred_new_siblings: Vec<HashOutTarget>,
+	pub pred_new_next_value: MerkleHashTarget<N>,
+	pub pred_old_siblings: Vec<MerkleHashTarget<N>>,
+	pub pred_new_siblings: Vec<MerkleHashTarget<N>>,
 
 	// Range-check witnesses for pred_value < leaf_value < pred_old_next_value
 	pub u: Vec<Target>,
@@ -280,29 +296,30 @@ pub struct BatchInsertionLinkTargets {
 	pub c_xb: Vec<BoolTarget>,
 }
 
-impl BatchInsertionLinkTargets {
-	pub fn new<F, const D: usize>(builder: &mut CircuitBuilder<F, D>, depth: usize) -> Self
+impl<const N: usize> BatchInsertionLinkTargets<N> {
+	pub fn new<H, F, const D: usize>(builder: &mut CircuitBuilder<F, D>, depth: usize) -> Self
 	where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		Self {
 			mask: builder.add_virtual_bool_target_safe(),
 
 			leaf_index: builder.add_virtual_target(),
-			leaf_value: builder.add_virtual_hash(),
+			leaf_value: H::add_virtual_hash(builder),
 			leaf_next_index: builder.add_virtual_target(),
-			leaf_next_value: builder.add_virtual_hash(),
+			leaf_next_value: H::add_virtual_hash(builder),
 
 			pred_path: (0..depth)
 				.map(|_| builder.add_virtual_bool_target_safe())
 				.collect(),
-			pred_value: builder.add_virtual_hash(),
+			pred_value: H::add_virtual_hash(builder),
 			pred_old_next_index: builder.add_virtual_target(),
-			pred_old_next_value: builder.add_virtual_hash(),
+			pred_old_next_value: H::add_virtual_hash(builder),
 			pred_new_next_index: builder.add_virtual_target(),
-			pred_new_next_value: builder.add_virtual_hash(),
-			pred_old_siblings: (0..depth).map(|_| builder.add_virtual_hash()).collect(),
-			pred_new_siblings: (0..depth).map(|_| builder.add_virtual_hash()).collect(),
+			pred_new_next_value: H::add_virtual_hash(builder),
+			pred_old_siblings: (0..depth).map(|_| H::add_virtual_hash(builder)).collect(),
+			pred_new_siblings: (0..depth).map(|_| H::add_virtual_hash(builder)).collect(),
 
 			u: (0..2 * HASH_SIZE)
 				.map(|_| builder.add_virtual_target())
@@ -331,20 +348,23 @@ impl BatchInsertionLinkTargets {
 	pub fn compute_mid_root<H, F, const D: usize>(
 		&self,
 		builder: &mut CircuitBuilder<F, D>,
+		ctx: &H::CircuitContext,
 		num_leaves: Target,
-	) -> HashOutTarget
+	) -> MerkleHashTarget<N>
 	where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let pred_new_hash = H::commit_node_circuit(
 			builder,
+			ctx,
 			self.pred_value,
 			self.pred_new_next_index,
 			self.pred_new_next_value,
 		);
 		Self::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			pred_new_hash,
 			&self.pred_new_siblings,
 			&self.pred_path,
@@ -356,52 +376,58 @@ impl BatchInsertionLinkTargets {
 	pub fn connect_pred_old_auth<H, F, const D: usize>(
 		&self,
 		builder: &mut CircuitBuilder<F, D>,
-		old_root: HashOutTarget,
+		ctx: &H::CircuitContext,
+		old_root: MerkleHashTarget<N>,
 		num_leaves: Target,
 	) where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let old_pred_hash = H::commit_node_circuit(
 			builder,
+			ctx,
 			self.pred_value,
 			self.pred_old_next_index,
 			self.pred_old_next_value,
 		);
 		let computed_old_root = Self::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			old_pred_hash,
 			&self.pred_old_siblings,
 			&self.pred_path,
 			num_leaves,
 		);
-		builder.connect_hashes(computed_old_root, old_root);
+		H::connect_hashes(builder, &computed_old_root, &old_root);
 	}
 
 	/// Authenticates this link's new predecessor against mid_root.
 	pub fn connect_pred_new_auth<H, F, const D: usize>(
 		&self,
 		builder: &mut CircuitBuilder<F, D>,
-		mid_root: HashOutTarget,
+		ctx: &H::CircuitContext,
+		mid_root: MerkleHashTarget<N>,
 		num_leaves: Target,
 	) where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let new_pred_hash = H::commit_node_circuit(
 			builder,
+			ctx,
 			self.pred_value,
 			self.pred_new_next_index,
 			self.pred_new_next_value,
 		);
 		let computed_mid_root = Self::compute_root_circuit::<H, F, D>(
 			builder,
+			ctx,
 			new_pred_hash,
 			&self.pred_new_siblings,
 			&self.pred_path,
 			num_leaves,
 		);
-		builder.connect_hashes(computed_mid_root, mid_root);
+		H::connect_hashes(builder, &computed_mid_root, &mid_root);
 	}
 
 	// ================================================================
@@ -412,11 +438,16 @@ impl BatchInsertionLinkTargets {
 	///
 	/// - Constraint 5: pred_value < leaf_value < pred_old_next_value (range check)
 	/// - Constraints 1–2: mask => pred_new_next == leaf
-	pub fn connect_link_constraints<H, F, const D: usize>(&self, builder: &mut CircuitBuilder<F, D>)
-	where
-		H: MerkleHashCircuit<F, D>,
+	pub fn connect_link_constraints<H, F, const D: usize>(
+		&self,
+		builder: &mut CircuitBuilder<F, D>,
+		ctx: &H::CircuitContext,
+	) where
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
+		let _ = ctx; // currently unused in this method, but kept for API consistency
+
 		// Constraint 5: range check
 		inclusion(
 			builder,
@@ -436,11 +467,11 @@ impl BatchInsertionLinkTargets {
 			self.pred_new_next_index,
 			self.leaf_index,
 		);
-		Self::connect_hash_if(
+		MerkleHashTarget::conditional_connect(
 			builder,
 			self.mask,
-			self.pred_new_next_value,
-			self.leaf_value,
+			&self.pred_new_next_value,
+			&self.leaf_value,
 		);
 	}
 
@@ -452,7 +483,7 @@ impl BatchInsertionLinkTargets {
 	pub fn connect_transition_constraints<F, const D: usize>(
 		&self,
 		builder: &mut CircuitBuilder<F, D>,
-		next: &BatchInsertionLinkTargets,
+		next: &BatchInsertionLinkTargets<N>,
 	) where
 		F: Field + RichField + Extendable<D>,
 	{
@@ -470,13 +501,13 @@ impl BatchInsertionLinkTargets {
 
 		// Constraint 7/16: leaf_next_value == select(next.mask, pred_old_next_value,
 		// next.leaf_value)
-		let expected_next_val = Self::select_hash(
+		let expected_next_val = MerkleHashTarget::select(
 			builder,
 			next.mask,
-			self.pred_old_next_value,
-			next.leaf_value,
+			&self.pred_old_next_value,
+			&next.leaf_value,
 		);
-		builder.connect_hashes(self.leaf_next_value, expected_next_val);
+		MerkleHashTarget::connect(builder, &self.leaf_next_value, &expected_next_val);
 
 		// Constraints 9–14: when !next.mask, pred fields must match
 		let not_mask = builder.not(next.mask);
@@ -492,13 +523,18 @@ impl BatchInsertionLinkTargets {
 		}
 
 		// Constraint 10: pred_value
-		Self::connect_hash_if(builder, not_mask, self.pred_value, next.pred_value);
-		// Constraint 11: pred_new_next_value
-		Self::connect_hash_if(
+		MerkleHashTarget::conditional_connect(
 			builder,
 			not_mask,
-			self.pred_new_next_value,
-			next.pred_new_next_value,
+			&self.pred_value,
+			&next.pred_value,
+		);
+		// Constraint 11: pred_new_next_value
+		MerkleHashTarget::conditional_connect(
+			builder,
+			not_mask,
+			&self.pred_new_next_value,
+			&next.pred_new_next_value,
 		);
 		// Constraint 12: pred_new_next_index
 		Self::connect_if(
@@ -508,11 +544,11 @@ impl BatchInsertionLinkTargets {
 			next.pred_new_next_index,
 		);
 		// Constraint 13: pred_old_next_value
-		Self::connect_hash_if(
+		MerkleHashTarget::conditional_connect(
 			builder,
 			not_mask,
-			self.pred_old_next_value,
-			next.pred_old_next_value,
+			&self.pred_old_next_value,
+			&next.pred_old_next_value,
 		);
 		// Constraint 14: pred_old_next_index
 		Self::connect_if(
@@ -538,7 +574,7 @@ impl BatchInsertionLinkTargets {
 		F: Field + RichField + Extendable<D>,
 	{
 		builder.connect(self.leaf_next_index, self.pred_old_next_index);
-		builder.connect_hashes(self.leaf_next_value, self.pred_old_next_value);
+		MerkleHashTarget::connect(builder, &self.leaf_next_value, &self.pred_old_next_value);
 	}
 
 	// ================================================================
@@ -549,13 +585,15 @@ impl BatchInsertionLinkTargets {
 	pub fn leaf_hash_circuit<H, F, const D: usize>(
 		&self,
 		builder: &mut CircuitBuilder<F, D>,
-	) -> HashOutTarget
+		ctx: &H::CircuitContext,
+	) -> MerkleHashTarget<N>
 	where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		H::commit_node_circuit(
 			builder,
+			ctx,
 			self.leaf_value,
 			self.leaf_next_index,
 			self.leaf_next_value,
@@ -567,15 +605,14 @@ impl BatchInsertionLinkTargets {
 	// ================================================================
 
 	/// Populates all witnesses for this link from a native `BatchInsertionLink`.
-	pub fn set<H, F>(
+	pub fn set<H, F, const D: usize>(
 		&self,
 		pw: &mut PartialWitness<F>,
 		link: &super::BatchInsertionLink<H>,
 	) -> Result<()>
 	where
-		H: MerkleHash,
-		H::Digest: ToHashOut<F>,
-		F: Field + PrimeField64,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
+		F: Field + PrimeField64 + RichField + Extendable<D>,
 	{
 		pw.set_bool_target(self.mask, link.mask)?;
 
@@ -583,50 +620,44 @@ impl BatchInsertionLinkTargets {
 			self.leaf_index,
 			F::from_canonical_u64(link.leaf_index as u64),
 		)?;
-		pw.set_hash_target(self.leaf_value, link.leaf_value.to_hash_out())?;
+		H::set_hash_witness(pw, &self.leaf_value, &link.leaf_value)?;
 		pw.set_target(
 			self.leaf_next_index,
 			F::from_canonical_u64(link.leaf_next_index as u64),
 		)?;
-		pw.set_hash_target(self.leaf_next_value, link.leaf_next_value.to_hash_out())?;
+		H::set_hash_witness(pw, &self.leaf_next_value, &link.leaf_next_value)?;
 
 		// Predecessor path bits
 		for (i, bit_target) in self.pred_path.iter().enumerate() {
 			pw.set_bool_target(*bit_target, ((link.pred_path >> i) & 1) == 1)?;
 		}
 
-		pw.set_hash_target(self.pred_value, link.pred_value.to_hash_out())?;
+		H::set_hash_witness(pw, &self.pred_value, &link.pred_value)?;
 		pw.set_target(
 			self.pred_old_next_index,
 			F::from_canonical_u64(link.pred_old_next_index as u64),
 		)?;
-		pw.set_hash_target(
-			self.pred_old_next_value,
-			link.pred_old_next_value.to_hash_out(),
-		)?;
+		H::set_hash_witness(pw, &self.pred_old_next_value, &link.pred_old_next_value)?;
 		pw.set_target(
 			self.pred_new_next_index,
 			F::from_canonical_u64(link.pred_new_next_index as u64),
 		)?;
-		pw.set_hash_target(
-			self.pred_new_next_value,
-			link.pred_new_next_value.to_hash_out(),
-		)?;
+		H::set_hash_witness(pw, &self.pred_new_next_value, &link.pred_new_next_value)?;
 
 		// Predecessor siblings
 		for (i, sibling_target) in self.pred_old_siblings.iter().enumerate() {
-			pw.set_hash_target(*sibling_target, link.pred_old_siblings[i].to_hash_out())?;
+			H::set_hash_witness(pw, sibling_target, &link.pred_old_siblings[i])?;
 		}
 		for (i, sibling_target) in self.pred_new_siblings.iter().enumerate() {
-			pw.set_hash_target(*sibling_target, link.pred_new_siblings[i].to_hash_out())?;
+			H::set_hash_witness(pw, sibling_target, &link.pred_new_siblings[i])?;
 		}
 
 		// Range-check witnesses
 		populate_inclusion_witness(
 			pw,
-			&link.pred_value.to_hash_out().elements,
-			&link.leaf_value.to_hash_out().elements,
-			&link.pred_old_next_value.to_hash_out().elements,
+			H::digest_elements(&link.pred_value),
+			H::digest_elements(&link.leaf_value),
+			H::digest_elements(&link.pred_old_next_value),
 			&self.u,
 			&self.v,
 			&self.c_ax,
@@ -655,49 +686,17 @@ impl BatchInsertionLinkTargets {
 		builder.assert_zero(product);
 	}
 
-	/// Enforces `cond => (a == b)` element-wise for HashOutTargets.
-	#[inline]
-	fn connect_hash_if<F, const D: usize>(
-		builder: &mut CircuitBuilder<F, D>,
-		cond: BoolTarget,
-		a: HashOutTarget,
-		b: HashOutTarget,
-	) where
-		F: Field + RichField + Extendable<D>,
-	{
-		for i in 0..HASH_SIZE {
-			Self::connect_if(builder, cond, a.elements[i], b.elements[i]);
-		}
-	}
-
-	/// Selects between two HashOutTargets based on a boolean condition.
-	#[inline]
-	fn select_hash<F, const D: usize>(
-		builder: &mut CircuitBuilder<F, D>,
-		cond: BoolTarget,
-		if_true: HashOutTarget,
-		if_false: HashOutTarget,
-	) -> HashOutTarget
-	where
-		F: Field + RichField + Extendable<D>,
-	{
-		HashOutTarget {
-			elements: core::array::from_fn(|i| {
-				builder.select(cond, if_true.elements[i], if_false.elements[i])
-			}),
-		}
-	}
-
 	/// Computes a Merkle root from a leaf hash and its full-depth authentication path.
 	fn compute_root_circuit<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
-		leaf_hash: HashOutTarget,
-		siblings: &[HashOutTarget],
+		ctx: &H::CircuitContext,
+		leaf_hash: MerkleHashTarget<N>,
+		siblings: &[MerkleHashTarget<N>],
 		path: &[BoolTarget],
 		num_leaves: Target,
-	) -> HashOutTarget
+	) -> MerkleHashTarget<N>
 	where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
 		let depth = siblings.len();
@@ -705,10 +704,11 @@ impl BatchInsertionLinkTargets {
 
 		for (level, (sibling, &dir)) in siblings.iter().zip(path.iter()).enumerate() {
 			if level == depth - 1 {
-				current =
-					Self::hash_parent_root::<H, F, D>(builder, current, *sibling, dir, num_leaves);
+				current = Self::hash_parent_root::<H, F, D>(
+					builder, ctx, current, *sibling, dir, num_leaves,
+				);
 			} else {
-				current = H::hash_2_to_1_circuit(builder, current, *sibling, dir);
+				current = H::hash_2_to_1_circuit(builder, ctx, current, *sibling, dir);
 			}
 		}
 		current
@@ -718,26 +718,19 @@ impl BatchInsertionLinkTargets {
 	#[inline]
 	fn hash_parent_root<H, F, const D: usize>(
 		builder: &mut CircuitBuilder<F, D>,
-		current: HashOutTarget,
-		sibling: HashOutTarget,
+		ctx: &H::CircuitContext,
+		current: MerkleHashTarget<N>,
+		sibling: MerkleHashTarget<N>,
 		dir: BoolTarget,
 		num_leaves: Target,
-	) -> HashOutTarget
+	) -> MerkleHashTarget<N>
 	where
-		H: MerkleHashCircuit<F, D>,
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
-		let left = HashOutTarget {
-			elements: core::array::from_fn(|i| {
-				builder.select(dir, sibling.elements[i], current.elements[i])
-			}),
-		};
-		let right = HashOutTarget {
-			elements: core::array::from_fn(|i| {
-				builder.select(dir, current.elements[i], sibling.elements[i])
-			}),
-		};
-		H::hash_root_circuit(builder, num_leaves, left, right)
+		let left = MerkleHashTarget::select(builder, dir, &sibling, &current);
+		let right = MerkleHashTarget::select(builder, dir, &current, &sibling);
+		H::hash_root_circuit(builder, ctx, num_leaves, left, right)
 	}
 }
 
@@ -761,7 +754,7 @@ mod test {
 	use super::BatchNullifierInsertProofTargets;
 	use crate::tree::{
 		NullifierInsertProof, NullifierTree,
-		hasher::{HashOutput, NewFromU64},
+		hasher::{HashOutput, MerkleHashCircuit, NewFromU64},
 	};
 
 	const D: usize = 2;
@@ -792,11 +785,17 @@ mod test {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
-		let targets = BatchNullifierInsertProofTargets::new(&mut builder, DEPTH, BATCH_SIZE);
-		targets.connect::<HashOutput, F, D>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+
+		let targets = BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(
+			&mut builder,
+			DEPTH,
+			BATCH_SIZE,
+		);
+		targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
 
 		let mut pw = PartialWitness::new();
-		targets.set::<HashOutput, F, DEPTH>(&mut pw, &batch_proof)?;
+		targets.set::<HashOutput, F, D>(&mut pw, &batch_proof)?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -898,11 +897,17 @@ mod test {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
-		let targets = BatchNullifierInsertProofTargets::new(&mut builder, TREE_DEPTH, BATCH);
-		targets.connect::<HashOutput, F, D>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+
+		let targets = BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(
+			&mut builder,
+			TREE_DEPTH,
+			BATCH,
+		);
+		targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
 
 		let mut pw = PartialWitness::new();
-		targets.set::<HashOutput, F, TREE_DEPTH>(&mut pw, &batch_proof)?;
+		targets.set::<HashOutput, F, D>(&mut pw, &batch_proof)?;
 
 		let data = builder.build::<C>();
 		let now = Instant::now();
@@ -942,7 +947,6 @@ mod test {
 	// ================================================================
 
 	use super::{BatchInsertProof, BatchInsertionLinkTargets};
-	use crate::tree::hasher::ToHashOut;
 
 	/// Builds a valid batch proof for low-level tests (depth=4, batch=4).
 	fn make_batch_proof() -> BatchInsertProof<HashOutput> {
@@ -966,11 +970,13 @@ mod test {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
-		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
-		link_targets.connect_link_constraints::<HashOutput, F, D>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+
+		let link_targets = BatchInsertionLinkTargets::new::<HashOutput, F, D>(&mut builder, DEPTH);
+		link_targets.connect_link_constraints::<HashOutput, F, D>(&mut builder, &ctx);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F, D>(&mut pw, &proof.links[0])?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -984,21 +990,31 @@ mod test {
 		let proof = make_batch_proof();
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
+
+		let ctx = HashOutput::register_luts(&mut builder);
+
+		let link_targets = BatchInsertionLinkTargets::new::<HashOutput, F, D>(&mut builder, DEPTH);
 		let start_index = builder.add_virtual_target();
-		let old_root_target = builder.add_virtual_hash();
-		let mid_root = link_targets.compute_mid_root::<HashOutput, F, D>(&mut builder, start_index);
+		let old_root_target = HashOutput::add_virtual_hash(&mut builder);
+		let mid_root =
+			link_targets.compute_mid_root::<HashOutput, F, D>(&mut builder, &ctx, start_index);
 		link_targets.connect_pred_old_auth::<HashOutput, F, D>(
 			&mut builder,
+			&ctx,
 			old_root_target,
 			start_index,
 		);
-		link_targets.connect_pred_new_auth::<HashOutput, F, D>(&mut builder, mid_root, start_index);
+		link_targets.connect_pred_new_auth::<HashOutput, F, D>(
+			&mut builder,
+			&ctx,
+			mid_root,
+			start_index,
+		);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F, D>(&mut pw, &proof.links[0])?;
 		pw.set_target(start_index, F::from_canonical_u64(proof.start_index as u64))?;
-		pw.set_hash_target(old_root_target, proof.old_root.to_hash_out())?;
+		HashOutput::set_hash_witness(&mut pw, &old_root_target, &proof.old_root)?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -1015,19 +1031,22 @@ mod test {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
-		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
+		let ctx = HashOutput::register_luts(&mut builder);
+
+		let link_targets = BatchInsertionLinkTargets::new::<HashOutput, F, D>(&mut builder, DEPTH);
 		let start_index = builder.add_virtual_target();
-		let old_root_target = builder.add_virtual_hash();
+		let old_root_target = HashOutput::add_virtual_hash(&mut builder);
 		link_targets.connect_pred_old_auth::<HashOutput, F, D>(
 			&mut builder,
+			&ctx,
 			old_root_target,
 			start_index,
 		);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F, D>(&mut pw, &proof.links[0])?;
 		pw.set_target(start_index, F::from_canonical_u64(proof.start_index as u64))?;
-		pw.set_hash_target(old_root_target, proof.old_root.to_hash_out())?;
+		HashOutput::set_hash_witness(&mut pw, &old_root_target, &proof.old_root)?;
 
 		let data = builder.build::<C>();
 		assert!(data.prove(pw).is_err());
@@ -1041,13 +1060,15 @@ mod test {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
-		let link0 = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
-		let link1 = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
+		let _ctx = HashOutput::register_luts(&mut builder);
+
+		let link0 = BatchInsertionLinkTargets::new::<HashOutput, F, D>(&mut builder, DEPTH);
+		let link1 = BatchInsertionLinkTargets::new::<HashOutput, F, D>(&mut builder, DEPTH);
 		link0.connect_transition_constraints(&mut builder, &link1);
 
 		let mut pw = PartialWitness::new();
-		link0.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
-		link1.set::<HashOutput, F>(&mut pw, &proof.links[1])?;
+		link0.set::<HashOutput, F, D>(&mut pw, &proof.links[0])?;
+		link1.set::<HashOutput, F, D>(&mut pw, &proof.links[1])?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -1063,11 +1084,12 @@ mod test {
 
 		// First link: mask must be true
 		let mut builder = CircuitBuilder::<F, D>::new(config.clone());
-		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
+		let _ctx = HashOutput::register_luts(&mut builder);
+		let link_targets = BatchInsertionLinkTargets::new::<HashOutput, F, D>(&mut builder, DEPTH);
 		link_targets.connect_first_link(&mut builder);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
+		link_targets.set::<HashOutput, F, D>(&mut pw, &proof.links[0])?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -1076,11 +1098,12 @@ mod test {
 		// Last link: leaf_next == pred_old_next
 		let last = proof.links.last().unwrap();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
+		let _ctx = HashOutput::register_luts(&mut builder);
+		let link_targets = BatchInsertionLinkTargets::new::<HashOutput, F, D>(&mut builder, DEPTH);
 		link_targets.connect_last_link(&mut builder);
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<HashOutput, F>(&mut pw, last)?;
+		link_targets.set::<HashOutput, F, D>(&mut pw, last)?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;
@@ -1096,16 +1119,18 @@ mod test {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
-		let link_targets = BatchInsertionLinkTargets::new(&mut builder, DEPTH);
-		let hash_target = link_targets.leaf_hash_circuit::<HashOutput, F, D>(&mut builder);
-		let expected = builder.add_virtual_hash();
-		builder.connect_hashes(hash_target, expected);
+		let ctx = HashOutput::register_luts(&mut builder);
+
+		let link_targets = BatchInsertionLinkTargets::new::<HashOutput, F, D>(&mut builder, DEPTH);
+		let hash_target = link_targets.leaf_hash_circuit::<HashOutput, F, D>(&mut builder, &ctx);
+		let expected = HashOutput::add_virtual_hash(&mut builder);
+		HashOutput::connect_hashes(&mut builder, &hash_target, &expected);
 
 		let native_hash = proof.links[0].leaf_hash();
 
 		let mut pw = PartialWitness::new();
-		link_targets.set::<HashOutput, F>(&mut pw, &proof.links[0])?;
-		pw.set_hash_target(expected, native_hash.to_hash_out())?;
+		link_targets.set::<HashOutput, F, D>(&mut pw, &proof.links[0])?;
+		HashOutput::set_hash_witness(&mut pw, &expected, &native_hash)?;
 
 		let data = builder.build::<C>();
 		let circuit_proof = data.prove(pw)?;

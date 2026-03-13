@@ -264,7 +264,7 @@ mod tests {
 	use plonky2_field::types::Field;
 	use rand::{SeedableRng, rand_core::Rng};
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::hasher::HashOutput;
+	use tessera_trees::tree::hasher::{HashOutput, MerkleHashCircuit};
 
 	use super::*;
 	use crate::{
@@ -338,7 +338,8 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 

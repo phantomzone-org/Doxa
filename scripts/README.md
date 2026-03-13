@@ -77,7 +77,7 @@ cargo run --bin commitment_tree_artifacts --release --manifest-path tessera-serv
 TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
 cargo run --bin nullifier_tree_artifacts --release --manifest-path tessera-server/Cargo.toml
 
-# Step 3 — TX leaf aggregator artifacts (72-PI; no dependencies)
+# Step 3 — TX leaf aggregator artifacts (77-PI; no dependencies)
 #   → tessera-server/artifacts/associated-input-aggregator/
 cargo run --bin aggregator_artifacts --release --manifest-path tessera-server/Cargo.toml
 

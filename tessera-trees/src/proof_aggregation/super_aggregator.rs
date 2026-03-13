@@ -106,6 +106,27 @@ const ALL_ARTIFACT_FILES: &[&str] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// PI layout constants
+// ---------------------------------------------------------------------------
+
+/// Fields per TX slot: 75 explicit + 2 plonky2 lookup-table metadata PIs.
+pub const TX_LEAF_PI_SIZE: usize = 77;
+
+/// Offset past `old_root[4] || new_root[4]` in tree PI vectors.
+pub const LEAF_OFFSET: usize = 8;
+
+/// Number of automatic lookup-table metadata PIs prepended by plonky2.
+pub const LUT_PI_COUNT: usize = 2;
+
+/// Offset to TX data fields within each TX slot
+/// (after LUT metadata, subpool_in, subpool_out, is_real).
+pub const TX_DATA_OFFSET: usize = LUT_PI_COUNT + 3;
+
+/// Offset to is_real (not_fake_tx) within each TX slot (after LUT metadata,
+/// subpool_in, subpool_out).
+pub const IS_REAL_OFFSET: usize = LUT_PI_COUNT + 2;
+
+// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -198,19 +219,29 @@ impl SuperAggregator {
 		tx: ProofNative,
 	) -> Result<ProofNative> {
 		let mut pw = PartialWitness::new();
-		pw.set_verifier_data_target(&self.targets.nc_vd, &self.inner.nc_verifier)?;
-		pw.set_proof_with_pis_target(&self.targets.nc_proof, &nc)?;
-		pw.set_verifier_data_target(&self.targets.nn_vd, &self.inner.nn_verifier)?;
-		pw.set_proof_with_pis_target(&self.targets.nn_proof, &nn)?;
-		pw.set_verifier_data_target(&self.targets.ac_vd, &self.inner.ac_verifier)?;
-		pw.set_proof_with_pis_target(&self.targets.ac_proof, &ac)?;
-		pw.set_verifier_data_target(&self.targets.an_vd, &self.inner.an_verifier)?;
-		pw.set_proof_with_pis_target(&self.targets.an_proof, &an)?;
-		pw.set_verifier_data_target(&self.targets.tx_vd, &self.inner.tx_verifier)?;
-		pw.set_proof_with_pis_target(&self.targets.tx_proof, &tx)?;
+		pw.set_verifier_data_target(&self.targets.nc_vd, &self.inner.nc_verifier)
+			.map_err(|e| anyhow!("set nc_vd (verifier): {e}"))?;
+		pw.set_proof_with_pis_target(&self.targets.nc_proof, &nc)
+			.map_err(|e| anyhow!("set nc_proof: {e}"))?;
+		pw.set_verifier_data_target(&self.targets.nn_vd, &self.inner.nn_verifier)
+			.map_err(|e| anyhow!("set nn_vd (verifier): {e}"))?;
+		pw.set_proof_with_pis_target(&self.targets.nn_proof, &nn)
+			.map_err(|e| anyhow!("set nn_proof: {e}"))?;
+		pw.set_verifier_data_target(&self.targets.ac_vd, &self.inner.ac_verifier)
+			.map_err(|e| anyhow!("set ac_vd (verifier): {e}"))?;
+		pw.set_proof_with_pis_target(&self.targets.ac_proof, &ac)
+			.map_err(|e| anyhow!("set ac_proof: {e}"))?;
+		pw.set_verifier_data_target(&self.targets.an_vd, &self.inner.an_verifier)
+			.map_err(|e| anyhow!("set an_vd (verifier): {e}"))?;
+		pw.set_proof_with_pis_target(&self.targets.an_proof, &an)
+			.map_err(|e| anyhow!("set an_proof: {e}"))?;
+		pw.set_verifier_data_target(&self.targets.tx_vd, &self.inner.tx_verifier)
+			.map_err(|e| anyhow!("set tx_vd (verifier): {e}"))?;
+		pw.set_proof_with_pis_target(&self.targets.tx_proof, &tx)
+			.map_err(|e| anyhow!("set tx_proof: {e}"))?;
 		self.circuit_data
 			.prove(pw)
-			.map_err(|e| anyhow!("SuperAggregator::prove failed: {e}"))
+			.map_err(|e| anyhow!("SuperAggregator::prove (generate_proof): {e}"))
 	}
 
 	/// Persist all artifacts to `path`.
@@ -385,6 +416,176 @@ fn hash_fingerprint(
 }
 
 // ---------------------------------------------------------------------------
+// Batch zero-check helper
+// ---------------------------------------------------------------------------
+
+/// Assert that all `constraints` are zero.
+///
+/// Accumulates `∑ rⁱ · cᵢ` with a Poseidon-derived random challenge `r` and
+/// connects the sum to zero.
+///
+/// Soundness: a random linear combination over Goldilocks gives false-positive
+/// probability ≤ N / p ≈ 2⁻⁶⁰ for N ≤ 2²⁰.
+fn batch_assert_zero(
+	builder: &mut CircuitBuilder<F, D>,
+	constraints: &[Target],
+	fiat_shamir_seed: &[Target],
+) {
+	if constraints.is_empty() {
+		return;
+	}
+
+	let zero = builder.zero();
+
+	if constraints.len() == 1 {
+		builder.connect(constraints[0], zero);
+		return;
+	}
+
+	let hash = builder.hash_n_to_hash_no_pad::<PoseidonHash>(fiat_shamir_seed.to_vec());
+	let r = hash.elements[0];
+
+	let mut acc = constraints[0];
+	let mut r_pow = r;
+	for &c in &constraints[1..] {
+		let term = builder.mul(r_pow, c);
+		acc = builder.add(acc, term);
+		r_pow = builder.mul(r_pow, r);
+	}
+	builder.connect(acc, zero);
+}
+
+// ---------------------------------------------------------------------------
+// PI cross-check gadgets
+// ---------------------------------------------------------------------------
+
+/// Wire AC tree PIs to TX PIs: conditional positional equality gated by `is_real`.
+///
+/// For each real TX slot (`is_real=1`), enforces `tx_ac[k] == tree_ac[k]` for
+/// `k ∈ 0..4`. For dummy slots (`is_real=0`), the constraint is trivially
+/// satisfied (`0 * diff == 0`).
+///
+/// Uses [`batch_assert_zero`] to accumulate all `is_real * (tx - tree)` values
+/// into a single random-linear-combination check, avoiding partition merges
+/// with `builder.zero()`.
+///
+/// **Caller must** call `builder.assert_bool(is_real)` for each slot separately.
+fn wire_ac_to_tx(
+	builder: &mut CircuitBuilder<F, D>,
+	ac_pis: &[Target],
+	tx_pis: &[Target],
+	n_tx_slots: usize,
+) {
+	let mut constraints = Vec::with_capacity(n_tx_slots * 4);
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
+		for k in 0..4 {
+			let tx_t = tx_pis[tx_base + TX_DATA_OFFSET + 4 + k];
+			let ac_t = ac_pis[LEAF_OFFSET + s * 4 + k];
+			let diff = builder.sub(tx_t, ac_t);
+			let gated = builder.mul(is_real, diff);
+			constraints.push(gated);
+		}
+	}
+	batch_assert_zero(builder, &constraints, &ac_pis[..LEAF_OFFSET]);
+}
+
+/// Wire NC tree PIs to TX PIs: conditional positional equality gated by `is_real`.
+///
+/// Same pattern as [`wire_ac_to_tx`] but for note commitments (8 notes × 4 fields
+/// per slot).
+///
+/// **Caller must** call `builder.assert_bool(is_real)` for each slot separately.
+fn wire_nc_to_tx(
+	builder: &mut CircuitBuilder<F, D>,
+	nc_pis: &[Target],
+	tx_pis: &[Target],
+	n_tx_slots: usize,
+	notes_per_slot: usize,
+) {
+	let mut constraints = Vec::with_capacity(n_tx_slots * notes_per_slot * 4);
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
+		for j in 0..notes_per_slot {
+			for k in 0..4 {
+				let tx_nc = tx_pis[tx_base + TX_DATA_OFFSET + 8 + notes_per_slot * 4 + j * 4 + k];
+				let leaf_idx = s * notes_per_slot + j;
+				let tree_nc = nc_pis[LEAF_OFFSET + leaf_idx * 4 + k];
+				let diff = builder.sub(tx_nc, tree_nc);
+				let gated = builder.mul(is_real, diff);
+				constraints.push(gated);
+			}
+		}
+	}
+	batch_assert_zero(builder, &constraints, &nc_pis[..LEAF_OFFSET]);
+}
+
+/// Wire AN tree PIs to TX PIs: multi-set equality (permutation argument).
+///
+/// Collects 4-field hashes from TX (account nullifiers) and AN tree leaves,
+/// then asserts multi-set equality via a GF(p²) product argument.
+fn wire_an_to_tx(
+	builder: &mut CircuitBuilder<F, D>,
+	an_pis: &[Target],
+	tx_pis: &[Target],
+	n_tx_slots: usize,
+) {
+	let mut tx_hashes = Vec::with_capacity(n_tx_slots);
+	let mut tree_hashes = Vec::with_capacity(n_tx_slots);
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		tx_hashes.push(HashOutTarget {
+			elements: core::array::from_fn(|k| tx_pis[tx_base + TX_DATA_OFFSET + k]),
+		});
+		tree_hashes.push(HashOutTarget {
+			elements: core::array::from_fn(|k| an_pis[LEAF_OFFSET + s * 4 + k]),
+		});
+	}
+	let fiat_shamir: Vec<Target> = an_pis[..8]
+		.iter()
+		.chain(tx_pis[..8].iter())
+		.copied()
+		.collect();
+	assert_multiset_eq(builder, &tx_hashes, &tree_hashes, &fiat_shamir);
+}
+
+/// Wire NN tree PIs to TX PIs: multi-set equality (permutation argument).
+///
+/// Same pattern as [`wire_an_to_tx`] but for note nullifiers (8 notes per slot).
+fn wire_nn_to_tx(
+	builder: &mut CircuitBuilder<F, D>,
+	nn_pis: &[Target],
+	tx_pis: &[Target],
+	n_tx_slots: usize,
+	notes_per_slot: usize,
+) {
+	let mut tx_hashes = Vec::with_capacity(n_tx_slots * notes_per_slot);
+	let mut tree_hashes = Vec::with_capacity(n_tx_slots * notes_per_slot);
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		for j in 0..notes_per_slot {
+			tx_hashes.push(HashOutTarget {
+				elements: core::array::from_fn(|k| {
+					tx_pis[tx_base + TX_DATA_OFFSET + 8 + j * 4 + k]
+				}),
+			});
+			let leaf_idx = s * notes_per_slot + j;
+			tree_hashes.push(HashOutTarget {
+				elements: core::array::from_fn(|k| nn_pis[LEAF_OFFSET + leaf_idx * 4 + k]),
+			});
+		}
+	}
+	let fiat_shamir: Vec<Target> = nn_pis[..8]
+		.iter()
+		.chain(tx_pis[..8].iter())
+		.copied()
+		.collect();
+	assert_multiset_eq(builder, &tx_hashes, &tree_hashes, &fiat_shamir);
+}
+
+// ---------------------------------------------------------------------------
 // Internal circuit builder
 // ---------------------------------------------------------------------------
 
@@ -412,9 +613,6 @@ fn setup_builder(
 	let tx_vd = builder.constant_verifier_data(&inner.tx_verifier);
 
 	// --- Derive batch sizes from inner circuit data ---
-	// n_tx_slots = TX root PI count / 77  (77 fields per TX leaf slot)
-	// 75 explicit + 2 plonky2 lookup-table metadata PIs.
-	const TX_LEAF_PI_SIZE: usize = 77;
 	let tx_total_pi = inner.tx_common.num_public_inputs;
 	assert_eq!(
 		tx_total_pi % TX_LEAF_PI_SIZE,
@@ -455,97 +653,45 @@ fn setup_builder(
 	builder.verify_proof::<ConfigNative>(&tx_proof, &tx_vd, &inner.tx_common);
 
 	// --- Cross-check: TX slot PIs must match the corresponding tree leaf PIs ---
-	const LEAF_OFFSET: usize = 8;
-	const TX_DATA_OFFSET: usize = 3;
 
-	let mut tx_an_hashes = Vec::with_capacity(n_tx_slots);
-	let mut tree_an_hashes = Vec::with_capacity(n_tx_slots);
-	let mut tx_nn_hashes = Vec::with_capacity(n_tx_slots * notes_per_slot);
-	let mut tree_nn_hashes = Vec::with_capacity(n_tx_slots * notes_per_slot);
-
+	// Assert is_real is boolean for each TX slot.
 	for s in 0..n_tx_slots {
-		let tx_base = s * TX_LEAF_PI_SIZE;
-
-		let is_real = BoolTarget::new_unsafe(tx_proof.public_inputs[tx_base + 2]);
+		let is_real =
+			BoolTarget::new_unsafe(tx_proof.public_inputs[s * TX_LEAF_PI_SIZE + IS_REAL_OFFSET]);
 		builder.assert_bool(is_real);
-
-		// AN: collect 4-field hash from TX and tree for multi-set check.
-		tx_an_hashes.push(HashOutTarget {
-			elements: core::array::from_fn(|k| {
-				tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + k]
-			}),
-		});
-		tree_an_hashes.push(HashOutTarget {
-			elements: core::array::from_fn(|k| an_proof.public_inputs[LEAF_OFFSET + s * 4 + k]),
-		});
-
-		// AC: conditional positional connect gated by is_real.
-		// When is_real=1: val = tx_t → enforces tx_t == ac_t.
-		// When is_real=0: val = ac_t → trivially ac_t == ac_t.
-		for k in 0..4 {
-			let tx_t = tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 4 + k];
-			let ac_t = ac_proof.public_inputs[LEAF_OFFSET + s * 4 + k];
-			let val = builder.select(is_real, tx_t, ac_t);
-			builder.connect(val, ac_t);
-		}
-
-		// NN: collect 4-field hashes from TX and tree for multi-set check.
-		for j in 0..notes_per_slot {
-			tx_nn_hashes.push(HashOutTarget {
-				elements: core::array::from_fn(|k| {
-					tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 8 + j * 4 + k]
-				}),
-			});
-			let leaf_idx = s * notes_per_slot + j;
-			tree_nn_hashes.push(HashOutTarget {
-				elements: core::array::from_fn(|k| {
-					nn_proof.public_inputs[LEAF_OFFSET + leaf_idx * 4 + k]
-				}),
-			});
-		}
-
-		// NC: conditional positional connect gated by is_real (same select pattern as AC).
-		for j in 0..notes_per_slot {
-			for k in 0..4 {
-				let tx_nc = tx_proof.public_inputs
-					[tx_base + TX_DATA_OFFSET + 8 + notes_per_slot * 4 + j * 4 + k];
-				let leaf_idx = s * notes_per_slot + j;
-				let tree_nc = nc_proof.public_inputs[LEAF_OFFSET + leaf_idx * 4 + k];
-				let val = builder.select(is_real, tx_nc, tree_nc);
-				builder.connect(val, tree_nc);
-			}
-		}
 	}
 
-	// AN multi-set equality: TX account nullifiers must match tree AN leaves (order-independent).
-	{
-		let fiat_shamir_inputs: Vec<Target> = an_proof.public_inputs[..8]
-			.iter()
-			.chain(tx_proof.public_inputs[..8].iter())
-			.copied()
-			.collect();
-		assert_multiset_eq(
-			&mut builder,
-			&tx_an_hashes,
-			&tree_an_hashes,
-			&fiat_shamir_inputs,
-		);
-	}
+	// Positional equality (conditional on is_real):
+	wire_ac_to_tx(
+		&mut builder,
+		&ac_proof.public_inputs,
+		&tx_proof.public_inputs,
+		n_tx_slots,
+	);
 
-	// NN multi-set equality: TX note nullifiers must match tree NN leaves (order-independent).
-	{
-		let fiat_shamir_inputs: Vec<Target> = nn_proof.public_inputs[..8]
-			.iter()
-			.chain(tx_proof.public_inputs[..8].iter())
-			.copied()
-			.collect();
-		assert_multiset_eq(
-			&mut builder,
-			&tx_nn_hashes,
-			&tree_nn_hashes,
-			&fiat_shamir_inputs,
-		);
-	}
+	wire_nc_to_tx(
+		&mut builder,
+		&nc_proof.public_inputs,
+		&tx_proof.public_inputs,
+		n_tx_slots,
+		notes_per_slot,
+	);
+
+	// Multi-set equality (unconditional permutation argument):
+	wire_an_to_tx(
+		&mut builder,
+		&an_proof.public_inputs,
+		&tx_proof.public_inputs,
+		n_tx_slots,
+	);
+
+	wire_nn_to_tx(
+		&mut builder,
+		&nn_proof.public_inputs,
+		&tx_proof.public_inputs,
+		n_tx_slots,
+		notes_per_slot,
+	);
 
 	// --- Collect tree PI targets and decompose each to [hi_u32, lo_u32] ---
 	//
@@ -647,6 +793,138 @@ fn read_verifier(
 ) -> Result<VerifierOnlyCircuitData<ConfigNative, D>> {
 	let bytes = fs::read(path).map_err(|e| anyhow!("failed to read {label}: {e}"))?;
 	VerifierOnlyCircuitData::from_bytes(&bytes).map_err(|_| anyhow!("deserialize {label} failed"))
+}
+
+// ---------------------------------------------------------------------------
+// Off-circuit PI validation (public — usable by prover at runtime)
+// ---------------------------------------------------------------------------
+
+/// Validate AC mapping off-circuit: for each real TX slot, the AC fields in
+/// the TX aggregated proof must match the corresponding tree leaf.
+///
+/// Returns an error describing the first mismatch found.
+pub fn validate_ac_offcircuit(ac_pis: &[F], tx_pis: &[F], n_tx_slots: usize) -> Result<()> {
+	use plonky2::field::types::{Field, PrimeField64};
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
+		if is_real == F::ONE {
+			for k in 0..4 {
+				let tx_v = tx_pis[tx_base + TX_DATA_OFFSET + 4 + k];
+				let ac_v = ac_pis[LEAF_OFFSET + s * 4 + k];
+				if tx_v != ac_v {
+					return Err(anyhow!(
+						"AC off-circuit mismatch: slot {s} field {k}: \
+						 tx={} tree={} (is_real={})",
+						tx_v.to_canonical_u64(),
+						ac_v.to_canonical_u64(),
+						is_real.to_canonical_u64()
+					));
+				}
+			}
+		}
+	}
+	Ok(())
+}
+
+/// Validate NC mapping off-circuit: for each real TX slot, NC note fields
+/// must match the corresponding tree leaves.
+pub fn validate_nc_offcircuit(
+	nc_pis: &[F],
+	tx_pis: &[F],
+	n_tx_slots: usize,
+	notes_per_slot: usize,
+) -> Result<()> {
+	use plonky2::field::types::{Field, PrimeField64};
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
+		if is_real == F::ONE {
+			for j in 0..notes_per_slot {
+				for k in 0..4 {
+					let tx_v =
+						tx_pis[tx_base + TX_DATA_OFFSET + 8 + notes_per_slot * 4 + j * 4 + k];
+					let leaf_idx = s * notes_per_slot + j;
+					let nc_v = nc_pis[LEAF_OFFSET + leaf_idx * 4 + k];
+					if tx_v != nc_v {
+						return Err(anyhow!(
+							"NC off-circuit mismatch: slot {s} note {j} field {k}: tx={} tree={}",
+							tx_v.to_canonical_u64(),
+							nc_v.to_canonical_u64()
+						));
+					}
+				}
+			}
+		}
+	}
+	Ok(())
+}
+
+/// Validate AN mapping off-circuit: TX AN hashes and tree AN leaves must
+/// form the same multi-set (order-independent).
+pub fn validate_an_offcircuit(an_pis: &[F], tx_pis: &[F], n_tx_slots: usize) -> Result<()> {
+	use plonky2::field::types::PrimeField64;
+	let mut tx_hashes: Vec<[u64; 4]> = Vec::new();
+	let mut tree_hashes: Vec<[u64; 4]> = Vec::new();
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		tx_hashes.push(core::array::from_fn(|k| {
+			tx_pis[tx_base + TX_DATA_OFFSET + k].to_canonical_u64()
+		}));
+		tree_hashes.push(core::array::from_fn(|k| {
+			an_pis[LEAF_OFFSET + s * 4 + k].to_canonical_u64()
+		}));
+	}
+	tx_hashes.sort();
+	tree_hashes.sort();
+	if tx_hashes != tree_hashes {
+		// Find first differing index for diagnostics.
+		for (i, (t, r)) in tx_hashes.iter().zip(tree_hashes.iter()).enumerate() {
+			if t != r {
+				return Err(anyhow!(
+					"AN off-circuit multiset mismatch at sorted index {i}: tx={t:?} tree={r:?}"
+				));
+			}
+		}
+	}
+	Ok(())
+}
+
+/// Validate NN mapping off-circuit: TX NN hashes and tree NN leaves must
+/// form the same multi-set (order-independent).
+pub fn validate_nn_offcircuit(
+	nn_pis: &[F],
+	tx_pis: &[F],
+	n_tx_slots: usize,
+	notes_per_slot: usize,
+) -> Result<()> {
+	use plonky2::field::types::PrimeField64;
+	let mut tx_hashes: Vec<[u64; 4]> = Vec::new();
+	let mut tree_hashes: Vec<[u64; 4]> = Vec::new();
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		for j in 0..notes_per_slot {
+			tx_hashes.push(core::array::from_fn(|k| {
+				tx_pis[tx_base + TX_DATA_OFFSET + 8 + j * 4 + k].to_canonical_u64()
+			}));
+			let leaf_idx = s * notes_per_slot + j;
+			tree_hashes.push(core::array::from_fn(|k| {
+				nn_pis[LEAF_OFFSET + leaf_idx * 4 + k].to_canonical_u64()
+			}));
+		}
+	}
+	tx_hashes.sort();
+	tree_hashes.sort();
+	if tx_hashes != tree_hashes {
+		for (i, (t, r)) in tx_hashes.iter().zip(tree_hashes.iter()).enumerate() {
+			if t != r {
+				return Err(anyhow!(
+					"NN off-circuit multiset mismatch at sorted index {i}: tx={t:?} tree={r:?}"
+				));
+			}
+		}
+	}
+	Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -940,13 +1218,14 @@ mod tests {
 	// -----------------------------------------------------------------------
 	//
 	// TX leaf PI layout per slot (tx_base = s × 77):
-	//   PI[tx_base + 0]              = subpool_id_in
-	//   PI[tx_base + 1]              = subpool_id_out
-	//   PI[tx_base + 2]              = is_real
-	//   PI[tx_base + 3 + k]          = account_nullifier[k]   (AN)
-	//   PI[tx_base + 7 + k]          = account_commitment[k]  (AC)
-	//   PI[tx_base + 11 + j*4 + k]   = note_nullifier[j][k]   (NN)
-	//   PI[tx_base + 43 + j*4 + k]   = note_commitment[j][k]  (NC)
+	//   PI[tx_base + 0..2]           = plonky2 LUT metadata (auto-registered)
+	//   PI[tx_base + 2]              = subpool_id_in
+	//   PI[tx_base + 3]              = subpool_id_out
+	//   PI[tx_base + 4]              = is_real  (IS_REAL_OFFSET)
+	//   PI[tx_base + 5 + k]          = account_nullifier[k]   (AN, TX_DATA_OFFSET)
+	//   PI[tx_base + 9 + k]          = account_commitment[k]  (AC)
+	//   PI[tx_base + 13 + j*4 + k]   = note_nullifier[j][k]   (NN)
+	//   PI[tx_base + 45 + j*4 + k]   = note_commitment[j][k]  (NC)
 	//
 	// All four trees share the same PI layout: old_root[4] + new_root[4] + values[batch_size × 4]
 	// LEAF_OFFSET = 8 for all trees (NC, NN, AC, AN).
@@ -1651,153 +1930,888 @@ mod tests {
 	}
 
 	// -----------------------------------------------------------------------
-	// Scale test: 128-TX slots (production size)
+	// Off-circuit PI mapping validation
 	// -----------------------------------------------------------------------
 
-	/// 128-TX all-dummy: builds and proves the full production-size SA circuit.
-	/// Prints timings for build and prove phases.
+	/// Validate AC mapping off-circuit: for each real slot, TX AC fields must
+	/// match tree AC leaves at the expected PI indices.
+	fn validate_ac_offcircuit(ac_pis: &[F], tx_pis: &[F], n_tx_slots: usize) {
+		for s in 0..n_tx_slots {
+			let tx_base = s * TX_LEAF_PI_SIZE;
+			let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
+			if is_real == F::ONE {
+				for k in 0..4 {
+					let tx_v = tx_pis[tx_base + TX_DATA_OFFSET + 4 + k];
+					let ac_v = ac_pis[LEAF_OFFSET + s * 4 + k];
+					assert_eq!(tx_v, ac_v, "AC off-circuit mismatch: slot {s} field {k}");
+				}
+			}
+		}
+	}
+
+	/// Validate NC mapping off-circuit: for each real slot, TX NC fields must
+	/// match tree NC leaves at the expected PI indices.
+	fn validate_nc_offcircuit(
+		nc_pis: &[F],
+		tx_pis: &[F],
+		n_tx_slots: usize,
+		notes_per_slot: usize,
+	) {
+		for s in 0..n_tx_slots {
+			let tx_base = s * TX_LEAF_PI_SIZE;
+			let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
+			if is_real == F::ONE {
+				for j in 0..notes_per_slot {
+					for k in 0..4 {
+						let tx_v =
+							tx_pis[tx_base + TX_DATA_OFFSET + 8 + notes_per_slot * 4 + j * 4 + k];
+						let leaf_idx = s * notes_per_slot + j;
+						let nc_v = nc_pis[LEAF_OFFSET + leaf_idx * 4 + k];
+						assert_eq!(
+							tx_v, nc_v,
+							"NC off-circuit mismatch: slot {s} note {j} field {k}"
+						);
+					}
+				}
+			}
+		}
+	}
+
+	/// Validate AN mapping off-circuit: TX AN hashes and tree AN leaves must
+	/// form the same multi-set (order-independent).
+	fn validate_an_offcircuit(an_pis: &[F], tx_pis: &[F], n_tx_slots: usize) {
+		use plonky2::field::types::PrimeField64;
+		let mut tx_hashes: Vec<[u64; 4]> = Vec::new();
+		let mut tree_hashes: Vec<[u64; 4]> = Vec::new();
+		for s in 0..n_tx_slots {
+			let tx_base = s * TX_LEAF_PI_SIZE;
+			tx_hashes.push(core::array::from_fn(|k| {
+				tx_pis[tx_base + TX_DATA_OFFSET + k].to_canonical_u64()
+			}));
+			tree_hashes.push(core::array::from_fn(|k| {
+				an_pis[LEAF_OFFSET + s * 4 + k].to_canonical_u64()
+			}));
+		}
+		tx_hashes.sort();
+		tree_hashes.sort();
+		assert_eq!(tx_hashes, tree_hashes, "AN off-circuit multiset mismatch");
+	}
+
+	/// Validate NN mapping off-circuit: TX NN hashes and tree NN leaves must
+	/// form the same multi-set (order-independent).
+	fn validate_nn_offcircuit(
+		nn_pis: &[F],
+		tx_pis: &[F],
+		n_tx_slots: usize,
+		notes_per_slot: usize,
+	) {
+		use plonky2::field::types::PrimeField64;
+		let mut tx_hashes: Vec<[u64; 4]> = Vec::new();
+		let mut tree_hashes: Vec<[u64; 4]> = Vec::new();
+		for s in 0..n_tx_slots {
+			let tx_base = s * TX_LEAF_PI_SIZE;
+			for j in 0..notes_per_slot {
+				tx_hashes.push(core::array::from_fn(|k| {
+					tx_pis[tx_base + TX_DATA_OFFSET + 8 + j * 4 + k].to_canonical_u64()
+				}));
+				let leaf_idx = s * notes_per_slot + j;
+				tree_hashes.push(core::array::from_fn(|k| {
+					nn_pis[LEAF_OFFSET + leaf_idx * 4 + k].to_canonical_u64()
+				}));
+			}
+		}
+		tx_hashes.sort();
+		tree_hashes.sort();
+		assert_eq!(tx_hashes, tree_hashes, "NN off-circuit multiset mismatch");
+	}
+
+	// -----------------------------------------------------------------------
+	// Off-circuit validation tests
+	// -----------------------------------------------------------------------
+
 	#[test]
-	#[ignore] // slow (~minutes); run explicitly with: cargo test -p tessera-trees --release test_scale_128tx -- --ignored --nocapture
-	fn test_scale_128tx_all_dummy() {
-		use std::time::Instant;
+	fn test_offcircuit_ac_mapping() {
+		let n = 4;
+		let ((_nc_cd, _nc_t), (_nn_cd, _nn_t), (ac_cd, ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, NOTES_PER_SLOT);
 
-		const N_TX: usize = 128;
-		const NOTES: usize = 8;
+		let mut ac_vals = vec![0u64; ac_t.len()];
+		let mut tx_vals = vec![0u64; tx_t.len()];
 
-		println!("=== 128-TX scale test (all-dummy) ===");
+		// Slot 0: is_real=1, AC = [10,20,30,40]
+		tx_vals[2] = 1;
+		for k in 0..4 {
+			let v = (k as u64 + 1) * 10;
+			tx_vals[TX_DATA_OFFSET + 4 + k] = v;
+			ac_vals[LEAF_OFFSET + k] = v;
+		}
+		// Slot 1: is_real=0 (dummy, mismatch OK)
+		tx_vals[TX_LEAF_PI_SIZE + TX_DATA_OFFSET + 4] = 999;
+		// Slot 2: is_real=1, AC = [50,60,70,80]
+		tx_vals[2 * TX_LEAF_PI_SIZE + IS_REAL_OFFSET] = 1;
+		for k in 0..4 {
+			let v = (k as u64 + 5) * 10;
+			tx_vals[2 * TX_LEAF_PI_SIZE + TX_DATA_OFFSET + 4 + k] = v;
+			ac_vals[LEAF_OFFSET + 2 * 4 + k] = v;
+		}
+		// Slot 3: is_real=0
 
-		// 1. Build leaf circuits.
-		let t0 = Instant::now();
+		let ac_proof = prove_with_values(&ac_cd, &ac_t, &ac_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+		validate_ac_offcircuit(&ac_proof.public_inputs, &tx_proof.public_inputs, n);
+	}
+
+	#[test]
+	fn test_offcircuit_nc_mapping() {
+		let n = 2;
+		let nps = NOTES_PER_SLOT;
+		let ((nc_cd, nc_t), (_nn_cd, _nn_t), (_ac_cd, _ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, nps);
+
+		let mut nc_vals = vec![0u64; nc_t.len()];
+		let mut tx_vals = vec![0u64; tx_t.len()];
+
+		// Slot 0: is_real=1, NC note 0 = [1,2,3,4]
+		tx_vals[2] = 1;
+		for k in 0..4 {
+			let v = k as u64 + 1;
+			tx_vals[TX_DATA_OFFSET + 8 + nps * 4 + k] = v;
+			nc_vals[LEAF_OFFSET + k] = v;
+		}
+
+		let nc_proof = prove_with_values(&nc_cd, &nc_t, &nc_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+		validate_nc_offcircuit(&nc_proof.public_inputs, &tx_proof.public_inputs, n, nps);
+	}
+
+	#[test]
+	fn test_offcircuit_an_mapping() {
+		let n = 4;
+		let ((_nc_cd, _nc_t), (_nn_cd, _nn_t), (_ac_cd, _ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, NOTES_PER_SLOT);
+
+		let mut an_vals = vec![0u64; an_t.len()];
+		let mut tx_vals = vec![0u64; tx_t.len()];
+
+		// Tree AN: slots [0..3] = [10,0,0,0], [20,0,0,0], [30,0,0,0], [40,0,0,0]
+		// TX AN:   slots [0..3] = [30,0,0,0], [10,0,0,0], [40,0,0,0], [20,0,0,0] (permuted)
+		let tree_order = [10u64, 20, 30, 40];
+		let tx_order = [30u64, 10, 40, 20];
+		for s in 0..n {
+			an_vals[LEAF_OFFSET + s * 4] = tree_order[s];
+			tx_vals[s * TX_LEAF_PI_SIZE + TX_DATA_OFFSET] = tx_order[s];
+		}
+
+		let an_proof = prove_with_values(&an_cd, &an_t, &an_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+		validate_an_offcircuit(&an_proof.public_inputs, &tx_proof.public_inputs, n);
+	}
+
+	#[test]
+	fn test_offcircuit_nn_mapping() {
+		let n = 2;
+		let nps = NOTES_PER_SLOT;
+		let ((_nc_cd, _nc_t), (nn_cd, nn_t), (_ac_cd, _ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, nps);
+
+		let mut nn_vals = vec![0u64; nn_t.len()];
+		let mut tx_vals = vec![0u64; tx_t.len()];
+
+		// Tree NN leaf 0 (slot 0 note 0) = [5,0,0,0]
+		// TX NN slot 0 note 0 = [5,0,0,0]
+		nn_vals[LEAF_OFFSET] = 5;
+		tx_vals[TX_DATA_OFFSET + 8] = 5;
+		// Tree NN leaf 8 (slot 1 note 0) = [9,0,0,0]
+		// TX NN slot 1 note 0 = [9,0,0,0]
+		nn_vals[LEAF_OFFSET + nps * 4] = 9;
+		tx_vals[TX_LEAF_PI_SIZE + TX_DATA_OFFSET + 8] = 9;
+
+		let nn_proof = prove_with_values(&nn_cd, &nn_t, &nn_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+		validate_nn_offcircuit(&nn_proof.public_inputs, &tx_proof.public_inputs, n, nps);
+	}
+
+	// -----------------------------------------------------------------------
+	// Standalone in-circuit gadget tests (with verify_proof)
+	// -----------------------------------------------------------------------
+	//
+	// Each test builds a circuit that:
+	//   1. verify_proof(tree_proof) + verify_proof(tx_proof)
+	//   2. assert_bool(is_real) for each TX slot
+	//   3. Applies ONE gadget
+	//   4. Proves and verifies
+	//
+	// This isolates each gadget in an environment similar to the SA (recursive
+	// proof verification) but without the other gadgets, decompose, or Keccak.
+
+	/// Helper: build a standalone circuit that verifies tree + TX proofs and
+	/// applies the given gadget.
+	/// Build, prove and verify a circuit that replicates the real SA environment
+	/// for a single gadget: verify_proof(tree) + verify_proof(tx) + gadget +
+	/// decompose_field_to_u32_pair on ALL tree PIs (the interaction with
+	/// decompose is what triggers wire-partition conflicts in the full SA).
+	fn standalone_gadget_test<G>(
+		tree_cd: &CircuitDataNative,
+		tree_proof: &ProofNative,
+		tx_cd: &CircuitDataNative,
+		tx_proof: &ProofNative,
+		n_tx_slots: usize,
+		gadget: G,
+	) where
+		G: FnOnce(&mut CircuitBuilder<F, D>, &[Target], &[Target]),
+	{
+		let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+
+		let tree_pt = builder.add_virtual_proof_with_pis(&tree_cd.common);
+		let tree_vd = builder.constant_verifier_data(&tree_cd.verifier_only);
+		builder.verify_proof::<ConfigNative>(&tree_pt, &tree_vd, &tree_cd.common);
+
+		let tx_pt = builder.add_virtual_proof_with_pis(&tx_cd.common);
+		let tx_vd = builder.constant_verifier_data(&tx_cd.verifier_only);
+		builder.verify_proof::<ConfigNative>(&tx_pt, &tx_vd, &tx_cd.common);
+
+		// Assert is_real is boolean.
+		for s in 0..n_tx_slots {
+			let is_real =
+				BoolTarget::new_unsafe(tx_pt.public_inputs[s * TX_LEAF_PI_SIZE + IS_REAL_OFFSET]);
+			builder.assert_bool(is_real);
+		}
+
+		gadget(&mut builder, &tree_pt.public_inputs, &tx_pt.public_inputs);
+
+		// --- Replicate the real SA: decompose ALL tree PIs to u32 pairs ---
+		// This is the operation that causes wire-partition conflicts because
+		// decompose_field_to_u32_pair calls connect(recomposed, pi_target),
+		// merging ArithmeticGate outputs into tree PI target partitions.
+		let byte_range_lut = add_u8_range_check_lookup_table(&mut builder);
+		for &pi in &tree_pt.public_inputs {
+			let [hi, lo] = decompose_field_to_u32_pair(&mut builder, pi, byte_range_lut);
+			// Register u32 outputs as PIs so the decompose isn't optimised away.
+			builder.register_public_input(hi.0);
+			builder.register_public_input(lo.0);
+		}
+
+		let data = builder.build::<ConfigNative>();
+
+		let mut pw = PartialWitness::new();
+		pw.set_verifier_data_target(&tree_vd, &tree_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&tree_pt, tree_proof).unwrap();
+		pw.set_verifier_data_target(&tx_vd, &tx_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&tx_pt, tx_proof).unwrap();
+
+		let proof = data.prove(pw).expect("standalone gadget prove failed");
+		data.verify(proof).expect("standalone gadget verify failed");
+	}
+
+	#[test]
+	fn test_wire_ac_standalone_all_dummy() {
+		let n = 4;
+		let ((_nc_cd, _nc_t), (_nn_cd, _nn_t), (ac_cd, ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, NOTES_PER_SLOT);
+
+		// All dummy: is_real=0 for all slots, all zeros.
+		let ac_proof = prove_zeros(&ac_cd, &ac_t);
+		let tx_proof = prove_zeros(&tx_cd, &tx_t);
+
+		// Off-circuit validation first.
+		validate_ac_offcircuit(&ac_proof.public_inputs, &tx_proof.public_inputs, n);
+
+		standalone_gadget_test(&ac_cd, &ac_proof, &tx_cd, &tx_proof, n, |b, ac, tx| {
+			wire_ac_to_tx(b, ac, tx, n);
+		});
+	}
+
+	#[test]
+	fn test_wire_ac_standalone_mixed() {
+		let n = 4;
+		let ((_nc_cd, _nc_t), (_nn_cd, _nn_t), (ac_cd, ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, NOTES_PER_SLOT);
+
+		let mut ac_vals = vec![0u64; ac_t.len()];
+		let mut tx_vals = vec![0u64; tx_t.len()];
+
+		// Slot 0: is_real=1, matching AC = [10,20,30,40]
+		tx_vals[2] = 1;
+		for k in 0..4 {
+			let v = (k as u64 + 1) * 10;
+			tx_vals[TX_DATA_OFFSET + 4 + k] = v;
+			ac_vals[LEAF_OFFSET + k] = v;
+		}
+		// Slots 1-3: is_real=0 (dummy)
+
+		let ac_proof = prove_with_values(&ac_cd, &ac_t, &ac_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+
+		validate_ac_offcircuit(&ac_proof.public_inputs, &tx_proof.public_inputs, n);
+
+		standalone_gadget_test(&ac_cd, &ac_proof, &tx_cd, &tx_proof, n, |b, ac, tx| {
+			wire_ac_to_tx(b, ac, tx, n);
+		});
+	}
+
+	#[test]
+	fn test_wire_nc_standalone_all_dummy() {
+		let n = 4;
+		let nps = NOTES_PER_SLOT;
+		let ((nc_cd, nc_t), (_nn_cd, _nn_t), (_ac_cd, _ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, nps);
+
+		let nc_proof = prove_zeros(&nc_cd, &nc_t);
+		let tx_proof = prove_zeros(&tx_cd, &tx_t);
+
+		validate_nc_offcircuit(&nc_proof.public_inputs, &tx_proof.public_inputs, n, nps);
+
+		standalone_gadget_test(&nc_cd, &nc_proof, &tx_cd, &tx_proof, n, |b, nc, tx| {
+			wire_nc_to_tx(b, nc, tx, n, nps);
+		});
+	}
+
+	#[test]
+	fn test_wire_nc_standalone_mixed() {
+		let n = 4;
+		let nps = NOTES_PER_SLOT;
+		let ((nc_cd, nc_t), (_nn_cd, _nn_t), (_ac_cd, _ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, nps);
+
+		let mut nc_vals = vec![0u64; nc_t.len()];
+		let mut tx_vals = vec![0u64; tx_t.len()];
+
+		// Slot 0: is_real=1, NC note 0 = [1,2,3,4]
+		tx_vals[2] = 1;
+		for j in 0..nps {
+			for k in 0..4 {
+				let v = (j * 4 + k) as u64 + 1;
+				tx_vals[TX_DATA_OFFSET + 8 + nps * 4 + j * 4 + k] = v;
+				nc_vals[LEAF_OFFSET + j * 4 + k] = v;
+			}
+		}
+		// Slots 1-3: is_real=0
+
+		let nc_proof = prove_with_values(&nc_cd, &nc_t, &nc_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+
+		validate_nc_offcircuit(&nc_proof.public_inputs, &tx_proof.public_inputs, n, nps);
+
+		standalone_gadget_test(&nc_cd, &nc_proof, &tx_cd, &tx_proof, n, |b, nc, tx| {
+			wire_nc_to_tx(b, nc, tx, n, nps);
+		});
+	}
+
+	/// Helper: build a full 4-field AN hash from a seed. All 4 fields are
+	/// non-zero and distinct so the multiset check exercises all components.
+	fn an_hash(seed: u64) -> [u64; 4] {
+		[seed, seed + 1000, seed + 2000, seed + 3000]
+	}
+
+	/// Helper: build a full 4-field NN hash from a seed.
+	fn nn_hash(seed: u64) -> [u64; 4] {
+		[seed, seed + 100, seed + 200, seed + 300]
+	}
+
+	/// Write a 4-field hash into an AN/NN tree PI vector at the given slot.
+	fn set_tree_hash(vals: &mut [u64], slot: usize, hash: [u64; 4]) {
+		for k in 0..4 {
+			vals[LEAF_OFFSET + slot * 4 + k] = hash[k];
+		}
+	}
+
+	/// Write a 4-field AN hash into the TX PI vector at the given slot.
+	fn set_tx_an_hash(vals: &mut [u64], slot: usize, hash: [u64; 4]) {
+		let tx_base = slot * TX_LEAF_PI_SIZE;
+		for k in 0..4 {
+			vals[tx_base + TX_DATA_OFFSET + k] = hash[k];
+		}
+	}
+
+	/// Write a 4-field NN hash into the TX PI vector at the given slot and note.
+	fn set_tx_nn_hash(vals: &mut [u64], slot: usize, note: usize, hash: [u64; 4]) {
+		let tx_base = slot * TX_LEAF_PI_SIZE;
+		for k in 0..4 {
+			vals[tx_base + TX_DATA_OFFSET + 8 + note * 4 + k] = hash[k];
+		}
+	}
+
+	/// Write a 4-field NN hash into an NN tree PI vector at the given flat leaf index.
+	fn set_tree_nn_hash(vals: &mut [u64], leaf_idx: usize, hash: [u64; 4]) {
+		for k in 0..4 {
+			vals[LEAF_OFFSET + leaf_idx * 4 + k] = hash[k];
+		}
+	}
+
+	#[test]
+	fn test_wire_an_standalone_sorted_tree() {
+		// Simulates real AN behaviour:
+		// - Tree: 4 account-nullifier hashes in sorted order (batch insertion output)
+		// - TX: same 4 hashes in unsorted transaction order
+		// All 4 fields of each hash are non-zero.
+		let n = 4;
+		let ((_nc_cd, _nc_t), (_nn_cd, _nn_t), (_ac_cd, _ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, NOTES_PER_SLOT);
+
+		// 4 distinct hashes, sorted by field-0 (simulating tree sorted order).
+		let hashes = [an_hash(10), an_hash(20), an_hash(50), an_hash(90)];
+
+		// Tree: sorted order [10, 20, 50, 90]
+		let mut an_vals = vec![0u64; an_t.len()];
+		for (s, &h) in hashes.iter().enumerate() {
+			set_tree_hash(&mut an_vals, s, h);
+		}
+
+		// TX: unsorted transaction order [50, 10, 90, 20]
+		let tx_perm = [2usize, 0, 3, 1];
+		let mut tx_vals = vec![0u64; tx_t.len()];
+		for (s, &src) in tx_perm.iter().enumerate() {
+			set_tx_an_hash(&mut tx_vals, s, hashes[src]);
+		}
+
+		let an_proof = prove_with_values(&an_cd, &an_t, &an_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+
+		validate_an_offcircuit(&an_proof.public_inputs, &tx_proof.public_inputs, n);
+
+		standalone_gadget_test(&an_cd, &an_proof, &tx_cd, &tx_proof, n, |b, an, tx| {
+			wire_an_to_tx(b, an, tx, n);
+		});
+	}
+
+	#[test]
+	fn test_wire_an_standalone_all_same_hash() {
+		// Edge case: all 4 slots have the same hash (duplicate nullifiers).
+		// Multiset should accept {A,A,A,A} == {A,A,A,A}.
+		let n = 4;
+		let ((_nc_cd, _nc_t), (_nn_cd, _nn_t), (_ac_cd, _ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, NOTES_PER_SLOT);
+
+		let h = an_hash(42);
+		let mut an_vals = vec![0u64; an_t.len()];
+		let mut tx_vals = vec![0u64; tx_t.len()];
+		for s in 0..n {
+			set_tree_hash(&mut an_vals, s, h);
+			set_tx_an_hash(&mut tx_vals, s, h);
+		}
+
+		let an_proof = prove_with_values(&an_cd, &an_t, &an_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+
+		validate_an_offcircuit(&an_proof.public_inputs, &tx_proof.public_inputs, n);
+
+		standalone_gadget_test(&an_cd, &an_proof, &tx_cd, &tx_proof, n, |b, an, tx| {
+			wire_an_to_tx(b, an, tx, n);
+		});
+	}
+
+	#[test]
+	fn test_wire_nn_standalone_sorted_tree() {
+		// Simulates real NN behaviour:
+		// - Tree: 4 slots × 8 notes = 32 note-nullifier hashes in sorted order
+		// - TX: same 32 hashes in unsorted transaction order
+		// (Uses n=4 slots, 8 notes/slot. Only a few non-zero to keep it tractable.)
+		let n = 4;
+		let nps = NOTES_PER_SLOT;
+		let total_notes = n * nps; // 32
+		let ((_nc_cd, _nc_t), (nn_cd, nn_t), (_ac_cd, _ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, nps);
+
+		// Generate 32 distinct hashes, sorted by seed (tree order).
+		let sorted_hashes: Vec<[u64; 4]> = (0..total_notes)
+			.map(|i| nn_hash((i as u64 + 1) * 5))
+			.collect();
+
+		// Tree: flat sorted order (leaf 0 = smallest, leaf 31 = largest).
+		let mut nn_vals = vec![0u64; nn_t.len()];
+		for (leaf_idx, &h) in sorted_hashes.iter().enumerate() {
+			set_tree_nn_hash(&mut nn_vals, leaf_idx, h);
+		}
+
+		// TX: unsorted. Reverse within each slot to simulate transaction order
+		// differing from sorted tree order.
+		// Slot s gets tree leaves [s*8+7, s*8+6, ..., s*8+0] (reversed).
+		let mut tx_vals = vec![0u64; tx_t.len()];
+		for s in 0..n {
+			for j in 0..nps {
+				let tree_leaf_idx = s * nps + (nps - 1 - j); // reversed
+				set_tx_nn_hash(&mut tx_vals, s, j, sorted_hashes[tree_leaf_idx]);
+			}
+		}
+
+		let nn_proof = prove_with_values(&nn_cd, &nn_t, &nn_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+
+		validate_nn_offcircuit(&nn_proof.public_inputs, &tx_proof.public_inputs, n, nps);
+
+		standalone_gadget_test(&nn_cd, &nn_proof, &tx_cd, &tx_proof, n, |b, nn, tx| {
+			wire_nn_to_tx(b, nn, tx, n, nps);
+		});
+	}
+
+	#[test]
+	fn test_wire_nn_standalone_cross_slot_permutation() {
+		// Notes are shuffled ACROSS slots (not just within), simulating the
+		// tree sorting notes from different TXs into a global sorted order.
+		let n = 2;
+		let nps = NOTES_PER_SLOT;
+		let total_notes = n * nps; // 16
+		let ((_nc_cd, _nc_t), (nn_cd, nn_t), (_ac_cd, _ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, nps);
+
+		// 16 distinct hashes.
+		let hashes: Vec<[u64; 4]> = (0..total_notes)
+			.map(|i| nn_hash((i as u64 + 1) * 7))
+			.collect();
+
+		// Tree: sorted order (ascending by seed).
+		let mut nn_vals = vec![0u64; nn_t.len()];
+		for (leaf_idx, &h) in hashes.iter().enumerate() {
+			set_tree_nn_hash(&mut nn_vals, leaf_idx, h);
+		}
+
+		// TX: interleave — slot 0 gets even-indexed hashes, slot 1 gets odd-indexed.
+		// This simulates two TXs whose notes interleave in the sorted tree.
+		let mut tx_vals = vec![0u64; tx_t.len()];
+		for j in 0..nps {
+			set_tx_nn_hash(&mut tx_vals, 0, j, hashes[j * 2]); // even
+			set_tx_nn_hash(&mut tx_vals, 1, j, hashes[j * 2 + 1]); // odd
+		}
+
+		let nn_proof = prove_with_values(&nn_cd, &nn_t, &nn_vals);
+		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+
+		validate_nn_offcircuit(&nn_proof.public_inputs, &tx_proof.public_inputs, n, nps);
+
+		standalone_gadget_test(&nn_cd, &nn_proof, &tx_cd, &tx_proof, n, |b, nn, tx| {
+			wire_nn_to_tx(b, nn, tx, n, nps);
+		});
+	}
+
+	// -----------------------------------------------------------------------
+	// Standalone gadget tests with random real/dummy patterns
+	// -----------------------------------------------------------------------
+
+	/// Helper: populate AC tree and TX values for a given real/dummy pattern.
+	/// Real slots get matching non-zero AC values; dummy slots get mismatched
+	/// values (to confirm the conditional gate actually skips them).
+	fn populate_ac_random_pattern(ac_vals: &mut [u64], tx_vals: &mut [u64], is_real: &[bool]) {
+		for (s, &real) in is_real.iter().enumerate() {
+			let tx_base = s * TX_LEAF_PI_SIZE;
+			if real {
+				tx_vals[tx_base + IS_REAL_OFFSET] = 1;
+				for k in 0..4 {
+					let v = (s as u64 * 100) + k as u64 + 1;
+					tx_vals[tx_base + TX_DATA_OFFSET + 4 + k] = v;
+					ac_vals[LEAF_OFFSET + s * 4 + k] = v;
+				}
+			} else {
+				// is_real=0, deliberately mismatch TX vs tree.
+				tx_vals[tx_base + IS_REAL_OFFSET] = 0;
+				tx_vals[tx_base + TX_DATA_OFFSET + 4] = 9999;
+				ac_vals[LEAF_OFFSET + s * 4] = 1111;
+			}
+		}
+	}
+
+	/// Helper: populate NC tree and TX values for a given real/dummy pattern.
+	fn populate_nc_random_pattern(
+		nc_vals: &mut [u64],
+		tx_vals: &mut [u64],
+		is_real: &[bool],
+		notes_per_slot: usize,
+	) {
+		for (s, &real) in is_real.iter().enumerate() {
+			let tx_base = s * TX_LEAF_PI_SIZE;
+			if real {
+				tx_vals[tx_base + IS_REAL_OFFSET] = 1;
+				for j in 0..notes_per_slot {
+					for k in 0..4 {
+						let v = (s as u64 * 1000) + (j as u64 * 10) + k as u64 + 1;
+						tx_vals[tx_base + TX_DATA_OFFSET + 8 + notes_per_slot * 4 + j * 4 + k] = v;
+						let leaf_idx = s * notes_per_slot + j;
+						nc_vals[LEAF_OFFSET + leaf_idx * 4 + k] = v;
+					}
+				}
+			} else {
+				tx_vals[tx_base + IS_REAL_OFFSET] = 0;
+				// Mismatch on purpose (skipped by is_real=0).
+				tx_vals[tx_base + TX_DATA_OFFSET + 8 + notes_per_slot * 4] = 7777;
+				let leaf_idx = s * notes_per_slot;
+				nc_vals[LEAF_OFFSET + leaf_idx * 4] = 3333;
+			}
+		}
+	}
+
+	#[test]
+	fn test_wire_ac_standalone_random_patterns() {
+		let n = 4;
+		let ((_nc_cd, _nc_t), (_nn_cd, _nn_t), (ac_cd, ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, NOTES_PER_SLOT);
+
+		// Test several patterns: all-real, alternating, only-last, only-middle.
+		let patterns: &[&[bool]] = &[
+			&[true, true, true, true],
+			&[true, false, true, false],
+			&[false, true, false, true],
+			&[false, false, false, true],
+			&[false, true, true, false],
+		];
+
+		for pattern in patterns {
+			let mut ac_vals = vec![0u64; ac_t.len()];
+			let mut tx_vals = vec![0u64; tx_t.len()];
+			populate_ac_random_pattern(&mut ac_vals, &mut tx_vals, pattern);
+
+			let ac_proof = prove_with_values(&ac_cd, &ac_t, &ac_vals);
+			let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+			validate_ac_offcircuit(&ac_proof.public_inputs, &tx_proof.public_inputs, n);
+
+			standalone_gadget_test(&ac_cd, &ac_proof, &tx_cd, &tx_proof, n, |b, ac, tx| {
+				wire_ac_to_tx(b, ac, tx, n);
+			});
+		}
+	}
+
+	#[test]
+	fn test_wire_nc_standalone_random_patterns() {
+		let n = 4;
+		let nps = NOTES_PER_SLOT;
+		let ((nc_cd, nc_t), (_nn_cd, _nn_t), (_ac_cd, _ac_t), (_an_cd, _an_t), (tx_cd, tx_t)) =
+			build_all_leaves(n, nps);
+
+		let patterns: &[&[bool]] = &[
+			&[true, true, true, true],
+			&[true, false, true, false],
+			&[false, true, false, true],
+			&[false, false, false, true],
+			&[false, true, true, false],
+		];
+
+		for pattern in patterns {
+			let mut nc_vals = vec![0u64; nc_t.len()];
+			let mut tx_vals = vec![0u64; tx_t.len()];
+			populate_nc_random_pattern(&mut nc_vals, &mut tx_vals, pattern, nps);
+
+			let nc_proof = prove_with_values(&nc_cd, &nc_t, &nc_vals);
+			let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
+			validate_nc_offcircuit(&nc_proof.public_inputs, &tx_proof.public_inputs, n, nps);
+
+			standalone_gadget_test(&nc_cd, &nc_proof, &tx_cd, &tx_proof, n, |b, nc, tx| {
+				wire_nc_to_tx(b, nc, tx, n, nps);
+			});
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Combined gadget tests — all 4 gadgets together (replicates full SA env)
+	// -----------------------------------------------------------------------
+
+	/// Build a circuit with all 5 inner proof verifications, all 4 cross-check
+	/// gadgets, and decompose_field_to_u32_pair on all 4 tree PI vectors.
+	/// This replicates the full SuperAggregator environment EXCEPT Keccak.
+	#[test]
+	fn test_combined_all_gadgets_no_keccak() {
+		let n = 4;
+		let nps = NOTES_PER_SLOT;
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
-			build_all_leaves(N_TX, NOTES);
-		println!("leaf circuits built in {:.2?}", t0.elapsed());
+			build_all_leaves(n, nps);
 
-		// 2. Build SA circuit.
-		let t1 = Instant::now();
-		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
-		println!("SA circuit built in {:.2?}", t1.elapsed());
-		println!(
-			"  SA degree_bits = {:?}",
-			super_agg.circuit_data.common.degree_bits()
-		);
-
-		// 3. Prove leaf proofs (all zeros = all-dummy).
-		let t2 = Instant::now();
+		// All dummy (zeros) — matches test_pipeline_4tx_all_dummy.
 		let nc_proof = prove_zeros(&nc_cd, &nc_t);
 		let nn_proof = prove_zeros(&nn_cd, &nn_t);
 		let ac_proof = prove_zeros(&ac_cd, &ac_t);
 		let an_proof = prove_zeros(&an_cd, &an_t);
 		let tx_proof = prove_zeros(&tx_cd, &tx_t);
-		println!("leaf proofs generated in {:.2?}", t2.elapsed());
 
-		// 4. Prove SA.
-		let t3 = Instant::now();
-		let root = super_agg
-			.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_proof)
-			.expect("128-TX all-dummy SA prove failed");
-		println!("SA proof generated in {:.2?}", t3.elapsed());
+		let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
 
-		// 5. Verify.
-		let t4 = Instant::now();
-		assert_eq!(root.public_inputs.len(), 8);
-		super_agg
-			.circuit_data
-			.verify(root)
-			.expect("128-TX SA verify failed");
-		println!("SA proof verified in {:.2?}", t4.elapsed());
-		println!("=== total: {:.2?} ===", t0.elapsed());
-	}
+		// 1. Add proof targets + verifier data for all 5 proofs.
+		let nc_pt = builder.add_virtual_proof_with_pis(&nc_cd.common);
+		let nc_vd = builder.constant_verifier_data(&nc_cd.verifier_only);
+		let nn_pt = builder.add_virtual_proof_with_pis(&nn_cd.common);
+		let nn_vd = builder.constant_verifier_data(&nn_cd.verifier_only);
+		let ac_pt = builder.add_virtual_proof_with_pis(&ac_cd.common);
+		let ac_vd = builder.constant_verifier_data(&ac_cd.verifier_only);
+		let an_pt = builder.add_virtual_proof_with_pis(&an_cd.common);
+		let an_vd = builder.constant_verifier_data(&an_cd.verifier_only);
+		let tx_pt = builder.add_virtual_proof_with_pis(&tx_cd.common);
+		let tx_vd = builder.constant_verifier_data(&tx_cd.verifier_only);
 
-	/// 128-TX mixed: 64 real slots with non-zero matching data + 64 dummy slots.
-	/// Exercises all cross-checks (AC, NC positional; AN, NN multi-set) at
-	/// production scale with a realistic mix.
-	#[test]
-	#[ignore] // slow; run with: cargo test -p tessera-trees --release test_scale_128tx_mixed -- --ignored --nocapture
-	fn test_scale_128tx_mixed_real_and_dummy() {
-		use std::time::Instant;
+		// 2. Verify all 5 proofs.
+		builder.verify_proof::<ConfigNative>(&nc_pt, &nc_vd, &nc_cd.common);
+		builder.verify_proof::<ConfigNative>(&nn_pt, &nn_vd, &nn_cd.common);
+		builder.verify_proof::<ConfigNative>(&ac_pt, &ac_vd, &ac_cd.common);
+		builder.verify_proof::<ConfigNative>(&an_pt, &an_vd, &an_cd.common);
+		builder.verify_proof::<ConfigNative>(&tx_pt, &tx_vd, &tx_cd.common);
 
-		const N_TX: usize = 128;
-		const NOTES: usize = 8;
-		const LEAF_OFFSET: usize = 8;
-		const N_REAL: usize = 64; // first 64 slots are real, rest are dummy
+		// 3. Assert is_real is boolean.
+		for s in 0..n {
+			let is_real =
+				BoolTarget::new_unsafe(tx_pt.public_inputs[s * TX_LEAF_PI_SIZE + IS_REAL_OFFSET]);
+			builder.assert_bool(is_real);
+		}
 
-		println!(
-			"=== 128-TX mixed test ({N_REAL} real + {} dummy) ===",
-			N_TX - N_REAL
+		// 4. All 4 cross-check gadgets.
+		wire_ac_to_tx(&mut builder, &ac_pt.public_inputs, &tx_pt.public_inputs, n);
+		wire_nc_to_tx(
+			&mut builder,
+			&nc_pt.public_inputs,
+			&tx_pt.public_inputs,
+			n,
+			nps,
+		);
+		wire_an_to_tx(&mut builder, &an_pt.public_inputs, &tx_pt.public_inputs, n);
+		wire_nn_to_tx(
+			&mut builder,
+			&nn_pt.public_inputs,
+			&tx_pt.public_inputs,
+			n,
+			nps,
 		);
 
-		let t0 = Instant::now();
+		// 5. Decompose ALL 4 tree PI vectors to u32 pairs (same as real SA).
+		let byte_range_lut = add_u8_range_check_lookup_table(&mut builder);
+		let all_tree_pis: Vec<Target> = nc_pt
+			.public_inputs
+			.iter()
+			.chain(nn_pt.public_inputs.iter())
+			.chain(ac_pt.public_inputs.iter())
+			.chain(an_pt.public_inputs.iter())
+			.copied()
+			.collect();
+
+		for &pi in &all_tree_pis {
+			let [hi, lo] = decompose_field_to_u32_pair(&mut builder, pi, byte_range_lut);
+			builder.register_public_input(hi.0);
+			builder.register_public_input(lo.0);
+		}
+
+		let data = builder.build::<ConfigNative>();
+
+		let mut pw = PartialWitness::new();
+		pw.set_verifier_data_target(&nc_vd, &nc_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&nc_pt, &nc_proof).unwrap();
+		pw.set_verifier_data_target(&nn_vd, &nn_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&nn_pt, &nn_proof).unwrap();
+		pw.set_verifier_data_target(&ac_vd, &ac_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&ac_pt, &ac_proof).unwrap();
+		pw.set_verifier_data_target(&an_vd, &an_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&an_pt, &an_proof).unwrap();
+		pw.set_verifier_data_target(&tx_vd, &tx_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&tx_pt, &tx_proof).unwrap();
+
+		let proof = data
+			.prove(pw)
+			.expect("combined all-gadgets (no keccak) prove failed");
+		data.verify(proof)
+			.expect("combined all-gadgets (no keccak) verify failed");
+	}
+
+	/// Same as above but WITH Keccak-256 — matches the real SuperAggregator exactly.
+	#[test]
+	fn test_combined_all_gadgets_with_keccak() {
+		let n = 4;
+		let nps = NOTES_PER_SLOT;
 		let ((nc_cd, nc_t), (nn_cd, nn_t), (ac_cd, ac_t), (an_cd, an_t), (tx_cd, tx_t)) =
-			build_all_leaves(N_TX, NOTES);
-		println!("leaf circuits built in {:.2?}", t0.elapsed());
+			build_all_leaves(n, nps);
 
-		let t1 = Instant::now();
-		let super_agg = make_super_agg(&nc_cd, &nn_cd, &ac_cd, &an_cd, &tx_cd);
-		println!("SA circuit built in {:.2?}", t1.elapsed());
+		let nc_proof = prove_zeros(&nc_cd, &nc_t);
+		let nn_proof = prove_zeros(&nn_cd, &nn_t);
+		let ac_proof = prove_zeros(&ac_cd, &ac_t);
+		let an_proof = prove_zeros(&an_cd, &an_t);
+		let tx_proof = prove_zeros(&tx_cd, &tx_t);
 
-		// --- Build tree leaf values ---
-		// Each real slot s gets distinct non-zero values:
-		//   AN[s] word 0 = 1000 + s
-		//   AC[s] word 0 = 2000 + s
-		//   NN[s][j] word 0 = 3000 + s*8 + j
-		//   NC[s][j] word 0 = 4000 + s*8 + j
-		// Dummy slots (s >= N_REAL) stay zero in all trees.
-		let mut an_vals = vec![0u64; an_t.len()];
-		let mut ac_vals = vec![0u64; ac_t.len()];
-		let mut nn_vals = vec![0u64; nn_t.len()];
-		let mut nc_vals = vec![0u64; nc_t.len()];
+		let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
 
-		for s in 0..N_REAL {
-			an_vals[LEAF_OFFSET + s * 4] = 1000 + s as u64;
-			ac_vals[LEAF_OFFSET + s * 4] = 2000 + s as u64;
-			for j in 0..NOTES {
-				let leaf_idx = s * NOTES + j;
-				nn_vals[LEAF_OFFSET + leaf_idx * 4] = 3000 + leaf_idx as u64;
-				nc_vals[LEAF_OFFSET + leaf_idx * 4] = 4000 + leaf_idx as u64;
-			}
+		let nc_pt = builder.add_virtual_proof_with_pis(&nc_cd.common);
+		let nc_vd = builder.constant_verifier_data(&nc_cd.verifier_only);
+		let nn_pt = builder.add_virtual_proof_with_pis(&nn_cd.common);
+		let nn_vd = builder.constant_verifier_data(&nn_cd.verifier_only);
+		let ac_pt = builder.add_virtual_proof_with_pis(&ac_cd.common);
+		let ac_vd = builder.constant_verifier_data(&ac_cd.verifier_only);
+		let an_pt = builder.add_virtual_proof_with_pis(&an_cd.common);
+		let an_vd = builder.constant_verifier_data(&an_cd.verifier_only);
+		let tx_pt = builder.add_virtual_proof_with_pis(&tx_cd.common);
+		let tx_vd = builder.constant_verifier_data(&tx_cd.verifier_only);
+
+		builder.verify_proof::<ConfigNative>(&nc_pt, &nc_vd, &nc_cd.common);
+		builder.verify_proof::<ConfigNative>(&nn_pt, &nn_vd, &nn_cd.common);
+		builder.verify_proof::<ConfigNative>(&ac_pt, &ac_vd, &ac_cd.common);
+		builder.verify_proof::<ConfigNative>(&an_pt, &an_vd, &an_cd.common);
+		builder.verify_proof::<ConfigNative>(&tx_pt, &tx_vd, &tx_cd.common);
+
+		for s in 0..n {
+			let is_real =
+				BoolTarget::new_unsafe(tx_pt.public_inputs[s * TX_LEAF_PI_SIZE + IS_REAL_OFFSET]);
+			builder.assert_bool(is_real);
 		}
 
-		let t2 = Instant::now();
-		let an_proof = prove_with_values(&an_cd, &an_t, &an_vals);
-		let ac_proof = prove_with_values(&ac_cd, &ac_t, &ac_vals);
-		let nn_proof = prove_with_values(&nn_cd, &nn_t, &nn_vals);
-		let nc_proof = prove_with_values(&nc_cd, &nc_t, &nc_vals);
+		wire_ac_to_tx(&mut builder, &ac_pt.public_inputs, &tx_pt.public_inputs, n);
+		wire_nc_to_tx(
+			&mut builder,
+			&nc_pt.public_inputs,
+			&tx_pt.public_inputs,
+			n,
+			nps,
+		);
+		wire_an_to_tx(&mut builder, &an_pt.public_inputs, &tx_pt.public_inputs, n);
+		wire_nn_to_tx(
+			&mut builder,
+			&nn_pt.public_inputs,
+			&tx_pt.public_inputs,
+			n,
+			nps,
+		);
 
-		// --- Build TX values ---
-		// Real slots: is_real=1, data matches tree leaves.
-		// Dummy slots: is_real=0, all zeros (matching zero tree leaves).
-		let tx_n_pi = tx_t.len();
-		let mut tx_vals = vec![0u64; tx_n_pi];
+		// Decompose + Keccak (same as real SA).
+		let byte_range_lut = add_u8_range_check_lookup_table(&mut builder);
+		let all_tree_pis: Vec<Target> = nc_pt
+			.public_inputs
+			.iter()
+			.chain(nn_pt.public_inputs.iter())
+			.chain(ac_pt.public_inputs.iter())
+			.chain(an_pt.public_inputs.iter())
+			.copied()
+			.collect();
 
-		for s in 0..N_REAL {
-			let tx_base = s * 77;
-			tx_vals[tx_base + 2] = 1; // is_real
-			tx_vals[tx_base + 3] = 1000 + s as u64; // AN word 0
-			tx_vals[tx_base + 7] = 2000 + s as u64; // AC word 0
-			for j in 0..NOTES {
-				let leaf_idx = s * NOTES + j;
-				tx_vals[tx_base + 11 + j * 4] = 3000 + leaf_idx as u64; // NN[j] word 0
-				tx_vals[tx_base + 43 + j * 4] = 4000 + leaf_idx as u64; // NC[j] word 0
-			}
+		let mut u32_targets = Vec::with_capacity(all_tree_pis.len() * 2);
+		for &pi in &all_tree_pis {
+			let [hi, lo] = decompose_field_to_u32_pair(&mut builder, pi, byte_range_lut);
+			u32_targets.push(hi.0);
+			u32_targets.push(lo.0);
 		}
-		// Dummy slots (s >= N_REAL): is_real=0, all zeros — already zeroed.
 
-		let tx_proof = prove_with_values(&tx_cd, &tx_t, &tx_vals);
-		println!("leaf proofs generated in {:.2?}", t2.elapsed());
+		let hash = builder.keccak256::<ConfigNative>(&u32_targets);
+		for &word in &hash {
+			builder.register_public_input(word);
+		}
 
-		let t3 = Instant::now();
-		let root = super_agg
-			.prove(nc_proof, nn_proof, ac_proof, an_proof, tx_proof)
-			.expect("128-TX mixed SA prove failed");
-		println!("SA proof generated in {:.2?}", t3.elapsed());
+		let data = builder.build::<ConfigNative>();
 
-		let t4 = Instant::now();
-		assert_eq!(root.public_inputs.len(), 8);
-		super_agg
-			.circuit_data
-			.verify(root)
-			.expect("128-TX mixed SA verify failed");
-		println!("SA proof verified in {:.2?}", t4.elapsed());
-		println!("=== total: {:.2?} ===", t0.elapsed());
+		let mut pw = PartialWitness::new();
+		pw.set_verifier_data_target(&nc_vd, &nc_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&nc_pt, &nc_proof).unwrap();
+		pw.set_verifier_data_target(&nn_vd, &nn_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&nn_pt, &nn_proof).unwrap();
+		pw.set_verifier_data_target(&ac_vd, &ac_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&ac_pt, &ac_proof).unwrap();
+		pw.set_verifier_data_target(&an_vd, &an_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&an_pt, &an_proof).unwrap();
+		pw.set_verifier_data_target(&tx_vd, &tx_cd.verifier_only)
+			.unwrap();
+		pw.set_proof_with_pis_target(&tx_pt, &tx_proof).unwrap();
+
+		let proof = data
+			.prove(pw)
+			.expect("combined all-gadgets WITH keccak prove failed");
+		data.verify(proof)
+			.expect("combined all-gadgets WITH keccak verify failed");
 	}
 }

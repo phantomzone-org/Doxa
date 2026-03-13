@@ -9,7 +9,10 @@ use plonky2::{
 use plonky2_field::extension::Extendable;
 use tessera_trees::{
 	plonky2_gadgets::u32::{U32Target, add_u8_range_check_lookup_table},
-	tree::{HASH_SIZE, hasher::MerkleHashCircuit},
+	tree::{
+		HASH_SIZE,
+		hasher::{MerkleHashCircuit, MerkleHashTarget},
+	},
 };
 
 use crate::{
@@ -70,11 +73,14 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	fn derive_dummy_account_nullifier(&mut self, dacc: DummyAccountTarget)
 	-> DummyAccountNullifier;
 
-	fn conditionally_assert_account_commitment_exists_in_act<H: MerkleHashCircuit<F, D>>(
+	fn conditionally_assert_account_commitment_exists_in_act<
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
+	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
 		act_root: ActRootTarget,
 		condition: BoolTarget,
+		ctx: &H::CircuitContext,
 	) -> CommitmentTreeMerkleTarget<ACT_DEPTH>;
 
 	fn derive_nullifier_key(&mut self, priv_id: PrivateIdentifierTarget) -> NullifierKeyTarget;
@@ -124,7 +130,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 
 	fn derive_dummy_note_commitment(&mut self, dnote: DummyNoteTarget) -> NoteCommitmentTarget;
 
-	fn assert_inotes_valid<H: MerkleHashCircuit<F, D>>(
+	fn assert_inotes_valid<H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>>(
 		&mut self,
 		inotes: [NoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
@@ -132,6 +138,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
+		ctx: &H::CircuitContext,
 	) -> [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
@@ -251,14 +258,17 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		AccountCommitmentTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
 	}
 
-	fn conditionally_assert_account_commitment_exists_in_act<H: MerkleHashCircuit<F, D>>(
+	fn conditionally_assert_account_commitment_exists_in_act<
+		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
+	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
 		act_root: ActRootTarget,
 		condition: BoolTarget,
+		ctx: &H::CircuitContext,
 	) -> CommitmentTreeMerkleTarget<ACT_DEPTH> {
 		conditional_merkle_verify_commitment_tree_gadget::<H, F, D, ACT_DEPTH>(
-			self, acc_comm.0, act_root.0, condition,
+			self, acc_comm.0, act_root.0, condition, ctx,
 		)
 	}
 
@@ -493,7 +503,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		accin_merkletrgts
 	}
 
-	fn assert_inotes_valid<H: MerkleHashCircuit<F, D>>(
+	fn assert_inotes_valid<H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>>(
 		&mut self,
 		inotes: [NoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
@@ -501,6 +511,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
+		ctx: &H::CircuitContext,
 	) -> [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH] {
 		let merkle_proofs: [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH] =
 			core::array::from_fn(|i| {
@@ -509,6 +520,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 					inotes_comm[i].0,
 					nct_root.0,
 					inote_isactive[i],
+					ctx,
 				)
 			});
 

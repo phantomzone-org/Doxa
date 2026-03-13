@@ -26,7 +26,7 @@ use plonky2::{
 	util::serialization::{DefaultGateSerializer, DefaultGeneratorSerializer},
 };
 use serde::{Deserialize, Serialize};
-use tessera_trees::{ConfigNative, D, F};
+use tessera_trees::{proof_aggregation::TX_DATA_OFFSET, ConfigNative, D, F};
 
 // ---------------------------------------------------------------------------
 // Contract bindings
@@ -289,17 +289,21 @@ async fn cmd_private_tx(count: usize) -> Result<()> {
 
 		// Extract PI data from the proof to populate the request body.
 		// PI layout (77 total: 75 explicit + 2 lookup metadata):
-		//   [0]=subpool_id_in, [1]=subpool_id_out, [2]=not_fake_tx,
-		//   [3..7]=AN, [7..11]=AC, [11..43]=NN(8×4), [43..75]=NC(8×4), [75..77]=lookup
-		// subpool_ids are implicitly registered by add_virtual_account_target.
+		//   [0..2]=LUT metadata, [2]=subpool_id_in, [3]=subpool_id_out,
+		//   [4]=not_fake_tx, [5..9]=AN, [9..13]=AC, [13..45]=NN(8×4),
+		//   [45..77]=NC(8×4)
 		let pis = &real_proof.public_inputs;
-		let account_nullifier = pi_hash_to_b256(&pis[3..7]);
-		let account_commitment = pi_hash_to_b256(&pis[7..11]);
+		let an_off = TX_DATA_OFFSET;
+		let ac_off = TX_DATA_OFFSET + 4;
+		let nn_off = TX_DATA_OFFSET + 8;
+		let nc_off = TX_DATA_OFFSET + 40;
+		let account_nullifier = pi_hash_to_b256(&pis[an_off..an_off + 4]);
+		let account_commitment = pi_hash_to_b256(&pis[ac_off..ac_off + 4]);
 		let note_nullifiers: Vec<B256> = (0..8)
-			.map(|i| pi_hash_to_b256(&pis[11 + i * 4..11 + (i + 1) * 4]))
+			.map(|i| pi_hash_to_b256(&pis[nn_off + i * 4..nn_off + (i + 1) * 4]))
 			.collect();
 		let note_commitments: Vec<B256> = (0..8)
-			.map(|i| pi_hash_to_b256(&pis[43 + i * 4..43 + (i + 1) * 4]))
+			.map(|i| pi_hash_to_b256(&pis[nc_off + i * 4..nc_off + (i + 1) * 4]))
 			.collect();
 
 		let proof_hex = format!("0x{}", hex::encode(&proof_bytes));

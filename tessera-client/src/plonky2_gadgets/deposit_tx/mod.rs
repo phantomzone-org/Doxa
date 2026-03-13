@@ -17,7 +17,7 @@ use primitive_types::{H160, U256};
 use tessera_trees::{
 	F,
 	plonky2_gadgets::u32::add_u8_range_check_lookup_table,
-	tree::hasher::{HashOutput, MerkleHashCircuit},
+	tree::hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 };
 
 use crate::{
@@ -60,11 +60,12 @@ pub(crate) mod cb;
 pub(crate) mod targets;
 
 pub fn deposit_tx_circuit<
-	H: MerkleHashCircuit<F, D>,
+	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
+	ctx: &H::CircuitContext,
 ) -> DepositTxTargets {
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
@@ -136,6 +137,7 @@ pub fn deposit_tx_circuit<
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
+		ctx,
 	);
 
 	// Enforce recipient match: deposit_note must target accin
@@ -626,7 +628,8 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 
 		// ── Fill witness ──────────────────────────────────────────────────────
@@ -658,7 +661,8 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 

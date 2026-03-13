@@ -163,7 +163,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 		// These values are required to:
 		// - authenticate the predecessor
 		// - rewire its successor pointer
-		let old_root: H::Digest = self.tree.get_root();
+		let old_root: H::Digest = self.tree.compute_root();
 		let pred_value: H::Digest = pred_node.value;
 		let pred_old_next_index: usize = pred_node.next_index;
 		let pred_old_next_value: H::Digest = pred_node.next_value;
@@ -232,7 +232,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 		// Phase 3: Emit STARK-friendly proof
 		// ============================================================
 
-		let new_root: H::Digest = self.tree.get_root();
+		let new_root: H::Digest = self.tree.compute_root();
 
 		Ok(NullifierInsertProof {
 			// Public inputs
@@ -255,7 +255,7 @@ impl<H: MerkleHash> NullifierTree<H> {
 	}
 
 	pub fn get_root(&self) -> H::Digest {
-		self.tree.get_root()
+		self.tree.compute_root()
 	}
 
 	pub fn verify(&self) -> MerkleTreeResult<()> {
