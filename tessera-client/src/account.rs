@@ -132,10 +132,37 @@ impl AccountStateTree {
 		self.tree.size()
 	}
 
-	/// Insert or overwrite a leaf; also updates the asset → (index, amount) map.
-	pub fn set_leaf(&mut self, at_index: usize, leaf: AccountStateTreeLeaf) {
-		self.assets.insert(leaf.asset_id, (at_index, leaf.amount));
-		self.tree.set_leaf(at_index, leaf);
+	/// Insert a new asset. Returns `Err` if `asset_id` is already tracked.
+	pub fn insert_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<(), String> {
+		if self.assets.contains_key(&asset_id) {
+			return Err(format!("asset {:?} already exists", asset_id));
+		}
+		let index = self.tree.next_index();
+		self.tree.insert(AccountStateTreeLeaf { asset_id, amount });
+		self.assets.insert(asset_id, (index, amount));
+		Ok(())
+	}
+
+	/// Update an existing asset's amount. Returns `Ok(previous_amount)` or `Err` if not found.
+	pub fn update_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<U256, String> {
+		let &(index, prev_amount) = self
+			.assets
+			.get(&asset_id)
+			.ok_or_else(|| format!("asset {:?} not found", asset_id))?;
+		self.tree.set_leaf(index, AccountStateTreeLeaf { asset_id, amount });
+		self.assets.insert(asset_id, (index, amount));
+		Ok(prev_amount)
+	}
+
+	/// Insert if new, update if existing.
+	/// Returns `None` if newly inserted, `Some(previous_amount)` if updated.
+	pub fn insert_or_update_asset(&mut self, asset_id: AssetId, amount: U256) -> Option<U256> {
+		if self.assets.contains_key(&asset_id) {
+			Some(self.update_asset(asset_id, amount).unwrap())
+		} else {
+			self.insert_asset(asset_id, amount).unwrap();
+			None
+		}
 	}
 
 	pub fn merkle_proof_at(

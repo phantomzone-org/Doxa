@@ -279,15 +279,9 @@ pub(crate) fn set_withdraw_tx_witness(
 
 			let new_bal = old_bal - withdrawal_amt;
 			slot_accout_amts[i] = new_bal;
-			slot_exists_out[i] = true;
+			slot_exists_out[i] = new_bal > U256::zero();
 
-			current_ast.set_leaf(
-				ast_index,
-				AccountStateTreeLeaf {
-					asset_id,
-					amount: new_bal,
-				},
-			);
+			current_ast.insert_or_update_asset(asset_id, new_bal);
 		} else {
 			// Padding slot: zero amounts, default-leaf proof at next free index.
 			slot_proofs.push(current_ast.merkle_proof_at(current_ast.next_index()));
@@ -447,27 +441,18 @@ mod tests {
 		};
 
 		// ── Mutate AST: set balances (asset_id=1 → 100, 2 → 200, 3 → 300) ─
-		accin.ast.set_leaf(
-			0,
-			AccountStateTreeLeaf {
-				asset_id: AssetId(F::from_canonical_u64(1)),
-				amount: U256::from(110u64),
-			},
-		);
-		accin.ast.set_leaf(
-			1,
-			AccountStateTreeLeaf {
-				asset_id: AssetId(F::from_canonical_u64(2)),
-				amount: U256::from(200u64),
-			},
-		);
-		accin.ast.set_leaf(
-			2,
-			AccountStateTreeLeaf {
-				asset_id: AssetId(F::from_canonical_u64(3)),
-				amount: U256::from(300u64),
-			},
-		);
+		accin
+			.ast
+			.insert_asset(AssetId(F::from_canonical_u64(1)), U256::from(100u64))
+			.unwrap();
+		accin
+			.ast
+			.insert_asset(AssetId(F::from_canonical_u64(2)), U256::from(200u64))
+			.unwrap();
+		accin
+			.ast
+			.insert_asset(AssetId(F::from_canonical_u64(3)), U256::from(300u64))
+			.unwrap();
 
 		// ── Insert accin into ACT ─────────────────────────────────────────
 		let mut act = CommitmentTree::<HashOutput>::new(ACT_DEPTH);
@@ -484,7 +469,7 @@ mod tests {
 		// ── Withdrawals: (asset_id=2, 50) and (asset_id=3, 50) ───────────
 		let withdrawals = [
 			(AssetId(F::from_canonical_u64(2)), U256::from(50u64)),
-			(AssetId(F::from_canonical_u64(3)), U256::from(50u64)),
+			(AssetId(F::from_canonical_u64(3)), U256::from(60u64)),
 		];
 
 		// ── Compute native TxHash and sign ────────────────────────────────
@@ -495,15 +480,9 @@ mod tests {
 		for (i, &(asset_id, withdrawal_amt)) in withdrawals.iter().enumerate() {
 			slot_asset_ids[i] = asset_id;
 			slot_withdrawal_amts[i] = withdrawal_amt;
-			let (idx, old_bal) = current_ast.amount_for(asset_id).unwrap();
+			let (_, old_bal) = current_ast.amount_for(asset_id).unwrap();
 			let new_bal = old_bal - withdrawal_amt;
-			current_ast.set_leaf(
-				idx,
-				AccountStateTreeLeaf {
-					asset_id,
-					amount: new_bal,
-				},
-			);
+			current_ast.insert_or_update_asset(asset_id, new_bal);
 		}
 		let mut accout = accin.clone();
 		accout.nonce = Nonce(F::from_canonical_u64(2));
