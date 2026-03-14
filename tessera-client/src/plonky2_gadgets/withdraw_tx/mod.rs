@@ -298,13 +298,6 @@ pub(crate) fn set_withdraw_tx_witness(
 	let mut accout = accin.clone();
 	accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
 	accout.ast = current_ast.clone();
-	assert!(accin.ast.root().0 == accout.ast.root().0);
-	dbg!(accin.ast.root());
-	dbg!(
-		current_ast
-			.merkle_proof_at(current_ast.next_index())
-			.extract_root()
-	);
 
 	// ── Native TxHash ─────────────────────────────────────────────────────
 	let accin_null = accin.nullifier(Some(accin_act_merkle_proof.pos as u64));
@@ -490,8 +483,8 @@ mod tests {
 
 		// ── Withdrawals: (asset_id=2, 50) and (asset_id=3, 50) ───────────
 		let withdrawals = [
-			// (AssetId(F::from_canonical_u64(2)), U256::from(50u64)),
-			// (AssetId(F::from_canonical_u64(3)), U256::from(50u64)),
+			(AssetId(F::from_canonical_u64(2)), U256::from(50u64)),
+			(AssetId(F::from_canonical_u64(3)), U256::from(50u64)),
 		];
 
 		// ── Compute native TxHash and sign ────────────────────────────────
