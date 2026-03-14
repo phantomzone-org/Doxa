@@ -153,8 +153,8 @@ pub fn deposit_tx_circuit<
 		asset_id,
 		accin_amt,
 		accout_amt,
-		accin,
-		accout,
+		accin.acc_ast_root,
+		accout.acc_ast_root,
 		asset_exists_in_accin,
 		asset_exists_in_accout,
 	);

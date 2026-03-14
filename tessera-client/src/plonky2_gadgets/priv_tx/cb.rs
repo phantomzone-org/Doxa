@@ -103,8 +103,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		asset_id: AssetIdTarget,
 		accin_amt: U256Target,
 		accout_amt: U256Target,
-		accin: AccountTarget,
-		accout: AccountTarget,
+		accin_ast_root: HashOutTarget,
+		accout_ast_root: HashOutTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
 	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH>;
@@ -459,36 +459,36 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		asset_id: AssetIdTarget,
 		accin_amt: U256Target,
 		accout_amt: U256Target,
-		accin: AccountTarget,
-		accout: AccountTarget,
+		accin_ast_root: HashOutTarget,
+		accout_ast_root: HashOutTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
 	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH> {
 		let accin_merkletrgts = self.assert_asset_amt_or_default_in_ast(
 			asset_id,
 			accin_amt,
-			accin.acc_ast_root,
+			accin_ast_root,
 			asset_exists_in_accin,
 		);
-		let accout_merkletrgts = self.assert_asset_amt_or_default_in_ast(
-			asset_id,
-			accout_amt,
-			accout.acc_ast_root,
-			asset_exists_in_accout,
-		);
+		// let accout_merkletrgts = self.assert_asset_amt_or_default_in_ast(
+		// 	asset_id,
+		// 	accout_amt,
+		// 	accout_ast_root,
+		// 	asset_exists_in_accout,
+		// );
 
 		// Siblings and path bits must match: the same leaf position is updated in both trees
-		for i in 0..ACC_AST_DEPTH {
-			self.connect_hashes(
-				accin_merkletrgts.siblings[i],
-				accout_merkletrgts.siblings[i],
-			);
+		// for i in 0..ACC_AST_DEPTH {
+		// 	self.connect_hashes(
+		// 		accin_merkletrgts.siblings[i],
+		// 		accout_merkletrgts.siblings[i],
+		// 	);
 
-			self.connect(
-				accin_merkletrgts.bits[i].target,
-				accout_merkletrgts.bits[i].target,
-			);
-		}
+		// 	self.connect(
+		// 		accin_merkletrgts.bits[i].target,
+		// 		accout_merkletrgts.bits[i].target,
+		// 	);
+		// }
 
 		accin_merkletrgts
 	}
