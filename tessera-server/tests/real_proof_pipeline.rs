@@ -61,12 +61,13 @@ fn prove_commitment_tree(
 ) -> (CircuitDataNative, ProofNative) {
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, D>::new(config);
-	let targets = BatchCommitmentProofTargets::new::<F, D>(&mut builder, TREE_DEPTH, batch_size);
-	targets.connect::<HashOutput, F, D>(&mut builder);
+	let targets =
+		BatchCommitmentProofTargets::new::<HashOutput, F, D>(&mut builder, TREE_DEPTH, batch_size);
+	targets.connect::<HashOutput, F, D>(&mut builder, &());
 	let cd = builder.build::<ConfigNative>();
 	let mut pw = PartialWitness::new();
 	targets
-		.set::<HashOutput, F, TREE_DEPTH>(&mut pw, batch_proof)
+		.set::<HashOutput, F, D, TREE_DEPTH>(&mut pw, batch_proof)
 		.expect("commitment witness set failed");
 	let proof = cd.prove(pw).expect("commitment tree prove failed");
 	cd.verify(proof.clone())
@@ -82,12 +83,12 @@ fn prove_nullifier_tree(
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, D>::new(config);
 	let targets =
-		BatchNullifierInsertProofTargets::new::<F, D>(&mut builder, TREE_DEPTH, batch_size);
-	targets.connect::<HashOutput, F, D>(&mut builder);
+		BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(&mut builder, TREE_DEPTH, batch_size);
+	targets.connect::<HashOutput, F, D>(&mut builder, &());
 	let cd = builder.build::<ConfigNative>();
 	let mut pw = PartialWitness::new();
 	targets
-		.set::<HashOutput, F, TREE_DEPTH>(&mut pw, batch_proof)
+		.set::<HashOutput, F, D>(&mut pw, batch_proof)
 		.expect("nullifier witness set failed");
 	let proof = cd.prove(pw).expect("nullifier tree prove failed");
 	cd.verify(proof.clone())

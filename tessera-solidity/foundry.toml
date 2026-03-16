@@ -1,5 +1,5 @@
 [profile.default]
-src = "src/pending-deposit"
+src = "src"
 test = "test"
 script = "script/pending-deposit"
 out = "out"
@@ -7,7 +7,7 @@ libs = ["lib"]
 cache_path = ".foundry-cache"
 via_ir = true
 optimizer = true
-optimizer_runs = 200
+optimizer_runs = 100000
 
 # Allow tests to read proof/calldata JSON from the groth-artifacts directory
 fs_permissions = [
