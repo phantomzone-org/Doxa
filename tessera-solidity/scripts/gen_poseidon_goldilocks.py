@@ -4,12 +4,21 @@
 Strategy:
 - Single assembly block, no Solidity overhead
 - Round constants as inline PUSH immediates (no memory array allocation)
-- Yul helper functions for sbox7, mds
+- Yul helper functions for sbox7, mds, and the fast partial-round path
 - State lives in memory at a fixed base pointer
-- All 30 rounds unrolled with hardcoded constants
+- Full rounds are unrolled with hardcoded constants
+- Partial rounds use Plonky2's fast Goldilocks decomposition with packed immediates
 - MDS uses 3-packed coefficients: pack 3 row outputs per u256 at offsets 0/86/172
   to cut MUL count from 144 to 48 per round
 """
+
+from poseidon_goldilocks_fast_partial_constants import (
+    FAST_PARTIAL_FIRST_ROUND_CONSTANT,
+    FAST_PARTIAL_ROUND_CONSTANTS,
+    FAST_PARTIAL_ROUND_INITIAL_MATRIX,
+    FAST_PARTIAL_ROUND_VS,
+    FAST_PARTIAL_ROUND_W_HATS,
+)
 
 # fmt: off
 # ALL_ROUND_CONSTANTS from plonky2/src/hash/poseidon.rs (360 u64 values)
@@ -108,6 +117,13 @@ RC = [
 # fmt: on
 
 assert len(RC) == 360
+assert len(FAST_PARTIAL_FIRST_ROUND_CONSTANT) == 12
+assert len(FAST_PARTIAL_ROUND_CONSTANTS) == 22
+assert len(FAST_PARTIAL_ROUND_VS) == 22
+assert len(FAST_PARTIAL_ROUND_W_HATS) == 22
+assert len(FAST_PARTIAL_ROUND_INITIAL_MATRIX) == 11
+
+GOLDILOCKS_P = 0xFFFFFFFF00000001
 
 # MDS circulant + diagonal
 CIRC = [17, 15, 41, 16, 2, 28, 13, 13, 39, 18, 34, 20]
@@ -135,6 +151,28 @@ def packed_coeff(r1, r2, r3, col):
     c2 = mds_coeff(r2, col)
     c3 = mds_coeff(r3, col)
     return c1 + (c2 << LANE_BITS) + (c3 << (2 * LANE_BITS))
+
+
+ROUND0_CONST_SBOX = [pow(RC[i], 7, GOLDILOCKS_P) for i in range(8, 12)]
+
+
+def round0_packed_const_contrib(r1, r2, r3):
+    """Packed constant contribution from round-0 capacity lanes 8..11."""
+    total = 0
+    for col, value in zip(range(8, 12), ROUND0_CONST_SBOX):
+        total += packed_coeff(r1, r2, r3, col) * value
+    return total
+
+
+def pack_u64_words(values):
+    """Pack up to four u64 constants per word for cheap Yul callsites."""
+    packed = []
+    for i in range(0, len(values), 4):
+        word = 0
+        for j, value in enumerate(values[i : i + 4]):
+            word |= value << (64 * j)
+        packed.append(word)
+    return packed
 
 
 def indent(n):
@@ -219,48 +257,183 @@ def gen_mds_function():
     return "\n".join(lines)
 
 
-def gen_add_rc(round_num, lvl=4):
-    """Generate add-round-constants for one round."""
+def gen_round0_function():
+    """Generate a specialized round 0 helper.
+
+    Capacity lanes 8..11 start at zero, so their add_rc + sbox outputs are
+    constants. Fold those S-box outputs into the first MDS.
+    """
+    mask_hex = f"0x{LANE_MASK:x}"
+    lines = []
+    lines.append("")
+    lines.append("            // ── Specialized round 0 ────────────────────────────")
+    lines.append("            // Capacity lanes start at zero, so their add_rc + sbox outputs are constants.")
+    lines.append("            function round0(base) {")
+    for i in range(8):
+        off = f"0x{i * 0x20:x}" if i > 0 else ""
+        base_expr = f"add(base, {off})" if i > 0 else "base"
+        lines.append(f"                let s{i} := sbox7(add(mload({base_expr}), 0x{RC[i]:016x}))")
+    lines.append(f"                let mask86 := {mask_hex}")
+    lines.append(f"                let P := 0x{GOLDILOCKS_P:x}")
+
+    for gi, (r1, r2, r3) in enumerate(ROW_GROUPS):
+        lines.append("")
+        lines.append(f"                // Group {gi}: rows {r1}, {r2}, {r3}")
+        lines.append(f"                let acc{gi} := 0x{round0_packed_const_contrib(r1, r2, r3):x}")
+        for col in range(8):
+            pc = packed_coeff(r1, r2, r3, col)
+            lines.append(f"                acc{gi} := add(acc{gi}, mul(0x{pc:x}, s{col}))")
+
+        off1 = f"0x{r1 * 0x20:x}" if r1 > 0 else ""
+        off2 = f"0x{r2 * 0x20:x}"
+        off3 = f"0x{r3 * 0x20:x}"
+        base1 = f"add(base, {off1})" if r1 > 0 else "base"
+        base2 = f"add(base, {off2})"
+        base3 = f"add(base, {off3})"
+        lines.append(f"                mstore({base1}, mulmod(and(acc{gi}, mask86), 1, P))")
+        lines.append(f"                mstore({base2}, mulmod(and(shr({LANE_BITS}, acc{gi}), mask86), 1, P))")
+        lines.append(f"                mstore({base3}, mulmod(shr({2 * LANE_BITS}, acc{gi}), 1, P))")
+
+    lines.append("            }")
+    return "\n".join(lines)
+
+
+def gen_mds_partial_init_function():
+    """Generate the initial linear transform for fast partial rounds."""
+    lines = []
+    lines.append("")
+    lines.append("            // ── Fast partial-round initializer ──────────────────")
+    lines.append("            // Transforms state[1..11] once before the 22-round fast path.")
+    lines.append("            // Lanes 1..11 intentionally stay unreduced through the partial block.")
+    lines.append("            function mds_partial_init(base) {")
+
+    for i in range(1, 12):
+        off = f"0x{i * 0x20:x}"
+        lines.append(f"                let s{i} := mload(add(base, {off}))")
+
+    for col in range(11):
+        off = f"0x{(col + 1) * 0x20:x}"
+        lines.append("                {")
+        lines.append(f"                    let acc := mul(0x{FAST_PARTIAL_ROUND_INITIAL_MATRIX[0][col]:016x}, s1)")
+        for row in range(1, 11):
+            coeff = FAST_PARTIAL_ROUND_INITIAL_MATRIX[row][col]
+            lines.append(f"                    acc := add(acc, mul(0x{coeff:016x}, s{row + 1}))")
+        lines.append(f"                    mstore(add(base, {off}), acc)")
+        lines.append("                }")
+
+    lines.append("            }")
+    return "\n".join(lines)
+
+
+def gen_fast_partial_round_function():
+    """Generate one generic fast partial-round helper using packed immediates."""
+    lines = []
+    lines.append("")
+    lines.append("            // ── Fast partial round ──────────────────────────────")
+    lines.append("            // state[0] is reduced every round for the x^7 S-box.")
+    lines.append("            // state[1..11] remain lazy and are reduced once before full rounds resume.")
+    lines.append("            function fast_partial_round(base, rc, v0, v1, v2, w0, w1, w2) {")
+    lines.append("                let s0 := add(sbox7(mload(base)), rc)")
+    lines.append("                let d := mul(25, s0)")
+    lines.append("                let mask64 := 0xFFFFFFFFFFFFFFFF")
+    lines.append("                let P := 0xFFFFFFFF00000001")
+
+    for lane in range(1, 12):
+        offset = f"0x{lane * 0x20:x}"
+        pack_idx = (lane - 1) // 4
+        shift = 64 * ((lane - 1) % 4)
+        v_word = f"v{pack_idx}"
+        w_word = f"w{pack_idx}"
+        if shift == 0:
+            v_expr = f"and({v_word}, mask64)"
+            w_expr = f"and({w_word}, mask64)"
+        else:
+            v_expr = f"and(shr({shift}, {v_word}), mask64)"
+            w_expr = f"and(shr({shift}, {w_word}), mask64)"
+        lines.append("                {")
+        lines.append(f"                    let si := mload(add(base, {offset}))")
+        lines.append(f"                    d := add(d, mul(si, {w_expr}))")
+        lines.append(f"                    mstore(add(base, {offset}), add(si, mul(s0, {v_expr})))")
+        lines.append("                }")
+
+    lines.append("                mstore(base, mulmod(d, 1, P))")
+    lines.append("            }")
+    return "\n".join(lines)
+
+
+def gen_sbox_full_with_rc(round_num, lvl=4, reduce_nonzero_lanes=False):
+    """Generate fused full-round add_rc + S-box.
+
+    If reduce_nonzero_lanes is set, lanes 1..11 are canonicalized before the
+    constant add. This is used for round 26 to consume the lazy partial lanes
+    without paying a dedicated cleanup pass.
+    """
     result = []
-    base = round_num * 12
     p = indent(lvl)
+    base = round_num * 12
     for i in range(12):
         rc = RC[base + i]
+        off = f"0x{i * 0x20:x}" if i > 0 else ""
+        base_expr = f"add(base, {off})" if i > 0 else "base"
+        if reduce_nonzero_lanes and i > 0:
+            input_expr = f"add(mulmod(mload({base_expr}), 1, 0xFFFFFFFF00000001), 0x{rc:016x})"
+        else:
+            input_expr = f"add(mload({base_expr}), 0x{rc:016x})"
+        result.append(f"{p}mstore({base_expr}, sbox7({input_expr}))")
+    return "\n".join(result)
+
+
+def gen_round(round_num, lvl=4):
+    """Generate one full round."""
+    p = indent(lvl)
+    result = [f"{p}// ── Round {round_num} (full) ──"]
+    result.append(gen_sbox_full_with_rc(round_num, lvl, reduce_nonzero_lanes=(round_num == 26)))
+    result.append(f"{p}mds(base)")
+    return "\n".join(result)
+
+
+def gen_partial_first_constant_layer(lvl=4):
+    """Generate the transformed first constant layer for fast partial rounds."""
+    result = []
+    p = indent(lvl)
+    for i, rc in enumerate(FAST_PARTIAL_FIRST_ROUND_CONSTANT):
         off = f"0x{i * 0x20:x}" if i > 0 else ""
         base_expr = f"add(base, {off})" if i > 0 else "base"
         result.append(f"{p}mstore({base_expr}, add(mload({base_expr}), 0x{rc:016x}))")
     return "\n".join(result)
 
 
-def gen_sbox_full(lvl=4):
-    """Generate full S-box (all 12 elements)."""
-    result = []
+def gen_fast_partial_round(round_num, lvl=4):
+    """Generate one fast partial-round call with packed immediates."""
+    packed_vs = pack_u64_words(FAST_PARTIAL_ROUND_VS[round_num])
+    packed_ws = pack_u64_words(FAST_PARTIAL_ROUND_W_HATS[round_num])
+    assert len(packed_vs) == 3
+    assert len(packed_ws) == 3
     p = indent(lvl)
-    for i in range(12):
-        off = f"0x{i * 0x20:x}" if i > 0 else ""
-        base_expr = f"add(base, {off})" if i > 0 else "base"
-        result.append(f"{p}mstore({base_expr}, sbox7(mload({base_expr})))")
-    return "\n".join(result)
+    return (
+        f"{p}fast_partial_round("
+        f"base, "
+        f"0x{FAST_PARTIAL_ROUND_CONSTANTS[round_num]:016x}, "
+        f"0x{packed_vs[0]:064x}, 0x{packed_vs[1]:064x}, 0x{packed_vs[2]:064x}, "
+        f"0x{packed_ws[0]:064x}, 0x{packed_ws[1]:064x}, 0x{packed_ws[2]:064x}"
+        f")"
+    )
 
 
-def gen_sbox_partial(lvl=4):
-    """Generate partial S-box (only state[0])."""
+def gen_partial_round_block(lvl=4):
+    """Generate the entire fast partial-round section."""
     p = indent(lvl)
-    return f"{p}mstore(base, sbox7(mload(base)))"
-
-
-def gen_round(round_num, lvl=4):
-    """Generate one complete round."""
-    is_full = round_num < 4 or round_num >= 26
-    kind = "full" if is_full else "partial"
-    p = indent(lvl)
-    result = [f"{p}// ── Round {round_num} ({kind}) ──"]
-    result.append(gen_add_rc(round_num, lvl))
-    if is_full:
-        result.append(gen_sbox_full(lvl))
-    else:
-        result.append(gen_sbox_partial(lvl))
-    result.append(f"{p}mds(base)")
+    result = [
+        f"{p}// ── Partial rounds (Plonky2 fast path) ──",
+        f"{p}// Replace rounds 4..25 with the Goldilocks-specific fast decomposition.",
+        gen_partial_first_constant_layer(lvl),
+        f"{p}mds_partial_init(base)",
+        "",
+    ]
+    for i in range(22):
+        result.append(f"{p}// Fast partial round {4 + i}")
+        result.append(gen_fast_partial_round(i, lvl))
+        result.append("")
     return "\n".join(result)
 
 
@@ -275,8 +448,8 @@ pragma solidity ^0.8.20;
 /// @title PoseidonGoldilocks
 /// @notice Poseidon hash over Goldilocks (p = 2^64 - 2^32 + 1), width=12, x^7 S-box.
 /// @dev Inline-assembly implementation with hardcoded round constants.
-///      Round constants, S-box, MDS, and all 30 rounds execute in a single
-///      assembly block with zero Solidity overhead.
+///      Full rounds use the packed Goldilocks MDS directly. Partial rounds use
+///      Plonky2's fast Goldilocks decomposition with packed per-round immediates.
 ///      MDS uses 3-packed coefficients (3 row outputs per u256 at bit offsets
 ///      0/86/172) to cut MUL count from 144 to 48 per round.
 contract PoseidonGoldilocks {
@@ -291,8 +464,11 @@ contract PoseidonGoldilocks {
     # Helper functions
     parts.append(gen_helpers())
 
-    # MDS function (kept as Yul function — inlining 30 copies causes stack-too-deep)
+    # Yul helpers
+    parts.append(gen_round0_function())
     parts.append(gen_mds_function())
+    parts.append(gen_mds_partial_init_function())
+    parts.append(gen_fast_partial_round_function())
 
     # State setup
     parts.append("""
@@ -321,10 +497,22 @@ contract PoseidonGoldilocks {
             // ── Permutation ──────────────────────────────────────
 """)
 
-    # All 30 rounds
-    for r in range(30):
+    # First four full rounds
+    parts.append("            // ── Round 0 (full, specialized) ──")
+    parts.append("            round0(base)")
+    parts.append("")
+    for r in range(1, 4):
         parts.append(gen_round(r))
         parts.append("")  # blank line between rounds
+
+    # Partial round block
+    parts.append(gen_partial_round_block())
+    parts.append("")
+
+    # Final four full rounds
+    for r in range(26, 30):
+        parts.append(gen_round(r))
+        parts.append("")
 
     # Pack output — MDS outputs are already canonical (< P) via mulmod reduction
     parts.append("""\
@@ -370,12 +558,43 @@ def verify_packed_safety():
     print("All overflow checks passed ✓")
 
 
+def verify_fast_partial_safety():
+    """Verify that lazy fast partial rounds stay within u256 bounds."""
+    P = (1 << 64) - (1 << 32) + 1
+    after_first_const = 2 * P
+
+    init_lane_max = []
+    for col in range(11):
+        total = 0
+        for row in range(11):
+            total += after_first_const * FAST_PARTIAL_ROUND_INITIAL_MATRIX[row][col]
+        init_lane_max.append(total)
+
+    max_init_lane = max(init_lane_max)
+    max_v = max(max(row) for row in FAST_PARTIAL_ROUND_VS)
+    max_w = max(max(row) for row in FAST_PARTIAL_ROUND_W_HATS)
+
+    lazy_lane_max = max_init_lane + len(FAST_PARTIAL_ROUND_CONSTANTS) * after_first_const * max_v
+    d_max = 25 * after_first_const + 11 * lazy_lane_max * max_w
+
+    print(f"Fast partial init lane: 2^{max_init_lane.bit_length() - 1:.1f} (needs < 2^256)")
+    print(f"Fast partial lazy lane: 2^{lazy_lane_max.bit_length() - 1:.1f} (needs < 2^256)")
+    print(f"Fast partial d sum:     2^{d_max.bit_length() - 1:.1f} (needs < 2^256)")
+
+    assert max_init_lane.bit_length() <= 256, "partial-init overflow!"
+    assert lazy_lane_max.bit_length() <= 256, "lazy lane overflow!"
+    assert d_max.bit_length() <= 256, "fast partial accumulator overflow!"
+    print("Fast partial overflow checks passed ✓")
+
+
 if __name__ == "__main__":
     import sys
     import os
 
     # Verify safety before generating
     verify_packed_safety()
+    print()
+    verify_fast_partial_safety()
     print()
 
     if len(sys.argv) > 1:
