@@ -268,9 +268,7 @@ pub(crate) fn set_withdraw_tx_witness(
 			slot_asset_ids[i] = asset_id;
 			slot_withdrawal_amts[i] = withdrawal_amt;
 			// TODO: panic here
-			let maybe = current_ast.amount_for(asset_id);
-			let (ast_index, old_bal) =
-				maybe.unwrap_or_else(|| (current_ast.next_index(), U256::zero()));
+			let (ast_index, old_bal) = current_ast.amount_for(asset_id).unwrap();
 			slot_accin_amts[i] = old_bal;
 			slot_exists_in[i] = true;
 
