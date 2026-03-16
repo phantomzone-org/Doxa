@@ -86,6 +86,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		&mut self,
 		accin: AccountTarget,
 		accout: AccountTarget,
+		is_rjct: BoolTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
 		is_priv_tx: BoolTarget,
@@ -543,6 +544,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		&mut self,
 		accin: AccountTarget,
 		accout: AccountTarget,
+		is_rjct: BoolTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
 		is_priv_tx: BoolTarget,
@@ -557,15 +559,19 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		self.connect(accout.nonce, expected_nonce);
 
 		// acc_ast_root is immutable for FreshAccTx and UpdateAuthTx; PrivTx may update it
+		//
+		// not_spend = !is_priv_tx = is_rjct | is_fresh_acc | is_update_auth, because we constrain
+		// elsewhere that only 1 flag of the set is set to true at any time
+		let not_spend = self.not(is_priv_tx);
 		for i in 0..HASH_SIZE {
 			// TODO:use is_fresh_acc | is_update_auth here
 			self.conditional_assert_eq(
-				is_fresh_acc.target,
+				not_spend.target,
 				accout.acc_ast_root.elements[i],
 				accin.acc_ast_root.elements[i],
 			);
 			self.conditional_assert_eq(
-				is_update_auth.target,
+				not_spend.target,
 				accout.acc_ast_root.elements[i],
 				accin.acc_ast_root.elements[i],
 			);
@@ -625,11 +631,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 			}
 
 			// asset_id
-			self.conditional_assert_eq(
-				is_rjct.target,
-				inotes[i].asset_id.0,
-				onotes[i].asset_id.0,
-			);
+			self.conditional_assert_eq(is_rjct.target, inotes[i].asset_id.0, onotes[i].asset_id.0);
 
 			// spend_cond of onote == reject_cond of inote (note returns to sender)
 			self.conditional_assert_eq(

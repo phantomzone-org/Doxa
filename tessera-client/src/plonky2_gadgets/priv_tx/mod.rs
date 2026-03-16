@@ -104,14 +104,19 @@ pub fn priv_tx_circuit<
 	// AccIn → AccOut transition invariants
 	// private_identifier, subpool_id are immutable for all tx kinds — enforced by sharing the
 	// same wires in `derive_account_commitment` for both accin and accout.
-	builder.assert_account_invariants(accin, accout, is_fresh_acc, is_update_auth, is_priv_tx);
+	builder.assert_account_invariants(
+		accin,
+		accout,
+		is_rjct,
+		is_fresh_acc,
+		is_update_auth,
+		is_priv_tx,
+	);
 
 	// Check Comm(AccIn) in ACT iff !fresh && not_fake == 1
 	let accin_pos = builder.add_virtual_target();
-	let not_is_rjct = builder.not(is_rjct);
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
-	let check_act = builder.and(not_is_rjct, not_is_fresh_acc);
-	let check_act = builder.and(check_act, not_fake_tx);
+	let check_act = builder.and(not_is_fresh_acc, not_fake_tx);
 	let accin_merkletrgts = builder.conditionally_assert_account_commitment_exists_in_act::<H>(
 		accin_comm, act_root, check_act,
 	);
@@ -169,9 +174,9 @@ pub fn priv_tx_circuit<
 	// check is_rjct
 	builder.assert_is_reject(is_rjct, inotes, inotes_isactive, onotes, onotes_isactive);
 
-	// All inotes and onotes share the same asset_id when tx_kind is_spend = true
+	// All inotes and onotes share the same asset_id
 	for note in inotes.iter().chain(onotes.iter()) {
-		builder.conditional_assert_eq(is_priv_tx.target, note.asset_id.0, asset_id.0);
+		builder.connect(note.asset_id.0, asset_id.0);
 	}
 
 	// for each inote verify NCT membership, and check spend auth
@@ -195,26 +200,6 @@ pub fn priv_tx_circuit<
 	);
 
 	// Derive tx hash //
-
-	// is is_rjct = true, then account commitment, nullifier are dummy. Otherwise not
-	let d_accin = builder.add_virtual_dummy_account_target();
-	let d_accout = builder.add_virtual_dummy_account_target();
-	let effective_accin_null = {
-		let dnull = builder.derive_dummy_account_nullifier(d_accin);
-		AccountNullifierTarget(HashOutTarget {
-			elements: core::array::from_fn(|j| {
-				builder._if(is_rjct, dnull.0.elements[j], accin_null.0.elements[j])
-			}),
-		})
-	};
-	let effective_accout_comm = {
-		let dcomm = builder.derive_dummy_account_commitment(d_accout);
-		AccountCommitmentTarget(HashOutTarget {
-			elements: core::array::from_fn(|j| {
-				builder._if(is_rjct, dcomm.0.elements[j], accout_comm.0.elements[j])
-			}),
-		})
-	};
 
 	// select valid inote nullifiers, onote commitments as per respective isactive selector
 	let effective_inotes_null: [NoteNullifierTarget; NOTE_BATCH] = core::array::from_fn(|i| {
@@ -243,8 +228,8 @@ pub fn priv_tx_circuit<
 	let tx_hash = builder.derive_tx_hash(
 		effective_inotes_null,
 		effective_onotes_comm,
-		effective_accin_null,
-		effective_accout_comm,
+		accin_null,
+		accout_comm,
 	);
 
 	// Validate authorization //
@@ -260,6 +245,7 @@ pub fn priv_tx_circuit<
 		not_fake_tx,
 	);
 
+	let not_is_rjct = builder.not(is_rjct);
 	let sig_targets = builder.assert_tx_signatures(
 		tx_hash,
 		inotes_isactive,
@@ -313,8 +299,6 @@ pub fn priv_tx_circuit<
 		subpool_consume_key,
 		accin,
 		accout,
-		d_accin,
-		d_accout,
 		accin_amt,
 		accout_amt,
 		asset_id,

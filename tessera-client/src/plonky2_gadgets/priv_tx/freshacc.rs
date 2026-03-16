@@ -98,8 +98,6 @@ pub(crate) fn set_freshacc_tx_witness(
 	// ── Accounts ──────────────────────────────────────────────────────────────
 	t.accin.set_witness(pw, accin);
 	t.accout.set_witness(pw, &accout);
-	for tgt in t.d_accin.0 { pw.set_target(tgt, F::ZERO).unwrap(); }
-	for tgt in t.d_accout.0 { pw.set_target(tgt, F::ZERO).unwrap(); }
 
 	// ── Asset / amounts (all zeros for FreshAcc) ──────────────────────────────
 	pw.set_target(t.asset_id.0, F::ZERO).unwrap();
