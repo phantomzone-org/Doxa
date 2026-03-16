@@ -40,6 +40,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	// ---- Add virtual methods ----
 
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
+	fn add_virtual_dummy_account_target(&mut self) -> DummyAccountTarget;
 	fn add_virtual_account_target(&mut self) -> AccountTarget;
 	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget;
 	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget;
@@ -192,6 +193,10 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 {
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
 		DummyNoteTarget(self.add_virtual_target_arr())
+	}
+
+	fn add_virtual_dummy_account_target(&mut self) -> DummyAccountTarget {
+		DummyAccountTarget(self.add_virtual_target_arr())
 	}
 
 	fn add_virtual_account_target(&mut self) -> AccountTarget {
@@ -543,6 +548,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 
 		// acc_ast_root is immutable for FreshAccTx and UpdateAuthTx; PrivTx may update it
 		for i in 0..HASH_SIZE {
+			// TODO:use is_fresh_acc | is_update_auth here
 			self.conditional_assert_eq(
 				is_fresh_acc.target,
 				accout.acc_ast_root.elements[i],

@@ -281,7 +281,9 @@ pub(crate) fn set_withdraw_tx_witness(
 			slot_accout_amts[i] = new_bal;
 			slot_exists_out[i] = new_bal > U256::zero();
 
-			current_ast.insert_or_update_asset(asset_id, new_bal);
+			current_ast
+				.insert_or_update_asset(asset_id, new_bal)
+				.unwrap();
 		} else {
 			// Padding slot: zero amounts, default-leaf proof at next free index.
 			slot_proofs.push(current_ast.merkle_proof_at(current_ast.next_index()));
@@ -482,7 +484,9 @@ mod tests {
 			slot_withdrawal_amts[i] = withdrawal_amt;
 			let (_, old_bal) = current_ast.amount_for(asset_id).unwrap();
 			let new_bal = old_bal - withdrawal_amt;
-			current_ast.insert_or_update_asset(asset_id, new_bal);
+			current_ast
+				.insert_or_update_asset(asset_id, new_bal)
+				.unwrap();
 		}
 		let mut accout = accin.clone();
 		accout.nonce = Nonce(F::from_canonical_u64(2));

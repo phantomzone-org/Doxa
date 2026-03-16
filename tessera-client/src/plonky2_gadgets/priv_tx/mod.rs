@@ -17,9 +17,10 @@ use crate::{
 		priv_tx::{
 			cb::PrivTxCircuitBuilder,
 			targets::{
-				AccountNullifierTarget, ActRootTarget, AssetIdTarget, DummyNoteTarget,
-				MainPoolConfigRootTarget, NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
-				NoteTarget, PublicIdentifierTaregt, SubpoolIdTarget, TxCircuitTargets,
+				AccountCommitmentTarget, AccountNullifierTarget, ActRootTarget, AssetIdTarget,
+				DummyNoteTarget, MainPoolConfigRootTarget, NctRootTarget, NoteCommitmentTarget,
+				NoteNullifierTarget, NoteTarget, PublicIdentifierTaregt, SubpoolIdTarget,
+				TxCircuitTargets,
 			},
 		},
 		signature::{LocalQuinticExtension, PubkeyTarget},
@@ -62,7 +63,6 @@ pub fn priv_tx_circuit<
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// Tx kinds
-	// TODO: where is it checked that these are indeed bool targets?
 	let is_rjct = builder.add_virtual_bool_target_safe();
 	let is_fresh_acc = builder.add_virtual_bool_target_safe();
 	let is_update_auth = builder.add_virtual_bool_target_safe();
@@ -108,8 +108,10 @@ pub fn priv_tx_circuit<
 
 	// Check Comm(AccIn) in ACT iff !fresh && not_fake == 1
 	let accin_pos = builder.add_virtual_target();
+	let not_is_rjct = builder.not(is_rjct);
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
-	let check_act = builder.and(not_is_fresh_acc, not_fake_tx);
+	let check_act = builder.and(not_is_rjct, not_is_fresh_acc);
+	let check_act = builder.and(check_act, not_fake_tx);
 	let accin_merkletrgts = builder.conditionally_assert_account_commitment_exists_in_act::<H>(
 		accin_comm, act_root, check_act,
 	);
@@ -164,9 +166,25 @@ pub fn priv_tx_circuit<
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
 	let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
 
-	// All inotes and onotes share the same asset_id
+	// check is_rject
+	{
+		for i in 0..NOTE_BATCH {
+			// identfier is equal
+			for j in 0..2 {
+				builder.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].identifier[j],
+					onotes[i].identifier[j],
+				);
+			}
+
+			// TODO: equate other fields as well
+		}
+	}
+
+	// All inotes and onotes share the same asset_id when tx_kind is_spend = true
 	for note in inotes.iter().chain(onotes.iter()) {
-		builder.connect(note.asset_id.0, asset_id.0);
+		builder.conditional_assert_eq(is_priv_tx.target, note.asset_id.0, asset_id.0);
 	}
 
 	// for each inote verify NCT membership, and check spend auth
@@ -190,6 +208,26 @@ pub fn priv_tx_circuit<
 	);
 
 	// Derive tx hash //
+
+	// is is_rjct = true, then account commitment, nullifier are dummy. Otherwise not
+	let d_accin = builder.add_virtual_dummy_account_target();
+	let d_accout = builder.add_virtual_dummy_account_target();
+	let effective_accin_null = {
+		let dnull = builder.derive_dummy_account_nullifier(d_accin);
+		AccountNullifierTarget(HashOutTarget {
+			elements: core::array::from_fn(|j| {
+				builder._if(is_rjct, dnull.0.elements[j], accin_null.0.elements[j])
+			}),
+		})
+	};
+	let effective_accout_comm = {
+		let dcomm = builder.derive_dummy_account_commitment(d_accout);
+		AccountCommitmentTarget(HashOutTarget {
+			elements: core::array::from_fn(|j| {
+				builder._if(is_rjct, dcomm.0.elements[j], accout_comm.0.elements[j])
+			}),
+		})
+	};
 
 	// select valid inote nullifiers, onote commitments as per respective isactive selector
 	let effective_inotes_null: [NoteNullifierTarget; NOTE_BATCH] = core::array::from_fn(|i| {
@@ -218,8 +256,8 @@ pub fn priv_tx_circuit<
 	let tx_hash = builder.derive_tx_hash(
 		effective_inotes_null,
 		effective_onotes_comm,
-		accin_null,
-		accout_comm,
+		effective_accin_null,
+		effective_accout_comm,
 	);
 
 	// Validate authorization //
