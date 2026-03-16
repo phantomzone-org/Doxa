@@ -56,7 +56,6 @@ pub fn priv_tx_circuit<
 ) -> TxCircuitTargets {
 	// Mint constants
 	// let ds_nullifier_key = builder.constant(F::from_canonical_u64(DS_NULLIFIER_KEY));
-	let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 
 	// not_fake_tx is a PI and set to 1 for tx that are not fake. It may be se to 0 to produce a
 	// dummy proof (used at proof aggregation stage)
@@ -88,6 +87,7 @@ pub fn priv_tx_circuit<
 	let private_identifier = accin.private_identifier;
 	let subpool_id = accin.subpool_id;
 	let public_identifier = {
+		let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 		let mut input = vec![ds_public_identifier];
 		input.extend(private_identifier.0);
 		let pubid = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input);
@@ -166,21 +166,8 @@ pub fn priv_tx_circuit<
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
 	let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
 
-	// check is_rject
-	{
-		for i in 0..NOTE_BATCH {
-			// identfier is equal
-			for j in 0..2 {
-				builder.conditional_assert_eq(
-					is_rjct.target,
-					inotes[i].identifier[j],
-					onotes[i].identifier[j],
-				);
-			}
-
-			// TODO: equate other fields as well
-		}
-	}
+	// check is_rjct
+	builder.assert_is_reject(is_rjct, inotes, inotes_isactive, onotes, onotes_isactive);
 
 	// All inotes and onotes share the same asset_id when tx_kind is_spend = true
 	for note in inotes.iter().chain(onotes.iter()) {
@@ -280,6 +267,7 @@ pub fn priv_tx_circuit<
 		accin,
 		subpool_consume_key,
 		approval_key,
+		not_is_rjct,
 		not_fake_tx,
 	);
 
@@ -325,6 +313,8 @@ pub fn priv_tx_circuit<
 		subpool_consume_key,
 		accin,
 		accout,
+		d_accin,
+		d_accout,
 		accin_amt,
 		accout_amt,
 		asset_id,

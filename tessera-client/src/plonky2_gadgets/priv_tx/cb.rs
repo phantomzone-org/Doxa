@@ -155,6 +155,15 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accout_comm: AccountCommitmentTarget,
 	) -> TxHashTarget;
 
+	fn assert_is_reject(
+		&mut self,
+		is_rjct: BoolTarget,
+		inotes: [NoteTarget; NOTE_BATCH],
+		inotes_isactive: [BoolTarget; NOTE_BATCH],
+		onotes: [NoteTarget; NOTE_BATCH],
+		onotes_isactive: [BoolTarget; NOTE_BATCH],
+	);
+
 	fn assert_balance_invariant(
 		&mut self,
 		accin_amt: U256Target,
@@ -173,7 +182,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accin: AccountTarget,
 		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
-		is_fake_tx: BoolTarget,
+		not_is_rjct: BoolTarget,
+		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets;
 }
 
@@ -581,6 +591,76 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		);
 	}
 
+	fn assert_is_reject(
+		&mut self,
+		is_rjct: BoolTarget,
+		inotes: [NoteTarget; NOTE_BATCH],
+		inotes_isactive: [BoolTarget; NOTE_BATCH],
+		onotes: [NoteTarget; NOTE_BATCH],
+		onotes_isactive: [BoolTarget; NOTE_BATCH],
+	) {
+		for i in 0..NOTE_BATCH {
+			self.conditional_assert_eq(
+				is_rjct.target,
+				inotes_isactive[i].target,
+				onotes_isactive[i].target,
+			);
+
+			// identifier
+			for j in 0..2 {
+				self.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].identifier[j],
+					onotes[i].identifier[j],
+				);
+			}
+
+			// amount (8 u32 limbs)
+			for j in 0..8 {
+				self.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].amount.0[j].0,
+					onotes[i].amount.0[j].0,
+				);
+			}
+
+			// asset_id
+			self.conditional_assert_eq(
+				is_rjct.target,
+				inotes[i].asset_id.0,
+				onotes[i].asset_id.0,
+			);
+
+			// spend_cond of onote == reject_cond of inote (note returns to sender)
+			self.conditional_assert_eq(
+				is_rjct.target,
+				inotes[i].reject_cond.subpool_id.0,
+				onotes[i].spend_cond.subpool_id.0,
+			);
+			for j in 0..4 {
+				self.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].reject_cond.public_identifier.0.elements[j],
+					onotes[i].spend_cond.public_identifier.0.elements[j],
+				);
+			}
+
+			// reject_cond of onote == reject_cond of inote (sender unchanged)
+			self.conditional_assert_eq(
+				is_rjct.target,
+				inotes[i].reject_cond.subpool_id.0,
+				onotes[i].reject_cond.subpool_id.0,
+			);
+			for j in 0..4 {
+				self.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].reject_cond.public_identifier.0.elements[j],
+					onotes[i].reject_cond.public_identifier.0.elements[j],
+				);
+			}
+		}
+	}
+
 	fn assert_balance_invariant(
 		&mut self,
 		accin_amt: U256Target,
@@ -649,6 +729,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		accin: AccountTarget,
 		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
+		not_is_rjct: BoolTarget,
 		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets {
 		// spend sig: required when any onote is active
@@ -656,6 +737,8 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		for sel in onotes_isactive.iter().skip(1) {
 			is_spend_req = self.or(*sel, is_spend_req);
 		}
+		// if tx_kind is reject then spend sig is not required: is_spend && !is_reject
+		is_spend_req = self.and(is_spend_req, not_is_rjct);
 
 		// we enforce the spend auth public key to match the one set in account. This implies for
 		// fake signatures, always set Q to the account's public key. Otherwise, the proof will

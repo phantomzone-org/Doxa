@@ -196,6 +196,8 @@ pub(crate) struct TxCircuitTargets {
 	// accounts
 	pub(crate) accin: AccountTarget,
 	pub(crate) accout: AccountTarget,
+	pub(crate) d_accin: DummyAccountTarget,
+	pub(crate) d_accout: DummyAccountTarget,
 	pub(crate) accin_amt: U256Target,
 	pub(crate) accout_amt: U256Target,
 	pub(crate) asset_id: AssetIdTarget,
