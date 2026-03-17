@@ -32,7 +32,7 @@
 | 19 | `SubtreeRootCircuit` unit tests | ✅ |
 | 20 | `SuperAggregatorV2` unit tests | ✅ |
 | 21 | `BatchBuilder` / sequencer unit tests | ✅ |
-| 22 | E2E tests | ⬜ |
+| 22 | E2E tests | ✅ |
 
 ---
 

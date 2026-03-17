@@ -312,6 +312,7 @@ sol! {
 		function proveTransactionBatch(bytes32 piCommitment, Proof calldata proof) external;
 		function submitDepositBatch(DepositBatch calldata batch) external;
 		function proveDepositBatch(bytes32 piCommitment, Proof calldata proof) external;
+		function depositAndRegister(bytes32 noteCommitment, uint256 maxAmount) external returns (bytes32);
 		function currentRoot() external view returns (uint256);
 		function confirmedRoots(uint256 root) external view returns (bool);
 		function poolConfigRoot() external view returns (bytes32);
