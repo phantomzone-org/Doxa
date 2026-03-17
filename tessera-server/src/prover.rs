@@ -60,7 +60,7 @@ pub struct AssociatedInputAggregatorService {
 	aggregator: Arc<GenericAggregator<F, ConfigNative, D>>,
 	pool: Arc<NodeProverPool<F, ConfigNative, D>>,
 	/// The inner PrivTx circuit data (needed for proof deserialization and dummy proving).
-	inner_circuit: CircuitDataNative,
+	pub(crate) inner_circuit: CircuitDataNative,
 	/// The inner PrivTx circuit targets (needed for dummy proving with overrides).
 	inner_targets: tessera_client::PrivTxTargets<D>,
 }
@@ -81,10 +81,10 @@ impl CommitmentProverService {
 	pub fn init(batch_size: usize) -> Result<Self> {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let ctx = HashOutput::register_luts(&mut builder);
+		HashOutput::register_luts(&mut builder);
 		let targets =
 			BatchCommitmentProofTargets::new::<HashOutput, F, D>(&mut builder, 32, batch_size);
-		targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
+		targets.connect::<HashOutput, F, D>(&mut builder, &());
 		let circuit_data = builder.build::<ConfigNative>();
 		info!(batch_size, "commitment prover initialized");
 		Ok(Self {
@@ -119,10 +119,10 @@ impl NullifierProverService {
 	pub fn init(batch_size: usize) -> Result<Self> {
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let ctx = HashOutput::register_luts(&mut builder);
+		HashOutput::register_luts(&mut builder);
 		let targets =
 			BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(&mut builder, 32, batch_size);
-		targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
+		targets.connect::<HashOutput, F, D>(&mut builder, &());
 		let circuit_data = builder.build::<ConfigNative>();
 		info!(batch_size, "nullifier prover initialized");
 		Ok(Self {
@@ -220,6 +220,12 @@ impl AssociatedInputAggregatorService {
 			override_nn,
 		);
 		Ok(proof.to_bytes())
+	}
+
+	/// Total leaf count of the underlying aggregation tree (`arity^depth`).
+	pub(crate) fn n_leaves(&self) -> usize {
+		let cfg = self.aggregator.config();
+		cfg.arity.pow(cfg.depth as u32)
 	}
 
 	/// Submit all leaf proof bytes to a streaming session, await the root proof.
@@ -862,7 +868,7 @@ fn bytes32_to_f4(b: &[u8; 32]) -> [F; 4] {
 /// # Errors
 /// Returns `Err` if the JSON is malformed, any key is missing, any value is not a valid
 /// hex U256, or an array has the wrong number of elements (8, 2, 2).
-fn parse_solidity_proof_json(json: &str) -> Result<SolidityProof> {
+pub(crate) fn parse_solidity_proof_json(json: &str) -> Result<SolidityProof> {
 	let v: serde_json::Value = serde_json::from_str(json)?;
 
 	let parse_u256_array = |key: &str, len: usize| -> Result<Vec<alloy::primitives::U256>> {

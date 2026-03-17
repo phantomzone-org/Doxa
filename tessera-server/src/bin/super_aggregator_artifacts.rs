@@ -91,10 +91,10 @@ fn prove_commitment_tree(leaves: &[HashOutput], batch_size: usize) -> Result<Pro
 
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, D>::new(config);
-	let ctx = HashOutput::register_luts(&mut builder);
+	HashOutput::register_luts(&mut builder);
 	let targets =
 		BatchCommitmentProofTargets::new::<HashOutput, F, D>(&mut builder, TREE_DEPTH, batch_size);
-	targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
+	targets.connect::<HashOutput, F, D>(&mut builder, &());
 	let cd = builder.build::<ConfigNative>();
 	let mut pw = PartialWitness::new();
 	targets.set::<HashOutput, F, D, TREE_DEPTH>(&mut pw, &batch_proof)?;
@@ -110,13 +110,13 @@ fn prove_nullifier_tree(leaves: &[HashOutput], batch_size: usize) -> Result<Proo
 
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, D>::new(config);
-	let ctx = HashOutput::register_luts(&mut builder);
+	HashOutput::register_luts(&mut builder);
 	let targets = BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(
 		&mut builder,
 		TREE_DEPTH,
 		batch_size,
 	);
-	targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
+	targets.connect::<HashOutput, F, D>(&mut builder, &());
 	let cd = builder.build::<ConfigNative>();
 	let mut pw = PartialWitness::new();
 	targets.set::<HashOutput, F, D>(&mut pw, &batch_proof)?;

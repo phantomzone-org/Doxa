@@ -188,6 +188,7 @@ async fn consume_request_handler(
 		.notes_commitment_tx
 		.send(NotesCommitmentRequest {
 			note,
+			consume_proof: Some(proof),
 		})
 		.await
 		.map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;

@@ -6,6 +6,7 @@ pub mod contract;
 pub mod dummy;
 pub mod prover;
 pub mod prover_client;
+pub mod prover_v2;
 pub mod sequencer;
 pub mod states;
 pub mod tree_store;
@@ -136,14 +137,14 @@ pub fn sample_batch_commitment_tree_proof(
 
 	print!("Alloc Targets: ");
 	let now: Instant = Instant::now();
-	let ctx = HashOutput::register_luts(&mut builder);
+	HashOutput::register_luts(&mut builder);
 	let targets: BatchCommitmentProofTargets<4> =
 		BatchCommitmentProofTargets::new::<HashOutput, F, D>(&mut builder, DEPTH, batch_size);
 	println!("{:?}", now.elapsed());
 
 	print!("Connect: ");
 	let now: Instant = Instant::now();
-	targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
+	targets.connect::<HashOutput, F, D>(&mut builder, &());
 	println!("{:?}", now.elapsed());
 
 	print!("Set Witnesses: ");
@@ -216,14 +217,14 @@ pub fn sample_batch_nullifier_tree_proof(
 
 	print!("Alloc Targets: ");
 	let now: Instant = Instant::now();
-	let ctx = HashOutput::register_luts(&mut builder);
+	HashOutput::register_luts(&mut builder);
 	let targets: BatchNullifierInsertProofTargets<4> =
 		BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(&mut builder, DEPTH, batch_size);
 	println!("{:?}", now.elapsed());
 
 	print!("Connect: ");
 	let now: Instant = Instant::now();
-	targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
+	targets.connect::<HashOutput, F, D>(&mut builder, &());
 	println!("{:?}", now.elapsed());
 
 	print!("Set Witnesses: ");

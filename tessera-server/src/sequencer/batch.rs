@@ -7,9 +7,17 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy::primitives::FixedBytes;
-use tessera_trees::tree::{hasher::HashOutput, CommitmentTree, NullifierTree};
+use tessera_trees::{
+	proof_aggregation::SubtreeRootCircuit,
+	tree::{hasher::HashOutput, CommitmentTree, NullifierTree},
+	F,
+};
 
-use crate::{contract, dummy::derive_dummy_leaf, types::ProveRequest};
+use crate::{
+	contract,
+	dummy::derive_dummy_leaf,
+	types::{ConsumeProveRequest, ProveRequest, ProveRequestV2},
+};
 
 /// Number of note-level leaves per account-level slot (NC and NN each have 8
 /// per TX slot).
@@ -86,6 +94,12 @@ pub struct FinalizedBatch {
 	/// Client TX proof bytes keyed by slot index (real private TX slots only).
 	/// Slots present in this map are real (is_real=1); absent slots are dummy.
 	pub tx_proofs_by_slot: HashMap<usize, Vec<u8>>,
+	/// Poseidon Merkle root of the NC leaves (V2).
+	///
+	/// Equal to `SubtreeRootCircuit::compute_root_native(nc_leaves_as_HashOutput)`.
+	/// Passed to `submitTransactionBatch` on-chain and proved in-circuit by
+	/// `SubtreeRootCircuit`.
+	pub batch_poseidon_root: HashOutput,
 }
 
 /// Incrementally builds a batch of `account_batch_size` slots.
@@ -144,6 +158,31 @@ impl BatchBuilder {
 			an_start: an_tree.num_leaves(),
 			nc_start: nc_tree.num_leaves(),
 			nn_start: nn_tree.num_leaves(),
+			an_in_batch: HashSet::new(),
+			nn_in_batch: HashSet::new(),
+		}
+	}
+
+	/// Create a new batch builder for the V2 sequencer (no off-chain trees).
+	///
+	/// Uses `dummy_root` for deterministic dummy leaf derivation and zero-based
+	/// start indices for all four leaf arrays.  In V2, the root and start index
+	/// only affect padding leaves, which are discarded after proving.
+	pub fn new_v2(account_batch_size: usize, dummy_root: [u8; 32]) -> Self {
+		let note_batch_size = account_batch_size * NOTES_PER_SLOT;
+		Self {
+			slots: Vec::with_capacity(account_batch_size),
+			account_batch_size,
+			note_batch_size,
+			open_deposit: None,
+			ac_root: dummy_root,
+			an_root: dummy_root,
+			nc_root: dummy_root,
+			nn_root: dummy_root,
+			ac_start: 0,
+			an_start: 0,
+			nc_start: 0,
+			nn_start: 0,
 			an_in_batch: HashSet::new(),
 			nn_in_batch: HashSet::new(),
 		}
@@ -439,6 +478,15 @@ impl BatchBuilder {
 			"NN leaves not sorted after finalize"
 		);
 
+		// 6. Compute V2 Poseidon subtree root over NC leaves.
+		//
+		// Uses non-validating conversion so that V1 keccak-derived dummy leaves
+		// (which may be out of the Goldilocks range) don't cause a panic here.
+		// V2 NC leaves are always valid Goldilocks elements, so the result is
+		// correct for V2 use.  V1 code never reads `batch_poseidon_root`.
+		let nc_hashes: Vec<HashOutput> = nc_leaves.iter().map(nc_leaf_to_hash_unchecked).collect();
+		let batch_poseidon_root = SubtreeRootCircuit::compute_root_native(&nc_hashes);
+
 		FinalizedBatch {
 			ac_leaves,
 			an_sorted,
@@ -447,8 +495,25 @@ impl BatchBuilder {
 			nn_sorted,
 			nn_sort_perm: nn_sort_perm_inv,
 			tx_proofs_by_slot,
+			batch_poseidon_root,
 		}
 	}
+}
+
+/// Convert a 32-byte leaf (big-endian 4 × u64) to a `HashOutput` without range validation.
+///
+/// Each 8-byte chunk is interpreted as a big-endian `u64` and stored as a
+/// Goldilocks field element via `from_noncanonical_u64` (which does NOT check
+/// that the value is below the Goldilocks prime).  This is safe for V2 NC
+/// leaves (which are always valid field elements) and avoids panics for V1
+/// keccak-derived dummy leaves (which may be out of range but are never fed
+/// into V2 circuits).
+fn nc_leaf_to_hash_unchecked(b: &[u8; 32]) -> HashOutput {
+	use plonky2::field::types::Field;
+	HashOutput::new(core::array::from_fn(|i| {
+		let val = u64::from_be_bytes(b[i * 8..(i + 1) * 8].try_into().unwrap());
+		F::from_noncanonical_u64(val)
+	}))
 }
 
 /// Return indices that would sort `v` as `[u64; 4]` big-endian (argsort).
@@ -561,6 +626,28 @@ impl FinalizedBatch {
 		})
 	}
 
+	/// Assemble a [`ProveRequestV2`] from the finalized V2 batch.
+	///
+	/// The `nc_leaves` and `tx_proofs_by_slot` come from the batch; the three
+	/// root values are provided by the caller from the Sequencer's current
+	/// on-chain state.
+	pub fn into_prove_request_v2(
+		&self,
+		batch_id: u64,
+		ac_root: HashOutput,
+		nc_root: HashOutput,
+		main_pool_cfg_root: [u8; 32],
+	) -> ProveRequestV2 {
+		ProveRequestV2 {
+			batch_id,
+			nc_leaves: self.nc_leaves.clone(),
+			ac_root,
+			nc_root,
+			main_pool_cfg_root,
+			tx_proofs_by_slot: self.tx_proofs_by_slot.clone(),
+		}
+	}
+
 	/// Convert sorted leaf arrays to `FixedBytes<32>` for on-chain submission.
 	pub fn nc_fixed(&self) -> Vec<FixedBytes<32>> {
 		self.nc_leaves
@@ -591,14 +678,156 @@ impl FinalizedBatch {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Consume (deposit) batch builder
+// ---------------------------------------------------------------------------
+
+/// Leaf data produced by [`ConsumeBatchBuilder::finalize`].
+pub struct FinalizedConsumeBatch {
+	/// Real deposit note commitments in arrival order (for `submitDepositBatch`).
+	///
+	/// All entries are validated `Pending` on-chain before submission.
+	/// Length ≤ `note_batch_size`.
+	pub deposit_note_commitments: Vec<[u8; 32]>,
+	/// NC leaves (real + dummy padding) for the SubtreeRootCircuit.
+	///
+	/// Length = `note_batch_size`.
+	pub nc_leaves: Vec<[u8; 32]>,
+	/// Poseidon Merkle root over `nc_leaves`.
+	pub batch_poseidon_root: HashOutput,
+	/// Consume proof bytes keyed by note index.
+	///
+	/// Present for each real deposit note that was submitted with a proof.
+	/// The prover uses these as consume-circuit leaf proofs.
+	pub consume_proofs_by_slot: HashMap<usize, Vec<u8>>,
+}
+
+impl FinalizedConsumeBatch {
+	/// Assemble a [`ConsumeProveRequest`] from this finalized consume batch.
+	pub fn into_prove_request(
+		&self,
+		batch_id: u64,
+		ac_root: HashOutput,
+		nc_root: HashOutput,
+		main_pool_cfg_root: [u8; 32],
+	) -> ConsumeProveRequest {
+		ConsumeProveRequest {
+			batch_id,
+			nc_leaves: self.nc_leaves.clone(),
+			ac_root,
+			nc_root,
+			main_pool_cfg_root,
+			consume_proofs_by_slot: self.consume_proofs_by_slot.clone(),
+		}
+	}
+}
+
+/// Accumulates deposit note commitments for a consume (deposit) batch.
+///
+/// Each batch holds up to `note_batch_size` real deposit notes (from
+/// individual `/consume-request` API calls).  At finalization the real notes
+/// are padded with deterministic dummy leaves to reach `note_batch_size`,
+/// and the Poseidon subtree root is computed over the full padded array.
+pub struct ConsumeBatchBuilder {
+	/// Real deposit notes in arrival order, paired with their consume proofs.
+	notes: Vec<([u8; 32], Option<Vec<u8>>)>,
+	/// Total capacity (= `account_batch_size × NOTES_PER_SLOT`).
+	note_batch_size: usize,
+	/// Dummy-leaf derivation root (= `confirmed_root` bytes at creation time).
+	dummy_root: [u8; 32],
+}
+
+impl ConsumeBatchBuilder {
+	/// Create a new consume batch builder.
+	///
+	/// - `note_batch_size`: total leaf capacity (= account_batch_size × 8).
+	/// - `dummy_root`: bytes used for deterministic dummy-leaf derivation.
+	pub fn new(note_batch_size: usize, dummy_root: [u8; 32]) -> Self {
+		Self {
+			notes: Vec::with_capacity(note_batch_size),
+			note_batch_size,
+			dummy_root,
+		}
+	}
+
+	/// Number of real deposit notes currently in this batch.
+	pub fn len(&self) -> usize {
+		self.notes.len()
+	}
+
+	/// Whether the batch has no real notes yet.
+	#[allow(dead_code)]
+	pub fn is_empty(&self) -> bool {
+		self.notes.is_empty()
+	}
+
+	/// Whether the batch is full (all note slots allocated).
+	pub fn is_full(&self) -> bool {
+		self.notes.len() >= self.note_batch_size
+	}
+
+	/// Add a deposit note to this batch.
+	///
+	/// `consume_proof`: optional proof bytes submitted by the client.
+	///
+	/// # Errors
+	/// Returns `Err` if the batch is already full.
+	pub fn add_note(
+		&mut self,
+		note: [u8; 32],
+		consume_proof: Option<Vec<u8>>,
+	) -> anyhow::Result<()> {
+		anyhow::ensure!(
+			!self.is_full(),
+			"consume batch full; cannot add deposit note"
+		);
+		self.notes.push((note, consume_proof));
+		Ok(())
+	}
+
+	/// Finalize: pad real notes to `note_batch_size` with dummies and compute
+	/// the Poseidon subtree root.
+	pub fn finalize(self) -> FinalizedConsumeBatch {
+		let real_count = self.notes.len();
+		let mut nc_leaves = Vec::with_capacity(self.note_batch_size);
+		let mut deposit_note_commitments = Vec::with_capacity(real_count);
+		let mut consume_proofs_by_slot = HashMap::new();
+
+		for (idx, (note, proof)) in self.notes.into_iter().enumerate() {
+			deposit_note_commitments.push(note);
+			nc_leaves.push(note);
+			if let Some(p) = proof {
+				consume_proofs_by_slot.insert(idx, p);
+			}
+		}
+
+		// Pad remaining slots with deterministic dummy leaves.
+		for idx in real_count..self.note_batch_size {
+			nc_leaves.push(derive_dummy_leaf(idx, &self.dummy_root));
+		}
+
+		let nc_hashes: Vec<HashOutput> = nc_leaves.iter().map(nc_leaf_to_hash_unchecked).collect();
+		let batch_poseidon_root = SubtreeRootCircuit::compute_root_native(&nc_hashes);
+
+		FinalizedConsumeBatch {
+			deposit_note_commitments,
+			nc_leaves,
+			batch_poseidon_root,
+			consume_proofs_by_slot,
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
+	use plonky2::field::types::Field;
 	use tessera_trees::tree::{CommitmentTree, NullifierTree};
 
 	use super::*;
 
 	const DEPTH: usize = 8;
 	const ACCOUNT_BATCH: usize = 4;
+	const NOTE_BATCH: usize = ACCOUNT_BATCH * NOTES_PER_SLOT;
 
 	fn make_trees() -> (
 		CommitmentTree<HashOutput>,
@@ -700,6 +929,14 @@ mod tests {
 		// AN and NN should be sorted.
 		assert!(is_sorted_u256(&batch.an_sorted));
 		assert!(is_sorted_u256(&batch.nn_sorted));
+
+		// V2: batch_poseidon_root must equal the native Poseidon Merkle root of NC leaves.
+		let nc_hashes = contract::bytes_slice_to_hashes(&batch.nc_leaves).unwrap();
+		let expected_root = SubtreeRootCircuit::compute_root_native(&nc_hashes);
+		assert_eq!(
+			batch.batch_poseidon_root, expected_root,
+			"batch_poseidon_root mismatch"
+		);
 	}
 
 	#[test]
@@ -736,5 +973,340 @@ mod tests {
 			assert_eq!(builder_pis[i].nc, fb_pi.nc, "NC mismatch at slot {i}");
 			assert_eq!(builder_pis[i].nn, fb_pi.nn, "NN mismatch at slot {i}");
 		}
+	}
+
+	// -------------------------------------------------------------------------
+	// V2 BatchBuilder tests
+	// -------------------------------------------------------------------------
+
+	fn dummy_root() -> [u8; 32] {
+		[0xAB; 32]
+	}
+
+	#[test]
+	fn v2_fills_to_capacity() {
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		assert!(!bb.is_full());
+		for i in 0..ACCOUNT_BATCH {
+			let full = bb
+				.add_private_tx(
+					vec![i as u8],
+					dummy_leaf(i as u8),
+					dummy_leaf(i as u8 + 100),
+					[dummy_leaf(i as u8 + 10); 8],
+					[dummy_leaf(i as u8 + 20); 8],
+				)
+				.unwrap();
+			assert_eq!(
+				full,
+				i == ACCOUNT_BATCH - 1,
+				"is_full signal wrong at slot {i}"
+			);
+		}
+		assert!(bb.is_full());
+		assert!(bb
+			.add_private_tx(vec![], [0; 32], [0; 32], [[0; 32]; 8], [[0; 32]; 8])
+			.is_err());
+	}
+
+	#[test]
+	fn v2_finalize_leaf_counts() {
+		// 2 private TXs + 3 deposits → 3 slots (deposit packs into 1 slot).
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		bb.add_private_tx(
+			vec![1],
+			dummy_leaf(1),
+			dummy_leaf(2),
+			[dummy_leaf(3); 8],
+			[dummy_leaf(4); 8],
+		)
+		.unwrap();
+		bb.add_private_tx(
+			vec![2],
+			dummy_leaf(5),
+			dummy_leaf(6),
+			[dummy_leaf(7); 8],
+			[dummy_leaf(8); 8],
+		)
+		.unwrap();
+		for i in 0..3u8 {
+			bb.add_deposit(dummy_leaf(50 + i)).unwrap();
+		}
+
+		let fb = bb.finalize();
+
+		assert_eq!(fb.ac_leaves.len(), ACCOUNT_BATCH, "ac_leaves len");
+		assert_eq!(fb.an_sorted.len(), ACCOUNT_BATCH, "an_sorted len");
+		assert_eq!(fb.an_sort_perm.len(), ACCOUNT_BATCH, "an_sort_perm len");
+		assert_eq!(
+			fb.nc_leaves.len(),
+			ACCOUNT_BATCH * NOTES_PER_SLOT,
+			"nc_leaves len"
+		);
+		assert_eq!(
+			fb.nn_sorted.len(),
+			ACCOUNT_BATCH * NOTES_PER_SLOT,
+			"nn_sorted len"
+		);
+		assert_eq!(
+			fb.nn_sort_perm.len(),
+			ACCOUNT_BATCH * NOTES_PER_SLOT,
+			"nn_sort_perm len"
+		);
+		// 2 real TX slots.
+		assert_eq!(fb.tx_proofs_by_slot.len(), 2);
+		assert!(fb.tx_proofs_by_slot.contains_key(&0));
+		assert!(fb.tx_proofs_by_slot.contains_key(&1));
+	}
+
+	#[test]
+	fn v2_finalize_poseidon_root() {
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		bb.add_private_tx(
+			vec![0xFF],
+			dummy_leaf(1),
+			dummy_leaf(2),
+			[dummy_leaf(3); 8],
+			[dummy_leaf(4); 8],
+		)
+		.unwrap();
+		bb.add_deposit(dummy_leaf(10)).unwrap();
+
+		let fb = bb.finalize();
+
+		let nc_hashes = contract::bytes_slice_to_hashes(&fb.nc_leaves).unwrap();
+		let expected = SubtreeRootCircuit::compute_root_native(&nc_hashes);
+		assert_eq!(
+			fb.batch_poseidon_root, expected,
+			"V2 batch_poseidon_root does not match recomputed native root"
+		);
+	}
+
+	#[test]
+	fn v2_tx_proofs_keyed_by_slot() {
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		// Slot 0: private TX with proof bytes [0xAA].
+		bb.add_private_tx(
+			vec![0xAA],
+			dummy_leaf(1),
+			dummy_leaf(2),
+			[dummy_leaf(3); 8],
+			[dummy_leaf(4); 8],
+		)
+		.unwrap();
+		// Slot 1: deposit (no proof).
+		bb.add_deposit(dummy_leaf(10)).unwrap();
+		// Slot 2: private TX with proof bytes [0xBB].
+		bb.add_private_tx(
+			vec![0xBB],
+			dummy_leaf(5),
+			dummy_leaf(6),
+			[dummy_leaf(7); 8],
+			[dummy_leaf(8); 8],
+		)
+		.unwrap();
+
+		let fb = bb.finalize();
+
+		assert_eq!(fb.tx_proofs_by_slot.len(), 2, "should have 2 real proofs");
+		assert_eq!(
+			fb.tx_proofs_by_slot[&0],
+			vec![0xAA],
+			"slot 0 proof mismatch"
+		);
+		assert_eq!(
+			fb.tx_proofs_by_slot[&2],
+			vec![0xBB],
+			"slot 2 proof mismatch"
+		);
+		assert!(
+			!fb.tx_proofs_by_slot.contains_key(&1),
+			"slot 1 should be absent (deposit)"
+		);
+	}
+
+	#[test]
+	fn v2_sorted_leaves() {
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		// Add slots with deliberately out-of-order AN / NN bytes.
+		for i in (0..ACCOUNT_BATCH as u8).rev() {
+			bb.add_private_tx(
+				vec![i],
+				dummy_leaf(i),
+				dummy_leaf(i + 100), // AN values: 103, 102, 101, 100 — reverse order
+				[dummy_leaf(i + 10); 8],
+				[dummy_leaf(i + 20); 8], // NN values: similarly reverse
+			)
+			.unwrap();
+		}
+		let fb = bb.finalize();
+		assert!(is_sorted_u256(&fb.an_sorted), "an_sorted is not sorted");
+		assert!(is_sorted_u256(&fb.nn_sorted), "nn_sorted is not sorted");
+	}
+
+	#[test]
+	fn v2_contains_an_nn_dedup() {
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let an = dummy_leaf(0xAA);
+		let nn = dummy_leaf(0xBB);
+
+		assert!(!bb.contains_an(&an));
+		assert!(!bb.contains_nn(&nn));
+
+		bb.add_private_tx(vec![1], dummy_leaf(1), an, [[0; 32]; 8], [nn; 8])
+			.unwrap();
+
+		assert!(bb.contains_an(&an), "AN should be in batch after adding TX");
+		assert!(bb.contains_nn(&nn), "NN should be in batch after adding TX");
+	}
+
+	#[test]
+	fn v2_into_prove_request() {
+		use plonky2::field::types::Field;
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		bb.add_private_tx(
+			vec![0xCC],
+			dummy_leaf(1),
+			dummy_leaf(2),
+			[dummy_leaf(3); 8],
+			[dummy_leaf(4); 8],
+		)
+		.unwrap();
+		let fb = bb.finalize();
+
+		let ac_root = HashOutput::new([F::from_canonical_u64(1), F::ZERO, F::ZERO, F::ZERO]);
+		let nc_root = HashOutput::new([F::from_canonical_u64(2), F::ZERO, F::ZERO, F::ZERO]);
+		let cfg_root = [0x11u8; 32];
+
+		let req = fb.into_prove_request_v2(42, ac_root, nc_root, cfg_root);
+
+		assert_eq!(req.batch_id, 42);
+		assert_eq!(req.nc_leaves, fb.nc_leaves);
+		assert_eq!(req.ac_root, ac_root);
+		assert_eq!(req.nc_root, nc_root);
+		assert_eq!(req.main_pool_cfg_root, cfg_root);
+		assert_eq!(req.tx_proofs_by_slot, fb.tx_proofs_by_slot);
+	}
+
+	// -------------------------------------------------------------------------
+	// ConsumeBatchBuilder tests
+	// -------------------------------------------------------------------------
+
+	#[test]
+	fn consume_builder_fills_to_capacity() {
+		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		assert!(cb.is_empty());
+		for i in 0..NOTE_BATCH {
+			cb.add_note(dummy_leaf(i as u8), None).unwrap();
+			assert_eq!(cb.len(), i + 1);
+		}
+		assert!(cb.is_full());
+		assert!(
+			cb.add_note([0; 32], None).is_err(),
+			"should reject when full"
+		);
+	}
+
+	#[test]
+	fn consume_finalize_leaf_counts() {
+		let real_notes = 5usize;
+		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		for i in 0..real_notes {
+			cb.add_note(dummy_leaf(i as u8), None).unwrap();
+		}
+		let fb = cb.finalize();
+
+		assert_eq!(
+			fb.nc_leaves.len(),
+			NOTE_BATCH,
+			"nc_leaves must be padded to full note_batch_size"
+		);
+		assert_eq!(
+			fb.deposit_note_commitments.len(),
+			real_notes,
+			"deposit_note_commitments should contain only real notes"
+		);
+	}
+
+	#[test]
+	fn consume_finalize_real_notes_first() {
+		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		let note_a = [0xAAu8; 32];
+		let note_b = [0xBBu8; 32];
+		cb.add_note(note_a, None).unwrap();
+		cb.add_note(note_b, None).unwrap();
+
+		let fb = cb.finalize();
+
+		// First two nc_leaves must be the real notes in arrival order.
+		assert_eq!(fb.nc_leaves[0], note_a, "first nc leaf should be note_a");
+		assert_eq!(fb.nc_leaves[1], note_b, "second nc leaf should be note_b");
+		// deposit_note_commitments matches.
+		assert_eq!(fb.deposit_note_commitments, vec![note_a, note_b]);
+	}
+
+	#[test]
+	fn consume_finalize_poseidon_root() {
+		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		for i in 0..3u8 {
+			cb.add_note(dummy_leaf(i), Some(vec![i])).unwrap();
+		}
+		let fb = cb.finalize();
+
+		let nc_hashes: Vec<HashOutput> = fb
+			.nc_leaves
+			.iter()
+			.map(|b| {
+				HashOutput::new(core::array::from_fn(|i| {
+					F::from_canonical_u64(u64::from_be_bytes(
+						b[i * 8..(i + 1) * 8].try_into().unwrap(),
+					))
+				}))
+			})
+			.collect();
+		let expected = SubtreeRootCircuit::compute_root_native(&nc_hashes);
+		assert_eq!(
+			fb.batch_poseidon_root, expected,
+			"consume batch_poseidon_root mismatch"
+		);
+	}
+
+	#[test]
+	fn consume_finalize_proofs_by_slot() {
+		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		// Note 0: has proof.
+		cb.add_note(dummy_leaf(1), Some(vec![0xAA])).unwrap();
+		// Note 1: no proof.
+		cb.add_note(dummy_leaf(2), None).unwrap();
+		// Note 2: has proof.
+		cb.add_note(dummy_leaf(3), Some(vec![0xBB])).unwrap();
+
+		let fb = cb.finalize();
+
+		assert_eq!(fb.consume_proofs_by_slot.len(), 2, "should have 2 proofs");
+		assert_eq!(fb.consume_proofs_by_slot[&0], vec![0xAA], "slot 0 proof");
+		assert!(!fb.consume_proofs_by_slot.contains_key(&1), "slot 1 absent");
+		assert_eq!(fb.consume_proofs_by_slot[&2], vec![0xBB], "slot 2 proof");
+	}
+
+	#[test]
+	fn consume_into_prove_request() {
+		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		cb.add_note(dummy_leaf(1), Some(vec![0xDD])).unwrap();
+		cb.add_note(dummy_leaf(2), None).unwrap();
+		let fb = cb.finalize();
+
+		let ac_root = HashOutput::new([F::from_canonical_u64(10), F::ZERO, F::ZERO, F::ZERO]);
+		let nc_root = HashOutput::new([F::from_canonical_u64(20), F::ZERO, F::ZERO, F::ZERO]);
+		let cfg_root = [0x22u8; 32];
+
+		let req = fb.into_prove_request(99, ac_root, nc_root, cfg_root);
+
+		assert_eq!(req.batch_id, 99);
+		assert_eq!(req.nc_leaves, fb.nc_leaves);
+		assert_eq!(req.ac_root, ac_root);
+		assert_eq!(req.nc_root, nc_root);
+		assert_eq!(req.main_pool_cfg_root, cfg_root);
+		assert_eq!(req.consume_proofs_by_slot, fb.consume_proofs_by_slot);
 	}
 }

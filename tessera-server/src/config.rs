@@ -35,6 +35,10 @@ pub struct SequencerConfig {
 	/// When set, the API layer validates /consume-request proof bytes cryptographically.
 	/// Set via `TESSERA_CONSUME_ARTIFACTS_PATH`.
 	pub consume_artifacts_path: Option<PathBuf>,
+	/// Number of account-level slots per batch (V2 sequencer).
+	/// Must equal SubtreeRootCircuit leaf count ÷ 8.
+	/// Set via `TESSERA_ACCOUNT_BATCH_SIZE` (default `16`).
+	pub account_batch_size: usize,
 }
 
 /// Configuration for the standalone prover service.
@@ -61,6 +65,92 @@ pub struct ProverConfig {
 	/// Per-request HTTP timeout for remote aggregation provers (seconds).
 	/// Set via `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default 300).
 	pub aggregation_prover_timeout_secs: u64,
+}
+
+/// Configuration for the V2 prover service (`prover_v2`).
+pub struct ProverV2Config {
+	/// SubtreeRootCircuit artifact directory.
+	/// Set via `TESSERA_SR_ARTIFACTS_PATH` (required).
+	pub sr_artifacts_path: PathBuf,
+	/// Leaf count the SubtreeRoot circuit was built for (= account_batch_size × 8).
+	/// Set via `TESSERA_SR_BATCH_SIZE` (default `128`).
+	pub sr_batch_size: usize,
+	/// SuperAggregatorV2 artifact directory.
+	/// Set via `TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH` (required).
+	pub super_aggregator_v2_artifacts_path: PathBuf,
+	/// Optional path to V2 TX aggregator artifacts.
+	/// Set via `TESSERA_AGGREGATOR_ARTIFACTS_PATH`.
+	pub aggregator_artifacts_path: Option<PathBuf>,
+	/// Comma-separated remote aggregation prover base URLs.
+	/// Set via `TESSERA_AGGREGATION_PROVER_URLS`.
+	pub aggregation_prover_urls: Vec<String>,
+	/// Per-request HTTP timeout for remote aggregation provers (seconds).
+	/// Set via `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default `300`).
+	pub aggregation_prover_timeout_secs: u64,
+	/// HTTP bind address for the V2 prover API.
+	/// Set via `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`).
+	pub api_bind_addr: String,
+}
+
+impl ProverV2Config {
+	/// Load V2 prover configuration from environment variables.
+	///
+	/// # Required env vars
+	/// - `TESSERA_SR_ARTIFACTS_PATH`: SubtreeRootCircuit artifact directory.
+	/// - `TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH`: SAV2 artifact directory.
+	///
+	/// # Optional env vars (with defaults)
+	/// - `TESSERA_SR_BATCH_SIZE` (default `128`): SubtreeRoot leaf count.
+	/// - `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): TX aggregator path.
+	/// - `TESSERA_AGGREGATION_PROVER_URLS` (default empty): remote prover URLs.
+	/// - `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default `300`): remote prover timeout.
+	/// - `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`): HTTP listen address.
+	pub fn from_env() -> Result<Self> {
+		let sr_artifacts_path = std::env::var("TESSERA_SR_ARTIFACTS_PATH")
+			.context("TESSERA_SR_ARTIFACTS_PATH not set")?
+			.into();
+
+		let super_aggregator_v2_artifacts_path =
+			std::env::var("TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH")
+				.context("TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH not set")?
+				.into();
+
+		let sr_batch_size: usize = std::env::var("TESSERA_SR_BATCH_SIZE")
+			.unwrap_or_else(|_| "128".to_string())
+			.parse()
+			.context("invalid TESSERA_SR_BATCH_SIZE")?;
+
+		let aggregator_artifacts_path = std::env::var("TESSERA_AGGREGATOR_ARTIFACTS_PATH")
+			.ok()
+			.map(PathBuf::from);
+
+		let aggregation_prover_urls: Vec<String> = std::env::var("TESSERA_AGGREGATION_PROVER_URLS")
+			.unwrap_or_default()
+			.split(',')
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+			.map(String::from)
+			.collect();
+
+		let aggregation_prover_timeout_secs: u64 =
+			std::env::var("TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS")
+				.unwrap_or_else(|_| "300".to_string())
+				.parse()
+				.context("invalid TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS")?;
+
+		let api_bind_addr = std::env::var("TESSERA_PROVER_API_ADDR")
+			.unwrap_or_else(|_| "127.0.0.1:8091".to_string());
+
+		Ok(Self {
+			sr_artifacts_path,
+			sr_batch_size,
+			super_aggregator_v2_artifacts_path,
+			aggregator_artifacts_path,
+			aggregation_prover_urls,
+			aggregation_prover_timeout_secs,
+			api_bind_addr,
+		})
+	}
 }
 
 /// Configuration for the standalone `aggregation_prover` service.
@@ -172,6 +262,11 @@ impl SequencerConfig {
 			.ok()
 			.map(PathBuf::from);
 
+		let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
+			.unwrap_or_else(|_| "16".to_string())
+			.parse()
+			.context("invalid TESSERA_ACCOUNT_BATCH_SIZE")?;
+
 		Ok(Self {
 			rpc_url,
 			operator_private_key,
@@ -186,6 +281,7 @@ impl SequencerConfig {
 			prover_api_timeout_secs,
 			aggregator_artifacts_path,
 			consume_artifacts_path,
+			account_batch_size,
 		})
 	}
 }

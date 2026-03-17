@@ -112,15 +112,15 @@ impl<H: MerkleHash> BatchInsertionLink<H> {
 	///  5. pred_value[i] < leaf_value[i]
 	fn verify_per_leaf(&self) -> bool {
 		// Constraint 5
-		if !(self.pred_value < self.leaf_value) {
+		if self.pred_value >= self.leaf_value {
 			return false;
 		}
 		// Constraint 4
-		if !(self.pred_old_next_value > self.leaf_value) {
+		if self.pred_old_next_value <= self.leaf_value {
 			return false;
 		}
 		// Constraint 3
-		if !(self.leaf_next_value > self.leaf_value) {
+		if self.leaf_next_value <= self.leaf_value {
 			return false;
 		}
 		// Constraints 1–2
@@ -154,13 +154,13 @@ impl<H: MerkleHash> BatchInsertionLink<H> {
 	/// 17. leaf_index[i] + 1 == leaf_index[i+1] (sorted order: leaf_value[i] < leaf_value[i+1])
 	fn verify_transition(&self, next: &Self) -> bool {
 		// Sorted order
-		if !(self.leaf_value < next.leaf_value) {
+		if self.leaf_value >= next.leaf_value {
 			return false;
 		}
 
 		if next.mask {
 			// Constraint 8: distinct predecessor gap doesn't overlap
-			if !(next.pred_value > self.leaf_value) {
+			if next.pred_value <= self.leaf_value {
 				return false;
 			}
 			// Constraints 6–7
@@ -352,9 +352,10 @@ impl<H: MerkleHash> NullifierTree<H> {
 
 	/// Sorts the leaves in ascending order and return a mask
 	/// indicating if the leaf true predecessor is already committed or not.
+	#[allow(clippy::type_complexity)]
 	fn sort_leaves(
 		&self,
-		leaves: &mut Vec<H::Digest>,
+		leaves: &mut [H::Digest],
 	) -> MerkleTreeResult<(
 		Vec<usize>,
 		Vec<H::Digest>,

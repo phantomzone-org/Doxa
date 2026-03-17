@@ -127,7 +127,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 				self.roots.len()
 			)))
 		})?;
-		Ok(root.clone())
+		Ok(*root)
 	}
 
 	pub fn get_last_root(&self) -> H::Digest {

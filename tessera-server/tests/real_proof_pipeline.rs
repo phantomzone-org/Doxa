@@ -82,8 +82,11 @@ fn prove_nullifier_tree(
 ) -> (CircuitDataNative, ProofNative) {
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, D>::new(config);
-	let targets =
-		BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(&mut builder, TREE_DEPTH, batch_size);
+	let targets = BatchNullifierInsertProofTargets::new::<HashOutput, F, D>(
+		&mut builder,
+		TREE_DEPTH,
+		batch_size,
+	);
 	targets.connect::<HashOutput, F, D>(&mut builder, &());
 	let cd = builder.build::<ConfigNative>();
 	let mut pw = PartialWitness::new();

@@ -150,8 +150,8 @@ impl<const N: usize> MerkleHashTarget<N> {
 		target: &Self,
 		values: &[F; N],
 	) -> Result<()> {
-		for i in 0..N {
-			pw.set_target(target.elements[i], values[i])?;
+		for (i, &val) in values.iter().enumerate().take(N) {
+			pw.set_target(target.elements[i], val)?;
 		}
 		Ok(())
 	}
