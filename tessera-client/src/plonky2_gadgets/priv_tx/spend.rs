@@ -128,13 +128,7 @@ pub fn set_spend_tx_witness(
 
 	let mut accout = accin.clone();
 	accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
-	accout.ast.set_leaf(
-		ast_index,
-		AccountStateTreeLeaf {
-			asset_id,
-			amount: new_bal,
-		},
-	);
+	accout.ast.insert_or_update_asset(asset_id, new_bal);
 
 	// ── Derive amounts and asset_exists flags ─────────────────────────────────
 	let (_, accin_amt) = accin.ast.amount_for(asset_id).unwrap_or((0, U256::zero()));
@@ -657,13 +651,9 @@ mod tests {
 		accout.nonce = Nonce(F::from_canonical_u64(2));
 		// spend_auth and consume_auth are immutable in PrivTx — kept from acc0
 		// Update AST: position 0 gets asset_id=1 with amount=150
-		accout.ast.set_leaf(
-			0,
-			AccountStateTreeLeaf {
-				asset_id: asset_id_val,
-				amount: U256::from(150u64),
-			},
-		);
+		accout
+			.ast
+			.insert_or_update_asset(asset_id_val, U256::from(150u64));
 
 		// Insert note commitments into NCT
 		let n0_nct_proof = nct.insert(n0.commitment().0).unwrap();

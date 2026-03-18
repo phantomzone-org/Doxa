@@ -43,6 +43,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	// ---- Add virtual methods ----
 
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
+	fn add_virtual_dummy_account_target(&mut self) -> DummyAccountTarget;
 	fn add_virtual_account_target(&mut self) -> AccountTarget;
 	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget;
 	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget;
@@ -91,6 +92,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		&mut self,
 		accin: AccountTarget,
 		accout: AccountTarget,
+		is_rjct: BoolTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
 		is_priv_tx: BoolTarget,
@@ -109,8 +111,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		asset_id: AssetIdTarget,
 		accin_amt: U256Target,
 		accout_amt: U256Target,
-		accin: AccountTarget,
-		accout: AccountTarget,
+		accin_ast_root: HashOutTarget,
+		accout_ast_root: HashOutTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
 	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH>;
@@ -161,6 +163,15 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accout_comm: AccountCommitmentTarget,
 	) -> TxHashTarget;
 
+	fn assert_is_reject(
+		&mut self,
+		is_rjct: BoolTarget,
+		inotes: [NoteTarget; NOTE_BATCH],
+		inotes_isactive: [BoolTarget; NOTE_BATCH],
+		onotes: [NoteTarget; NOTE_BATCH],
+		onotes_isactive: [BoolTarget; NOTE_BATCH],
+	);
+
 	fn assert_balance_invariant(
 		&mut self,
 		accin_amt: U256Target,
@@ -179,7 +190,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accin: AccountTarget,
 		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
-		is_fake_tx: BoolTarget,
+		not_is_rjct: BoolTarget,
+		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets;
 }
 
@@ -199,6 +211,10 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 {
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
 		DummyNoteTarget(self.add_virtual_target_arr())
+	}
+
+	fn add_virtual_dummy_account_target(&mut self) -> DummyAccountTarget {
+		DummyAccountTarget(self.add_virtual_target_arr())
 	}
 
 	fn add_virtual_account_target(&mut self) -> AccountTarget {
@@ -469,21 +485,21 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		asset_id: AssetIdTarget,
 		accin_amt: U256Target,
 		accout_amt: U256Target,
-		accin: AccountTarget,
-		accout: AccountTarget,
+		accin_ast_root: HashOutTarget,
+		accout_ast_root: HashOutTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
 	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH> {
 		let accin_merkletrgts = self.assert_asset_amt_or_default_in_ast(
 			asset_id,
 			accin_amt,
-			accin.acc_ast_root,
+			accin_ast_root,
 			asset_exists_in_accin,
 		);
 		let accout_merkletrgts = self.assert_asset_amt_or_default_in_ast(
 			asset_id,
 			accout_amt,
-			accout.acc_ast_root,
+			accout_ast_root,
 			asset_exists_in_accout,
 		);
 
@@ -540,6 +556,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		&mut self,
 		accin: AccountTarget,
 		accout: AccountTarget,
+		is_rjct: BoolTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
 		is_priv_tx: BoolTarget,
@@ -554,14 +571,19 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		self.connect(accout.nonce, expected_nonce);
 
 		// acc_ast_root is immutable for FreshAccTx and UpdateAuthTx; PrivTx may update it
+		//
+		// not_spend = !is_priv_tx = is_rjct | is_fresh_acc | is_update_auth, because we constrain
+		// elsewhere that only 1 flag of the set is set to true at any time
+		let not_spend = self.not(is_priv_tx);
 		for i in 0..HASH_SIZE {
+			// TODO:use is_fresh_acc | is_update_auth here
 			self.conditional_assert_eq(
-				is_fresh_acc.target,
+				not_spend.target,
 				accout.acc_ast_root.elements[i],
 				accin.acc_ast_root.elements[i],
 			);
 			self.conditional_assert_eq(
-				is_update_auth.target,
+				not_spend.target,
 				accout.acc_ast_root.elements[i],
 				accin.acc_ast_root.elements[i],
 			);
@@ -585,6 +607,72 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 			accout.consume_auth.config.target,
 			accin.consume_auth.config.target,
 		);
+	}
+
+	fn assert_is_reject(
+		&mut self,
+		is_rjct: BoolTarget,
+		inotes: [NoteTarget; NOTE_BATCH],
+		inotes_isactive: [BoolTarget; NOTE_BATCH],
+		onotes: [NoteTarget; NOTE_BATCH],
+		onotes_isactive: [BoolTarget; NOTE_BATCH],
+	) {
+		for i in 0..NOTE_BATCH {
+			self.conditional_assert_eq(
+				is_rjct.target,
+				inotes_isactive[i].target,
+				onotes_isactive[i].target,
+			);
+
+			// identifier
+			for j in 0..2 {
+				self.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].identifier[j],
+					onotes[i].identifier[j],
+				);
+			}
+
+			// amount (8 u32 limbs)
+			for j in 0..8 {
+				self.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].amount.0[j].0,
+					onotes[i].amount.0[j].0,
+				);
+			}
+
+			// asset_id
+			self.conditional_assert_eq(is_rjct.target, inotes[i].asset_id.0, onotes[i].asset_id.0);
+
+			// spend_cond of onote == reject_cond of inote (note returns to sender)
+			self.conditional_assert_eq(
+				is_rjct.target,
+				inotes[i].reject_cond.subpool_id.0,
+				onotes[i].spend_cond.subpool_id.0,
+			);
+			for j in 0..4 {
+				self.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].reject_cond.public_identifier.0.elements[j],
+					onotes[i].spend_cond.public_identifier.0.elements[j],
+				);
+			}
+
+			// reject_cond of onote == reject_cond of inote (sender unchanged)
+			self.conditional_assert_eq(
+				is_rjct.target,
+				inotes[i].reject_cond.subpool_id.0,
+				onotes[i].reject_cond.subpool_id.0,
+			);
+			for j in 0..4 {
+				self.conditional_assert_eq(
+					is_rjct.target,
+					inotes[i].reject_cond.public_identifier.0.elements[j],
+					onotes[i].reject_cond.public_identifier.0.elements[j],
+				);
+			}
+		}
 	}
 
 	fn assert_balance_invariant(
@@ -655,6 +743,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		accin: AccountTarget,
 		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
+		not_is_rjct: BoolTarget,
 		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets {
 		// spend sig: required when any onote is active
@@ -662,6 +751,8 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		for sel in onotes_isactive.iter().skip(1) {
 			is_spend_req = self.or(*sel, is_spend_req);
 		}
+		// if tx_kind is reject then spend sig is not required: is_spend && !is_reject
+		is_spend_req = self.and(is_spend_req, not_is_rjct);
 
 		// we enforce the spend auth public key to match the one set in account. This implies for
 		// fake signatures, always set Q to the account's public key. Otherwise, the proof will

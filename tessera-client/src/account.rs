@@ -133,10 +133,37 @@ impl AccountStateTree {
 		self.tree.size()
 	}
 
-	/// Insert or overwrite a leaf; also updates the asset → (index, amount) map.
-	pub fn set_leaf(&mut self, at_index: usize, leaf: AccountStateTreeLeaf) {
-		self.assets.insert(leaf.asset_id, (at_index, leaf.amount));
-		self.tree.set_leaf(at_index, leaf);
+	/// Insert a new asset. Returns `Err` if `asset_id` is already tracked.
+	pub fn insert_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<(), String> {
+		if self.assets.contains_key(&asset_id) {
+			return Err(format!("asset {:?} already exists", asset_id));
+		}
+		let index = self.tree.next_index();
+		self.tree.insert(AccountStateTreeLeaf { asset_id, amount });
+		self.assets.insert(asset_id, (index, amount));
+		Ok(())
+	}
+
+	/// Update an existing asset's amount. Returns `Ok(previous_amount)` or `Err` if not found.
+	pub fn update_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<U256, String> {
+		let &(index, prev_amount) = self
+			.assets
+			.get(&asset_id)
+			.ok_or_else(|| format!("asset {:?} not found", asset_id))?;
+		self.tree.set_leaf(index, AccountStateTreeLeaf { asset_id, amount });
+		self.assets.insert(asset_id, (index, amount));
+		Ok(prev_amount)
+	}
+
+	/// Insert if new, update if existing.
+	/// Returns `None` if newly inserted, `Some(previous_amount)` if updated.
+	pub fn insert_or_update_asset(&mut self, asset_id: AssetId, amount: U256) -> Option<U256> {
+		if self.assets.contains_key(&asset_id) {
+			Some(self.update_asset(asset_id, amount).unwrap())
+		} else {
+			self.insert_asset(asset_id, amount).unwrap();
+			None
+		}
 	}
 
 	pub fn merkle_proof_at(
@@ -324,6 +351,32 @@ pub fn derive_deposit_tx_hash(
 	tx_hash_inp.extend_from_slice(&deposit_note_comm.0.0);
 	tx_hash_inp.extend_from_slice(&map_h160_to_f(&eth_adrs));
 	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&tx_hash_inp).elements)
+}
+
+pub fn derive_withdraw_tx_hash(
+	accin_null: AccountNullifier,
+	accout_comm: AccountCommitment,
+	asset_ids: [AssetId; NOTE_BATCH],
+	amounts: [U256; NOTE_BATCH],
+	w_acc_addr: H160,
+) -> HashOutput {
+	// inp = accin_null[4] || accout_comm[4] || asset_ids[NOTE_BATCH]
+	//     || amounts_f[8*NOTE_BATCH] (each U256 as 8 u32 F limbs) || w_acc_addr[5]
+	let mut inp: Vec<F> = Vec::new();
+	inp.extend_from_slice(&accin_null.0.0);
+	inp.extend_from_slice(&accout_comm.0.0);
+	for id in &asset_ids {
+		inp.push(id.0);
+	}
+	for amt in &amounts {
+		// U256 stores 4 u64 limbs (little-endian); split each into 2 u32 limbs
+		for limb64 in amt.0.iter() {
+			inp.push(F::from_canonical_u32(*limb64 as u32));
+			inp.push(F::from_canonical_u32((*limb64 >> 32) as u32));
+		}
+	}
+	inp.extend_from_slice(&map_h160_to_f(&w_acc_addr));
+	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements)
 }
 
 /// Compute the actual root of the default empty Account State Tree (depth `ACC_AST_DEPTH`,

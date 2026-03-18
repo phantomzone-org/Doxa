@@ -20,9 +20,10 @@ use crate::{
 		priv_tx::{
 			cb::PrivTxCircuitBuilder,
 			targets::{
-				AccountNullifierTarget, ActRootTarget, AssetIdTarget, DummyNoteTarget,
-				MainPoolConfigRootTarget, NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
-				NoteTarget, PublicIdentifierTaregt, SubpoolIdTarget, TxCircuitTargets,
+				AccountCommitmentTarget, AccountNullifierTarget, ActRootTarget, AssetIdTarget,
+				DummyNoteTarget, MainPoolConfigRootTarget, NctRootTarget, NoteCommitmentTarget,
+				NoteNullifierTarget, NoteTarget, PublicIdentifierTaregt, SubpoolIdTarget,
+				TxCircuitTargets,
 			},
 		},
 		signature::{LocalQuinticExtension, PubkeyTarget},
@@ -32,7 +33,8 @@ use crate::{
 
 pub(crate) mod cb;
 mod freshacc;
-pub mod spend;
+mod reject;
+mod spend;
 pub(crate) mod targets;
 
 /// Public alias for the PrivTx circuit targets, used with [`build_priv_tx_circuit`]
@@ -65,14 +67,12 @@ pub fn priv_tx_circuit<
 ) -> TxCircuitTargets {
 	// Mint constants
 	// let ds_nullifier_key = builder.constant(F::from_canonical_u64(DS_NULLIFIER_KEY));
-	let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 
 	// not_fake_tx is a PI and set to 1 for tx that are not fake. It may be se to 0 to produce a
 	// dummy proof (used at proof aggregation stage)
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// Tx kinds
-	// TODO: where is it checked that these are indeed bool targets?
 	let is_rjct = builder.add_virtual_bool_target_safe();
 	let is_fresh_acc = builder.add_virtual_bool_target_safe();
 	let is_update_auth = builder.add_virtual_bool_target_safe();
@@ -98,6 +98,7 @@ pub fn priv_tx_circuit<
 	let private_identifier = accin.private_identifier;
 	let subpool_id = accin.subpool_id;
 	let public_identifier = {
+		let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 		let mut input = vec![ds_public_identifier];
 		input.extend(private_identifier.0);
 		let pubid = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input);
@@ -114,7 +115,14 @@ pub fn priv_tx_circuit<
 	// AccIn → AccOut transition invariants
 	// private_identifier, subpool_id are immutable for all tx kinds — enforced by sharing the
 	// same wires in `derive_account_commitment` for both accin and accout.
-	builder.assert_account_invariants(accin, accout, is_fresh_acc, is_update_auth, is_priv_tx);
+	builder.assert_account_invariants(
+		accin,
+		accout,
+		is_rjct,
+		is_fresh_acc,
+		is_update_auth,
+		is_priv_tx,
+	);
 
 	// Check Comm(AccIn) in ACT iff !fresh && not_fake == 1
 	let accin_pos = builder.add_virtual_target();
@@ -142,8 +150,8 @@ pub fn priv_tx_circuit<
 		asset_id,
 		accin_amt,
 		accout_amt,
-		accin,
-		accout,
+		accin.acc_ast_root,
+		accout.acc_ast_root,
 		asset_exists_in_accin,
 		asset_exists_in_accout,
 	);
@@ -173,6 +181,9 @@ pub fn priv_tx_circuit<
 	let donotes: [DummyNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
 	let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
+
+	// check is_rjct
+	builder.assert_is_reject(is_rjct, inotes, inotes_isactive, onotes, onotes_isactive);
 
 	// All inotes and onotes share the same asset_id
 	for note in inotes.iter().chain(onotes.iter()) {
@@ -276,6 +287,7 @@ pub fn priv_tx_circuit<
 		not_fake_tx,
 	);
 
+	let not_is_rjct = builder.not(is_rjct);
 	let sig_targets = builder.assert_tx_signatures(
 		tx_hash,
 		inotes_isactive,
@@ -283,22 +295,22 @@ pub fn priv_tx_circuit<
 		accin,
 		subpool_consume_key,
 		approval_key,
+		not_is_rjct,
 		not_fake_tx,
 	);
 
-	// Declare public inputs (75 explicit + 2 LUT metadata = 77 total):
-	//  PI[0..2]  = plonky2 LUT metadata (auto-registered, not set by user)
-	//  PI[2]     = subpool_id_in
-	//  PI[3]     = subpool_id_out
-	//  PI[4]     = not_fake_tx (is_real)          [IS_REAL_OFFSET]
-	//  PI[5..9]  = AN (account nullifier)         [TX_DATA_OFFSET]
-	//  PI[9..13] = AC (account commitment)
-	//  PI[13..45]= NN (note nullifiers, 8×4)
-	//  PI[45..77]= NC (note commitments, 8×4)
-	builder.register_public_input(accin.subpool_id.0);
-	builder.register_public_input(accout.subpool_id.0);
+	// Declare public inputs:
+	//  - effective input note nullifiers
+	//  - effective output note commitments
+	//  - AIn Nullifier
+	//  - AOut commitment
+	//  - not_is_fake bool target
+	//  - NCT root
+	//  - ACT root
 	builder.register_public_input(not_fake_tx.target);
-	builder.register_public_inputs(&final_an.0.elements);
+	builder.register_public_inputs(&act_root.0.elements);
+	builder.register_public_inputs(&nct_root.0.elements);
+	builder.register_public_inputs(&accin_null.0.elements);
 	builder.register_public_inputs(&accout_comm.0.elements);
 	builder.register_public_inputs(
 		final_nn

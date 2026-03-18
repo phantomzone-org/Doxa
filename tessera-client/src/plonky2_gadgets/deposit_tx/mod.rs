@@ -155,8 +155,8 @@ pub fn deposit_tx_circuit<
 		asset_id,
 		accin_amt,
 		accout_amt,
-		accin,
-		accout,
+		accin.acc_ast_root,
+		accout.acc_ast_root,
 		asset_exists_in_accin,
 		asset_exists_in_accout,
 	);
@@ -198,17 +198,21 @@ pub fn deposit_tx_circuit<
 
 	// Register public inputs
 	//   - not_fake_tx
+	//   - ACT root
 	//   - AccIn nullifier
 	//   - AccOut Commitment
 	//   - deposit note commitment
 	//   - eth_address
 	//   - deposit note amount
+	//   - deposit note asset_id
 	builder.register_public_input(not_fake_tx.target);
+	builder.register_public_inputs(&act_root.0.elements);
 	builder.register_public_inputs(&accin_null.0.elements);
 	builder.register_public_inputs(&accout_comm.0.elements);
 	builder.register_public_inputs(&deposit_note_comm.0.elements);
 	builder.register_public_inputs(&eth_address);
 	builder.register_public_inputs(&deposit_note.amount.0.map(|v| v.0));
+	builder.register_public_input(asset_id.0);
 
 	DepositTxTargets {
 		not_fake_tx,
@@ -269,13 +273,7 @@ pub(crate) fn set_deposit_tx_witness(
 	let new_bal = old_bal + deposit_amt;
 	let mut accout = accin.clone();
 	accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
-	accout.ast.set_leaf(
-		ast_index,
-		AccountStateTreeLeaf {
-			asset_id,
-			amount: new_bal,
-		},
-	);
+	accout.ast.insert_or_update_asset(asset_id, new_bal);
 
 	// ── Amounts and exists flags ───────────────────────────────────────────────
 	let (_, accin_amt) = accin.ast.amount_for(asset_id).unwrap_or((0, U256::zero()));
@@ -603,13 +601,7 @@ mod tests {
 		// ── Compute native TxHash ─────────────────────────────────────────────
 		let mut accout = accin.clone();
 		accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
-		accout.ast.set_leaf(
-			0,
-			AccountStateTreeLeaf {
-				asset_id,
-				amount: deposit_note.amount,
-			},
-		);
+		accout.ast.insert_or_update_asset(asset_id, deposit_note.amount);
 
 		let accin_null = accin.nullifier(Some(accin_merkle_proof.pos as u64));
 		let deposit_note_comm = deposit_note.commitment();
