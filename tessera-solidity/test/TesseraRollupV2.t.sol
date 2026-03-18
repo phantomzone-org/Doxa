@@ -359,7 +359,11 @@ contract TesseraRollupV2Test is Test {
         rollup.submitTransactionBatch(b);
     }
 
-    /// Re-using a spent nullifier in a new batch reverts NullifierAlreadyUsed.
+    /// Re-using a spent nullifier in a new batch reverts NullifierAlreadyUsed at prove time.
+    ///
+    /// submitTransactionBatch is permissive (no nullifier pre-check); the check
+    /// is enforced in proveTransactionBatch so that the two-phase model can
+    /// reject races without blocking submission.
     function test_submit_nullifierAlreadyUsed() public {
         uint256 knownNullifier = 0x9ABC;
         uint256 genesis = rollup.zeros(rollup.treeDepth());
@@ -379,16 +383,20 @@ contract TesseraRollupV2Test is Test {
         }
         assertTrue(rollup.nullifiers(knownNullifier));
 
-        // Try to submit another batch with the same nullifier.
+        // Submit a second batch reusing knownNullifier — submit succeeds.
         TesseraRollupV2.TransactionBatch memory b2 = TesseraRollupV2.TransactionBatch({
             acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: PCR,
             noteCommitments: empty, noteNullifiers: empty,
             accountCommitment: _nc++, accountNullifier: knownNullifier,
             batchPoseidonRoot: 0x2222, confirmed: false
         });
+        bytes32 pic2 = _txPI(b2);
         vm.prank(OP);
-        vm.expectRevert(abi.encodeWithSelector(TesseraRollupV2.NullifierAlreadyUsed.selector, knownNullifier));
         rollup.submitTransactionBatch(b2);
+
+        // Prove phase must revert with NullifierAlreadyUsed.
+        vm.expectRevert(abi.encodeWithSelector(TesseraRollupV2.NullifierAlreadyUsed.selector, knownNullifier));
+        rollup.proveTransactionBatch(pic2, _dummyProof());
     }
 
     /// Submitting the same batch twice reverts BatchAlreadySubmitted.
@@ -725,6 +733,62 @@ contract TesseraRollupV2Test is Test {
         vm.prank(OP);
         rollup.submitTransactionBatch(b);
     }
+
+    // -----------------------------------------------------------------------
+    // =====================================================================
+    // TESTS: keccakToPublicInputs encoding
+    // =====================================================================
+    // -----------------------------------------------------------------------
+
+    /// keccakToPublicInputs correctly decomposes a known bytes32 into 8 uint32 words.
+    ///
+    /// Mirrors the Rust `keccak_to_public_inputs` unit test in prover_v2.rs and
+    /// verifies that the Solidity ↔ Rust encoding contract holds.
+    function test_keccakToPublicInputs_roundtrip() public view {
+        uint256[8] memory words;
+        words[0] = 0xDEADBEEF;
+        words[1] = 0x01234567;
+        words[2] = 0x89ABCDEF;
+        words[3] = 0xFEDCBA98;
+        words[4] = 0x11223344;
+        words[5] = 0x55667788;
+        words[6] = 0x99AABBCC;
+        words[7] = 0x00FF00FF;
+
+        // Pack words into bytes32 big-endian (mirrors prove_plonky2 in Rust).
+        bytes32 packed = bytes32(
+            (words[0] << 224) | (words[1] << 192) | (words[2] << 160) | (words[3] << 128) |
+            (words[4] << 96)  | (words[5] << 64)  | (words[6] << 32)  | words[7]
+        );
+
+        uint256[8] memory unpacked = rollup.keccakToPublicInputs(packed);
+        for (uint256 i = 0; i < 8; i++) {
+            assertEq(unpacked[i], words[i], "word mismatch");
+        }
+    }
+
+    /// keccakToPublicInputs round-trips the all-zero bytes32 (dummy proof piCommitment).
+    function test_keccakToPublicInputs_allZero() public view {
+        uint256[8] memory inputs = rollup.keccakToPublicInputs(bytes32(0));
+        for (uint256 i = 0; i < 8; i++) {
+            assertEq(inputs[i], 0, "zero mismatch");
+        }
+    }
+
+    /// keccakToPublicInputs round-trips the all-ones bytes32.
+    function test_keccakToPublicInputs_allOnes() public view {
+        bytes32 allOnes = bytes32(type(uint256).max);
+        uint256[8] memory inputs = rollup.keccakToPublicInputs(allOnes);
+        for (uint256 i = 0; i < 8; i++) {
+            assertEq(inputs[i], 0xFFFFFFFF, "allOnes mismatch");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // =====================================================================
+    // TESTS: Access control + pause
+    // =====================================================================
+    // -----------------------------------------------------------------------
 
     /// Operator can update poolConfigRoot; old value rejected by new batches.
     function test_setPoolConfigRoot() public {

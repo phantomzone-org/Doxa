@@ -63,13 +63,20 @@ use plonky2::{
 	util::serialization::DefaultGateSerializer,
 };
 
-use super::{IS_REAL_OFFSET, TX_DATA_OFFSET, TX_LEAF_PI_SIZE};
+/// Number of public inputs per TX leaf in the aggregated TX proof.
+pub const TX_LEAF_PI_SIZE: usize = 77;
+/// Offset of the `is_real` flag within a TX leaf's public inputs.
+pub const IS_REAL_OFFSET: usize = 4;
+/// Offset of the first TX data field (account nullifier) within a TX leaf's public inputs.
+pub const TX_DATA_OFFSET: usize = 5;
 use crate::{
 	CircuitDataNative, ConfigNative, D, F, ProofNative,
 	groth::serializer::TesseraGeneratorSerializer,
 	plonky2_gadgets::{
-		keccak256::{builder::BuilderKeccak256, utils::solidity_keccak256},
-		sha256::circuit::decompose_field_to_u32_pair,
+		keccak256::{
+			builder::BuilderKeccak256, field_decompose::decompose_field_to_u32_pair,
+			utils::solidity_keccak256,
+		},
 		u32::add_u8_range_check_lookup_table,
 	},
 	tree::hasher::HashOutput,

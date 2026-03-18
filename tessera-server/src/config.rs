@@ -41,32 +41,6 @@ pub struct SequencerConfig {
 	pub account_batch_size: usize,
 }
 
-/// Configuration for the standalone prover service.
-pub struct ProverConfig {
-	/// Note-tree batch size expected by the note-tree circuits (notes-commitment +
-	/// notes-nullifier).
-	pub note_batch_size: usize,
-	/// Account-tree batch size expected by the account-tree circuits (accounts-commitment +
-	/// accounts-nullifier). Must equal `note_batch_size / 8`.
-	pub account_batch_size: usize,
-	/// HTTP bind address for prover API.
-	pub api_bind_addr: String,
-	/// Path to pre-built SuperAggregator artifacts directory.
-	/// Set via `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH`.
-	pub super_aggregator_artifacts_path: PathBuf,
-	/// Optional path to pre-built `GenericAggregator` artifacts for aggregating
-	/// `PrivateTx` leaf proofs.  When `None` the prover accepts only dummy proofs.
-	/// Set via `TESSERA_AGGREGATOR_ARTIFACTS_PATH`.
-	pub aggregator_artifacts_path: Option<PathBuf>,
-	/// Comma-separated list of remote aggregation prover base URLs.
-	/// When empty (default) the coordinator uses only a local prover.
-	/// Set via `TESSERA_AGGREGATION_PROVER_URLS`.
-	pub aggregation_prover_urls: Vec<String>,
-	/// Per-request HTTP timeout for remote aggregation provers (seconds).
-	/// Set via `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default 300).
-	pub aggregation_prover_timeout_secs: u64,
-}
-
 /// Configuration for the V2 prover service (`prover_v2`).
 pub struct ProverV2Config {
 	/// SubtreeRootCircuit artifact directory.
@@ -282,73 +256,6 @@ impl SequencerConfig {
 			aggregator_artifacts_path,
 			consume_artifacts_path,
 			account_batch_size,
-		})
-	}
-}
-
-impl ProverConfig {
-	/// Load standalone prover configuration from environment variables.
-	///
-	/// # Required env vars
-	/// - `TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH`: path to pre-built SuperAggregator artifacts.
-	///
-	/// # Optional env vars (with defaults)
-	/// - `TESSERA_NOTE_BATCH_SIZE` (default `1024`): leaf count per note-tree batch.
-	/// - `TESSERA_ACCOUNT_BATCH_SIZE` (default `128`): leaf count per account-tree batch (must be
-	///   1/8 of note size).
-	/// - `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`): HTTP listen address.
-	/// - `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): aggregator artifacts path.
-	/// - `TESSERA_AGGREGATION_PROVER_URLS` (default empty): comma-separated remote prover URLs.
-	/// - `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default `300`): remote prover timeout.
-	///
-	/// # Errors
-	/// Returns `Err` if any required variable is absent or any value fails to parse.
-	pub fn from_env() -> Result<Self> {
-		let super_aggregator_artifacts_path =
-			std::env::var("TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH")
-				.context("TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH not set")?
-				.into();
-
-		let note_batch_size: usize = std::env::var("TESSERA_NOTE_BATCH_SIZE")
-			.unwrap_or_else(|_| "1024".to_string())
-			.parse()
-			.context("invalid TESSERA_NOTE_BATCH_SIZE")?;
-		let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
-			.unwrap_or_else(|_| "128".to_string())
-			.parse()
-			.context("invalid TESSERA_ACCOUNT_BATCH_SIZE")?;
-		anyhow::ensure!(
-			note_batch_size == account_batch_size * 8,
-			"TESSERA_NOTE_BATCH_SIZE ({note_batch_size}) must be exactly 8 × TESSERA_ACCOUNT_BATCH_SIZE ({account_batch_size})"
-		);
-		let api_bind_addr = std::env::var("TESSERA_PROVER_API_ADDR")
-			.unwrap_or_else(|_| "127.0.0.1:8091".to_string());
-		let aggregator_artifacts_path = std::env::var("TESSERA_AGGREGATOR_ARTIFACTS_PATH")
-			.ok()
-			.map(PathBuf::from);
-
-		let aggregation_prover_urls: Vec<String> = std::env::var("TESSERA_AGGREGATION_PROVER_URLS")
-			.unwrap_or_default()
-			.split(',')
-			.map(str::trim)
-			.filter(|s| !s.is_empty())
-			.map(String::from)
-			.collect();
-
-		let aggregation_prover_timeout_secs: u64 =
-			std::env::var("TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS")
-				.unwrap_or_else(|_| "300".to_string())
-				.parse()
-				.context("invalid TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS")?;
-
-		Ok(Self {
-			note_batch_size,
-			account_batch_size,
-			api_bind_addr,
-			super_aggregator_artifacts_path,
-			aggregator_artifacts_path,
-			aggregation_prover_urls,
-			aggregation_prover_timeout_secs,
 		})
 	}
 }

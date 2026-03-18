@@ -31,8 +31,8 @@ use tessera_client::TesseraGateSerializer;
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	proof_aggregation::{
-		GenericAggregator, GenericAggregatorConfig, ReducerKind, SubtreeRootCircuit,
-		SuperAggregatorV2, SuperAggregatorV2CircuitData, TX_DATA_OFFSET, TX_LEAF_PI_SIZE,
+		GenericAggregator, GenericAggregatorConfig, SubtreeRootCircuit, SuperAggregatorV2,
+		SuperAggregatorV2CircuitData, TX_DATA_OFFSET, TX_LEAF_PI_SIZE,
 	},
 	tree::hasher::HashOutput,
 	ProofBN128, ProofNative, F,
@@ -128,7 +128,6 @@ fn main() -> Result<()> {
 	let agg_config = GenericAggregatorConfig {
 		arity: ARITY,
 		depth: agg_depth,
-		reducer: ReducerKind::None,
 	};
 	let tx_agg = GenericAggregator::new(
 		agg_config,
@@ -336,6 +335,39 @@ fn main() -> Result<()> {
 	debug_log(&format!(
 		"\n(rust) Solidity proof JSON written to {json_path:?}\n{solidity_json}"
 	));
+
+	// =======================================================================
+	// 12. Copy Verifier.sol → tessera-solidity/src/VerifierSuperAggregatorV2.sol Copy
+	//     proof_solidity.json → tessera-solidity/test/fixtures/groth16_proof.json
+	// =======================================================================
+	println!("\n[12] Syncing Solidity artifacts...");
+	let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+	let workspace_root = manifest_dir
+		.parent()
+		.expect("CARGO_MANIFEST_DIR has parent");
+	let sol_src_dir = workspace_root.join("tessera-solidity/src");
+	let sol_fixtures_dir = workspace_root.join("tessera-solidity/test/fixtures");
+
+	let verifier_src = groth_path.join("Verifier.sol");
+	if verifier_src.exists() && sol_src_dir.is_dir() {
+		// Rename contract to VerifierSuperAggregatorV2 so both TX and deposit
+		// verifier deployments can share the same file without name collisions.
+		let content = fs::read_to_string(&verifier_src)?;
+		let renamed = content.replace("contract Verifier ", "contract VerifierSuperAggregatorV2 ");
+		let dst = sol_src_dir.join("VerifierSuperAggregatorV2.sol");
+		fs::write(&dst, renamed)?;
+		println!("  VerifierSuperAggregatorV2.sol → {}", dst.display());
+	} else {
+		println!("  Verifier.sol not found or Foundry src dir absent — skipping Solidity copy.");
+	}
+
+	if sol_fixtures_dir.is_dir() || fs::create_dir_all(&sol_fixtures_dir).is_ok() {
+		let fixture_dst = sol_fixtures_dir.join("groth16_proof.json");
+		fs::copy(&json_path, &fixture_dst)?;
+		println!("  groth16_proof.json → {}", fixture_dst.display());
+	} else {
+		println!("  Could not create fixtures dir — skipping proof fixture copy.");
+	}
 
 	println!("\n=== SuperAggregatorV2 artifacts generated successfully ===");
 	Ok(())

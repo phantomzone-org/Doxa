@@ -34,12 +34,10 @@
 //! - [`bitwise`] — XOR, AND, NOT
 //! - [`arithmetic`] — wrapping addition, CRT-based assertion
 //! - [`rotation`] — right rotation (ROTR), logical right shift (SHR)
-//! - [`sha256`] — Ch, Maj, Σ₀, Σ₁, σ₀, σ₁
 
 pub mod arithmetic;
 pub mod bitwise;
 pub mod rotation;
-pub mod sha256;
 
 use std::sync::Arc;
 
@@ -57,7 +55,6 @@ use plonky2::{
 	util::serialization::{Buffer, IoResult, Read, Write},
 };
 pub use rotation::*;
-pub use sha256::*;
 
 /// A target representing a `u32` value in a Plonky2 circuit.
 ///

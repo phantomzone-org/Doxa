@@ -3,9 +3,7 @@ use std::time::Duration;
 use anyhow::Context;
 use reqwest::StatusCode;
 
-use crate::types::{
-	ConsumeOutcome, ConsumeProveRequest, ProveOutcome, ProveOutcomeV2, ProveRequest, ProveRequestV2,
-};
+use crate::types::{ConsumeOutcome, ConsumeProveRequest, ProveOutcomeV2, ProveRequestV2};
 
 #[derive(Clone)]
 pub struct HttpProverClient {
@@ -23,28 +21,6 @@ impl HttpProverClient {
 			client,
 			base_url: base_url.trim_end_matches('/').to_string(),
 		})
-	}
-
-	pub async fn prove(&self, request: ProveRequest) -> anyhow::Result<ProveOutcome> {
-		let url = format!("{}/prove", self.base_url);
-		let response = self
-			.client
-			.post(url)
-			.json(&request)
-			.send()
-			.await
-			.context("send prove request to prover service")?;
-
-		let status = response.status();
-		if status != StatusCode::OK {
-			let body = response.text().await.unwrap_or_default();
-			return Err(anyhow::anyhow!("prover service returned {status}: {body}"));
-		}
-
-		response
-			.json::<ProveOutcome>()
-			.await
-			.context("decode prove response from prover service")
 	}
 
 	pub async fn prove_consume(

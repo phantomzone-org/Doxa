@@ -20,14 +20,15 @@
 //! artifacts/super-aggregator-v2/groth-artifacts/
 //! ```
 
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use plonky2::{field::types::PrimeField64, plonk::proof::ProofWithPublicInputs};
 use tessera_trees::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	proof_aggregation::{
-		validate_subtree_nc_offcircuit, SubtreeRootCircuit, SuperAggregatorV2, TX_LEAF_PI_SIZE,
+		validate_subtree_nc_offcircuit, GenericAggregator, SubtreeRootCircuit, SuperAggregatorV2,
+		TX_LEAF_PI_SIZE,
 	},
 	tree::hasher::HashOutput,
 	ConfigNative, ProofNative, D, F,
@@ -35,7 +36,10 @@ use tessera_trees::{
 use tracing::{error, info};
 
 use crate::{
-	prover::{build_pool, parse_solidity_proof_json, AssociatedInputAggregatorService},
+	aggregation_pipeline::{
+		start_aggregation_session, AsyncNodeProver, LocalAsyncNodeProver, NodeProverPool,
+		RemoteNodeProver,
+	},
 	types::{ConsumeOutcome, ConsumeProveRequest, ProveOutcomeV2, ProveRequestV2, SolidityProof},
 };
 
@@ -451,6 +455,17 @@ impl ProverRuntimeV2 {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Mirror of Solidity `TesseraRollupV2.keccakToPublicInputs`.
+///
+/// Splits a 32-byte Keccak-256 piCommitment into 8 big-endian uint32 words,
+/// matching the gnark Groth16 verifier's public input layout.
+///
+/// This is the inverse of the packing done in `SuperAggregatorV2Service::prove_plonky2`:
+/// `commitment[i*4..(i+1)*4] = word[i].to_be_bytes()`.
+pub fn keccak_to_public_inputs(commitment: &[u8; 32]) -> [u32; 8] {
+	core::array::from_fn(|i| u32::from_be_bytes(commitment[i * 4..(i + 1) * 4].try_into().unwrap()))
+}
+
 /// Convert a 32-byte big-endian leaf to a [`HashOutput`].
 ///
 /// Each 8-byte chunk becomes one Goldilocks field element in canonical form.
@@ -460,4 +475,174 @@ fn bytes32_to_hash(b: &[u8; 32]) -> HashOutput {
 		let val = u64::from_be_bytes(b[i * 8..(i + 1) * 8].try_into().unwrap());
 		F::from_canonical_u64(val)
 	}))
+}
+
+/// Parse the Groth16 solidity JSON (produced by `Groth16Wrapper::proof_to_solidity_json`)
+/// into a [`SolidityProof`].
+pub(crate) fn parse_solidity_proof_json(json: &str) -> Result<SolidityProof> {
+	let v: serde_json::Value = serde_json::from_str(json)?;
+
+	let parse_u256_array = |key: &str, len: usize| -> Result<Vec<alloy::primitives::U256>> {
+		let arr = v[key]
+			.as_array()
+			.ok_or_else(|| anyhow::anyhow!("missing {key}"))?;
+		arr.iter()
+			.take(len)
+			.map(|s| {
+				let hex_str = s
+					.as_str()
+					.ok_or_else(|| anyhow::anyhow!("expected string in {key}"))?;
+				let hex_str = hex_str.trim_start_matches("0x");
+				Ok(alloy::primitives::U256::from_str_radix(hex_str, 16)?)
+			})
+			.collect()
+	};
+
+	let proof_vec = parse_u256_array("proof", 8)?;
+	let comm_vec = parse_u256_array("commitments", 2)?;
+	let pok_vec = parse_u256_array("commitmentPok", 2)?;
+
+	Ok(SolidityProof {
+		proof: proof_vec
+			.try_into()
+			.map_err(|_| anyhow::anyhow!("proof: expected 8 elements"))?,
+		commitments: comm_vec
+			.try_into()
+			.map_err(|_| anyhow::anyhow!("commitments: expected 2 elements"))?,
+		commitment_pok: pok_vec
+			.try_into()
+			.map_err(|_| anyhow::anyhow!("commitmentPok: expected 2 elements"))?,
+	})
+}
+
+/// Build a [`NodeProverPool`] for TX-aggregation-tree node proving.
+///
+/// When `aggregator_artifacts_path` is supplied and the artifacts are present,
+/// the pool contains one local prover plus one remote prover per URL.
+/// If artifacts are absent or the path is `None`, the returned pool is empty.
+pub fn build_pool(
+	aggregator_artifacts_path: Option<&Path>,
+	remote_urls: &[String],
+	timeout: Duration,
+) -> Result<Arc<NodeProverPool<F, ConfigNative, D>>> {
+	let mut provers: Vec<Arc<dyn AsyncNodeProver<F, ConfigNative, D>>> = Vec::new();
+
+	if let Some(path) = aggregator_artifacts_path {
+		if GenericAggregator::<F, ConfigNative, D>::has_full_artifacts(path)? {
+			let agg = Arc::new(GenericAggregator::<F, ConfigNative, D>::from_artifacts(
+				path,
+				&tessera_client::TesseraGateSerializer,
+			)?);
+
+			provers.push(Arc::new(LocalAsyncNodeProver::new(agg.clone())));
+
+			for url in remote_urls {
+				let remote = RemoteNodeProver::new(url, agg.clone(), timeout)?;
+				provers.push(Arc::new(remote));
+			}
+		}
+	}
+
+	Ok(Arc::new(NodeProverPool::new(provers)))
+}
+
+/// Aggregates `PrivateTx` leaf proofs into a single root Plonky2 proof using
+/// the streaming aggregation pipeline. Loaded from pre-built artifacts.
+pub struct AssociatedInputAggregatorService {
+	aggregator: Arc<GenericAggregator<F, ConfigNative, D>>,
+	pool: Arc<NodeProverPool<F, ConfigNative, D>>,
+	/// The inner PrivTx circuit data (needed for proof deserialization).
+	pub(crate) inner_circuit: tessera_trees::CircuitDataNative,
+}
+
+impl AssociatedInputAggregatorService {
+	/// Load from pre-built aggregator artifacts at `path`, using `pool` for
+	/// distributed node proving.
+	pub fn from_artifacts_and_pool(
+		path: &Path,
+		pool: Arc<NodeProverPool<F, ConfigNative, D>>,
+	) -> Result<Self> {
+		if !GenericAggregator::<F, ConfigNative, D>::has_full_artifacts(path)? {
+			return Err(anyhow::anyhow!(
+				"aggregator artifacts not found at {:?}. \
+				 Run `cargo run --bin aggregator_artifacts --release` first.",
+				path
+			));
+		}
+		info!("loading associated input aggregator from artifacts");
+		let aggregator = GenericAggregator::<F, ConfigNative, D>::from_artifacts(
+			path,
+			&tessera_client::TesseraGateSerializer,
+		)?;
+
+		info!("building inner PrivTx circuit for proof deserialization");
+		let (inner_circuit, _inner_targets) = tessera_client::build_priv_tx_circuit();
+		info!(
+			inner_pi = inner_circuit.common.num_public_inputs,
+			inner_degree_bits = inner_circuit.common.degree_bits(),
+			"inner PrivTx circuit ready"
+		);
+
+		Ok(Self {
+			aggregator: Arc::new(aggregator),
+			pool,
+			inner_circuit,
+		})
+	}
+
+	/// Total leaf count of the underlying aggregation tree (`arity^depth`).
+	pub(crate) fn n_leaves(&self) -> usize {
+		let cfg = self.aggregator.config();
+		cfg.arity.pow(cfg.depth as u32)
+	}
+
+	/// Submit all leaf proof bytes to a streaming session and await the root proof.
+	pub async fn aggregate_bytes(&self, proof_bytes: &[Vec<u8>]) -> Result<ProofNative> {
+		let (handle, root_fut) =
+			start_aggregation_session(self.aggregator.clone(), self.pool.clone());
+
+		for (i, bytes) in proof_bytes.iter().enumerate() {
+			handle.submit_bytes(i, bytes.clone()).await?;
+		}
+		drop(handle);
+
+		let root = root_fut.await?;
+		self.aggregator.verify_root(&root)?;
+		Ok(root)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Verify that packing 8 u32 words big-endian into a bytes32 (the logic in
+	/// `prove_plonky2`) is the exact inverse of `keccak_to_public_inputs`, which
+	/// mirrors the Solidity `keccakToPublicInputs` function.
+	///
+	/// This guarantees that the gnark public inputs and the on-chain
+	/// `keccakToPublicInputs(piCommitment)` decomposition are consistent.
+	#[test]
+	fn test_pi_commitment_encoding_round_trip() {
+		let words: [u32; 8] = [
+			0xDEAD_BEEF,
+			0x0123_4567,
+			0x89AB_CDEF,
+			0xFEDC_BA98,
+			0x1122_3344,
+			0x5566_7788,
+			0x99AA_BBCC,
+			0x00FF_00FF,
+		];
+
+		// Pack words → bytes32 (same logic as prove_plonky2).
+		let mut commitment = [0u8; 32];
+		for (i, &w) in words.iter().enumerate() {
+			commitment[i * 4..(i + 1) * 4].copy_from_slice(&w.to_be_bytes());
+		}
+
+		// Unpack bytes32 → words (mirrors Solidity keccakToPublicInputs).
+		let unpacked = keccak_to_public_inputs(&commitment);
+		assert_eq!(unpacked, words);
+	}
 }

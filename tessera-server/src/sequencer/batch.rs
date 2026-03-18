@@ -16,7 +16,7 @@ use tessera_trees::{
 use crate::{
 	contract,
 	dummy::derive_dummy_leaf,
-	types::{ConsumeProveRequest, ProveRequest, ProveRequestV2},
+	types::{ConsumeProveRequest, ProveRequestV2},
 };
 
 /// Number of note-level leaves per account-level slot (NC and NN each have 8
@@ -571,59 +571,6 @@ impl FinalizedBatch {
 			nc,
 			nn,
 		}
-	}
-
-	/// Build native tree proofs and assemble a [`ProveRequest`].
-	///
-	/// Clones the four trees, inserts the finalized leaf arrays, and returns
-	/// the resulting batch proofs + the full `ProveRequest`.
-	#[allow(clippy::too_many_arguments, clippy::wrong_self_convention)]
-	pub fn into_prove_request(
-		&self,
-		batch_id: u64,
-		ac_tree: &CommitmentTree<HashOutput>,
-		an_tree: &NullifierTree<HashOutput>,
-		nc_tree: &CommitmentTree<HashOutput>,
-		nn_tree: &NullifierTree<HashOutput>,
-	) -> anyhow::Result<ProveRequest> {
-		// NC: arrival order → commitment tree
-		let nc_hashes = contract::bytes_slice_to_hashes(&self.nc_leaves)?;
-		let mut nc_tmp = nc_tree.clone();
-		let nc_proof = nc_tmp.insert_batch(nc_hashes)?;
-		anyhow::ensure!(nc_proof.verify(), "NC native proof verification failed");
-
-		// NN: sorted → nullifier tree
-		let nn_hashes = contract::bytes_slice_to_hashes(&self.nn_sorted)?;
-		let mut nn_tmp = nn_tree.clone();
-		let nn_proof = nn_tmp.insert_batch(nn_hashes)?;
-		anyhow::ensure!(nn_proof.verify(), "NN native proof verification failed");
-
-		// AC: arrival order → commitment tree
-		let ac_hashes = contract::bytes_slice_to_hashes(&self.ac_leaves)?;
-		let mut ac_tmp = ac_tree.clone();
-		let ac_proof = ac_tmp.insert_batch(ac_hashes)?;
-		anyhow::ensure!(ac_proof.verify(), "AC native proof verification failed");
-
-		// AN: sorted → nullifier tree
-		let an_hashes = contract::bytes_slice_to_hashes(&self.an_sorted)?;
-		let mut an_tmp = an_tree.clone();
-		let an_proof = an_tmp.insert_batch(an_hashes)?;
-		anyhow::ensure!(an_proof.verify(), "AN native proof verification failed");
-
-		Ok(ProveRequest {
-			batch_id,
-			notes_commitment_proof: nc_proof,
-			notes_nullifier_proof: nn_proof,
-			accounts_commitment_proof: ac_proof,
-			accounts_nullifier_proof: an_proof,
-			nc_sorted_leaves: self.nc_leaves.clone(),
-			nn_sorted_leaves: self.nn_sorted.clone(),
-			ac_sorted_leaves: self.ac_leaves.clone(),
-			an_sorted_leaves: self.an_sorted.clone(),
-			an_sort_perm: self.an_sort_perm.clone(),
-			nn_sort_perm: self.nn_sort_perm.clone(),
-			tx_proofs_by_slot: self.tx_proofs_by_slot.clone(),
-		})
 	}
 
 	/// Assemble a [`ProveRequestV2`] from the finalized V2 batch.

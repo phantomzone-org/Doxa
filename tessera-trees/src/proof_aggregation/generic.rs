@@ -1,40 +1,8 @@
 //! Generic recursive proof aggregator.
 //!
 //! Combines `arity^depth` independent leaf proofs (sharing the same circuit)
-//! into a single root proof whose public inputs are the reducer-derived digest
-//! of all leaf public inputs.
-//!
-//! # Aggregation strategy
-//!
-//! Intermediate levels (0 to depth-2) verify `arity` child proofs and pass
-//! all child public inputs through unchanged (concatenated).  The reducer is
-//! applied **only at the root level** (level `depth-1`), receiving the full
-//! `arity^depth × leaf_pi_len` field-element preimage at once.
-//!
-//! This keeps every intermediate circuit free of expensive hash gadgets.
-//!
-//! # PI contract
-//!
-//! Only the root proof has a fixed-length PI:
-//!
-//! - **`Keccak256`**: 8 Goldilocks field elements (256-bit big-endian digest). Each of the
-//!   `arity^depth × leaf_pi_len` leaf field elements is first decomposed into a `[hi_u32, lo_u32]`
-//!   pair (matching `keccak256_field_elements_native`), and all resulting words are hashed in one
-//!   Keccak-256 invocation.
-//! - **`Poseidon`**: 4 Goldilocks field elements (one `HashOut`).  All leaf field elements are
-//!   concatenated and hashed with `hash_n_to_hash_no_pad`.
-//! - **`None`**: `arity^depth × leaf_pi_len` Goldilocks field elements — the raw concatenation of
-//!   all leaf public inputs, identical to what intermediate levels expose.  No hash gadget is added
-//!   to the root circuit, so the default generator serializer suffices.
-//!
-//! Intermediate-level proofs carry `arity^(level+1) × leaf_pi_len` field
-//! elements as their public inputs.
-//!
-//! # Serializer requirement
-//!
-//! Only the root-level circuit uses the `Keccak256` reducer; intermediate
-//! circuits contain no hash gadgets.  `CircuitData::to_bytes` / `from_bytes`
-//! for the root circuit **must** use [`TesseraGeneratorSerializer`].
+//! into a single root proof whose public inputs are the concatenation of all
+//! leaf public inputs, passed through unchanged at every level.
 
 use std::{fs, path::Path, time::Instant};
 
@@ -42,10 +10,7 @@ use anyhow::{Result, anyhow, bail};
 use plonky2::{
 	field::extension::Extendable,
 	hash::hash_types::RichField,
-	iop::{
-		target::Target,
-		witness::{PartialWitness, WitnessWrite},
-	},
+	iop::witness::{PartialWitness, WitnessWrite},
 	plonk::{
 		circuit_builder::CircuitBuilder,
 		circuit_data::{
@@ -62,13 +27,7 @@ use serde::{Deserialize, Serialize};
 use super::artifacts::{
 	LEAF_COMMON_PATH, LEAF_VERIFIER_PATH, MANIFEST_PATH, MANIFEST_VERSION, level_circuit_path,
 };
-use crate::{
-	groth::serializer::TesseraGeneratorSerializer,
-	plonky2_gadgets::{
-		keccak256::builder::BuilderKeccak256, sha256::circuit::decompose_field_to_u32_pair,
-		u32::add_u8_range_check_lookup_table,
-	},
-};
+use crate::groth::serializer::TesseraGeneratorSerializer;
 
 // ---------------------------------------------------------------------------
 // Public manifest version cap
@@ -89,8 +48,6 @@ pub struct GenericAggregatorConfig {
 	/// Number of aggregation levels.  Must be `>= 1`.
 	/// Total leaf count `= arity^depth`.
 	pub depth: usize,
-	/// How child public inputs are collapsed into a single parent digest.
-	pub reducer: ReducerKind,
 }
 
 impl GenericAggregatorConfig {
@@ -120,38 +77,7 @@ impl GenericAggregatorConfig {
 	}
 }
 
-/// Strategy for deriving a single parent digest from concatenated child PIs.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ReducerKind {
-	/// Keccak-256 applied once at the root over all `arity^depth × leaf_pi_len`
-	/// leaf field elements.
-	///
-	/// Output: 8 Goldilocks field elements (256-bit big-endian digest).
-	/// Each leaf field element is decomposed into `[hi_u32, lo_u32]` before
-	/// hashing, matching `keccak256_field_elements_native`.
-	Keccak256,
-	/// Poseidon applied once at the root over all `arity^depth × leaf_pi_len`
-	/// leaf field elements (using `C::Hasher`).
-	///
-	/// Output: 4 Goldilocks field elements (one `HashOut`).
-	Poseidon,
-	/// No reduction: all leaf public inputs are concatenated and registered
-	/// directly as the root circuit's public inputs (same behaviour as
-	/// intermediate levels).
-	///
-	/// Root PI count = `arity^depth × leaf_pi_len`.
-	///
-	/// No hash gadget is added to the root circuit, so the default generator
-	/// serializer suffices for all levels.
-	None,
-}
-
-/// A root proof produced by [`GenericAggregator::aggregate`].
-///
-/// The PI shape depends on the reducer:
-/// - `Keccak256` → 8 Goldilocks field elements, each a u32 word (big-endian).
-/// - `Poseidon`  → 4 Goldilocks field elements (one `HashOut`).
-/// - `None`      → `arity^depth × leaf_pi_len` Goldilocks field elements (raw pass-through).
+/// The root aggregation proof.
 #[derive(Debug)]
 pub struct AggregatedProof<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>, const D: usize>
 {
@@ -177,7 +103,6 @@ struct AggregatorManifest {
 	version: u32,
 	arity: usize,
 	depth: usize,
-	reducer: ReducerKind,
 	leaf_pi_len: usize,
 	levels: usize,
 }
@@ -234,16 +159,9 @@ where
 		let mut levels: Vec<LevelCircuit<F, C, D>> = Vec::with_capacity(config.depth);
 
 		// Level 0: verifies leaf proofs.
-		// The reducer is only applied at the root (last) level.
 		{
-			let is_root = config.depth == 1;
-			let (builder, proof_targets, verifier_target) = setup_level_builder::<F, C, D>(
-				&leaf_common,
-				&leaf_verifier,
-				config.arity,
-				&config.reducer,
-				is_root,
-			);
+			let (builder, proof_targets, verifier_target) =
+				setup_level_builder::<F, C, D>(&leaf_common, &leaf_verifier, config.arity);
 			let circuit_data = builder.build::<C>();
 			levels.push(LevelCircuit {
 				circuit_data,
@@ -254,16 +172,10 @@ where
 
 		// Levels 1..depth-1: each verifies the previous level's proofs.
 		for i in 1..config.depth {
-			let is_root = i == config.depth - 1;
 			let inner_common = levels[i - 1].circuit_data.common.clone();
 			let inner_verifier = levels[i - 1].circuit_data.verifier_only.clone();
-			let (builder, proof_targets, verifier_target) = setup_level_builder::<F, C, D>(
-				&inner_common,
-				&inner_verifier,
-				config.arity,
-				&config.reducer,
-				is_root,
-			);
+			let (builder, proof_targets, verifier_target) =
+				setup_level_builder::<F, C, D>(&inner_common, &inner_verifier, config.arity);
 			let circuit_data = builder.build::<C>();
 			levels.push(LevelCircuit {
 				circuit_data,
@@ -286,7 +198,7 @@ where
 			.ok_or_else(|| anyhow::anyhow!("level index > {}", self.levels.len()))
 	}
 
-	/// Returns the aggregator configuration (arity, depth, reducer).
+	/// Returns the aggregator configuration (arity, depth).
 	pub fn config(&self) -> &GenericAggregatorConfig {
 		&self.config
 	}
@@ -433,7 +345,6 @@ impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
 			version: MANIFEST_VERSION,
 			arity: self.config.arity,
 			depth: self.config.depth,
-			reducer: self.config.reducer.clone(),
 			leaf_pi_len: self.leaf_common.num_public_inputs,
 			levels: self.config.depth,
 		};
@@ -503,7 +414,6 @@ impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
 		let config = GenericAggregatorConfig {
 			arity: manifest.arity,
 			depth: manifest.depth,
-			reducer: manifest.reducer,
 		};
 		config.validate()?;
 
@@ -539,8 +449,6 @@ impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
 			Vec::with_capacity(config.depth);
 
 		for i in 0..config.depth {
-			let is_root_level = i == config.depth - 1;
-
 			// Replay the exact same deterministic builder operations used in `new`
 			// to recover the target wire indices.  No `build()` or `prove()` call
 			// is needed; the builder is discarded after extracting targets.
@@ -549,8 +457,6 @@ impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
 					&inner_common,
 					&inner_verifier,
 					config.arity,
-					&config.reducer,
-					is_root_level,
 				);
 
 			let level_path = path.join(level_circuit_path(i));
@@ -644,8 +550,6 @@ fn setup_level_builder<
 	inner_common: &CommonCircuitData<F, D>,
 	inner_verifier: &VerifierOnlyCircuitData<C, D>,
 	arity: usize,
-	reducer: &ReducerKind,
-	is_root_level: bool,
 ) -> (
 	CircuitBuilder<F, D>,
 	Vec<ProofWithPublicInputsTarget<D>>,
@@ -670,91 +574,14 @@ where
 		builder.verify_proof::<C>(pt, &verifier_target, inner_common);
 	}
 
-	// At intermediate levels just pass child PIs through; at the root apply
-	// the reducer over the full leaf preimage.
-	apply_reducer::<F, C, D>(
-		&mut builder,
-		&proof_targets,
-		reducer,
-		is_root_level,
-		inner_common.num_public_inputs,
-	);
+	// Pass all child public inputs through unchanged at every level.
+	for pt in &proof_targets {
+		for &pi in &pt.public_inputs {
+			builder.register_public_input(pi);
+		}
+	}
 
 	(builder, proof_targets, verifier_target)
-}
-
-/// Registers public inputs for one aggregation level.
-///
-/// - **Intermediate levels** (`is_root_level = false`): concatenate all child PI targets and
-///   register them directly — no hash, no constraint overhead.
-/// - **Root level** (`is_root_level = true`): apply the reducer over the full preimage (all
-///   `arity^depth × leaf_pi_len` leaf field elements that have been passed through from the
-///   bottom).
-fn apply_reducer<
-	F: RichField + Extendable<D>,
-	C: GenericConfig<D, F = F> + 'static,
-	const D: usize,
->(
-	builder: &mut CircuitBuilder<F, D>,
-	proof_targets: &[ProofWithPublicInputsTarget<D>],
-	reducer: &ReducerKind,
-	is_root_level: bool,
-	child_pi_len: usize,
-) where
-	C::Hasher: AlgebraicHasher<F>,
-{
-	if !is_root_level {
-		// Pass all child public inputs through unchanged.
-		for pt in proof_targets {
-			for &pi in &pt.public_inputs {
-				builder.register_public_input(pi);
-			}
-		}
-		return;
-	}
-
-	// Root level: apply the chosen reducer over all leaf field elements
-	// that have propagated up through intermediate pass-through levels.
-	match reducer {
-		ReducerKind::Keccak256 => {
-			// All inputs are original leaf Goldilocks field elements.
-			// Decompose each into [hi_u32, lo_u32] (big-endian) to match
-			// keccak256_field_elements_native's encoding.
-			let byte_range_lut = add_u8_range_check_lookup_table(builder);
-			let mut u32_targets = Vec::with_capacity(proof_targets.len() * child_pi_len * 2);
-			for pt in proof_targets {
-				for &pi in &pt.public_inputs {
-					let [hi, lo] = decompose_field_to_u32_pair(builder, pi, byte_range_lut);
-					u32_targets.push(hi.0);
-					u32_targets.push(lo.0);
-				}
-			}
-			let hash = builder.keccak256::<C>(&u32_targets);
-			for &word in &hash {
-				builder.register_public_input(word);
-			}
-		},
-		ReducerKind::Poseidon => {
-			// All inputs are original leaf field elements — hash them directly.
-			let inputs: Vec<Target> = proof_targets
-				.iter()
-				.flat_map(|pt| pt.public_inputs.iter().copied())
-				.collect();
-			let hash = builder.hash_n_to_hash_no_pad::<C::Hasher>(inputs);
-			for &elem in &hash.elements {
-				builder.register_public_input(elem);
-			}
-		},
-		ReducerKind::None => {
-			// No reduction: pass all child public inputs through unchanged,
-			// identical to the intermediate-level pass-through.
-			for pt in proof_targets {
-				for &pi in &pt.public_inputs {
-					builder.register_public_input(pi);
-				}
-			}
-		},
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -768,22 +595,16 @@ mod tests {
 	use anyhow::Result;
 	use num::pow;
 	use plonky2::{
-		field::types::{Field, PrimeField64},
-		hash::poseidon::PoseidonHash,
+		field::types::Field,
 		iop::{
 			target::Target,
 			witness::{PartialWitness, WitnessWrite},
 		},
-		plonk::{
-			circuit_builder::CircuitBuilder, circuit_data::CircuitConfig,
-			config::Hasher as PlonkyHasher,
-		},
+		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 	};
 
 	use super::*;
-	use crate::{
-		ConfigNative, D, F, plonky2_gadgets::keccak256::utils::keccak256_field_elements_native,
-	};
+	use crate::{ConfigNative, D, F};
 
 	// -----------------------------------------------------------------------
 	// Helpers
@@ -834,7 +655,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 3,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			cfg.clone(),
@@ -852,7 +672,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 3,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			cfg,
@@ -870,7 +689,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 2,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			cfg,
@@ -890,7 +708,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 2,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			cfg,
@@ -911,7 +728,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 2,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			cfg,
@@ -935,7 +751,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 1,
 			depth: 1,
-			reducer: ReducerKind::Keccak256,
 		};
 		assert!(cfg.validate().is_err(), "arity=1 should be rejected");
 	}
@@ -945,7 +760,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 3,
 			depth: 1,
-			reducer: ReducerKind::Keccak256,
 		};
 		assert!(cfg.validate().is_err(), "arity=3 should be rejected");
 	}
@@ -955,7 +769,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 0,
-			reducer: ReducerKind::Keccak256,
 		};
 		assert!(cfg.validate().is_err(), "depth=0 should be rejected");
 	}
@@ -965,7 +778,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 2,
-			reducer: ReducerKind::Keccak256,
 		};
 		assert!(cfg.validate().is_ok());
 	}
@@ -980,7 +792,6 @@ mod tests {
 		let config = GenericAggregatorConfig {
 			arity: 2,
 			depth: 1,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			config,
@@ -997,18 +808,17 @@ mod tests {
 	}
 
 	// -----------------------------------------------------------------------
-	// Keccak256 circuit / native agreement  (arity=2, depth=1)
+	// Raw PI pass-through  (arity=2, depth=1)
 	// -----------------------------------------------------------------------
 
 	#[test]
-	fn test_keccak256_circuit_native_agreement() -> Result<()> {
+	fn test_aggregate_passthrough_arity2_depth1() -> Result<()> {
 		const N_PI: usize = 4;
 
 		let (leaf_circuit, targets) = build_leaf_circuit(N_PI);
 		let config = GenericAggregatorConfig {
 			arity: 2,
 			depth: 1,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			config,
@@ -1016,7 +826,6 @@ mod tests {
 			leaf_circuit.verifier_only.clone(),
 		)?;
 
-		// Known leaf PI values.
 		let leaf0_values: [u64; N_PI] = [1, 2, 3, 4];
 		let leaf1_values: [u64; N_PI] = [5, 6, 7, 8];
 
@@ -1024,48 +833,40 @@ mod tests {
 		let proof1 = prove_leaf(&leaf_circuit, &targets, &leaf1_values)?;
 
 		let root = agg.aggregate(vec![proof0, proof1])?;
-
-		// Sanity: root proof must verify.
 		agg.verify_root(&root.proof)?;
 
-		// Expected digest: keccak256_field_elements_native over all child PI field
-		// elements in order (left child then right child).
-		let all_fields: Vec<F> = leaf0_values
+		// Root PI count = arity^depth × leaf_pi_len = 2 × 4 = 8.
+		assert_eq!(
+			root.proof.public_inputs.len(),
+			8,
+			"root must expose all leaf field elements"
+		);
+
+		// Verify exact values: leaf0 then leaf1, in order.
+		let expected: Vec<F> = leaf0_values
 			.iter()
 			.chain(leaf1_values.iter())
 			.map(|&v| F::from_canonical_u64(v))
 			.collect();
-		let expected = keccak256_field_elements_native(&all_fields);
-
 		assert_eq!(
-			root.proof.public_inputs.len(),
-			8,
-			"Keccak256 root must have exactly 8 public inputs"
+			root.proof.public_inputs, expected,
+			"root PIs must be raw concatenation of leaf PIs"
 		);
-		for (i, &expected_word) in expected.iter().enumerate() {
-			assert_eq!(
-				root.proof.public_inputs[i],
-				F::from_canonical_u64(expected_word as u64),
-				"public input word {i} mismatch: circuit output 0x{:08X}, expected 0x{expected_word:08X}",
-				root.proof.public_inputs[i].to_canonical_u64(),
-			);
-		}
 		Ok(())
 	}
 
 	// -----------------------------------------------------------------------
-	// Multi-level aggregation  (arity=2, depth=2)
+	// Raw PI pass-through — multi-level  (arity=2, depth=2)
 	// -----------------------------------------------------------------------
 
 	#[test]
-	fn test_aggregate_keccak256_arity2_depth2() -> Result<()> {
-		const N_PI: usize = 2;
+	fn test_aggregate_passthrough_arity2_depth2() -> Result<()> {
+		const N_PI: usize = 3;
 
 		let (leaf_circuit, targets) = build_leaf_circuit(N_PI);
 		let config = GenericAggregatorConfig {
 			arity: 2,
 			depth: 2,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			config,
@@ -1073,15 +874,26 @@ mod tests {
 			leaf_circuit.verifier_only.clone(),
 		)?;
 
-		// 4 leaf proofs (arity^depth = 2^2 = 4).
-		let proofs: Vec<_> = (0u64..4)
-			.map(|i| prove_leaf(&leaf_circuit, &targets, &[i * 10, i * 10 + 1]))
+		// 4 leaf proofs.
+		let leaf_values: Vec<[u64; N_PI]> = (0u64..4)
+			.map(|i| [i * 10, i * 10 + 1, i * 10 + 2])
+			.collect();
+		let proofs: Vec<_> = leaf_values
+			.iter()
+			.map(|vals| prove_leaf(&leaf_circuit, &targets, vals))
 			.collect::<Result<_>>()?;
 
 		let root = agg.aggregate(proofs)?;
-
 		agg.verify_root(&root.proof)?;
-		assert_eq!(root.proof.public_inputs.len(), 8);
+
+		// Root PI count = 2^2 × 3 = 12.
+		assert_eq!(root.proof.public_inputs.len(), 12);
+
+		let expected: Vec<F> = leaf_values
+			.iter()
+			.flat_map(|vals| vals.iter().map(|&v| F::from_canonical_u64(v)))
+			.collect();
+		assert_eq!(root.proof.public_inputs, expected);
 		Ok(())
 	}
 
@@ -1098,7 +910,6 @@ mod tests {
 		let config = GenericAggregatorConfig {
 			arity: 2,
 			depth: 1,
-			reducer: ReducerKind::Keccak256,
 		};
 
 		// Build a fresh aggregator and write artifacts.
@@ -1138,163 +949,6 @@ mod tests {
 	}
 
 	// -----------------------------------------------------------------------
-	// Arity=4, depth=2: 16 leaf proofs → 4 level-0 proofs → 1 root proof
-	// with native cross-verification of the two-level Keccak256 preimage.
-	// -----------------------------------------------------------------------
-
-	#[test]
-	fn test_aggregate_keccak256_arity4_depth2() -> Result<()> {
-		const N_PI: usize = 4;
-		const ARITY: usize = 4;
-		const DEPTH: usize = 4;
-		let n_leaves: usize = pow(ARITY, DEPTH);
-
-		let (leaf_circuit, targets) = build_leaf_circuit(N_PI);
-		let config = GenericAggregatorConfig {
-			arity: ARITY,
-			depth: DEPTH,
-			reducer: ReducerKind::Keccak256,
-		};
-		let agg = GenericAggregator::new(
-			config,
-			leaf_circuit.common.clone(),
-			leaf_circuit.verifier_only.clone(),
-		)?;
-
-		// 16 leaf proofs with distinct PI values.
-		let leaf_values: Vec<[u64; N_PI]> = (0..n_leaves as u64)
-			.map(|i| [i * 100, i * 100 + 1, i * 100 + 2, i * 100 + 3])
-			.collect();
-		let proofs: Vec<_> = leaf_values
-			.iter()
-			.map(|vals| prove_leaf(&leaf_circuit, &targets, vals))
-			.collect::<Result<_>>()?;
-
-		let now = Instant::now();
-		let root = agg.aggregate(proofs)?;
-		println!("proof took: {:?}", now.elapsed());
-		agg.verify_root(&root.proof)?;
-
-		assert_eq!(
-			root.proof.public_inputs.len(),
-			8,
-			"Keccak256 root must have exactly 8 public inputs"
-		);
-
-		// --- Native cross-check ---
-		//
-		// The reducer is applied once at the root over ALL arity^depth × N_PI
-		// leaf field elements concatenated — matches keccak256_field_elements_native.
-		let all_fields: Vec<F> = leaf_values
-			.iter()
-			.flat_map(|vals| vals.iter().map(|&v| F::from_canonical_u64(v)))
-			.collect();
-		let expected = keccak256_field_elements_native(&all_fields);
-
-		for (i, &expected_word) in expected.iter().enumerate() {
-			assert_eq!(
-				root.proof.public_inputs[i],
-				F::from_canonical_u64(expected_word as u64),
-				"public input word {i} mismatch: circuit 0x{:08X}, expected 0x{expected_word:08X}",
-				root.proof.public_inputs[i].to_canonical_u64(),
-			);
-		}
-		Ok(())
-	}
-
-	// -----------------------------------------------------------------------
-	// None reducer — raw PI pass-through  (arity=2, depth=1)
-	// -----------------------------------------------------------------------
-
-	#[test]
-	fn test_none_reducer_passthrough() -> Result<()> {
-		const N_PI: usize = 4;
-
-		let (leaf_circuit, targets) = build_leaf_circuit(N_PI);
-		let config = GenericAggregatorConfig {
-			arity: 2,
-			depth: 1,
-			reducer: ReducerKind::None,
-		};
-		let agg = GenericAggregator::new(
-			config,
-			leaf_circuit.common.clone(),
-			leaf_circuit.verifier_only.clone(),
-		)?;
-
-		let leaf0_values: [u64; N_PI] = [1, 2, 3, 4];
-		let leaf1_values: [u64; N_PI] = [5, 6, 7, 8];
-
-		let proof0 = prove_leaf(&leaf_circuit, &targets, &leaf0_values)?;
-		let proof1 = prove_leaf(&leaf_circuit, &targets, &leaf1_values)?;
-
-		let root = agg.aggregate(vec![proof0, proof1])?;
-		agg.verify_root(&root.proof)?;
-
-		// Root PI count = arity^depth × leaf_pi_len = 2 × 4 = 8.
-		assert_eq!(
-			root.proof.public_inputs.len(),
-			8,
-			"None root must expose all leaf field elements"
-		);
-
-		// Verify exact values: leaf0 then leaf1, in order.
-		let expected: Vec<F> = leaf0_values
-			.iter()
-			.chain(leaf1_values.iter())
-			.map(|&v| F::from_canonical_u64(v))
-			.collect();
-		assert_eq!(
-			root.proof.public_inputs, expected,
-			"None root PIs must be raw concatenation of leaf PIs"
-		);
-		Ok(())
-	}
-
-	// -----------------------------------------------------------------------
-	// None reducer — multi-level  (arity=2, depth=2)
-	// -----------------------------------------------------------------------
-
-	#[test]
-	fn test_none_reducer_arity2_depth2() -> Result<()> {
-		const N_PI: usize = 3;
-
-		let (leaf_circuit, targets) = build_leaf_circuit(N_PI);
-		let config = GenericAggregatorConfig {
-			arity: 2,
-			depth: 2,
-			reducer: ReducerKind::None,
-		};
-		let agg = GenericAggregator::new(
-			config,
-			leaf_circuit.common.clone(),
-			leaf_circuit.verifier_only.clone(),
-		)?;
-
-		// 4 leaf proofs.
-		let leaf_values: Vec<[u64; N_PI]> = (0u64..4)
-			.map(|i| [i * 10, i * 10 + 1, i * 10 + 2])
-			.collect();
-		let proofs: Vec<_> = leaf_values
-			.iter()
-			.map(|vals| prove_leaf(&leaf_circuit, &targets, vals))
-			.collect::<Result<_>>()?;
-
-		let root = agg.aggregate(proofs)?;
-		agg.verify_root(&root.proof)?;
-
-		// Root PI count = 2^2 × 3 = 12.
-		assert_eq!(root.proof.public_inputs.len(), 12);
-
-		let expected: Vec<F> = leaf_values
-			.iter()
-			.flat_map(|vals| vals.iter().map(|&v| F::from_canonical_u64(v)))
-			.collect();
-		assert_eq!(root.proof.public_inputs, expected);
-		Ok(())
-	}
-
-	// -----------------------------------------------------------------------
 	// Artifact roundtrip  (arity=4, depth=2)
 	// -----------------------------------------------------------------------
 
@@ -1311,7 +965,6 @@ mod tests {
 		let config = GenericAggregatorConfig {
 			arity: ARITY,
 			depth: DEPTH,
-			reducer: ReducerKind::Keccak256,
 		};
 
 		// Build a fresh aggregator and write artifacts.
@@ -1352,21 +1005,20 @@ mod tests {
 	}
 
 	// -----------------------------------------------------------------------
-	// Poseidon reducer  (arity=4, depth=3)
+	// Large aggregation  (arity=4, depth=4)
 	// -----------------------------------------------------------------------
 
 	#[test]
-	fn test_aggregate_poseidon_arity4_depth3() -> Result<()> {
+	fn test_aggregate_large_arity4_depth4() -> Result<()> {
 		const N_PI: usize = 4;
-		const ARITY: usize = 2;
-		const DEPTH: usize = 7;
+		const ARITY: usize = 4;
+		const DEPTH: usize = 4;
 		let n_leaves: usize = pow(ARITY, DEPTH);
 
 		let (leaf_circuit, targets) = build_leaf_circuit(N_PI);
 		let config = GenericAggregatorConfig {
 			arity: ARITY,
 			depth: DEPTH,
-			reducer: ReducerKind::Poseidon,
 		};
 		let agg = GenericAggregator::new(
 			config,
@@ -1374,6 +1026,7 @@ mod tests {
 			leaf_circuit.verifier_only.clone(),
 		)?;
 
+		// 256 leaf proofs with distinct PI values.
 		let leaf_values: Vec<[u64; N_PI]> = (0..n_leaves as u64)
 			.map(|i| [i * 100, i * 100 + 1, i * 100 + 2, i * 100 + 3])
 			.collect();
@@ -1387,31 +1040,19 @@ mod tests {
 		println!("proof took: {:?}", now.elapsed());
 		agg.verify_root(&root.proof)?;
 
+		// Root PI count = arity^depth × leaf_pi_len = 256 × 4 = 1024.
 		assert_eq!(
 			root.proof.public_inputs.len(),
-			4,
-			"Poseidon root must have exactly 4 public inputs"
+			n_leaves * N_PI,
+			"root must expose all leaf field elements"
 		);
 
-		// --- Native cross-check ---
-		//
-		// The reducer is applied once at the root over ALL arity^depth × N_PI
-		// leaf field elements concatenated.
-		let all_fields: Vec<F> = leaf_values
+		// Verify the raw pass-through: all leaf PIs in order.
+		let expected: Vec<F> = leaf_values
 			.iter()
 			.flat_map(|vals| vals.iter().map(|&v| F::from_canonical_u64(v)))
 			.collect();
-		let expected = PoseidonHash::hash_no_pad(&all_fields);
-
-		for (i, &expected_elem) in expected.elements.iter().enumerate() {
-			assert_eq!(
-				root.proof.public_inputs[i],
-				expected_elem,
-				"public input element {i} mismatch: circuit {:?}, expected {:?}",
-				root.proof.public_inputs[i].to_canonical_u64(),
-				expected_elem.to_canonical_u64(),
-			);
-		}
+		assert_eq!(root.proof.public_inputs, expected);
 		Ok(())
 	}
 }

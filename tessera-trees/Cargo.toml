@@ -28,8 +28,6 @@ env_logger = "0.11.9"
 ff = { package = "ff", version = "0.13", features = ["derive"] }
 num-bigint = { version = "0.4", features = ["rand"] }
 lazy_static = "1.4.0"
-sha2          = {workspace = true}
-
 [dev-dependencies]
 criterion = "0.8.2"
 proptest = "1.10.0"

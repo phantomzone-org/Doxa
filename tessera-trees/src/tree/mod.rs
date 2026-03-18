@@ -6,7 +6,6 @@ pub(crate) mod verification;
 
 pub mod error;
 pub mod hasher;
-pub mod keccak_hasher;
 
 pub use commitment_tree::*;
 pub use nullifier_tree::*;

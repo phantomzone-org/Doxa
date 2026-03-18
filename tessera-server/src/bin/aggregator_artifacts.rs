@@ -1,7 +1,7 @@
 //! Generate Aggregator artifacts for the [`PrivateTx`].
 //!
 //! Produces a native Plonky2 `GenericAggregator` (ARITY=2, DEPTH=7,
-//! [`ReducerKind::None`]) that aggregates 128 inner PrivTx proofs and exposes
+//! pass-through) that aggregates 128 inner PrivTx proofs and exposes
 //! their 9856 raw public inputs (128×77) as the root proof's public inputs.
 //!
 //! The inner PrivTx circuit (from `tessera-client`) produces 75 public inputs:
@@ -19,7 +19,7 @@ use std::{fs, path::PathBuf, time::Instant};
 use anyhow::Result;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use tessera_client::TesseraGateSerializer;
-use tessera_trees::proof_aggregation::{GenericAggregator, GenericAggregatorConfig, ReducerKind};
+use tessera_trees::proof_aggregation::{GenericAggregator, GenericAggregatorConfig};
 
 fn debug_enabled() -> bool {
 	std::env::var("TESSERA_DEBUG")
@@ -74,7 +74,6 @@ fn main() -> Result<()> {
 	let config = GenericAggregatorConfig {
 		arity: ARITY,
 		depth: DEPTH,
-		reducer: ReducerKind::None,
 	};
 
 	let agg = GenericAggregator::new(

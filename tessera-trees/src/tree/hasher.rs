@@ -29,10 +29,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
 	F,
 	plonky2_gadgets::{
-		keccak256::{builder::BuilderKeccak256, utils::keccak256_field_elements_native},
-		sha256::{
-			CircuitBuilderSha256, Sha256Luts, circuit::decompose_field_to_u32_pair,
-			sha256_field_elements_native,
+		keccak256::{
+			builder::BuilderKeccak256, field_decompose::decompose_field_to_u32_pair,
+			utils::keccak256_field_elements_native,
 		},
 		u32::add_u8_range_check_lookup_table,
 	},
@@ -191,7 +190,6 @@ impl MerkleHashTarget<4> {
 /// | Struct | Hash | Public-input size |
 /// |---|---|---|
 /// | [`PoseidonCommitment`] | Poseidon | 4 Goldilocks elements (256 bit) |
-/// | [`Sha256Commitment`] | SHA-256 | 8 `u32` words (256 bit) |
 /// | [`Keccak256Commitment`] | Keccak-256 | 8 `u32` words (256 bit) |
 ///
 /// # Usage
@@ -202,10 +200,6 @@ impl MerkleHashTarget<4> {
 /// ```ignore
 /// // Poseidon commitment (no setup needed):
 /// let targets = ProofTargets::new(&mut builder, depth, batch, Some(&PoseidonCommitment));
-///
-/// // SHA-256 commitment (registers lookup tables first):
-/// let sha256 = Sha256Commitment::new(&mut builder, 8);
-/// let targets = ProofTargets::new(&mut builder, depth, batch, Some(&sha256));
 ///
 /// // Keccak-256 commitment (registers a byte-range lookup table):
 /// let keccak = Keccak256Commitment::<C, D>::new(&mut builder);
@@ -288,56 +282,6 @@ impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Pose
 	}
 }
 
-/// SHA-256-based data commitment.
-///
-/// Computes `SHA256(preimage)` where each target is treated as a
-/// Goldilocks field element encoded in big-endian 8-byte form.
-/// Registers the 8-word (256-bit) digest as public inputs
-/// (8 targets, each holding a `u32` value).
-///
-/// # Construction
-///
-/// The lookup tables required by the SHA-256 circuit are registered
-/// when `Sha256Commitment::new` is called.  Create this **before**
-/// passing it to proof-target constructors, and only once per circuit.
-#[derive(Clone, Copy, Debug)]
-pub struct Sha256Commitment {
-	luts: Sha256Luts,
-}
-
-impl Sha256Commitment {
-	/// Registers the SHA-256 lookup tables and returns a ready-to-use
-	/// commitment object.  Call once per circuit builder.
-	///
-	/// `chunk_bits` controls the bitwise-LUT granularity (1, 2, 4, or 8).
-	pub fn new<F: RichField + Extendable<D>, const D: usize>(
-		builder: &mut CircuitBuilder<F, D>,
-		chunk_bits: usize,
-	) -> Self {
-		Self {
-			luts: Sha256Luts::new(builder, chunk_bits),
-		}
-	}
-}
-
-impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Sha256Commitment {
-	fn commit_public_inputs(&self, builder: &mut CircuitBuilder<F, D>, preimage: Vec<Target>) {
-		let hash = builder.sha256_hash_field_elements(&preimage, &self.luts);
-		for word in &hash {
-			builder.register_public_input(word.0);
-		}
-	}
-
-	fn commit_native(&self, source: &dyn CommitmentPreimage<F>) -> Vec<F> {
-		let mut preimage = Vec::new();
-		source.write_preimage(&mut preimage);
-		sha256_field_elements_native(&preimage)
-			.iter()
-			.map(|&w| F::from_canonical_u64(w as u64))
-			.collect()
-	}
-}
-
 /// Keccak-256-based data commitment.
 ///
 /// Computes `keccak256(preimage)` where each target is treated as a
@@ -346,10 +290,6 @@ impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Sha2
 /// Registers the 8-word (256-bit) digest as public inputs
 /// (8 targets, each holding a `u32` value).
 ///
-/// The encoding is identical to [`Sha256Commitment`], so the preimage
-/// byte layout is unchanged — only the hash function differs.
-/// This makes the on-chain verifier input (`uint256[8]`) identical in
-/// shape to the SHA-256 variant, avoiding ABI churn.
 ///
 /// The circuit output matches `keccak256(abi.encodePacked(fields))`
 /// in Solidity when each Goldilocks element maps to one big-endian
