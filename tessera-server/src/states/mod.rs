@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use tessera_trees::tree::{hasher::HashOutput, CommitmentTree, NullifierTree};
+use tessera_trees::tree::{hasher::HashOutput, CommitmentTree};
 
 use crate::TREE_DEPTH;
 
@@ -31,7 +31,7 @@ pub struct PendingRequest {
 	pub commitment: [u8; 32],
 }
 
-/// Trait abstracting over commitment and nullifier tree insertion behavior.
+/// Trait abstracting over commitment tree insertion behavior.
 ///
 /// The sequencer manages four trees that differ only in their insertion
 /// method (`insert_batch`) and proof-verification
@@ -42,8 +42,7 @@ pub trait SequencerTree: Sized {
 	/// Create a tree pre-padded to the given batch alignment.
 	///
 	/// Commitment trees ignore `batch_size` (their leaf count starts at 0 which is already
-	/// aligned). Nullifier trees pre-insert deterministic padding leaves so that `num_leaves() ==
-	/// batch_size`.
+	/// aligned).
 	fn new_padded(depth: usize, batch_size: usize) -> Self;
 	fn get_root(&self) -> HashOutput;
 	fn num_leaves(&self) -> usize;
@@ -83,35 +82,10 @@ impl SequencerTree for CommitmentTree<HashOutput> {
 	}
 }
 
-impl SequencerTree for NullifierTree<HashOutput> {
-	fn new(depth: usize) -> Self {
-		NullifierTree::new(depth)
-	}
-
-	fn new_padded(depth: usize, batch_size: usize) -> Self {
-		NullifierTree::new_with_padding(depth, batch_size)
-	}
-
-	fn get_root(&self) -> HashOutput {
-		self.get_root()
-	}
-
-	fn num_leaves(&self) -> usize {
-		self.num_leaves()
-	}
-
-	fn insert_verified(&mut self, leaves: Vec<HashOutput>) -> Result<HashOutput> {
-		let proof = self.insert_batch(leaves)?;
-		anyhow::ensure!(proof.verify(), "nullifier tree proof verification failed");
-		Ok(proof.new_root)
-	}
-}
-
 /// Sequencer in-memory state for one tree's pending-request queue.
 ///
-/// Generic over the tree type (`CommitmentTree<HashOutput>` or
-/// `NullifierTree<HashOutput>`) via [`SequencerTree`].  All queue-management
-/// logic is tree-type-agnostic.
+/// Generic over the tree type (`CommitmentTree<HashOutput>`) via [`SequencerTree`].  All
+/// queue-management logic is tree-type-agnostic.
 pub struct TreeState<T: SequencerTree> {
 	/// Local tree mirror.
 	pub tree: T,
@@ -248,6 +222,5 @@ impl<T: SequencerTree> TreeState<T> {
 	}
 }
 
-/// Convenience aliases preserving the original type names.
+/// Convenience alias preserving the original type name.
 pub type CommitmentTreeState = TreeState<CommitmentTree<HashOutput>>;
-pub type NullifierTreeState = TreeState<NullifierTree<HashOutput>>;

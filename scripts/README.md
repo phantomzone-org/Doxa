@@ -69,28 +69,23 @@ All require `--release`. Default batch sizes: `TESSERA_NOTE_BATCH_SIZE=1024`, `T
 ```bash
 # Step 1 — commitment tree artifacts (NC + AC; no dependencies)
 #   → tessera-server/artifacts/commitment-tree/
-TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
+TESSERA_NOTE_BATCH_SIZE=1024 \
 cargo run --bin commitment_tree_artifacts --release --manifest-path tessera-server/Cargo.toml
 
-# Step 2 — nullifier tree artifacts (NN + AN; no dependencies)
-#   → tessera-server/artifacts/nullifier-tree/
-TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
-cargo run --bin nullifier_tree_artifacts --release --manifest-path tessera-server/Cargo.toml
-
-# Step 3 — TX leaf aggregator artifacts (77-PI; no dependencies)
+# Step 2 — TX leaf aggregator artifacts (77-PI; no dependencies)
 #   → tessera-server/artifacts/associated-input-aggregator/
 cargo run --bin aggregator_artifacts --release --manifest-path tessera-server/Cargo.toml
 
-# Step 4 — consume circuit artifacts (4-PI; no dependencies)
+# Step 3 — consume circuit artifacts (4-PI; no dependencies)
 #   → tessera-server/artifacts/consume/
 cargo run --bin consume_artifacts --release --manifest-path tessera-server/Cargo.toml
 
-# Step 5 — SuperAggregator artifacts (Groth16; requires steps 1–4)
+# Step 4 — SuperAggregator artifacts (Groth16; requires steps 1–3)
 #   → tessera-server/artifacts/super-aggregator/
 TESSERA_NOTE_BATCH_SIZE=1024 TESSERA_ACCOUNT_BATCH_SIZE=128 \
 cargo run --bin super_aggregator_artifacts --release --manifest-path tessera-server/Cargo.toml
 
-# Step 6 — copy Groth16 Verifier.sol into tessera-solidity/src/
+# Step 5 — copy Groth16 Verifier.sol into tessera-solidity/src/
 scripts/sync_verifiers_from_artifacts.sh
 ```
 

@@ -9,12 +9,11 @@ use std::collections::{HashMap, HashSet};
 use alloy::primitives::FixedBytes;
 use tessera_trees::{
 	proof_aggregation::SubtreeRootCircuit,
-	tree::{hasher::HashOutput, CommitmentTree, NullifierTree},
+	tree::hasher::HashOutput,
 	F,
 };
 
 use crate::{
-	contract,
 	dummy::derive_dummy_leaf,
 	types::{ConsumeProveRequest, ProveRequestV2},
 };
@@ -131,38 +130,6 @@ pub struct BatchBuilder {
 }
 
 impl BatchBuilder {
-	/// Create a new batch builder.
-	///
-	/// # Parameters
-	/// - `account_batch_size`: number of account-level slots in the batch.
-	/// - `ac_tree` / `an_tree` / `nc_tree` / `nn_tree`: current tree states (used to read roots and
-	///   leaf counts for dummy derivation).
-	pub fn new(
-		account_batch_size: usize,
-		ac_tree: &CommitmentTree<HashOutput>,
-		an_tree: &NullifierTree<HashOutput>,
-		nc_tree: &CommitmentTree<HashOutput>,
-		nn_tree: &NullifierTree<HashOutput>,
-	) -> Self {
-		let note_batch_size = account_batch_size * NOTES_PER_SLOT;
-		Self {
-			slots: Vec::with_capacity(account_batch_size),
-			account_batch_size,
-			note_batch_size,
-			open_deposit: None,
-			ac_root: contract::hash_to_bytes32(&ac_tree.get_root()).0,
-			an_root: contract::hash_to_bytes32(&an_tree.get_root()).0,
-			nc_root: contract::hash_to_bytes32(&nc_tree.get_root()).0,
-			nn_root: contract::hash_to_bytes32(&nn_tree.get_root()).0,
-			ac_start: ac_tree.num_leaves(),
-			an_start: an_tree.num_leaves(),
-			nc_start: nc_tree.num_leaves(),
-			nn_start: nn_tree.num_leaves(),
-			an_in_batch: HashSet::new(),
-			nn_in_batch: HashSet::new(),
-		}
-	}
-
 	/// Create a new batch builder for the V2 sequencer (no off-chain trees).
 	///
 	/// Uses `dummy_root` for deterministic dummy leaf derivation and zero-based
@@ -768,26 +735,15 @@ impl ConsumeBatchBuilder {
 #[cfg(test)]
 mod tests {
 	use plonky2::field::types::Field;
-	use tessera_trees::tree::{CommitmentTree, NullifierTree};
 
 	use super::*;
+	use crate::contract;
 
-	const DEPTH: usize = 8;
 	const ACCOUNT_BATCH: usize = 4;
 	const NOTE_BATCH: usize = ACCOUNT_BATCH * NOTES_PER_SLOT;
 
-	fn make_trees() -> (
-		CommitmentTree<HashOutput>,
-		NullifierTree<HashOutput>,
-		CommitmentTree<HashOutput>,
-		NullifierTree<HashOutput>,
-	) {
-		(
-			CommitmentTree::new(DEPTH),
-			NullifierTree::new_with_padding(DEPTH, ACCOUNT_BATCH),
-			CommitmentTree::new(DEPTH),
-			NullifierTree::new_with_padding(DEPTH, ACCOUNT_BATCH * NOTES_PER_SLOT),
-		)
+	fn dummy_root() -> [u8; 32] {
+		[0u8; 32]
 	}
 
 	fn dummy_leaf(val: u8) -> [u8; 32] {
@@ -796,8 +752,7 @@ mod tests {
 
 	#[test]
 	fn add_private_tx_fills_batch() {
-		let (ac, an, nc, nn) = make_trees();
-		let mut bb = BatchBuilder::new(ACCOUNT_BATCH, &ac, &an, &nc, &nn);
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
 		for i in 0..ACCOUNT_BATCH {
 			let full = bb
 				.add_private_tx(
@@ -820,8 +775,7 @@ mod tests {
 
 	#[test]
 	fn deposit_mini_batching() {
-		let (ac, an, nc, nn) = make_trees();
-		let mut bb = BatchBuilder::new(ACCOUNT_BATCH, &ac, &an, &nc, &nn);
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
 
 		// Add 5 deposits: should create 1 slot (8 NC positions, 5 filled).
 		for i in 0..5 {
@@ -846,8 +800,7 @@ mod tests {
 
 	#[test]
 	fn finalize_pads_and_sorts() {
-		let (ac, an, nc, nn) = make_trees();
-		let mut bb = BatchBuilder::new(ACCOUNT_BATCH, &ac, &an, &nc, &nn);
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
 
 		// 1 real TX + 2 deposits
 		bb.add_private_tx(
@@ -888,8 +841,7 @@ mod tests {
 
 	#[test]
 	fn tx_pi_matches_after_finalize() {
-		let (ac, an, nc, nn) = make_trees();
-		let mut bb = BatchBuilder::new(ACCOUNT_BATCH, &ac, &an, &nc, &nn);
+		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
 
 		// 1 real TX + 2 deposits (partially filling one deposit slot)
 		bb.add_private_tx(
@@ -920,14 +872,6 @@ mod tests {
 			assert_eq!(builder_pis[i].nc, fb_pi.nc, "NC mismatch at slot {i}");
 			assert_eq!(builder_pis[i].nn, fb_pi.nn, "NN mismatch at slot {i}");
 		}
-	}
-
-	// -------------------------------------------------------------------------
-	// V2 BatchBuilder tests
-	// -------------------------------------------------------------------------
-
-	fn dummy_root() -> [u8; 32] {
-		[0xAB; 32]
 	}
 
 	#[test]

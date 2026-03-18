@@ -171,28 +171,11 @@ fn ensure_artifacts(root: &Path) -> anyhow::Result<()> {
 		.arg("commitment_tree_artifacts")
 		.arg("--release")
 		.env("TESSERA_NOTE_BATCH_SIZE", "128")
-		.env("TESSERA_ACCOUNT_BATCH_SIZE", "16")
 		.current_dir(root.join("tessera-server"));
 	run_cmd_with_timeout(
 		commitment_cmd,
 		Duration::from_secs(60 * 60),
 		"commitment_tree_artifacts generation",
-	)?;
-
-	eprintln!("Generating nullifier-tree artifacts...");
-	let mut nullifier_cmd = Command::new("cargo");
-	nullifier_cmd
-		.arg("run")
-		.arg("--bin")
-		.arg("nullifier_tree_artifacts")
-		.arg("--release")
-		.env("TESSERA_NOTE_BATCH_SIZE", "128")
-		.env("TESSERA_ACCOUNT_BATCH_SIZE", "16")
-		.current_dir(root.join("tessera-server"));
-	run_cmd_with_timeout(
-		nullifier_cmd,
-		Duration::from_secs(60 * 60),
-		"nullifier_tree_artifacts generation",
 	)?;
 
 	anyhow::ensure!(

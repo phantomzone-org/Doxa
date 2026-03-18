@@ -35,7 +35,7 @@ pub struct MerkleTree<H: MerkleHash> {
 }
 
 impl<H: MerkleHash> MerkleTree<H> {
-	/// Allocates a new [NullifierTree] of the provided depth.
+	/// Allocates a new [`MerkleTree`] of the provided depth.
 	/// The depth is fixed and cannot be changed afterward.
 	pub fn new(depth: usize) -> Self {
 		let mut default_siblings: Vec<H::Digest> = Vec::with_capacity(depth);

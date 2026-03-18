@@ -277,11 +277,10 @@ async fn cmd_private_tx(count: usize) -> Result<()> {
 		let seed = 0xDEAD_BEEF_0000_0000u64.wrapping_add(tx_idx as u64);
 		let c = circuit.clone();
 		let t = targets.clone();
-		let real_proof =
-			tokio::task::spawn_blocking(move || {
-				tessera_client::prove_real_priv_tx_seeded(&c, &t, seed)
-			})
-			.await?;
+		let real_proof = tokio::task::spawn_blocking(move || {
+			tessera_client::prove_real_priv_tx_seeded(&c, &t, seed)
+		})
+		.await?;
 		let proof_bytes = real_proof.to_bytes();
 		println!(
 			"  tx {tx_idx}: proof {} bytes, {} PIs",

@@ -344,7 +344,8 @@ fn extract_leaves_from_pis(pis: &[F]) -> ([u8; 32], [u8; 32], Vec<[u8; 32]>, Vec
 	//   PI[9..13]  = AC  (4 fields — account commitment out)
 	//   PI[13..45] = NN  (8×4 fields — note nullifiers)
 	//   PI[45..77] = NC  (8×4 fields — note commitments)
-	// PI[77..85] (act_root, nct_root) are consumed by the aggregator and not propagated per slot.
+	// PI[77..85] (act_root, nct_root) are consumed by the aggregator and not propagated per
+	// slot.
 	use tessera_trees::proof_aggregation::TX_DATA_OFFSET;
 
 	let f4_to_bytes32 = |fields: &[F]| -> [u8; 32] {
