@@ -178,7 +178,7 @@ pub(crate) struct SubpoolFullProofTargets {
 	pub(crate) subpool_config_root: SubpoolConfigRootTarget,
 }
 
-pub(crate) struct TxCircuitTargets {
+pub struct TxCircuitTargets {
 	pub(crate) not_fake_tx: BoolTarget,
 	// tx kind flags
 	pub(crate) is_rjct: BoolTarget,
@@ -221,4 +221,10 @@ pub(crate) struct TxCircuitTargets {
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	// signature targets
 	pub(crate) sig_targets: TxSignatureTargets,
+	// AN/AC/NN/NC are all free virtual PI targets. For real TXs the circuit enforces
+	// each equals its derived counterpart; for fake TXs the prover supplies padding values.
+	pub(crate) accin_null: AccountNullifierTarget,
+	pub(crate) accout_comm: AccountCommitmentTarget,
+	pub(crate) override_nn: [[Target; 4]; NOTE_BATCH],
+	pub(crate) override_nc: [[Target; 4]; NOTE_BATCH],
 }

@@ -21,6 +21,9 @@ use crate::tree::{
 	deserialize = "H::Digest: Deserialize<'de>"
 ))]
 pub struct MerkleTree<H: MerkleHash> {
+	/// Roots history
+	pub(crate) roots: Vec<H::Digest>,
+
 	/// Leaves
 	pub(crate) leaves: Vec<H::Digest>,
 
@@ -32,7 +35,7 @@ pub struct MerkleTree<H: MerkleHash> {
 }
 
 impl<H: MerkleHash> MerkleTree<H> {
-	/// Allocates a new [NullifierTree] of the provided depth.
+	/// Allocates a new [`MerkleTree`] of the provided depth.
 	/// The depth is fixed and cannot be changed afterward.
 	pub fn new(depth: usize) -> Self {
 		let mut default_siblings: Vec<H::Digest> = Vec::with_capacity(depth);
@@ -46,11 +49,16 @@ impl<H: MerkleHash> MerkleTree<H> {
 			));
 		}
 
-		Self {
+		let mut tree = Self {
+			roots: Vec::new(),
 			leaves: Vec::new(),
 			layers: vec![Vec::new(); depth],
 			default_siblings,
-		}
+		};
+
+		tree.roots.push(tree.compute_root());
+
+		tree
 	}
 
 	#[allow(dead_code)]
@@ -111,7 +119,22 @@ impl<H: MerkleHash> MerkleTree<H> {
 		&self.leaves
 	}
 
-	pub fn get_root(&self) -> H::Digest {
+	pub fn get_root(&self, i: usize) -> MerkleTreeResult<H::Digest> {
+		let root = self.roots.get(i).ok_or_else(|| {
+			anyhow!(MerkleTreeError::IndexError(format!(
+				"root index: {} >= self.roots.len(): {}",
+				i,
+				self.roots.len()
+			)))
+		})?;
+		Ok(*root)
+	}
+
+	pub fn get_last_root(&self) -> H::Digest {
+		self.get_root(self.roots.len() - 1).unwrap()
+	}
+
+	pub fn compute_root(&self) -> H::Digest {
 		let last_layer: &Vec<H::Digest> = self.layers.last().unwrap();
 		if last_layer.is_empty() {
 			// Empty tree: return the root of a tree with all empty leaves

@@ -8,22 +8,29 @@ use plonky2_field::types::Field;
 use rand::Rng;
 use tessera_trees::{F, tree::hasher::HashOutput};
 
-use super::{double_hash_native, targets::TxCircuitTargets};
+use super::{
+	double_hash_native,
+	targets::TxCircuitTargets,
+	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
+};
 use crate::{
 	ACT_DEPTH, AccountAddress, AssetId, ConsumeAuth, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH,
 	NCT_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth,
 	StandardAccount, SubpoolId,
 	account::PublicIdentifier,
 	derive_priv_tx_hash,
-	ecgfp5::{CompressedPoint, PointEw},
+	ecgfp5::CompressedPoint,
 	note::{NodeIdentifier, StandardNote},
 	plonky2_gadgets::{
 		merkle::{SetDummyMerklePathOfWitness, SetMerklePathOfWitness},
 		set_hash, set_u256_zero,
-		signature::set_schnorr_witness,
+		witness::{
+			set_fake_schnorr_signature, set_hash_blocks, set_real_schnorr_signature,
+			set_subpool_full_proof,
+		},
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::{Scalar, Signature, schnorr_challenge},
+	pool_config::{CompPubKey, MainPoolConfigTree},
+	schnorr::{CompressedPublicKey, Signature},
 };
 
 /// Fill `pw` with a complete FreshAcc transaction witness.
@@ -42,9 +49,11 @@ use crate::{
 ///
 /// `nct_root` and `act_root` are [F::ZERO; 4] for a normal FreshAcc (no notes,
 /// account not yet in ACT).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn set_freshacc_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
+	not_fake_tx: bool,
 	accin: &StandardAccount,
 	new_spend_auth: SpendAuth,
 	new_consume_auth: ConsumeAuth,
@@ -60,8 +69,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	donotes: [[F; 4]; NOTE_BATCH],
 ) {
 	// ── Build accout ──────────────────────────────────────────────────────────
-	let mut accout = accin.clone();
-	accout.nonce = Nonce(F::ONE);
+	let mut accout = accin.clone_with_incremented_nonce();
 	accout.spend_auth = new_spend_auth;
 	accout.consume_auth = new_consume_auth;
 
@@ -78,26 +86,31 @@ pub(crate) fn set_freshacc_tx_witness(
 	);
 
 	// ── Tx kind flags ─────────────────────────────────────────────────────────
-	pw.set_bool_target(t.is_rjct, false).unwrap();
-	pw.set_bool_target(t.is_fresh_acc, true).unwrap();
-	pw.set_bool_target(t.is_update_auth, false).unwrap();
-	pw.set_bool_target(t.is_priv_tx, false).unwrap();
-
-	pw.set_bool_target(t.not_fake_tx, true).unwrap();
+	set_tx_kind_flags(
+		pw,
+		t,
+		TxKindFlags {
+			is_rjct: false,
+			is_fresh_acc: true,
+			is_update_auth: false,
+			is_priv_tx: false,
+			not_fake_tx,
+		},
+	);
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
-	set_hash(pw, t.act_root.0, act_root.0);
-	set_hash(pw, t.nct_root.0, nct_root.0);
-
-	// ── Authority keys ────────────────────────────────────────────────────────
-	t.approval_key.set_witness(pw, &approval_key);
-	t.rejection_key.set_witness(pw, &rejection_key);
-	t.subpool_consume_key.set_witness(pw, &consume_key);
-
-	// ── Accounts ──────────────────────────────────────────────────────────────
-	t.accin.set_witness(pw, accin);
-	t.accout.set_witness(pw, &accout);
+	set_common_tx_witness(
+		pw,
+		t,
+		main_pool.root(),
+		act_root,
+		nct_root,
+		&approval_key,
+		&rejection_key,
+		&consume_key,
+		accin,
+		&accout,
+	);
 
 	// ── Asset / amounts (all zeros for FreshAcc) ──────────────────────────────
 	pw.set_target(t.asset_id.0, F::ZERO).unwrap();
@@ -118,12 +131,9 @@ pub(crate) fn set_freshacc_tx_witness(
 	// accout_ast_merkle is auto-filled via connect_array in the circuit
 
 	// ── Input notes (all inactive) ────────────────────────────────────────────
-	let zero_addr = AccountAddress {
-		subpool_id: SubpoolId(F::ZERO),
-		public_id: PublicIdentifier(HashOutput([F::ZERO; 4])),
-	};
+	let zero_addr = AccountAddress::zero();
 	let inote = StandardNote {
-		identifier: NodeIdentifier([F::ZERO; 2]),
+		identifier: NodeIdentifier::ZERO,
 		asset_id: AssetId(F::ZERO),
 		amt: primitive_types::U256::zero(),
 		recipient: AccountAddress::from_acc(accin),
@@ -139,7 +149,7 @@ pub(crate) fn set_freshacc_tx_witness(
 
 	// ── Output notes (all inactive) ───────────────────────────────────────────
 	let onote = StandardNote {
-		identifier: NodeIdentifier([F::ZERO; 2]),
+		identifier: NodeIdentifier::ZERO,
 		asset_id: AssetId(F::ZERO),
 		amt: primitive_types::U256::zero(),
 		recipient: zero_addr,
@@ -151,85 +161,60 @@ pub(crate) fn set_freshacc_tx_witness(
 	}
 
 	// ── Dummy note hashes ─────────────────────────────────────────────────────
-	for i in 0..NOTE_BATCH {
-		for j in 0..4 {
-			pw.set_target(t.dinotes[i].0[j], dinotes[i][j]).unwrap();
-			pw.set_target(t.donotes[i].0[j], donotes[i][j]).unwrap();
-		}
-	}
+	set_hash_blocks(pw, &t.dinotes.map(|note| note.0), &dinotes);
+	set_hash_blocks(pw, &t.donotes.map(|note| note.0), &donotes);
+
+	// ── AN/AC/NN/NC override targets ─────────────────────────────────────────
+	// For real TXs these equal the derived values (enforced by circuit).
+	set_hash(pw, t.accin_null.0, accin.nullifier(None).0.0);
+	set_hash(pw, t.accout_comm.0, accout.commitment().0.0);
+	// All inotes are inactive for FreshAcc: effective_inotes_null[i] = double_hash(dinotes[i]).
+	// All onotes are inactive for FreshAcc: derived_onotes_comm[i] = double_hash(donotes[i]).
+	set_note_hash_overrides(
+		pw,
+		t,
+		&array::from_fn(|i| double_hash_native(dinotes[i])),
+		&array::from_fn(|i| double_hash_native(donotes[i])),
+	);
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
-	let subpool = SubpoolConfigTree::new(approval_key, rejection_key, consume_key);
-	let full_proof = main_pool
-		.full_subpool_proof(&subpool, subpool_id)
-		.expect("subpool not registered in main_pool at the given subpool_id");
-
-	t.subpool_proof_targets
-		.approval_proof
-		.set_witness(pw, &full_proof.approval_proof);
-	t.subpool_proof_targets
-		.rejection_proof
-		.set_witness(pw, &full_proof.rejection_proof);
-	t.subpool_proof_targets
-		.consume_proof
-		.set_witness(pw, &full_proof.consume_proof);
-	t.subpool_proof_targets
-		.main_pool_proof
-		.set_witness(pw, &full_proof.main_pool_proof);
-
-	pw.set_target_arr(
-		&t.subpool_proof_targets.subpool_config_root.0.elements,
-		&subpool.root().0,
-	)
-	.unwrap();
+	set_subpool_full_proof(
+		pw,
+		&t.subpool_proof_targets,
+		main_pool,
+		&approval_key,
+		&rejection_key,
+		&consume_key,
+		subpool_id,
+	);
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 
 	// Spend (fake): is_spend_req = false → apply_check = false.
-	let spend_q: PointEw<F> =
-		PointEw::decode(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)).unwrap();
-	let spend_e = Scalar::from_raw([42, 8, 2, 5, 1]);
-	let spend_s = Scalar::from_raw([7, 12, 13, 14, 14]);
-	let spend_r = PointEw::generator()
-		.scalar_mul(&spend_s)
-		.add(&spend_q.scalar_mul(&spend_e));
-	set_schnorr_witness(
+	set_fake_schnorr_signature(
 		pw,
 		&t.sig_targets.spend,
-		spend_q,
-		spend_r.encode(),
-		spend_e,
-		spend_s,
+		CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)),
+		[42, 8, 2, 5, 1],
+		[7, 12, 13, 14, 14],
 	);
 
 	// Consume (fake): consume_auth.config = false → circuit uses subpool_consume_key.
-	let consume_q: PointEw<F> = PointEw::decode(consume_key.0).unwrap();
-	let consume_e = Scalar::from_raw([13, 13, 5, 6, 7]);
-	let consume_s = Scalar::from_raw([17, 19, 12, 13, 16]);
-	let consume_r = PointEw::generator()
-		.scalar_mul(&consume_s)
-		.add(&consume_q.scalar_mul(&consume_e));
-	set_schnorr_witness(
+	set_fake_schnorr_signature(
 		pw,
 		&t.sig_targets.consume,
-		consume_q,
-		consume_r.encode(),
-		consume_e,
-		consume_s,
+		consume_key,
+		[13, 13, 5, 6, 7],
+		[17, 19, 12, 13, 16],
 	);
 
 	// Approval (real): always enforced for FreshAcc.
-	let approval_q: PointEw<F> = PointEw::decode(approval_key.0).unwrap();
-	let approval_cr = approval_sig.r.encode();
-	let approval_cq = approval_q.encode();
-	let approval_e = schnorr_challenge(&approval_cr, &approval_cq, &tx_hash);
-	set_schnorr_witness(
+	set_real_schnorr_signature(
 		pw,
 		&t.sig_targets.approval,
-		approval_q,
-		approval_cr,
-		approval_e,
-		approval_sig.s,
+		approval_key,
+		&tx_hash,
+		approval_sig,
 	);
 }
 
@@ -248,7 +233,7 @@ mod tests {
 	use plonky2_field::types::Field;
 	use rand::{SeedableRng, rand_core::Rng};
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::hasher::HashOutput;
+	use tessera_trees::tree::hasher::{HashOutput, MerkleHashCircuit};
 
 	use super::*;
 	use crate::{
@@ -322,7 +307,8 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 
@@ -330,6 +316,7 @@ mod tests {
 		super::set_freshacc_tx_witness(
 			&mut pw,
 			&t,
+			true,
 			&accin,
 			new_spend_auth,
 			new_consume_auth,

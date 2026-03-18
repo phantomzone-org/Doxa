@@ -1,22 +1,10 @@
-use alloy::primitives::{keccak256, B256};
-
-/// Tree discriminator used in dummy-leaf derivation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DummyTreeType {
-	NotesCommitment    = 0,
-	NotesNullifier     = 1,
-	AccountsCommitment = 2,
-	AccountsNullifier  = 3,
-}
+use alloy::primitives::keccak256;
 
 /// Deterministically pad a batch of real leaves up to `batch_size`.
 ///
-/// Dummy leaves are derived as:
-/// `H(leaf_index || H(public_value))`,
-/// where:
-/// `H(public_value) = H(tree_type || batch_start_index || packed_real_leaves)`.
+/// Dummy leaves are derived as `field_safe_keccak256(leaf_index || current_root)`.
 pub fn pad_leaves(
-	tree_type: DummyTreeType,
+	current_root: &[u8; 32],
 	batch_start_index: usize,
 	batch_size: usize,
 	real_leaves: &[[u8; 32]],
@@ -32,54 +20,30 @@ pub fn pad_leaves(
 	let mut out = Vec::with_capacity(batch_size);
 	out.extend_from_slice(real_leaves);
 
-	if out.len() == batch_size {
-		return Ok(out);
-	}
-
-	let public_value_hash = public_value_hash(tree_type, batch_start_index, real_leaves)?;
 	for i in out.len()..batch_size {
 		let leaf_index = batch_start_index
 			.checked_add(i)
 			.ok_or_else(|| anyhow::anyhow!("leaf index overflow during dummy derivation"))?;
-		out.push(derive_dummy_leaf(leaf_index, public_value_hash));
+		out.push(derive_dummy_leaf(leaf_index, current_root));
 	}
 	Ok(out)
 }
 
-/// Compute the per-batch public-value hash that seeds all dummy leaves.
+/// Derive a single deterministic dummy leaf.
 ///
-/// `H(tree_type_byte || batch_start_index_be32 || real_leaf_0 || … || real_leaf_n)`
+/// ```text
+/// dummy_leaf = field_safe_keccak256(leaf_index || current_root)
+/// ```
 ///
-/// Including all real leaves in the hash ensures the dummy values are
-/// unpredictable without knowing the batch contents, preventing front-running
-/// on padding positions.
-///
-/// # Errors
-/// Returns `Err` if `batch_start_index` overflows `u64`.
-fn public_value_hash(
-	tree_type: DummyTreeType,
-	batch_start_index: usize,
-	real_leaves: &[[u8; 32]],
-) -> anyhow::Result<B256> {
-	let mut preimage = Vec::with_capacity(1 + 32 + real_leaves.len() * 32);
-	preimage.push(tree_type as u8);
-	preimage.extend_from_slice(&u256_be_from_usize(batch_start_index)?);
-	for leaf in real_leaves {
-		preimage.extend_from_slice(leaf);
-	}
-	Ok(keccak256(preimage))
-}
-
-/// Derive a single dummy leaf for position `leaf_index`.
-///
-/// `field_safe_digest(keccak256(leaf_index_be32 || public_value_hash))`
-///
-/// The `field_safe_digest` step clears the MSB of each 64-bit limb so the
-/// result is a valid Goldilocks field element in every 8-byte chunk.
-fn derive_dummy_leaf(leaf_index: usize, public_value_hash: B256) -> [u8; 32] {
-	let mut preimage = Vec::with_capacity(64);
-	preimage.extend_from_slice(&u256_be_from_usize_infallible(leaf_index));
-	preimage.extend_from_slice(public_value_hash.as_slice());
+/// - `leaf_index`: absolute index in the tree, encoded as `uint256` big-endian (32 bytes).
+/// - `current_root`: the tree's root hash at batch-assembly time, encoded as `bytes32` (32 bytes).
+/// - The result has the MSB of each 8-byte limb cleared so every limb is a valid Goldilocks field
+///   element (< 2^63 < p).
+pub fn derive_dummy_leaf(leaf_index: usize, current_root: &[u8; 32]) -> [u8; 32] {
+	let mut preimage = [0u8; 64];
+	// leaf_index as uint256 big-endian (high 24 bytes zero, low 8 = u64 BE).
+	preimage[24..32].copy_from_slice(&(leaf_index as u64).to_be_bytes());
+	preimage[32..64].copy_from_slice(current_root);
 	field_safe_digest(keccak256(preimage).0)
 }
 
@@ -91,56 +55,42 @@ fn derive_dummy_leaf(leaf_index: usize, public_value_hash: B256) -> [u8; 32] {
 /// prime, making it unconditionally valid without a modular reduction.
 fn field_safe_digest(mut digest: [u8; 32]) -> [u8; 32] {
 	for i in 0..4 {
-		let limb_start = i * 8;
-		digest[limb_start] &= 0x7f;
+		digest[i * 8] &= 0x7f;
 	}
 	digest
 }
 
-/// Encode `value` as a 32-byte big-endian uint256, returning `Err` if it
-/// exceeds `u64::MAX` (current deployments never exceed this range).
-fn u256_be_from_usize(value: usize) -> anyhow::Result<[u8; 32]> {
-	// Current deployments fit in u64; encode as uint256 big-endian for ABI parity.
-	let value_u64 = u64::try_from(value)
-		.map_err(|_| anyhow::anyhow!("value too large for uint64-backed encoding: {value}"))?;
-	Ok(u256_be_from_usize_infallible(value_u64 as usize))
-}
-
-/// Encode `value` as a 32-byte big-endian uint256 (infallible; truncates to u64).
-///
-/// The high 24 bytes are zeroed; bytes 24–31 contain the big-endian u64
-/// encoding.  Callers that can statically guarantee the value fits in u64
-/// may use this variant to avoid an `anyhow::Result`.
-fn u256_be_from_usize_infallible(value: usize) -> [u8; 32] {
-	let mut out = [0u8; 32];
-	let be = (value as u64).to_be_bytes();
-	out[24..].copy_from_slice(&be);
-	out
-}
-
 #[cfg(test)]
 mod tests {
-	use super::{pad_leaves, DummyTreeType};
+	use super::derive_dummy_leaf;
 
 	#[test]
-	fn pad_keeps_full_batch_unchanged() {
-		let leaves = vec![[7u8; 32], [9u8; 32]];
-		let padded = pad_leaves(DummyTreeType::NotesCommitment, 0, 2, &leaves).unwrap();
-		assert_eq!(padded, leaves);
+	fn dummy_leaf_is_field_safe() {
+		let root = [0xABu8; 32];
+		for idx in [0usize, 1, 7, 255, 1024] {
+			let leaf = derive_dummy_leaf(idx, &root);
+			// Each 64-bit limb has the top bit cleared.
+			assert_eq!(leaf[0] & 0x80, 0, "limb 0 MSB set for idx {idx}");
+			assert_eq!(leaf[8] & 0x80, 0, "limb 1 MSB set for idx {idx}");
+			assert_eq!(leaf[16] & 0x80, 0, "limb 2 MSB set for idx {idx}");
+			assert_eq!(leaf[24] & 0x80, 0, "limb 3 MSB set for idx {idx}");
+		}
 	}
 
 	#[test]
-	fn pad_appends_field_safe_dummies() {
-		let leaves = vec![[1u8; 32]];
-		let padded = pad_leaves(DummyTreeType::AccountsNullifier, 11, 4, &leaves).unwrap();
-		assert_eq!(padded.len(), 4);
-		assert_eq!(padded[0], [1u8; 32]);
-		for dummy in &padded[1..] {
-			// Each 64-bit limb has the top bit cleared.
-			assert_eq!(dummy[0] & 0x80, 0);
-			assert_eq!(dummy[8] & 0x80, 0);
-			assert_eq!(dummy[16] & 0x80, 0);
-			assert_eq!(dummy[24] & 0x80, 0);
-		}
+	fn different_indices_produce_different_leaves() {
+		let root = [0x42u8; 32];
+		let a = derive_dummy_leaf(0, &root);
+		let b = derive_dummy_leaf(1, &root);
+		assert_ne!(a, b);
+	}
+
+	#[test]
+	fn different_roots_produce_different_leaves() {
+		let root_a = [0x01u8; 32];
+		let root_b = [0x02u8; 32];
+		let a = derive_dummy_leaf(0, &root_a);
+		let b = derive_dummy_leaf(0, &root_b);
+		assert_ne!(a, b);
 	}
 }

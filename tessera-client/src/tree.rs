@@ -21,7 +21,7 @@ use tessera_trees::{
 // #[derive(Clone, Debug, PartialEq, Eq)]
 // pub(crate) struct Node(pub(crate) HashOutput);
 
-pub(crate) struct CommitmentTreeMerkleProof<const DEPTH: usize> {
+pub struct CommitmentTreeMerkleProof<const DEPTH: usize> {
 	pub(crate) leaf: HashOutput,
 	pub(crate) path: Vec<HashOutput>,
 	pub(crate) num_leaves: usize,
@@ -54,16 +54,16 @@ impl<const DEPTH: usize> CommitmentTreeMerkleProof<DEPTH> {
 		let bits: [bool; DEPTH] = core::array::from_fn(|j| (self.pos >> j) & 1 == 1);
 		let mut current = self.leaf;
 
-		for level in 0..DEPTH {
+		for (level, (bit, sibling)) in bits.iter().zip(self.path.iter()).enumerate() {
 			if level == DEPTH - 1 {
-				let (left, right) = if bits[level] {
-					(self.path[level], current)
+				let (left, right) = if *bit {
+					(*sibling, current)
 				} else {
-					(current, self.path[level])
+					(current, *sibling)
 				};
 				current = HashOutput::hash_root(self.num_leaves, &left, &right);
 			} else {
-				current = HashOutput::hash_2_to_1(&current, &self.path[level], bits[level]);
+				current = HashOutput::hash_2_to_1(&current, sibling, *bit);
 			}
 		}
 		current == root
@@ -302,7 +302,7 @@ where
 		let mut index = at_index;
 
 		self.tree[0][index] = node;
-		index = index >> 1;
+		index >>= 1;
 		for i in 0..DEPTH {
 			let left_child = &self.tree[i][index << 1];
 			let right_child = &self.tree[i][(index << 1) + 1];
@@ -316,14 +316,12 @@ where
 	pub fn merkle_proof(&self, leaf: NType::Leaf) -> Option<MerkleProof<NType, DEPTH>> {
 		let index = self.leaf_index_map.get(&leaf);
 
-		if index.is_none() {
-			return None;
-		}
+		index?;
 
 		let mut current_index = *index.unwrap();
 		let mut path = vec![];
 		for level in 0..DEPTH {
-			let (sibling_index, direction) = if current_index % 2 == 0 {
+			let (sibling_index, direction) = if current_index.is_multiple_of(2) {
 				// Current is left child, sibling is on the right
 				(current_index + 1, Direction::Right)
 			} else {
@@ -356,7 +354,7 @@ where
 		let mut current_index = index;
 		let mut path = vec![];
 		for level in 0..DEPTH {
-			let (sibling_index, direction) = if current_index % 2 == 0 {
+			let (sibling_index, direction) = if current_index.is_multiple_of(2) {
 				(current_index + 1, Direction::Right)
 			} else {
 				(current_index - 1, Direction::Left)

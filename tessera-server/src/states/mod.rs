@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use tessera_trees::tree::{hasher::Hash, CommitmentTree, NullifierTree};
+use tessera_trees::tree::{hasher::HashOutput, CommitmentTree};
 
 use crate::TREE_DEPTH;
 
@@ -31,7 +31,7 @@ pub struct PendingRequest {
 	pub commitment: [u8; 32],
 }
 
-/// Trait abstracting over commitment and nullifier tree insertion behavior.
+/// Trait abstracting over commitment tree insertion behavior.
 ///
 /// The sequencer manages four trees that differ only in their insertion
 /// method (`insert_batch`) and proof-verification
@@ -42,18 +42,17 @@ pub trait SequencerTree: Sized {
 	/// Create a tree pre-padded to the given batch alignment.
 	///
 	/// Commitment trees ignore `batch_size` (their leaf count starts at 0 which is already
-	/// aligned). Nullifier trees pre-insert deterministic padding leaves so that `num_leaves() ==
-	/// batch_size`.
+	/// aligned).
 	fn new_padded(depth: usize, batch_size: usize) -> Self;
-	fn get_root(&self) -> Hash;
+	fn get_root(&self) -> HashOutput;
 	fn num_leaves(&self) -> usize;
 	/// Insert leaves, verify the resulting proof, and return the new root.
-	fn insert_verified(&mut self, leaves: Vec<Hash>) -> Result<Hash>;
+	fn insert_verified(&mut self, leaves: Vec<HashOutput>) -> Result<HashOutput>;
 	/// Apply fixups needed after loading a legacy snapshot. Default: no-op.
 	fn fixup_legacy_snapshot(&mut self, _snapshot_version: u32) {}
 }
 
-impl SequencerTree for CommitmentTree<Hash> {
+impl SequencerTree for CommitmentTree<HashOutput> {
 	fn new(depth: usize) -> Self {
 		CommitmentTree::new(depth)
 	}
@@ -62,7 +61,7 @@ impl SequencerTree for CommitmentTree<Hash> {
 		CommitmentTree::new(depth)
 	}
 
-	fn get_root(&self) -> Hash {
+	fn get_root(&self) -> HashOutput {
 		self.get_root()
 	}
 
@@ -70,7 +69,7 @@ impl SequencerTree for CommitmentTree<Hash> {
 		self.num_leaves()
 	}
 
-	fn insert_verified(&mut self, leaves: Vec<Hash>) -> Result<Hash> {
+	fn insert_verified(&mut self, leaves: Vec<HashOutput>) -> Result<HashOutput> {
 		let proof = self.insert_batch(leaves)?;
 		anyhow::ensure!(proof.verify(), "commitment tree proof verification failed");
 		Ok(proof.root_new)
@@ -83,35 +82,10 @@ impl SequencerTree for CommitmentTree<Hash> {
 	}
 }
 
-impl SequencerTree for NullifierTree<Hash> {
-	fn new(depth: usize) -> Self {
-		NullifierTree::new(depth)
-	}
-
-	fn new_padded(depth: usize, batch_size: usize) -> Self {
-		NullifierTree::new_with_padding(depth, batch_size)
-	}
-
-	fn get_root(&self) -> Hash {
-		self.get_root()
-	}
-
-	fn num_leaves(&self) -> usize {
-		self.num_leaves()
-	}
-
-	fn insert_verified(&mut self, leaves: Vec<Hash>) -> Result<Hash> {
-		let proof = self.insert_batch(leaves)?;
-		anyhow::ensure!(proof.verify(), "nullifier tree proof verification failed");
-		Ok(proof.new_root)
-	}
-}
-
 /// Sequencer in-memory state for one tree's pending-request queue.
 ///
-/// Generic over the tree type (`CommitmentTree<Hash>` or
-/// `NullifierTree<Hash>`) via [`SequencerTree`].  All queue-management
-/// logic is tree-type-agnostic.
+/// Generic over the tree type (`CommitmentTree<HashOutput>`) via [`SequencerTree`].  All
+/// queue-management logic is tree-type-agnostic.
 pub struct TreeState<T: SequencerTree> {
 	/// Local tree mirror.
 	pub tree: T,
@@ -147,17 +121,17 @@ impl<T: SequencerTree> TreeState<T> {
 	}
 
 	/// Return the tree's genesis root with padding for the given batch size.
-	pub fn genesis_root(batch_size: usize) -> Hash {
+	pub fn genesis_root(batch_size: usize) -> HashOutput {
 		T::new_padded(TREE_DEPTH, batch_size).get_root()
 	}
 
 	/// Return current local root.
-	pub fn current_root(&self) -> Hash {
+	pub fn current_root(&self) -> HashOutput {
 		self.tree.get_root()
 	}
 
 	/// Replay one commitment into the local tree.
-	pub fn replay_consumed_commitment(&mut self, commitment: Hash) -> Result<()> {
+	pub fn replay_consumed_commitment(&mut self, commitment: HashOutput) -> Result<()> {
 		self.tree.insert_verified(vec![commitment])?;
 		Ok(())
 	}
@@ -248,6 +222,5 @@ impl<T: SequencerTree> TreeState<T> {
 	}
 }
 
-/// Convenience aliases preserving the original type names.
-pub type CommitmentTreeState = TreeState<CommitmentTree<Hash>>;
-pub type NullifierTreeState = TreeState<NullifierTree<Hash>>;
+/// Convenience alias preserving the original type name.
+pub type CommitmentTreeState = TreeState<CommitmentTree<HashOutput>>;

@@ -54,7 +54,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 
 	fn verify_root(&self) -> MerkleTreeResult<()> {
 		let recomputed_root = self.recompute_root();
-		let stored_root = self.get_root();
+		let stored_root = self.compute_root();
 
 		if recomputed_root != stored_root {
 			return Err(anyhow!(MerkleTreeError::RootMismatch));

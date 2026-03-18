@@ -489,7 +489,8 @@ mod tests {
 			legacy_bytes,
 		)?;
 
-		let mut store = TreeStore::<CommitmentTree<HashOutput>>::open(&base, TreeId::NotesCommitment, 1)?;
+		let mut store =
+			TreeStore::<CommitmentTree<HashOutput>>::open(&base, TreeId::NotesCommitment, 1)?;
 		let (loaded_state, meta) = store.load_or_init(|| CommitmentTree::new(4))?;
 		assert_eq!(meta.snapshot_version, SNAPSHOT_VERSION_V1);
 		assert_eq!(loaded_state.num_leaves(), 2);

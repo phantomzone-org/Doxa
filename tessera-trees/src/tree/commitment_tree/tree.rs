@@ -31,7 +31,7 @@ impl<H: MerkleHash> CommitmentTree<H> {
 	}
 
 	pub fn get_root(&self) -> H::Digest {
-		self.tree.get_root()
+		self.tree.compute_root()
 	}
 
 	pub fn num_leaves(&self) -> usize {

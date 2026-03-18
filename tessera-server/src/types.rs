@@ -1,66 +1,99 @@
+use std::collections::HashMap;
+
 use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
-use tessera_trees::tree::{hasher::Hash, BatchCommitmentProof, BatchInsertProof};
+use tessera_trees::tree::hasher::HashOutput;
 
-/// Sent from Sequencer to Prover via `tokio::mpsc` channel.
+/// Sent from Sequencer V2 to ProverRuntimeV2 for TX batches.
 ///
-/// Carries all four tree witnesses + sorted leaf data for TX proof construction.
-/// The prover proves all five inner circuits and wraps them into a single
-/// SuperAggregator Groth16 proof.
+/// Carries NC leaf array + private witnesses for the SuperAggregatorV2 circuit.
+/// No tree proofs — the on-chain Poseidon IMT replaces them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProveRequest {
-	/// On-chain batch ID from `registerTransactionBatchUpdate`.
+pub struct ProveRequestV2 {
+	/// On-chain batch identifier.
 	pub batch_id: u64,
-	/// Notes commitment tree batch-insertion witness.
-	pub notes_commitment_proof: BatchCommitmentProof<Hash>,
-	/// Notes nullifier tree batch-insertion witness.
-	pub notes_nullifier_proof: BatchInsertProof<Hash>,
-	/// Accounts commitment tree batch-insertion witness.
-	pub accounts_commitment_proof: BatchCommitmentProof<Hash>,
-	/// Accounts nullifier tree batch-insertion witness.
-	pub accounts_nullifier_proof: BatchInsertProof<Hash>,
-	/// Sorted leaf bytes for all 4 trees (after padding and sorting).
-	/// Used by the prover to build TX leaf proofs with correct tree data.
-	pub nc_sorted_leaves: Vec<[u8; 32]>,
-	pub nn_sorted_leaves: Vec<[u8; 32]>,
-	pub ac_sorted_leaves: Vec<[u8; 32]>,
-	pub an_sorted_leaves: Vec<[u8; 32]>,
-	/// Indices (in the sorted account-level batch) of slots that are real
-	/// private transactions (is_real=1). Empty for deposit-only batches.
-	pub real_account_slots: Vec<usize>,
+	/// Note-commitment leaves in arrival (slot) order.
+	/// Length = `account_batch_size × notes_per_slot`.
+	pub nc_leaves: Vec<[u8; 32]>,
+	/// On-chain account commitment tree root before this batch.
+	pub ac_root: HashOutput,
+	/// On-chain note commitment tree root before this batch.
+	pub nc_root: HashOutput,
+	/// Contract `poolConfigRoot` (bytes32, big-endian).
+	pub main_pool_cfg_root: [u8; 32],
+	/// Client-supplied PrivTx proof bytes keyed by account slot index.
+	/// Absent slots use the pre-loaded dummy proof.
+	pub tx_proofs_by_slot: HashMap<usize, Vec<u8>>,
 }
 
-/// Sent from Prover back to Sequencer via `tokio::mpsc` channel.
+/// Sent from ProverRuntimeV2 back to Sequencer V2 for TX batches.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ProveOutcome {
+pub enum ProveOutcomeV2 {
 	Success {
-		/// Echoed from the originating `ProveRequest`.
+		/// Echoed from the originating request.
 		batch_id: u64,
-		/// New notes commitment root after insertion.
-		notes_new_root: Hash,
-		/// New notes nullifier root after insertion.
-		nullifier_notes_new_root: Hash,
-		/// New accounts commitment root after insertion.
-		accounts_new_root: Hash,
-		/// New accounts nullifier root after insertion.
-		nullifier_accounts_new_root: Hash,
-		/// Single SuperAggregator Groth16 proof, ready for `confirmBatch()`.
+		/// Poseidon Merkle root of the note-commitment batch (= SubtreeRoot).
+		batch_poseidon_root: HashOutput,
+		/// Groth16 proof ready for `proveTransactionBatch()`.
 		solidity_proof: Box<SolidityProof>,
-		/// `keccak256` commitment over all 5 inner proofs' public inputs,
-		/// encoded as 8 × uint32 big-endian words.  Passed as `publicInputs`
-		/// to `confirmBatch()` on-chain.
+		/// `keccak256(piCommitment preimage)` encoded as 8 × u32 big-endian.
 		super_pi_commitment: [u8; 32],
 	},
 	Failure {
-		/// Echoed from the originating `ProveRequest`.
 		batch_id: u64,
 		error: String,
 	},
 }
 
-/// Parsed proof ready for the contract's `confirmBatch` call.
+/// Sent from Sequencer V2 to ProverRuntimeV2 for deposit/consume batches.
 ///
-/// Corresponds to `DepositsRollupBridge.Proof` in Solidity.
+/// Mirrors `ProveRequestV2` but targets the consume (deposit validation) pipeline:
+/// the prover uses the `depositVerifier` address and marks deposit notes `Validated`
+/// post-proof instead of nullifying them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumeProveRequest {
+	/// On-chain batch identifier.
+	pub batch_id: u64,
+	/// Deposit note-commitment leaves in arrival (slot) order.
+	/// Length = `account_batch_size × notes_per_slot`.
+	pub nc_leaves: Vec<[u8; 32]>,
+	/// On-chain account commitment tree root before this batch.
+	pub ac_root: HashOutput,
+	/// On-chain note commitment tree root before this batch.
+	pub nc_root: HashOutput,
+	/// Contract `poolConfigRoot` (bytes32, big-endian).
+	pub main_pool_cfg_root: [u8; 32],
+	/// Client-supplied consume proof bytes keyed by account slot index.
+	/// Absent slots use the pre-loaded dummy proof.
+	pub consume_proofs_by_slot: HashMap<usize, Vec<u8>>,
+}
+
+/// Sent from ProverRuntimeV2 back to Sequencer V2 for deposit/consume batches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConsumeOutcome {
+	Success {
+		/// Echoed from the originating request.
+		batch_id: u64,
+		/// Poseidon Merkle root of the deposit-note batch (= SubtreeRoot).
+		batch_poseidon_root: HashOutput,
+		/// Groth16 proof ready for `proveDepositBatch()`.
+		solidity_proof: Box<SolidityProof>,
+		/// `keccak256(piCommitment preimage)` encoded as 8 × u32 big-endian.
+		super_pi_commitment: [u8; 32],
+	},
+	Failure {
+		batch_id: u64,
+		error: String,
+	},
+}
+
+// ---------------------------------------------------------------------------
+// Shared proof type
+// ---------------------------------------------------------------------------
+
+/// Parsed proof ready for the contract's `proveTransactionBatch` / `proveDepositBatch` call.
+///
+/// Corresponds to `TesseraRollupV2.Proof` in Solidity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolidityProof {
 	pub proof: [U256; 8],

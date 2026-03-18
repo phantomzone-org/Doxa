@@ -1,10 +1,10 @@
-#![allow(clippy::all)]
-#![allow(warnings)]
+#![allow(dead_code, unused_imports, unused_variables)]
 pub(crate) mod account;
 pub(crate) mod commitment;
 pub(crate) mod ecgfp5;
 pub(crate) mod note;
 pub(crate) mod plonky2_gadgets;
+pub use plonky2_gadgets::serialization::TesseraGateSerializer;
 pub(crate) mod pool_config;
 pub(crate) mod schnorr;
 pub(crate) mod tree;
@@ -48,7 +48,9 @@ pub const MAIN_POOL_CONFIG_DEPTH: usize = 20;
 
 pub use account::*;
 pub use note::*;
+pub use plonky2_gadgets::priv_tx::{
+	FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, RejectTxInputs, SpendTxInputs,
+	build_circuit_and_dummy_proof, build_circuit_and_real_proof, build_priv_tx_circuit,
+	prove_dummy_priv_tx, prove_real_priv_tx, prove_real_priv_tx_seeded,
+};
 use tessera_trees::tree::HASH_SIZE;
-
-#[cfg(test)]
-mod tests {}

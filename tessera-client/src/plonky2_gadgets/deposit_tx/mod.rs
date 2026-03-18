@@ -1,7 +1,7 @@
 use plonky2::{
 	hash::{
 		hash_types::{HashOut, RichField},
-		poseidon::{Poseidon, PoseidonHash},
+		poseidon::Poseidon,
 	},
 	iop::{
 		target::Target,
@@ -17,12 +17,12 @@ use primitive_types::{H160, U256};
 use tessera_trees::{
 	F,
 	plonky2_gadgets::u32::add_u8_range_check_lookup_table,
-	tree::hasher::{HashOutput, MerkleHashCircuit},
+	tree::hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 };
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, AccountAddress, AssetId, DS_PUBLIC_IDENTIFIER,
-	MAIN_POOL_CONFIG_DEPTH, Nonce, SUBPOOL_CONFIG_DEPTH, StandardAccount, SubpoolId,
+	ACC_AST_DEPTH, ACT_DEPTH, AccountAddress, AssetId, MAIN_POOL_CONFIG_DEPTH, Nonce,
+	SUBPOOL_CONFIG_DEPTH, StandardAccount, SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
 	derive_deposit_tx_hash,
 	ecgfp5::{CompressedPoint, PointEw},
@@ -44,14 +44,15 @@ use crate::{
 			},
 		},
 		set_hash, set_u256_zero,
-		signature::{
-			LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget,
-			set_schnorr_witness,
-		},
+		signature::{LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget},
 		u256::CircuitBuilderU256,
+		witness::{
+			fake_authority_keys, set_authority_keys, set_fake_schnorr_signature,
+			set_real_schnorr_signature, set_subpool_full_proof,
+		},
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::{CompressedPublicKey, Scalar, Signature, schnorr_challenge},
+	schnorr::{CompressedPublicKey, Signature},
 	tree::CommitmentTreeMerkleProof,
 	utils::map_h160_to_f,
 };
@@ -60,18 +61,17 @@ pub(crate) mod cb;
 pub(crate) mod targets;
 
 pub fn deposit_tx_circuit<
-	H: MerkleHashCircuit<F, D>,
+	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
+	ctx: &H::CircuitContext,
 ) -> DepositTxTargets {
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// Authority keys
-	let approval_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
-	let rejection_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
-	let subpool_consume_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
+	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
 
 	// Tree roots
 	let act_root = ActRootTarget(builder.add_virtual_hash());
@@ -104,12 +104,7 @@ pub fn deposit_tx_circuit<
 	let eth_address: [Target; 5] = builder.add_virtual_target_arr();
 
 	// Derive public_identifier from accin.private_identifier
-	let public_identifier = {
-		let ds_public_identifier = builder.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
-		let mut inp = vec![ds_public_identifier];
-		inp.extend(accin.private_identifier.0);
-		PublicIdentifierTaregt(builder.hash_n_to_hash_no_pad::<PoseidonHash>(inp))
-	};
+	let public_identifier = builder.derive_public_identifier(accin.private_identifier);
 
 	// Derive nullifier key
 	let nk = builder.derive_nullifier_key(accin.private_identifier);
@@ -136,6 +131,7 @@ pub fn deposit_tx_circuit<
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
+		ctx,
 	);
 
 	// Enforce recipient match: deposit_note must target accin
@@ -146,7 +142,7 @@ pub fn deposit_tx_circuit<
 	);
 
 	// Account invariants
-	DepositTxCircuitBuilder::assert_account_invariants(builder, accin, accout);
+	builder.assert_account_invariants_simple(accin, accout);
 
 	// AST update: verify asset/amt proofs and enforce same leaf position
 	let accin_ast_merkle = builder.assert_ast_update(
@@ -244,6 +240,7 @@ pub fn deposit_tx_circuit<
 ///
 /// `accout` is derived internally: cloned from `accin`, nonce incremented by one,
 /// AST updated with `deposit_note.amount` credited to `deposit_note.asset_id`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn set_deposit_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &DepositTxTargets,
@@ -269,8 +266,7 @@ pub(crate) fn set_deposit_tx_witness(
 		.amount_for(asset_id)
 		.unwrap_or_else(|| (accin.ast.next_index(), U256::zero()));
 	let new_bal = old_bal + deposit_amt;
-	let mut accout = accin.clone();
-	accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
+	let mut accout = accin.clone_with_incremented_nonce();
 	accout.ast.insert_or_update_asset(asset_id, new_bal);
 
 	// ── Amounts and exists flags ───────────────────────────────────────────────
@@ -298,9 +294,15 @@ pub(crate) fn set_deposit_tx_witness(
 	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
 
 	// ── Authority keys ────────────────────────────────────────────────────────
-	t.approval_key.set_witness(pw, approval_key);
-	t.rejection_key.set_witness(pw, rejection_key);
-	t.subpool_consume_key.set_witness(pw, consume_key);
+	set_authority_keys(
+		pw,
+		&t.approval_key,
+		&t.rejection_key,
+		&t.subpool_consume_key,
+		approval_key,
+		rejection_key,
+		consume_key,
+	);
 
 	// ── Accounts ──────────────────────────────────────────────────────────────
 	t.accin.set_witness(pw, accin);
@@ -331,69 +333,43 @@ pub(crate) fn set_deposit_tx_witness(
 	t.deposit_note.set_witness(pw, deposit_note);
 
 	// ── Eth address ───────────────────────────────────────────────────────────
-	pw.set_target_arr(&t.eth_address, &map_h160_to_f(&eth_address))
+	pw.set_target_arr(&t.eth_address, &map_h160_to_f(eth_address))
 		.unwrap();
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
-	let subpool = SubpoolConfigTree::new(*approval_key, *rejection_key, *consume_key);
-	let full_proof = main_pool
-		.full_subpool_proof(&subpool, subpool_id)
-		.expect("subpool not in main_pool at the given subpool_id");
-
-	t.subpool_proof_targets
-		.approval_proof
-		.set_witness(pw, &full_proof.approval_proof);
-	t.subpool_proof_targets
-		.rejection_proof
-		.set_witness(pw, &full_proof.rejection_proof);
-	t.subpool_proof_targets
-		.consume_proof
-		.set_witness(pw, &full_proof.consume_proof);
-	t.subpool_proof_targets
-		.main_pool_proof
-		.set_witness(pw, &full_proof.main_pool_proof);
-
-	pw.set_target_arr(
-		&t.subpool_proof_targets.subpool_config_root.0.elements,
-		&subpool.root().0,
-	)
-	.unwrap();
+	set_subpool_full_proof(
+		pw,
+		&t.subpool_proof_targets,
+		&main_pool,
+		approval_key,
+		rejection_key,
+		consume_key,
+		subpool_id,
+	);
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 
 	// Consume: uses accin.consume_auth.config to pick key (same as circuit)
-	{
-		let cq = if accin.consume_auth.config {
-			accin.consume_auth.pk.unwrap().0
+	set_real_schnorr_signature(
+		pw,
+		&t.sig_targets.consume,
+		if accin.consume_auth.config {
+			accin.consume_auth.pk.unwrap()
 		} else {
-			consume_key.0
-		};
-		let cr = consume_sig.r.encode();
-		let e = schnorr_challenge(&cr, &cq, &tx_hash.0);
-		set_schnorr_witness(
-			pw,
-			&t.sig_targets.consume,
-			PointEw::decode(cq).unwrap(),
-			cr,
-			e,
-			consume_sig.s,
-		);
-	}
+			*consume_key
+		},
+		&tx_hash.0,
+		consume_sig,
+	);
 
 	// Approval
-	{
-		let cq = approval_key.0;
-		let cr = approval_sig.r.encode();
-		let e = schnorr_challenge(&cr, &cq, &tx_hash.0);
-		set_schnorr_witness(
-			pw,
-			&t.sig_targets.approval,
-			PointEw::decode(cq).unwrap(),
-			cr,
-			e,
-			approval_sig.s,
-		);
-	}
+	set_real_schnorr_signature(
+		pw,
+		&t.sig_targets.approval,
+		*approval_key,
+		&tx_hash.0,
+		approval_sig,
+	);
 }
 
 pub(crate) fn set_fake_deposit_tx_witness(
@@ -409,8 +385,7 @@ pub(crate) fn set_fake_deposit_tx_witness(
 	);
 
 	// ── Derive accout ─────────────────────────────────────────────────────────
-	let mut accout = accin.clone();
-	accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
+	let accout = accin.clone_with_incremented_nonce();
 
 	// ── Tx kind flags ---------------------------------------------------------
 	pw.set_bool_target(t.not_fake_tx, false).unwrap();
@@ -420,15 +395,16 @@ pub(crate) fn set_fake_deposit_tx_witness(
 	set_hash(pw, t.act_root.0, act_root.0);
 
 	// ── Authority keys (derived from fixed scalars) ───────────────────────────
-	let fake_approval_q = PointEw::generator().scalar_mul(&Scalar::from_raw([1, 2, 3, 4, 5]));
-	let fake_rejection_q = PointEw::generator().scalar_mul(&Scalar::from_raw([6, 7, 8, 9, 0]));
-	let fake_consume_q = PointEw::generator().scalar_mul(&Scalar::from_raw([11, 12, 13, 14, 0]));
-	let fake_approval_cpk = CompressedPublicKey(fake_approval_q.encode());
-	let fake_rejection_cpk = CompressedPublicKey(fake_rejection_q.encode());
-	let fake_consume_cpk = CompressedPublicKey(fake_consume_q.encode());
-	t.approval_key.set_witness(pw, &fake_approval_cpk);
-	t.rejection_key.set_witness(pw, &fake_rejection_cpk);
-	t.subpool_consume_key.set_witness(pw, &fake_consume_cpk);
+	let (fake_approval_cpk, fake_rejection_cpk, fake_consume_cpk) = fake_authority_keys();
+	set_authority_keys(
+		pw,
+		&t.approval_key,
+		&t.rejection_key,
+		&t.subpool_consume_key,
+		&fake_approval_cpk,
+		&fake_rejection_cpk,
+		&fake_consume_cpk,
+	);
 
 	// ── Accounts ──────────────────────────────────────────────────────────────
 	t.accin.set_witness(pw, &accin);
@@ -455,7 +431,6 @@ pub(crate) fn set_fake_deposit_tx_witness(
 	// not_fake_tx = false.
 	let fake_subpool =
 		SubpoolConfigTree::new(fake_approval_cpk, fake_rejection_cpk, fake_consume_cpk);
-
 	t.subpool_proof_targets
 		.approval_proof
 		.set_witness(pw, &fake_subpool.approval_key_proof());
@@ -468,7 +443,6 @@ pub(crate) fn set_fake_deposit_tx_witness(
 	t.subpool_proof_targets
 		.main_pool_proof
 		.set_dummy_witness(pw, MAIN_POOL_CONFIG_DEPTH);
-
 	pw.set_target_arr(
 		&t.subpool_proof_targets.subpool_config_root.0.elements,
 		&fake_subpool.root().0,
@@ -491,33 +465,21 @@ pub(crate) fn set_fake_deposit_tx_witness(
 		.unwrap();
 
 	// Consume (fake)
-	let consume_e = Scalar::from_raw([13, 13, 13, 13, 13]);
-	let consume_s = Scalar::from_raw([14, 15, 16, 17, 18]);
-	let consume_r = PointEw::generator()
-		.scalar_mul(&consume_s)
-		.add(&fake_consume_q.scalar_mul(&consume_e));
-	set_schnorr_witness(
+	set_fake_schnorr_signature(
 		pw,
 		&t.sig_targets.consume,
-		fake_consume_q,
-		consume_r.encode(),
-		consume_e,
-		consume_s,
+		fake_consume_cpk,
+		[13, 13, 13, 13, 13],
+		[14, 15, 16, 17, 18],
 	);
 
 	// Approval (fake)
-	let approval_e = Scalar::from_raw([21, 22, 23, 24, 25]);
-	let approval_s = Scalar::from_raw([31, 32, 33, 34, 35]);
-	let approval_r = PointEw::generator()
-		.scalar_mul(&approval_s)
-		.add(&fake_approval_q.scalar_mul(&approval_e));
-	set_schnorr_witness(
+	set_fake_schnorr_signature(
 		pw,
 		&t.sig_targets.approval,
-		fake_approval_q,
-		approval_r.encode(),
-		approval_e,
-		approval_s,
+		fake_approval_cpk,
+		[21, 22, 23, 24, 25],
+		[31, 32, 33, 34, 35],
 	);
 }
 #[cfg(test)]
@@ -599,7 +561,9 @@ mod tests {
 		// ── Compute native TxHash ─────────────────────────────────────────────
 		let mut accout = accin.clone();
 		accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
-		accout.ast.insert_or_update_asset(asset_id, deposit_note.amount);
+		accout
+			.ast
+			.insert_or_update_asset(asset_id, deposit_note.amount);
 
 		let accin_null = accin.nullifier(Some(accin_merkle_proof.pos as u64));
 		let deposit_note_comm = deposit_note.commitment();
@@ -618,7 +582,8 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 
 		// ── Fill witness ──────────────────────────────────────────────────────
@@ -650,7 +615,8 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 

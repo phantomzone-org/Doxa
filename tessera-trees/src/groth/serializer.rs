@@ -38,11 +38,11 @@ use plonky2::{get_generator_tag_impl, read_generator_impl};
 use crate::{
 	ConfigNative, F,
 	plonky2_gadgets::{
+		keccak256::field_decompose::{CanonicalCheckGenerator, FieldDecompositionGenerator},
 		keccak256::generators::{
 			single_generator::Keccak256SingleGenerator,
 			stark_proof_generator::Keccak256StarkProofGenerator,
 		},
-		sha256::circuit::{CanonicalCheckGenerator, FieldDecompositionGenerator},
 		u32::gadgets::{
 			// defined directly in gadgets/mod.rs
 			ByteDecompositionGenerator,

@@ -49,12 +49,12 @@ impl Scalar {
 		Self(limbs)
 	}
 
-	pub(crate) fn to_bit_arr(&self) -> [bool; Self::BITS] {
+	pub(crate) fn to_bit_arr(self) -> [bool; Self::BITS] {
 		let mut bits = [false; Self::BITS];
-		for i in 0..Self::BITS {
+		for (i, b) in bits.iter_mut().enumerate() {
 			let limb = i / 64;
 			let bit = i % 64;
-			bits[i] = (self.0[limb] >> bit) & 1 == 1;
+			*b = (self.0[limb] >> bit) & 1 == 1;
 		}
 		bits
 	}
@@ -256,7 +256,7 @@ impl<F: Extendable<5>> PublicKey<F> {
 	}
 }
 
-pub(crate) struct Signature {
+pub struct Signature {
 	pub(crate) r: PointEw<GoldilocksField>,
 	pub(crate) s: Scalar,
 }

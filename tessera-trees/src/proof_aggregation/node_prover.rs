@@ -119,10 +119,7 @@ mod tests {
 	};
 
 	use super::*;
-	use crate::{
-		ConfigNative, D, F,
-		proof_aggregation::{GenericAggregatorConfig, ReducerKind},
-	};
+	use crate::{ConfigNative, D, F, proof_aggregation::GenericAggregatorConfig};
 
 	fn build_leaf_circuit(n_pi: usize) -> (CircuitData<F, ConfigNative, D>, Vec<Target>) {
 		let config = CircuitConfig::standard_recursion_config();
@@ -155,7 +152,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 1,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = Arc::new(GenericAggregator::new(
 			cfg,
@@ -184,7 +180,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity: 2,
 			depth: 1,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = Arc::new(GenericAggregator::new(
 			cfg,

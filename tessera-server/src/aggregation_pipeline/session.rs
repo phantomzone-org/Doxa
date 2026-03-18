@@ -430,7 +430,7 @@ mod tests {
 		},
 	};
 	use tessera_trees::{
-		proof_aggregation::{GenericAggregator, GenericAggregatorConfig, ReducerKind},
+		proof_aggregation::{GenericAggregator, GenericAggregatorConfig},
 		ConfigNative, D, F,
 	};
 
@@ -473,7 +473,6 @@ mod tests {
 		let cfg = GenericAggregatorConfig {
 			arity,
 			depth,
-			reducer: ReducerKind::Keccak256,
 		};
 		let agg = GenericAggregator::new(
 			cfg,

@@ -1,6 +1,9 @@
 use itertools::Itertools;
 use plonky2::{
-	hash::hash_types::{HashOutTarget, RichField},
+	hash::{
+		hash_types::{HashOutTarget, RichField},
+		poseidon::Poseidon,
+	},
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
@@ -15,7 +18,7 @@ use primitive_types::{H160, U256};
 use tessera_trees::{
 	F,
 	plonky2_gadgets::u32::add_u8_range_check_lookup_table,
-	tree::hasher::{HashOutput, MerkleHashCircuit},
+	tree::hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 };
 
 use crate::{
@@ -33,15 +36,13 @@ use crate::{
 			},
 		},
 		set_hash,
-		signature::{
-			LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget,
-			set_schnorr_witness,
-		},
+		signature::conditional_schnorr_verify_gadget,
 		u256::CircuitBuilderU256,
 		withdraw_tx::{cb::WithdrawTxCircuitBuilder, targets::WithdrawTxTargets},
+		witness::{set_authority_keys, set_real_schnorr_signature, set_subpool_full_proof},
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::{Signature, schnorr_challenge},
+	schnorr::Signature,
 	tree::CommitmentTreeMerkleProof,
 	utils::map_h160_to_f,
 };
@@ -50,19 +51,18 @@ pub(crate) mod cb;
 pub(crate) mod targets;
 
 pub fn withdraw_tx_circuit<
-	H: MerkleHashCircuit<F, D>,
-	F: RichField + Extendable<D>,
+	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
+	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
+	ctx: &H::CircuitContext,
 ) -> WithdrawTxTargets {
 	// ── Tx flag ───────────────────────────────────────────────────────────────
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// ── Authority keys ────────────────────────────────────────────────────────
-	let approval_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
-	let rejection_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
-	let subpool_consume_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
+	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
 	let act_root = ActRootTarget(builder.add_virtual_hash());
@@ -106,12 +106,13 @@ pub fn withdraw_tx_circuit<
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
+		ctx,
 	);
 
 	// ── Account invariants ───────────────────────────────────────────────────
 	// Enforces unconditionally: private_identifier, subpool_id, nonce+1,
 	// spend_auth, and consume_auth are all immutable. AST root may change.
-	WithdrawTxCircuitBuilder::assert_account_invariants(builder, accin, accout);
+	builder.assert_account_invariants_simple(accin, accout);
 
 	// ── Chained AST updates ───────────────────────────────────────────────────
 	// We process NOTE_BATCH withdrawal slots in sequence.  Each slot updates
@@ -234,6 +235,7 @@ pub fn withdraw_tx_circuit<
 ///
 /// `withdrawals` contains up to `NOTE_BATCH` `(asset_id, withdrawal_amount)` pairs.
 /// Remaining slots are zero-padded automatically.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn set_withdraw_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &WithdrawTxTargets,
@@ -289,8 +291,7 @@ pub(crate) fn set_withdraw_tx_witness(
 	}
 
 	// ── Build accout ──────────────────────────────────────────────────────
-	let mut accout = accin.clone();
-	accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
+	let mut accout = accin.clone_with_incremented_nonce();
 	accout.ast = current_ast.clone();
 
 	// ── Native TxHash ─────────────────────────────────────────────────────
@@ -311,9 +312,15 @@ pub(crate) fn set_withdraw_tx_witness(
 	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
 
 	// ── Authority keys ────────────────────────────────────────────────────
-	t.approval_key.set_witness(pw, approval_key);
-	t.rejection_key.set_witness(pw, rejection_key);
-	t.subpool_consume_key.set_witness(pw, consume_key);
+	set_authority_keys(
+		pw,
+		&t.approval_key,
+		&t.rejection_key,
+		&t.subpool_consume_key,
+		approval_key,
+		rejection_key,
+		consume_key,
+	);
 
 	// ── Accounts ──────────────────────────────────────────────────────────
 	t.accin.set_witness(pw, accin);
@@ -346,44 +353,18 @@ pub(crate) fn set_withdraw_tx_witness(
 	t.accin_act_merkle.set_witness(pw, &accin_act_merkle_proof);
 
 	// ── Subpool full proof ────────────────────────────────────────────────
-	let subpool = SubpoolConfigTree::new(*approval_key, *rejection_key, *consume_key);
-	let full_proof = main_pool
-		.full_subpool_proof(&subpool, subpool_id)
-		.expect("subpool not registered in main_pool at the given subpool_id");
-
-	t.subpool_proof_targets
-		.approval_proof
-		.set_witness(pw, &full_proof.approval_proof);
-	t.subpool_proof_targets
-		.rejection_proof
-		.set_witness(pw, &full_proof.rejection_proof);
-	t.subpool_proof_targets
-		.consume_proof
-		.set_witness(pw, &full_proof.consume_proof);
-	t.subpool_proof_targets
-		.main_pool_proof
-		.set_witness(pw, &full_proof.main_pool_proof);
-
-	pw.set_target_arr(
-		&t.subpool_proof_targets.subpool_config_root.0.elements,
-		&subpool.root().0,
-	)
-	.unwrap();
+	set_subpool_full_proof(
+		pw,
+		&t.subpool_proof_targets,
+		main_pool,
+		approval_key,
+		rejection_key,
+		consume_key,
+		subpool_id,
+	);
 
 	// ── Approval signature ────────────────────────────────────────────────
-	{
-		let cq = approval_key.0;
-		let cr = approval_sig.r.encode();
-		let e = schnorr_challenge(&cr, &cq, &tx_hash.0);
-		set_schnorr_witness(
-			pw,
-			&t.approval_sig,
-			PointEw::decode(cq).unwrap(),
-			cr,
-			e,
-			approval_sig.s,
-		);
-	}
+	set_real_schnorr_signature(pw, &t.approval_sig, *approval_key, &tx_hash.0, approval_sig);
 }
 
 #[cfg(test)]
@@ -505,7 +486,8 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = withdraw_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = withdraw_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 
 		// ── Fill witness ──────────────────────────────────────────────────

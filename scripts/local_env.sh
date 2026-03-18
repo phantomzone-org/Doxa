@@ -64,6 +64,18 @@ else
 fi
 unset _agg_dir
 
+# Client binary env vars (bridges local_env names → what `client` expects).
+# Contract addresses are read from tessera-server/.env if present.
+export TESSERA_RPC_URL="$RPC"
+export TESSERA_CLIENT_KEY="$CLIENT_KEY"
+if [[ -f "$ROOT_DIR/tessera-server/.env" ]]; then
+  _bridge="$(sed -n 's/^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=//p' "$ROOT_DIR/tessera-server/.env" | tail -n1)"
+  _token="$(sed -n 's/^TESSERA_MONITORED_TOKEN=//p' "$ROOT_DIR/tessera-server/.env" | tail -n1)"
+  [[ -n "$_bridge" ]] && export TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS="$_bridge"
+  [[ -n "$_token" ]] && export TESSERA_MONITORED_TOKEN="$_token"
+  unset _bridge _token
+fi
+
 echo "Loaded local env:"
 echo "  RPC=$RPC"
 echo "  TESSERA_NOTE_BATCH_SIZE=$TESSERA_NOTE_BATCH_SIZE"
@@ -78,3 +90,6 @@ echo "  TESSERA_PROVER_API_URL=$TESSERA_PROVER_API_URL"
 echo "  TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH=$TESSERA_SUPER_AGGREGATOR_ARTIFACTS_PATH"
 echo "  TESSERA_CONSUME_ARTIFACTS_PATH=${TESSERA_CONSUME_ARTIFACTS_PATH:-"(not set)"}"
 echo "  TESSERA_AGGREGATOR_ARTIFACTS_PATH=${TESSERA_AGGREGATOR_ARTIFACTS_PATH:-"(not set)"}"
+echo "  TESSERA_CLIENT_KEY=${TESSERA_CLIENT_KEY:0:10}..."
+echo "  TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=${TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS:-"(not set)"}"
+echo "  TESSERA_MONITORED_TOKEN=${TESSERA_MONITORED_TOKEN:-"(not set)"}"

@@ -45,10 +45,6 @@ name = "sequencer"
 path = "src/bin/sequencer.rs"
 
 [[bin]]
-name = "prover"
-path = "src/bin/prover.rs"
-
-[[bin]]
 name = "aggregation_prover"
 path = "src/bin/aggregation_prover.rs"
 

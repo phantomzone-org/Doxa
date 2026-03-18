@@ -4,6 +4,7 @@ use std::{
 	marker::PhantomData,
 };
 
+use anyhow::Result;
 use plonky2::{
 	field::{
 		extension::Extendable,
@@ -13,7 +14,10 @@ use plonky2::{
 		hash_types::{HashOut, HashOutTarget, RichField},
 		poseidon::PoseidonHash,
 	},
-	iop::target::{BoolTarget, Target},
+	iop::{
+		target::{BoolTarget, Target},
+		witness::{PartialWitness, WitnessWrite},
+	},
 	plonk::{
 		circuit_builder::CircuitBuilder,
 		config::{AlgebraicHasher, GenericConfig, Hasher},
@@ -25,10 +29,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
 	F,
 	plonky2_gadgets::{
-		keccak256::{builder::BuilderKeccak256, utils::keccak256_field_elements_native},
-		sha256::{
-			CircuitBuilderSha256, Sha256Luts, circuit::decompose_field_to_u32_pair,
-			sha256_field_elements_native,
+		keccak256::{
+			builder::BuilderKeccak256, field_decompose::decompose_field_to_u32_pair,
+			utils::keccak256_field_elements_native,
 		},
 		u32::add_u8_range_check_lookup_table,
 	},
@@ -73,6 +76,101 @@ pub trait MerkleHash: Copy + Clone + Debug {
 	) -> Self::Digest;
 }
 
+// ---------------------------------------------------------------------------
+// MerkleHashTarget<N> — const-generic circuit hash target
+// ---------------------------------------------------------------------------
+
+/// Circuit-level hash target with a compile-time element count.
+///
+/// - Poseidon: `MerkleHashTarget<4>` (maps 1:1 to plonky2's `HashOutTarget`)
+/// - Keccak-256: `MerkleHashTarget<8>` (one u32 word per element, no packing)
+#[derive(Clone, Copy, Debug)]
+pub struct MerkleHashTarget<const N: usize> {
+	pub elements: [Target; N],
+}
+
+impl<const N: usize> MerkleHashTarget<N> {
+	/// Allocate N virtual targets.
+	pub fn add_virtual<F: RichField + Extendable<D>, const D: usize>(
+		builder: &mut CircuitBuilder<F, D>,
+	) -> Self {
+		Self {
+			elements: core::array::from_fn(|_| builder.add_virtual_target()),
+		}
+	}
+
+	/// Allocate N virtual targets and register them as public inputs.
+	pub fn add_virtual_public_input<F: RichField + Extendable<D>, const D: usize>(
+		builder: &mut CircuitBuilder<F, D>,
+	) -> Self {
+		Self {
+			elements: core::array::from_fn(|_| builder.add_virtual_public_input()),
+		}
+	}
+
+	/// Connect two hash targets element-wise (equality constraint).
+	pub fn connect<F: RichField + Extendable<D>, const D: usize>(
+		builder: &mut CircuitBuilder<F, D>,
+		a: &Self,
+		b: &Self,
+	) {
+		for i in 0..N {
+			builder.connect(a.elements[i], b.elements[i]);
+		}
+	}
+
+	/// Conditional connect: if `flag == 1`, constrain `a == b`.
+	pub fn conditional_connect<F: RichField + Extendable<D>, const D: usize>(
+		builder: &mut CircuitBuilder<F, D>,
+		flag: BoolTarget,
+		a: &Self,
+		b: &Self,
+	) {
+		for i in 0..N {
+			builder.conditional_assert_eq(flag.target, a.elements[i], b.elements[i]);
+		}
+	}
+
+	/// Per-element select: if `dir == 1` pick `a`, else pick `b`.
+	pub fn select<F: RichField + Extendable<D>, const D: usize>(
+		builder: &mut CircuitBuilder<F, D>,
+		dir: BoolTarget,
+		a: &Self,
+		b: &Self,
+	) -> Self {
+		Self {
+			elements: core::array::from_fn(|i| builder.select(dir, a.elements[i], b.elements[i])),
+		}
+	}
+
+	/// Set witness values from a field-element array.
+	pub fn set_witness<F: Field>(
+		pw: &mut PartialWitness<F>,
+		target: &Self,
+		values: &[F; N],
+	) -> Result<()> {
+		for (i, &val) in values.iter().enumerate().take(N) {
+			pw.set_target(target.elements[i], val)?;
+		}
+		Ok(())
+	}
+}
+
+/// Conversion helpers for the 4-element case (plonky2 `HashOutTarget`).
+impl MerkleHashTarget<4> {
+	pub fn from_hash_out_target(h: HashOutTarget) -> Self {
+		Self {
+			elements: h.elements,
+		}
+	}
+
+	pub fn to_hash_out_target(&self) -> HashOutTarget {
+		HashOutTarget {
+			elements: self.elements,
+		}
+	}
+}
+
 /// Computes a binding commitment over proof data in-circuit and
 /// registers the result as public inputs.
 ///
@@ -92,7 +190,6 @@ pub trait MerkleHash: Copy + Clone + Debug {
 /// | Struct | Hash | Public-input size |
 /// |---|---|---|
 /// | [`PoseidonCommitment`] | Poseidon | 4 Goldilocks elements (256 bit) |
-/// | [`Sha256Commitment`] | SHA-256 | 8 `u32` words (256 bit) |
 /// | [`Keccak256Commitment`] | Keccak-256 | 8 `u32` words (256 bit) |
 ///
 /// # Usage
@@ -103,10 +200,6 @@ pub trait MerkleHash: Copy + Clone + Debug {
 /// ```ignore
 /// // Poseidon commitment (no setup needed):
 /// let targets = ProofTargets::new(&mut builder, depth, batch, Some(&PoseidonCommitment));
-///
-/// // SHA-256 commitment (registers lookup tables first):
-/// let sha256 = Sha256Commitment::new(&mut builder, 8);
-/// let targets = ProofTargets::new(&mut builder, depth, batch, Some(&sha256));
 ///
 /// // Keccak-256 commitment (registers a byte-range lookup table):
 /// let keccak = Keccak256Commitment::<C, D>::new(&mut builder);
@@ -189,56 +282,6 @@ impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Pose
 	}
 }
 
-/// SHA-256-based data commitment.
-///
-/// Computes `SHA256(preimage)` where each target is treated as a
-/// Goldilocks field element encoded in big-endian 8-byte form.
-/// Registers the 8-word (256-bit) digest as public inputs
-/// (8 targets, each holding a `u32` value).
-///
-/// # Construction
-///
-/// The lookup tables required by the SHA-256 circuit are registered
-/// when `Sha256Commitment::new` is called.  Create this **before**
-/// passing it to proof-target constructors, and only once per circuit.
-#[derive(Clone, Copy, Debug)]
-pub struct Sha256Commitment {
-	luts: Sha256Luts,
-}
-
-impl Sha256Commitment {
-	/// Registers the SHA-256 lookup tables and returns a ready-to-use
-	/// commitment object.  Call once per circuit builder.
-	///
-	/// `chunk_bits` controls the bitwise-LUT granularity (1, 2, 4, or 8).
-	pub fn new<F: RichField + Extendable<D>, const D: usize>(
-		builder: &mut CircuitBuilder<F, D>,
-		chunk_bits: usize,
-	) -> Self {
-		Self {
-			luts: Sha256Luts::new(builder, chunk_bits),
-		}
-	}
-}
-
-impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Sha256Commitment {
-	fn commit_public_inputs(&self, builder: &mut CircuitBuilder<F, D>, preimage: Vec<Target>) {
-		let hash = builder.sha256_hash_field_elements(&preimage, &self.luts);
-		for word in &hash {
-			builder.register_public_input(word.0);
-		}
-	}
-
-	fn commit_native(&self, source: &dyn CommitmentPreimage<F>) -> Vec<F> {
-		let mut preimage = Vec::new();
-		source.write_preimage(&mut preimage);
-		sha256_field_elements_native(&preimage)
-			.iter()
-			.map(|&w| F::from_canonical_u64(w as u64))
-			.collect()
-	}
-}
-
 /// Keccak-256-based data commitment.
 ///
 /// Computes `keccak256(preimage)` where each target is treated as a
@@ -247,10 +290,6 @@ impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Sha2
 /// Registers the 8-word (256-bit) digest as public inputs
 /// (8 targets, each holding a `u32` value).
 ///
-/// The encoding is identical to [`Sha256Commitment`], so the preimage
-/// byte layout is unchanged — only the hash function differs.
-/// This makes the on-chain verifier input (`uint256[8]`) identical in
-/// shape to the SHA-256 variant, avoiding ABI churn.
 ///
 /// The circuit output matches `keccak256(abi.encodePacked(fields))`
 /// in Solidity when each Goldilocks element maps to one big-endian
@@ -313,36 +352,95 @@ where
 	}
 }
 
-pub trait MerkleHashCircuit<F: Field, const D: usize>: Clone + Debug {
-	type Digest: ToHashOut<F>;
+pub trait MerkleHashCircuit<F: Field, const D: usize>: MerkleHash {
+	/// Circuit-level hash target type.
+	/// Poseidon: `MerkleHashTarget<4>`. Keccak: `MerkleHashTarget<8>`.
+	type HashTarget: Copy + Clone + Debug;
 
-	const HEAD: HashOut<F>;
-	const TAIL: HashOut<F>;
+	/// Opaque context for circuit-build-time state (e.g. lookup table indices).
+	/// Poseidon: `()`. Keccak: `KeccakCircuitContext`.
+	type CircuitContext: Copy + Clone + Debug;
+
+	/// Return the field elements of a native digest as a slice.
+	/// Used to bridge native proof values into witness-setting helpers.
+	fn digest_elements(d: &Self::Digest) -> &[F];
+
+	/// Register any lookup tables needed by circuit methods.
+	/// Must be called exactly once per `CircuitBuilder`, before hash methods.
+	fn register_luts(builder: &mut CircuitBuilder<F, D>) -> Self::CircuitContext
+	where
+		F: RichField + Extendable<D>;
+
+	/// Access the underlying `[Target]` slice of a hash target.
+	fn hash_target_elements(t: &Self::HashTarget) -> &[Target];
+
+	/// Allocate virtual targets for one hash.
+	fn add_virtual_hash(builder: &mut CircuitBuilder<F, D>) -> Self::HashTarget
+	where
+		F: RichField + Extendable<D>;
+
+	/// Allocate virtual targets for one hash and register them as public inputs.
+	fn add_virtual_hash_public_input(builder: &mut CircuitBuilder<F, D>) -> Self::HashTarget
+	where
+		F: RichField + Extendable<D>;
+
+	/// Create a constant hash target from a native digest value.
+	fn constant_hash(builder: &mut CircuitBuilder<F, D>, value: &Self::Digest) -> Self::HashTarget
+	where
+		F: RichField + Extendable<D>;
+
+	/// Connect two hash targets element-wise (equality constraint).
+	fn connect_hashes(
+		builder: &mut CircuitBuilder<F, D>,
+		a: &Self::HashTarget,
+		b: &Self::HashTarget,
+	) where
+		F: RichField + Extendable<D>;
+
+	/// Per-element select: if `dir == 1` pick `a`, else pick `b`.
+	fn select_hash(
+		builder: &mut CircuitBuilder<F, D>,
+		dir: BoolTarget,
+		a: &Self::HashTarget,
+		b: &Self::HashTarget,
+	) -> Self::HashTarget
+	where
+		F: RichField + Extendable<D>;
+
+	/// Set witness values for a hash target from a native digest.
+	fn set_hash_witness(
+		pw: &mut PartialWitness<F>,
+		target: &Self::HashTarget,
+		value: &Self::Digest,
+	) -> Result<()>;
 
 	fn hash_2_to_1_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		cur: HashOutTarget,
-		sib: HashOutTarget,
+		ctx: &Self::CircuitContext,
+		cur: Self::HashTarget,
+		sib: Self::HashTarget,
 		dir: BoolTarget,
-	) -> HashOutTarget
+	) -> Self::HashTarget
 	where
 		F: RichField + Extendable<D>;
 
 	fn hash_root_circuit(
 		builder: &mut CircuitBuilder<F, D>,
+		ctx: &Self::CircuitContext,
 		num_leaves: Target,
-		left: HashOutTarget,
-		right: HashOutTarget,
-	) -> HashOutTarget
+		left: Self::HashTarget,
+		right: Self::HashTarget,
+	) -> Self::HashTarget
 	where
 		F: RichField + Extendable<D>;
 
 	fn commit_node_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		value: HashOutTarget,
+		ctx: &Self::CircuitContext,
+		value: Self::HashTarget,
 		next_index: Target,
-		next_value: HashOutTarget,
-	) -> HashOutTarget
+		next_value: Self::HashTarget,
+	) -> Self::HashTarget
 	where
 		F: RichField + Extendable<D>;
 }
@@ -513,41 +611,87 @@ impl MerkleHash for HashOutput {
 }
 
 impl MerkleHashCircuit<F, 2> for HashOutput {
-	type Digest = HashOutput;
+	type CircuitContext = ();
+	type HashTarget = MerkleHashTarget<4>;
 
-	const HEAD: HashOut<F> = HashOut {
-		elements: [F::ZERO; 4],
-	};
-	const TAIL: HashOut<F> = HashOut {
-		elements: [F::NEG_ONE; 4],
-	};
+	fn digest_elements(d: &Self::Digest) -> &[F] {
+		&d.0
+	}
+
+	fn register_luts(_builder: &mut CircuitBuilder<F, 2>) -> Self::CircuitContext {}
+
+	fn hash_target_elements(t: &Self::HashTarget) -> &[Target] {
+		&t.elements
+	}
+
+	fn add_virtual_hash(builder: &mut CircuitBuilder<F, 2>) -> Self::HashTarget {
+		MerkleHashTarget::<4>::add_virtual(builder)
+	}
+
+	fn add_virtual_hash_public_input(builder: &mut CircuitBuilder<F, 2>) -> Self::HashTarget {
+		MerkleHashTarget::<4>::add_virtual_public_input(builder)
+	}
+
+	fn constant_hash(builder: &mut CircuitBuilder<F, 2>, value: &Self::Digest) -> Self::HashTarget {
+		MerkleHashTarget::from_hash_out_target(builder.constant_hash(value.as_hash_out()))
+	}
+
+	fn connect_hashes(
+		builder: &mut CircuitBuilder<F, 2>,
+		a: &Self::HashTarget,
+		b: &Self::HashTarget,
+	) {
+		MerkleHashTarget::connect(builder, a, b);
+	}
+
+	fn select_hash(
+		builder: &mut CircuitBuilder<F, 2>,
+		dir: BoolTarget,
+		a: &Self::HashTarget,
+		b: &Self::HashTarget,
+	) -> Self::HashTarget {
+		MerkleHashTarget::select(builder, dir, a, b)
+	}
+
+	fn set_hash_witness(
+		pw: &mut PartialWitness<F>,
+		target: &Self::HashTarget,
+		value: &Self::Digest,
+	) -> Result<()> {
+		MerkleHashTarget::set_witness(pw, target, &value.0)
+	}
 
 	fn hash_2_to_1_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
-		cur: HashOutTarget,
-		sib: HashOutTarget,
+		_ctx: &Self::CircuitContext,
+		cur: Self::HashTarget,
+		sib: Self::HashTarget,
 		dir: BoolTarget,
-	) -> HashOutTarget {
+	) -> Self::HashTarget {
+		let left = Self::select_hash(builder, dir, &sib, &cur);
+		let right = Self::select_hash(builder, dir, &cur, &sib);
 		let data = vec![
-			builder.select(dir, sib.elements[0], cur.elements[0]),
-			builder.select(dir, sib.elements[1], cur.elements[1]),
-			builder.select(dir, sib.elements[2], cur.elements[2]),
-			builder.select(dir, sib.elements[3], cur.elements[3]),
-			builder.select(dir, cur.elements[0], sib.elements[0]),
-			builder.select(dir, cur.elements[1], sib.elements[1]),
-			builder.select(dir, cur.elements[2], sib.elements[2]),
-			builder.select(dir, cur.elements[3], sib.elements[3]),
+			left.elements[0],
+			left.elements[1],
+			left.elements[2],
+			left.elements[3],
+			right.elements[0],
+			right.elements[1],
+			right.elements[2],
+			right.elements[3],
 		];
-		builder.hash_n_to_hash_no_pad::<PoseidonHash>(data)
+		let out = builder.hash_n_to_hash_no_pad::<PoseidonHash>(data);
+		MerkleHashTarget::from_hash_out_target(out)
 	}
 
 	fn hash_root_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
+		_ctx: &Self::CircuitContext,
 		num_leaves: Target,
-		left: HashOutTarget,
-		right: HashOutTarget,
-	) -> HashOutTarget {
-		builder.hash_n_to_hash_no_pad::<PoseidonHash>(vec![
+		left: Self::HashTarget,
+		right: Self::HashTarget,
+	) -> Self::HashTarget {
+		let out = builder.hash_n_to_hash_no_pad::<PoseidonHash>(vec![
 			num_leaves,
 			left.elements[0],
 			left.elements[1],
@@ -557,16 +701,18 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 			right.elements[1],
 			right.elements[2],
 			right.elements[3],
-		])
+		]);
+		MerkleHashTarget::from_hash_out_target(out)
 	}
 
 	fn commit_node_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
-		value: HashOutTarget,
+		_ctx: &Self::CircuitContext,
+		value: Self::HashTarget,
 		next_index: Target,
-		next_value: HashOutTarget,
-	) -> HashOutTarget {
-		builder.hash_n_to_hash_no_pad::<PoseidonHash>(vec![
+		next_value: Self::HashTarget,
+	) -> Self::HashTarget {
+		let out = builder.hash_n_to_hash_no_pad::<PoseidonHash>(vec![
 			next_index,
 			value.elements[0],
 			value.elements[1],
@@ -576,7 +722,8 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 			next_value.elements[1],
 			next_value.elements[2],
 			next_value.elements[3],
-		])
+		]);
+		MerkleHashTarget::from_hash_out_target(out)
 	}
 }
 
@@ -586,9 +733,8 @@ mod test {
 	use anyhow::Result;
 	use plonky2::{
 		field::types::Field,
-		hash::hash_types::HashOutTarget,
 		iop::{
-			target::{BoolTarget, Target},
+			target::Target,
 			witness::{PartialWitness, WitnessWrite},
 		},
 		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
@@ -607,21 +753,27 @@ mod test {
 		let left: HashOutput = HashOutput::new_from_u64(42);
 		let right: HashOutput = HashOutput::new_from_u64(1337);
 
-		let dir_target: BoolTarget = builder.add_virtual_bool_target_safe();
-		let left_target: HashOutTarget = builder.add_virtual_hash_public_input();
-		let right_target: HashOutTarget = builder.add_virtual_hash_public_input();
-		let out_target: HashOutTarget = builder.add_virtual_hash_public_input();
-		let have_target: HashOutTarget =
-			HashOutput::hash_2_to_1_circuit(&mut builder, left_target, right_target, dir_target);
-		builder.connect_hashes(have_target, out_target);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let dir_target = builder.add_virtual_bool_target_safe();
+		let left_target = HashOutput::add_virtual_hash(&mut builder);
+		let right_target = HashOutput::add_virtual_hash(&mut builder);
+		let out_target = HashOutput::add_virtual_hash(&mut builder);
+		let have_target = HashOutput::hash_2_to_1_circuit(
+			&mut builder,
+			&ctx,
+			left_target,
+			right_target,
+			dir_target,
+		);
+		HashOutput::connect_hashes(&mut builder, &have_target, &out_target);
 		let data = builder.build::<ConfigNative>();
 
 		for dir in [false, true] {
 			let out: HashOutput = HashOutput::hash_2_to_1(&left, &right, dir);
 			let mut pw: PartialWitness<F> = PartialWitness::new();
-			pw.set_hash_target(left_target, left.as_hash_out())?;
-			pw.set_hash_target(right_target, right.as_hash_out())?;
-			pw.set_hash_target(out_target, out.as_hash_out())?;
+			HashOutput::set_hash_witness(&mut pw, &left_target, &left)?;
+			HashOutput::set_hash_witness(&mut pw, &right_target, &right)?;
+			HashOutput::set_hash_witness(&mut pw, &out_target, &out)?;
 			pw.set_bool_target(dir_target, dir)?;
 			let proof = data.prove(pw)?;
 			data.verify(proof)?;
@@ -638,22 +790,28 @@ mod test {
 		let value: HashOutput = HashOutput::new_from_u64(1337);
 		let next_value: HashOutput = HashOutput::new_from_u64(432);
 
+		let ctx = HashOutput::register_luts(&mut builder);
 		let next_index_t: Target = builder.add_virtual_target();
-		let value_t: HashOutTarget = builder.add_virtual_hash_public_input();
-		let next_value_t: HashOutTarget = builder.add_virtual_hash_public_input();
-		let comm_want_t: HashOutTarget = builder.add_virtual_hash_public_input();
-		let comm_have_t: HashOutTarget =
-			HashOutput::commit_node_circuit(&mut builder, value_t, next_index_t, next_value_t);
-		builder.connect_hashes(comm_have_t, comm_want_t);
+		let value_t = HashOutput::add_virtual_hash(&mut builder);
+		let next_value_t = HashOutput::add_virtual_hash(&mut builder);
+		let comm_want_t = HashOutput::add_virtual_hash(&mut builder);
+		let comm_have_t = HashOutput::commit_node_circuit(
+			&mut builder,
+			&ctx,
+			value_t,
+			next_index_t,
+			next_value_t,
+		);
+		HashOutput::connect_hashes(&mut builder, &comm_have_t, &comm_want_t);
 		let data = builder.build::<ConfigNative>();
 
 		let out: HashOutput = HashOutput::commit_node(&value, next_index, &next_value);
 		let mut pw: PartialWitness<F> = PartialWitness::new();
 
 		pw.set_target(next_index_t, F::from_canonical_u64(next_index as u64))?;
-		pw.set_hash_target(value_t, value.as_hash_out())?;
-		pw.set_hash_target(next_value_t, next_value.as_hash_out())?;
-		pw.set_hash_target(comm_want_t, out.as_hash_out())?;
+		HashOutput::set_hash_witness(&mut pw, &value_t, &value)?;
+		HashOutput::set_hash_witness(&mut pw, &next_value_t, &next_value)?;
+		HashOutput::set_hash_witness(&mut pw, &comm_want_t, &out)?;
 		let proof: ProofNative = data.prove(pw)?;
 		data.verify(proof)?;
 		Ok(())

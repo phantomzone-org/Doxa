@@ -184,6 +184,7 @@ impl<F: Field> LocalQuinticExtension<F> {
 	//
 	// (xo + xi + x3) (xi - x3)^2 == (yi - y3)^2 // degree = 6
 	// (yo + y3) * (xi - x3) == (yi - y3) * (x3 - xo) // degree = 4
+	#[allow(clippy::too_many_arguments)]
 	fn add_three_points(
 		x1: Self,
 		y1: Self,
@@ -212,6 +213,7 @@ impl<F: Field> LocalQuinticExtension<F> {
 	// Returns constraints for
 	//      AccOut = AccIn + b0 x P1 + b1 x P2
 	// where `x` op is intepreted as selection with bi as the selector bit
+	#[allow(clippy::too_many_arguments)]
 	fn double_acc_chain(
 		accix: Self,
 		acciy: Self,
@@ -372,6 +374,7 @@ impl<F: Default> Default for LocalQuinticExtension<F> {
 /// circuit.  Mirrors `LocalQuinticExtension<F>` but for recursive constraint
 /// generation.
 #[derive(Clone, Copy)]
+#[allow(clippy::upper_case_acronyms)]
 struct QET<const D: usize>([plonky2::iop::ext_target::ExtensionTarget<D>; 5]);
 
 impl<const D: usize> QET<D> {
@@ -457,7 +460,7 @@ impl<const D: usize> QET<D> {
 		self,
 		b: &mut plonky2::plonk::circuit_builder::CircuitBuilder<F, D>,
 	) -> Self {
-		self.clone().mul(self, b)
+		self.mul(self, b)
 	}
 
 	fn mul_basef<F: RichField + Extendable<D>>(
@@ -500,6 +503,7 @@ impl<const D: usize> QET<D> {
 		c
 	}
 
+	#[allow(clippy::too_many_arguments)]
 	fn add_three_points<F: RichField + Extendable<D>>(
 		x1: QET<D>,
 		y1: QET<D>,
@@ -538,6 +542,7 @@ impl<const D: usize> QET<D> {
 		c
 	}
 
+	#[allow(clippy::too_many_arguments)]
 	fn double_acc_chain<F: RichField + Extendable<D>>(
 		accix: QET<D>,
 		acciy: QET<D>,
@@ -1034,7 +1039,7 @@ pub(super) struct CompressionGate {
 
 impl CompressionGate {
 	fn new_from_config(config: &CircuitConfig) -> Self {
-		let wires_per_op = 15;
+		let wires_per_op = 16; // w(5) + x(5) + y(5) + isactive(1) = 16
 		Self {
 			num_ops: config.num_routed_wires / wires_per_op,
 		}
@@ -1063,7 +1068,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for CompressionGat
 	}
 
 	fn num_wires(&self) -> usize {
-		self.num_ops * 15
+		self.num_ops * 16
 	}
 
 	fn num_constants(&self) -> usize {
@@ -1295,9 +1300,9 @@ pub(crate) fn conditional_schnorr_verify_gadget<F: RichField + Extendable<D>, co
 
 	// Add 80 DoubleAdd4x gates
 	let mut da4x_rows = [usize::default(); 80];
-	for i in 0..80 {
+	for da4x_row in &mut da4x_rows {
 		let gate = DoubleAdd4x::new();
-		da4x_rows[i] = builder.add_gate(gate, vec![]);
+		*da4x_row = builder.add_gate(gate, vec![]);
 	}
 
 	// Build per-gate targets from wire offsets (matching eval_unfiltered layout).
@@ -1323,9 +1328,9 @@ pub(crate) fn conditional_schnorr_verify_gadget<F: RichField + Extendable<D>, co
 		}
 
 		// Set AccIn of 0^th DoubleAdd4x to acc OFFSET point
-		for j in 0..5 {
-			let cx = builder.constant(F::from_canonical_u64(OFFSET[0][j]));
-			let cy = builder.constant(F::from_canonical_u64(OFFSET[1][j]));
+		for (j, (&ox, &oy)) in OFFSET[0].iter().zip(OFFSET[1].iter()).enumerate() {
+			let cx = builder.constant(F::from_canonical_u64(ox));
+			let cy = builder.constant(F::from_canonical_u64(oy));
 			builder.connect(cx, sig_gates[0].accin.x.0[j]);
 			builder.connect(cy, sig_gates[0].accin.y.0[j]);
 		}
@@ -1340,7 +1345,7 @@ pub(crate) fn conditional_schnorr_verify_gadget<F: RichField + Extendable<D>, co
 
 	// check cr is indeed compressed R = (rx, ry)
 	// check R is indeed a point on the curve
-	let (cg_r_row, cg_r_pos) = builder.find_slot(cg_kind, &vec![], &vec![]);
+	let (cg_r_row, cg_r_pos) = builder.find_slot(cg_kind, &[], &[]);
 	let acvtr = Target::wire(
 		cg_r_row,
 		CompressionGate::wire_ith_isactive_offset(cg_r_pos),
@@ -1362,7 +1367,7 @@ pub(crate) fn conditional_schnorr_verify_gadget<F: RichField + Extendable<D>, co
 	}
 
 	// check cq is compressed point Q
-	let (cg_q_row, cg_q_pos) = builder.find_slot(cg_kind, &vec![], &vec![]);
+	let (cg_q_row, cg_q_pos) = builder.find_slot(cg_kind, &[], &[]);
 	let acvtq = Target::wire(
 		cg_q_row,
 		CompressionGate::wire_ith_isactive_offset(cg_q_pos),
@@ -1578,6 +1583,7 @@ pub(crate) fn set_schnorr_witness<F: RichField + Legendre + Extendable<5>>(
 	assert_eq!(accin.encode(), cr);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn set_dbladd4x_gate_witness<F: RichField + Extendable<5>>(
 	pw: &mut PartialWitness<F>,
 	t: &DoubleAdd4xTargets,

@@ -25,12 +25,19 @@ impl U256Target {
 	/// Sets the witness for this target from a `primitive_types::U256`.
 	///
 	/// `value.0` is `[u64; 4]` little-endian; each u64 is split into two u32 limbs.
-	pub(crate) fn set_witness<F: Field>(&self, pw: &mut PartialWitness<F>, value: primitive_types::U256) {
+	pub(crate) fn set_witness<F: Field>(
+		&self,
+		pw: &mut PartialWitness<F>,
+		value: primitive_types::U256,
+	) {
 		for (i, &word) in value.0.iter().enumerate() {
 			pw.set_target(self.0[2 * i].0, F::from_canonical_u32(word as u32))
 				.unwrap();
-			pw.set_target(self.0[2 * i + 1].0, F::from_canonical_u32((word >> 32) as u32))
-				.unwrap();
+			pw.set_target(
+				self.0[2 * i + 1].0,
+				F::from_canonical_u32((word >> 32) as u32),
+			)
+			.unwrap();
 		}
 	}
 }
@@ -90,7 +97,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU256<F, D>
 
 		let mut out: [U32Target; 8] = array::from_fn(|_| self.add_virtual_u32_target());
 
-		for limb_idx in 0..8 {
+		for (limb_idx, out_limb) in out.iter_mut().enumerate() {
 			let mut limb_inputs = vec![input.0[limb_idx].0];
 			(0..LEN).for_each(|i| limb_inputs.push(chain[i].0[limb_idx].0));
 
@@ -119,7 +126,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU256<F, D>
 			let rhs = self.add(result.0, carry_scaled);
 			self.connect(lhs, rhs);
 
-			out[limb_idx] = result;
+			*out_limb = result;
 
 			carry = carry_out;
 		}
