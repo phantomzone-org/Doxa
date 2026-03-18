@@ -75,7 +75,7 @@ pub(crate) const ECGFP5_CAP_A: [u64; 5] = [6148914689804861439, 263, 0, 0, 0];
 pub(crate) const ECGFP5_CAP_B: [u64; 5] = [15713893096167979237, 6148914689804861265, 0, 0, 0];
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
-pub(crate) struct PointEw<F: Extendable<5>> {
+pub struct PointEw<F: Extendable<5>> {
 	pub(crate) x: QuinticExtension<F>,
 	pub(crate) y: QuinticExtension<F>,
 	pub(crate) at_inf: bool,
@@ -164,10 +164,10 @@ impl<F: Extendable<5>> PointEw<F> {
 
 	pub(crate) fn add(&self, rhs: &PointEw<F>) -> Self {
 		if self.at_inf {
-			return rhs.clone();
+			return *rhs;
 		}
 		if rhs.at_inf {
-			return self.clone();
+			return *self;
 		}
 		if self.x == rhs.x {
 			if self.y == rhs.y {
@@ -234,7 +234,7 @@ impl<F: Extendable<5>> PointEw<F> {
 		if top == 0 {
 			return Self::NEUTRAL;
 		}
-		let mut acc = self.clone();
+		let mut acc = *self;
 		for i in (0..top - 1).rev() {
 			acc = acc.double();
 			if bits[i] {
@@ -275,7 +275,7 @@ impl<F: PrimeField64 + Legendre + Extendable<5>> PointEw<F> {
 		// point at inf is handled with w = 0 before. If delta is not a sqaure, then w
 		// is invalid.
 		delta.sqrt().map(|r| {
-			let half: F = F::from_canonical_u64((F::ORDER + 1) / 2);
+			let half: F = F::from_canonical_u64(F::ORDER.div_ceil(2));
 
 			let x1 = <QuinticExtension<F> as FieldExtension<5>>::scalar_mul(&(e + r), half);
 			let x2 = <QuinticExtension<F> as FieldExtension<5>>::scalar_mul(&(e - r), half);
@@ -328,38 +328,38 @@ impl<F: Extendable<5> + PrimeField> Sqrt for QuinticExtension<F> {
 
 		// === x^((p+1) / 2) ===
 
-		t = (t * y.square()).into(); // t = x^3
+		t *= y.square(); // t = x^3
 		y = t;
 
 		y = repeated_square(y, 2);
-		t = (t * y).into(); // t = x^(2^4-1)
+		t *= y; // t = x^(2^4-1)
 
 		y = t;
 		y = repeated_square(y, 4);
-		t = (t * y).into(); // t = x^(2^8-1)
+		t *= y; // t = x^(2^8-1)
 
 		y = t;
 		y = repeated_square(y, 8);
-		t = (t * y).into(); // t = x^(2^16-1)
+		t *= y; // t = x^(2^16-1)
 
 		y = t;
 		y = repeated_square(y, 16);
 		t *= y; // t = x^(2^32-1)
 
 		t = repeated_square(t, 31); // t = x^(2^63 - 2^32)
-		t = (t * *self).into(); // x^((p+1)/2)
+		t *= *self; // x^((p+1)/2)
 
 		// === x^((r-1) / 2) ===
 
 		y = t;
 		y = y.repeated_frobenius(2);
-		t = (t * y).into();
+		t *= y;
 		t = t.frobenius(); // x^((r-1) / 2)
 
 		// === x^r ===
 
 		y = t.square();
-		y = (*self * y).into();
+		y = *self * y;
 		let a: [F; 5] = y.to_basefield_array();
 		let a = a[0]; // TODO: x^r \in GFp. Therefore mul in GFp5 can be optimised
 
@@ -380,7 +380,8 @@ impl<F: Extendable<5> + PrimeField> Sqrt for QuinticExtension<F> {
 }
 
 #[derive(PartialEq, Eq)]
-pub(crate) enum LegendreSymbol {
+#[allow(clippy::upper_case_acronyms)]
+pub enum LegendreSymbol {
 	ZERO,
 	ONE,
 	NEGONE, // -1
@@ -405,7 +406,7 @@ pub trait Legendre {
 impl Legendre for GoldilocksField {
 	fn legendre(&self) -> LegendreSymbol {
 		// (p-1)/2 = 0x7FFFFFFF80000000
-		let x = self.clone();
+		let x = *self;
 		let x2 = x * x.square();
 		let x4 = x2 * repeated_square(x2, 2);
 		let x8 = x4 * repeated_square(x4, 4);

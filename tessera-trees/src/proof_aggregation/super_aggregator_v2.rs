@@ -751,9 +751,10 @@ mod tests {
 		nc_flat: &[u64],
 	) -> Vec<u64> {
 		let mut v = vec![0u64; TX_LEAF_PI_SIZE];
-		// PI[0..2] = LUT metadata = 0
-		// PI[2] = subpool_id_in = 0
-		// PI[3] = subpool_id_out = 0
+		// PI[0] = subpool_id_in  (auto-registered by add_virtual_account_target, zero for test)
+		// PI[1] = subpool_id_out (auto-registered by add_virtual_account_target, zero for test)
+		// PI[2] = subpool_id_in  (explicit, same wire as PI[0], zero for test)
+		// PI[3] = subpool_id_out (explicit, same wire as PI[1], zero for test)
 		v[4] = is_real; // IS_REAL_OFFSET = 4
 		v[5] = an[0];
 		v[6] = an[1];

@@ -278,8 +278,10 @@ async fn cmd_private_tx(count: usize) -> Result<()> {
 		let c = circuit.clone();
 		let t = targets.clone();
 		let real_proof =
-			tokio::task::spawn_blocking(move || tessera_client::prove_real_priv_tx(&c, &t, seed))
-				.await?;
+			tokio::task::spawn_blocking(move || {
+				tessera_client::prove_real_priv_tx_seeded(&c, &t, seed)
+			})
+			.await?;
 		let proof_bytes = real_proof.to_bytes();
 		println!(
 			"  tx {tx_idx}: proof {} bytes, {} PIs",
@@ -288,10 +290,11 @@ async fn cmd_private_tx(count: usize) -> Result<()> {
 		);
 
 		// Extract PI data from the proof to populate the request body.
-		// PI layout (77 total: 75 explicit + 2 lookup metadata):
-		//   [0..2]=LUT metadata, [2]=subpool_id_in, [3]=subpool_id_out,
+		// PI layout (TX_LEAF_PI_SIZE = 77 per slot):
+		//   [0]=subpool_id_in (auto), [1]=subpool_id_out (auto),
+		//   [2]=subpool_id_in (explicit), [3]=subpool_id_out (explicit),
 		//   [4]=not_fake_tx, [5..9]=AN, [9..13]=AC, [13..45]=NN(8×4),
-		//   [45..77]=NC(8×4)
+		//   [45..77]=NC(8×4); [77..85]=act_root/nct_root (aggregator-internal, not per slot)
 		let pis = &real_proof.public_inputs;
 		let an_off = TX_DATA_OFFSET;
 		let ac_off = TX_DATA_OFFSET + 4;

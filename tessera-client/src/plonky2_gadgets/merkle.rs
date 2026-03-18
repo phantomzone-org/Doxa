@@ -41,12 +41,15 @@ fn set_merkle_siblings_and_bits<F: Field, const DEPTH: usize>(
 	siblings: [[F; HASH_SIZE]; DEPTH],
 	bits: [bool; DEPTH],
 ) {
-	for lvl in 0..DEPTH {
-		for i in 0..4 {
-			pw.set_target(t_siblings[lvl].elements[i], siblings[lvl][i])
-				.unwrap();
+	for ((t_sib, sib), (t_bit, bit)) in t_siblings
+		.iter()
+		.zip(siblings.iter())
+		.zip(t_bits.iter().zip(bits.iter()))
+	{
+		for (elem_t, &elem_v) in t_sib.elements.iter().zip(sib.iter()) {
+			pw.set_target(*elem_t, elem_v).unwrap();
 		}
-		pw.set_bool_target(t_bits[lvl], bits[lvl]).unwrap();
+		pw.set_bool_target(*t_bit, *bit).unwrap();
 	}
 }
 

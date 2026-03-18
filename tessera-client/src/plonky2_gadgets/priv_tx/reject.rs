@@ -3,21 +3,24 @@ use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
 use tessera_trees::{F, tree::hasher::HashOutput};
 
-use super::{double_hash_native, targets::TxCircuitTargets};
+use super::{
+	double_hash_native,
+	targets::TxCircuitTargets,
+	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
+};
 use crate::{
 	ACT_DEPTH, AccountAddress, AssetId, NCT_DEPTH, NOTE_BATCH, Nonce, NoteCommitment,
 	NoteNullifier, StandardAccount, SubpoolId,
 	account::PublicIdentifier,
 	derive_priv_tx_hash,
-	ecgfp5::PointEw,
 	note::{NodeIdentifier, PositionedStandardNode, StandardNote},
 	plonky2_gadgets::{
 		merkle::{SetDummyMerklePathOfWitness, SetMerklePathOfWitness},
 		set_hash,
-		signature::set_schnorr_witness,
+		witness::{set_hash_blocks, set_real_schnorr_signature, set_subpool_full_proof},
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::{Scalar, Signature, schnorr_challenge},
+	pool_config::{CompPubKey, MainPoolConfigTree},
+	schnorr::Signature,
 	tree::CommitmentTreeMerkleProof,
 };
 
@@ -26,6 +29,7 @@ use crate::{
 /// `accout` is derived internally by cloning `accin` and incrementing the nonce.
 /// The tx_hash uses the real `accin` nullifier (position-based) and `accout` commitment —
 /// no dummy accounts. `d_accin`/`d_accout` circuit targets are zeroed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn set_reject_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
@@ -51,8 +55,7 @@ pub(crate) fn set_reject_tx_witness(
 	assert_eq!(inotes.len(), inotes_nct_proofs.len());
 
 	// ── Build accout ──────────────────────────────────────────────────────────
-	let mut accout = accin.clone();
-	accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
+	let accout = accin.clone_with_incremented_nonce();
 
 	// ── Tx hash ───────────────────────────────────────────────────────────────
 	let nk = accin.nk();
@@ -62,7 +65,7 @@ pub(crate) fn set_reject_tx_witness(
 		if i < inotes.len() {
 			let pos_f = F::from_canonical_usize(inotes_nct_proofs[i].pos);
 			NoteNullifier(
-				PositionedStandardNode::from_note(inotes[i].clone(), pos_f)
+				PositionedStandardNode::from_note(inotes[i], pos_f)
 					.nullifier(&nk)
 					.0,
 			)
@@ -85,25 +88,33 @@ pub(crate) fn set_reject_tx_witness(
 	);
 
 	// ── Tx kind flags ─────────────────────────────────────────────────────────
-	pw.set_bool_target(t.is_rjct, true).unwrap();
-	pw.set_bool_target(t.is_fresh_acc, false).unwrap();
-	pw.set_bool_target(t.is_update_auth, false).unwrap();
-	pw.set_bool_target(t.is_priv_tx, false).unwrap();
-	pw.set_bool_target(t.not_fake_tx, true).unwrap();
+	set_tx_kind_flags(
+		pw,
+		t,
+		TxKindFlags {
+			is_rjct: true,
+			is_fresh_acc: false,
+			is_update_auth: false,
+			is_priv_tx: false,
+			not_fake_tx: true,
+		},
+	);
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
-	set_hash(pw, t.act_root.0, act_root.0);
-	set_hash(pw, t.nct_root.0, nct_root.0);
-
-	// ── Authority keys ────────────────────────────────────────────────────────
-	t.approval_key.set_witness(pw, approval_key);
-	t.rejection_key.set_witness(pw, rejection_key);
-	t.subpool_consume_key.set_witness(pw, consume_key);
-
-	// ── Accounts ──────────────────────────────────────────────────────────────
-	t.accin.set_witness(pw, accin);
-	t.accout.set_witness(pw, &accout);
+	set_common_tx_witness(
+		pw,
+		t,
+		main_pool.root(),
+		act_root,
+		nct_root,
+		approval_key,
+		rejection_key,
+		consume_key,
+		accin,
+		&accout,
+	);
+	set_hash(pw, t.accin_null.0, accin_null.0.0);
+	set_hash(pw, t.accout_comm.0, accout.commitment().0.0);
 
 	// ── Asset / amounts ───────────────────────────────────────────────────────
 	// Use the asset_id from active inotes (all notes must share the same asset_id in the circuit)
@@ -140,12 +151,9 @@ pub(crate) fn set_reject_tx_witness(
 		.set_witness(pw, &accin.ast.merkle_proof_at(ast_index));
 
 	// ── Input notes ───────────────────────────────────────────────────────────
-	let zero_addr = AccountAddress {
-		subpool_id: SubpoolId(F::ZERO),
-		public_id: PublicIdentifier(HashOutput([F::ZERO; 4])),
-	};
+	let zero_addr = AccountAddress::zero();
 	let inactive_inote = StandardNote {
-		identifier: NodeIdentifier([F::ZERO; 2]),
+		identifier: NodeIdentifier::ZERO,
 		asset_id,
 		amt: U256::zero(),
 		recipient: AccountAddress::from_acc(accin),
@@ -171,7 +179,7 @@ pub(crate) fn set_reject_tx_witness(
 
 	// ── Output notes ──────────────────────────────────────────────────────────
 	let inactive_onote = StandardNote {
-		identifier: NodeIdentifier([F::ZERO; 2]),
+		identifier: NodeIdentifier::ZERO,
 		asset_id,
 		amt: U256::zero(),
 		recipient: zero_addr,
@@ -188,86 +196,59 @@ pub(crate) fn set_reject_tx_witness(
 	}
 
 	// ── Dummy note hashes ─────────────────────────────────────────────────────
-	for i in 0..NOTE_BATCH {
-		for j in 0..4 {
-			pw.set_target(t.dinotes[i].0[j], dinotes[i][j]).unwrap();
-			pw.set_target(t.donotes[i].0[j], donotes[i][j]).unwrap();
-		}
-	}
+	set_hash_blocks(pw, &t.dinotes.map(|note| note.0), &dinotes);
+	set_hash_blocks(pw, &t.donotes.map(|note| note.0), &donotes);
+
+	// ── NN/NC override targets — must match effective nullifiers/commitments in the circuit ─
+	set_note_hash_overrides(
+		pw,
+		t,
+		&tx_inote_nulls.map(|nullifier| nullifier.0.0),
+		&tx_onote_comms.map(|commitment| commitment.0.0),
+	);
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
-	let subpool = SubpoolConfigTree::new(*approval_key, *rejection_key, *consume_key);
-	let full_proof = main_pool
-		.full_subpool_proof(&subpool, subpool_id)
-		.expect("subpool not registered in main_pool at the given subpool_id");
-
-	t.subpool_proof_targets
-		.approval_proof
-		.set_witness(pw, &full_proof.approval_proof);
-	t.subpool_proof_targets
-		.rejection_proof
-		.set_witness(pw, &full_proof.rejection_proof);
-	t.subpool_proof_targets
-		.consume_proof
-		.set_witness(pw, &full_proof.consume_proof);
-	t.subpool_proof_targets
-		.main_pool_proof
-		.set_witness(pw, &full_proof.main_pool_proof);
-
-	pw.set_target_arr(
-		&t.subpool_proof_targets.subpool_config_root.0.elements,
-		&subpool.root().0,
-	)
-	.unwrap();
+	set_subpool_full_proof(
+		pw,
+		&t.subpool_proof_targets,
+		main_pool,
+		approval_key,
+		rejection_key,
+		consume_key,
+		subpool_id,
+	);
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 
 	// Spend (fake — disabled for reject by not_is_rjct, but Q must match accin.spend_auth)
-	{
-		let q = PointEw::decode(
-			accin
-				.spend_auth
-				.spend_pk
-				.expect("accin must have a spend_pk")
-				.0,
-		)
-		.unwrap();
-		let e = Scalar::from_raw([42, 8, 2, 5, 1]);
-		let s = Scalar::from_raw([7, 12, 13, 14, 14]);
-		let r = PointEw::generator().scalar_mul(&s).add(&q.scalar_mul(&e));
-		set_schnorr_witness(pw, &t.sig_targets.spend, q, r.encode(), e, s);
-	}
+	crate::plonky2_gadgets::witness::set_fake_schnorr_signature(
+		pw,
+		&t.sig_targets.spend,
+		accin
+			.spend_auth
+			.spend_pk
+			.expect("accin must have a spend_pk"),
+		[42, 8, 2, 5, 1],
+		[7, 12, 13, 14, 14],
+	);
 
 	// Consume (real — is_consume_req = has_inotes AND not_is_spend_req = true)
-	{
-		// consume_auth.config = false → use subpool consume key
-		let cq = consume_key.0;
-		let cr = consume_sig.r.encode();
-		let e = schnorr_challenge(&cr, &cq, &tx_hash);
-		set_schnorr_witness(
-			pw,
-			&t.sig_targets.consume,
-			PointEw::decode(cq).unwrap(),
-			cr,
-			e,
-			consume_sig.s,
-		);
-	}
+	set_real_schnorr_signature(
+		pw,
+		&t.sig_targets.consume,
+		*consume_key,
+		&tx_hash,
+		consume_sig,
+	);
 
 	// Approval (real — always required)
-	{
-		let cq = approval_key.0;
-		let cr = approval_sig.r.encode();
-		let e = schnorr_challenge(&cr, &cq, &tx_hash);
-		set_schnorr_witness(
-			pw,
-			&t.sig_targets.approval,
-			PointEw::decode(cq).unwrap(),
-			cr,
-			e,
-			approval_sig.s,
-		);
-	}
+	set_real_schnorr_signature(
+		pw,
+		&t.sig_targets.approval,
+		*approval_key,
+		&tx_hash,
+		approval_sig,
+	);
 }
 
 #[cfg(test)]
@@ -285,7 +266,10 @@ mod tests {
 	use primitive_types::U256;
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::{CommitmentTree, hasher::HashOutput};
+	use tessera_trees::tree::{
+		CommitmentTree,
+		hasher::{HashOutput, MerkleHashCircuit},
+	};
 
 	use super::*;
 	use crate::{
@@ -455,7 +439,8 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
+		let ctx = HashOutput::register_luts(&mut builder);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 

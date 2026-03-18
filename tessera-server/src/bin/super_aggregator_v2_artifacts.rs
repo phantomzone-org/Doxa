@@ -116,8 +116,16 @@ fn main() -> Result<()> {
 	let now = Instant::now();
 	let zero_an = [F::ZERO; 4];
 	let zero_nn = [[F::ZERO; 4]; tessera_client::NOTE_BATCH];
-	let dummy_inner_proof =
-		tessera_client::prove_dummy_priv_tx(&priv_tx_cd, &priv_tx_targets, 0, zero_an, zero_nn);
+	let zero_ac = [F::ZERO; 4];
+	let zero_nc = [[F::ZERO; 4]; tessera_client::NOTE_BATCH];
+	let dummy_inner_proof = tessera_client::prove_dummy_priv_tx(
+		&priv_tx_cd,
+		&priv_tx_targets,
+		zero_an,
+		zero_nn,
+		zero_ac,
+		zero_nc,
+	);
 	println!("  dummy inner proof [{:?}]", now.elapsed());
 
 	// =======================================================================
@@ -158,13 +166,14 @@ fn main() -> Result<()> {
 	let now = Instant::now();
 	// Reuse the same dummy proof for all slots — is_real=0 so cross-check is gated off.
 	let dummy_tx_proofs: Vec<ProofNative> = (0..account_batch_size)
-		.map(|s| {
+		.map(|_s| {
 			tessera_client::prove_dummy_priv_tx(
 				&priv_tx_cd,
 				&priv_tx_targets,
-				s as u64,
 				zero_an,
 				zero_nn,
+				zero_ac,
+				zero_nc,
 			)
 		})
 		.collect();

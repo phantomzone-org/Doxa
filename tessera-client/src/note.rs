@@ -47,6 +47,8 @@ pub struct NoteNullifier(pub HashOutput);
 pub struct NodeIdentifier(pub(crate) [F; 2]);
 
 impl NodeIdentifier {
+	pub(crate) const ZERO: Self = Self([F::ZERO; 2]);
+
 	pub fn from_rng<R: CryptoRng + Rng>(rng: &mut R) -> Self {
 		Self(
 			rng.sample_iter(Uniform::new(0, F::ORDER).unwrap())

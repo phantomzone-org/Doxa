@@ -18,7 +18,8 @@ use tessera_trees::{
 use crate::{
 	ACC_AST_DEPTH, ACT_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT,
 	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF,
-	DS_NULLIFIER_KEY, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH,
+	DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH,
+	SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
 		merkle::{
 			CommitmentTreeMerkleTarget, ComputeMerkleRootTarget, ConditionalMerkleTarget,
@@ -41,6 +42,10 @@ use crate::{
 
 pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	// ---- Add virtual methods ----
+
+	/// Allocate the three subpool authority key targets (approval, rejection, consume)
+	/// that appear in every transaction circuit.
+	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget);
 
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
 	fn add_virtual_dummy_account_target(&mut self) -> DummyAccountTarget;
@@ -86,7 +91,20 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 
 	fn derive_nullifier_key(&mut self, priv_id: PrivateIdentifierTarget) -> NullifierKeyTarget;
 
+	fn derive_public_identifier(
+		&mut self,
+		priv_id: PrivateIdentifierTarget,
+	) -> PublicIdentifierTaregt;
+
 	fn assert_fresh_account(&mut self, acc: AccountTarget, condition: BoolTarget);
+
+	/// Unconditionally enforce the invariants that hold for **every** tx kind:
+	/// `private_identifier` and `subpool_id` are immutable, `nonce` increments
+	/// by one, and the two auth keys (`spend_auth`, `consume_auth`) are frozen.
+	///
+	/// Used by deposit and withdraw circuits where these invariants always apply
+	/// without any conditional gating.
+	fn assert_account_invariants_simple(&mut self, accin: AccountTarget, accout: AccountTarget);
 
 	fn assert_account_invariants(
 		&mut self,
@@ -106,6 +124,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		selector: BoolTarget,
 	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH>;
 
+	#[allow(clippy::too_many_arguments)]
 	fn assert_ast_update(
 		&mut self,
 		asset_id: AssetIdTarget,
@@ -132,6 +151,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 
 	fn derive_dummy_note_commitment(&mut self, dnote: DummyNoteTarget) -> NoteCommitmentTarget;
 
+	#[allow(clippy::too_many_arguments)]
 	fn assert_inotes_valid<H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>>(
 		&mut self,
 		inotes: [NoteTarget; NOTE_BATCH],
@@ -182,6 +202,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 	);
 
+	#[allow(clippy::too_many_arguments)]
 	fn assert_tx_signatures(
 		&mut self,
 		tx_hash: TxHashTarget,
@@ -201,14 +222,21 @@ fn double_hash<F: RichField + Extendable<D>, const D: usize>(
 ) -> HashOutTarget {
 	let input = input.to_vec();
 	let out0 = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input);
-	let out1 = builder.hash_n_to_hash_no_pad::<PoseidonHash>(out0.elements.to_vec());
-	out1
+
+	builder.hash_n_to_hash_no_pad::<PoseidonHash>(out0.elements.to_vec())
 }
 
 // TODO: rearrange this as per the trait declaration
 impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 	for CircuitBuilder<F, D>
 {
+	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget) {
+		let approval = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
+		let rejection = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
+		let consume = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
+		(approval, rejection, consume)
+	}
+
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
 		DummyNoteTarget(self.add_virtual_target_arr())
 	}
@@ -360,6 +388,16 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		NullifierKeyTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
 	}
 
+	fn derive_public_identifier(
+		&mut self,
+		priv_id: PrivateIdentifierTarget,
+	) -> PublicIdentifierTaregt {
+		let ds = self.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
+		let mut input = vec![ds];
+		input.extend(priv_id.0);
+		PublicIdentifierTaregt(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
+	}
+
 	fn derive_dummy_note_nullifier(&mut self, dnote: DummyNoteTarget) -> NoteNullifierTarget {
 		NoteNullifierTarget(double_hash(self, dnote.0))
 	}
@@ -444,13 +482,13 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 			|key: PubkeyTarget| -> ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH> {
 				let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
 				// TODO: change this from conditional to compute
-				let mt = conditional_merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(
+
+				conditional_merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(
 					self,
 					leaf_hash,
 					subpool_config_root,
 					not_fake_tx,
-				);
-				mt
+				)
 			};
 
 		let approval_proof = verify_key_proof(approval_key);
@@ -552,6 +590,20 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		merkle_proofs
 	}
 
+	fn assert_account_invariants_simple(&mut self, accin: AccountTarget, accout: AccountTarget) {
+		self.connect_array(accin.private_identifier.0, accout.private_identifier.0);
+		self.connect(accin.subpool_id.0, accout.subpool_id.0);
+		let one = self.one();
+		let expected_nonce = self.add(accin.nonce, one);
+		self.connect(accout.nonce, expected_nonce);
+		self.connect_array(accin.spend_auth.0.0, accout.spend_auth.0.0);
+		self.connect_array(accin.consume_auth.pk.0.0, accout.consume_auth.pk.0.0);
+		self.connect(
+			accin.consume_auth.config.target,
+			accout.consume_auth.config.target,
+		);
+	}
+
 	fn assert_account_invariants(
 		&mut self,
 		accin: AccountTarget,
@@ -576,12 +628,12 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		// elsewhere that only 1 flag of the set is set to true at any time
 		let not_spend = self.not(is_priv_tx);
 		for i in 0..HASH_SIZE {
-			// TODO:use is_fresh_acc | is_update_auth here
-			self.conditional_assert_eq(
-				not_spend.target,
-				accout.acc_ast_root.elements[i],
-				accin.acc_ast_root.elements[i],
-			);
+			// TODO: use is_fresh_acc | is_update_auth here instead of not_spend
+			// self.conditional_assert_eq(
+			// 	not_spend.target,
+			// 	accout.acc_ast_root.elements[i],
+			// 	accin.acc_ast_root.elements[i],
+			// );
 			self.conditional_assert_eq(
 				not_spend.target,
 				accout.acc_ast_root.elements[i],
@@ -706,32 +758,29 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 
 		let default_ast_root: [Target; HASH_SIZE] =
 			core::array::from_fn(|i| self.constant(F::from_canonical_u64(AST_DEFAULT_ROOT[i])));
-		for i in 0..HASH_SIZE {
-			self.conditional_assert_eq(
-				condition.target,
-				acc.acc_ast_root.elements[i],
-				default_ast_root[i],
-			);
+		for (&elem, &default) in acc
+			.acc_ast_root
+			.elements
+			.iter()
+			.zip(default_ast_root.iter())
+		{
+			self.conditional_assert_eq(condition.target, elem, default);
 		}
 
 		self.conditional_assert_eq(condition.target, acc.nonce, zero);
 
 		let default_spend: [Target; 5] =
 			DEFAULT_SPEND_AUTH_PK.map(|v| self.constant(F::from_canonical_u64(v)));
-		for i in 0..5 {
-			self.conditional_assert_eq(condition.target, acc.spend_auth.0.0[i], default_spend[i]);
+		for (&t, &d) in acc.spend_auth.0.0.iter().zip(default_spend.iter()) {
+			self.conditional_assert_eq(condition.target, t, d);
 		}
 
 		self.conditional_assert_eq(condition.target, acc.consume_auth.config.target, zero);
 
 		let default_consume: [Target; 5] = DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER
 			.map(|v| self.constant(F::from_canonical_u64(v)));
-		for i in 0..5 {
-			self.conditional_assert_eq(
-				condition.target,
-				acc.consume_auth.pk.0.0[i],
-				default_consume[i],
-			);
+		for (&t, &d) in acc.consume_auth.pk.0.0.iter().zip(default_consume.iter()) {
+			self.conditional_assert_eq(condition.target, t, d);
 		}
 	}
 

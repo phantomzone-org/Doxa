@@ -41,33 +41,34 @@ impl PrivateIdentifier {
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct PublicIdentifier(pub HashOutput);
 
+impl PublicIdentifier {
+	pub(crate) const ZERO: Self = Self(HashOutput([F::ZERO; 4]));
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SubpoolId(pub F);
 
 #[derive(Debug, Clone, Copy)]
 pub struct Nonce(pub F);
 
+impl Nonce {
+	pub(crate) fn incremented(self) -> Self {
+		Self(F::from_canonical_u64(self.0.to_canonical_u64() + 1))
+	}
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SpendAuth {
 	pub spend_pk: Option<CompressedPublicKey<F>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConsumeAuth {
 	/// If false, consume is delegated to subpool owner
 	/// If true, consume requires signature from self.pk
 	pub config: bool,
 	/// None only when self.config == 1.
 	pub pk: Option<CompressedPublicKey<F>>,
-}
-
-impl Default for ConsumeAuth {
-	fn default() -> Self {
-		Self {
-			config: false,
-			pk: None,
-		}
-	}
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -117,6 +118,12 @@ pub struct AccountStateTree {
 	assets: HashMap<AssetId, (usize, U256)>,
 }
 
+impl Default for AccountStateTree {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 impl AccountStateTree {
 	pub fn new() -> Self {
 		Self {
@@ -139,7 +146,10 @@ impl AccountStateTree {
 			return Err(format!("asset {:?} already exists", asset_id));
 		}
 		let index = self.tree.next_index();
-		self.tree.insert(AccountStateTreeLeaf { asset_id, amount });
+		self.tree.insert(AccountStateTreeLeaf {
+			asset_id,
+			amount,
+		});
 		self.assets.insert(asset_id, (index, amount));
 		Ok(())
 	}
@@ -150,7 +160,13 @@ impl AccountStateTree {
 			.assets
 			.get(&asset_id)
 			.ok_or_else(|| format!("asset {:?} not found", asset_id))?;
-		self.tree.set_leaf(index, AccountStateTreeLeaf { asset_id, amount });
+		self.tree.set_leaf(
+			index,
+			AccountStateTreeLeaf {
+				asset_id,
+				amount,
+			},
+		);
 		self.assets.insert(asset_id, (index, amount));
 		Ok(prev_amount)
 	}
@@ -222,6 +238,12 @@ impl StandardAccount {
 		}
 	}
 
+	pub(crate) fn clone_with_incremented_nonce(&self) -> Self {
+		let mut next = self.clone();
+		next.nonce = self.nonce.incremented();
+		next
+	}
+
 	pub fn public_id(&self) -> PublicIdentifier {
 		let mut input = [F::ZERO; 3];
 		input[0] = F::from_canonical_u64(DS_PUBLIC_IDENTIFIER);
@@ -235,7 +257,7 @@ impl StandardAccount {
 		input[0] = F::from_canonical_u64(DS_NULLIFIER_KEY);
 		input[1..].copy_from_slice(self.private_identifier.0.as_slice());
 		let nk = <PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements;
-		NullifierKey(nk.into())
+		NullifierKey(nk)
 	}
 
 	pub fn commitment(&self) -> AccountCommitment {
@@ -316,6 +338,13 @@ impl AccountAddress {
 		Self {
 			subpool_id: acc.subpool_id,
 			public_id: acc.public_id(),
+		}
+	}
+
+	pub(crate) fn zero() -> Self {
+		Self {
+			subpool_id: SubpoolId(F::ZERO),
+			public_id: PublicIdentifier::ZERO,
 		}
 	}
 }

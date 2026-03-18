@@ -334,15 +334,17 @@ fn verify_associated_tx_proof(
 #[allow(clippy::type_complexity)]
 fn extract_leaves_from_pis(pis: &[F]) -> ([u8; 32], [u8; 32], Vec<[u8; 32]>, Vec<[u8; 32]>) {
 	use plonky2::field::types::PrimeField64;
-	// Inner TX proof PI layout (77 fields total):
-	//   PI[0..2]   = plonky2 LUT metadata (auto-registered)
-	//   PI[2]      = subpool_id_in
-	//   PI[3]      = subpool_id_out
-	//   PI[4]      = is_real
-	//   PI[5..9]   = AN  (4 fields)
-	//   PI[9..13]  = AC  (4 fields)
-	//   PI[13..45] = NN  (8×4 fields)
-	//   PI[45..77] = NC  (8×4 fields)
+	// Inner TX proof PI layout (TX_LEAF_PI_SIZE = 77 fields per slot):
+	//   PI[0]      = subpool_id_in  (auto-registered by add_virtual_account_target)
+	//   PI[1]      = subpool_id_out (auto-registered by add_virtual_account_target)
+	//   PI[2]      = subpool_id_in  (explicit re-registration, same wire as PI[0])
+	//   PI[3]      = subpool_id_out (explicit re-registration, same wire as PI[1])
+	//   PI[4]      = not_fake_tx    (IS_REAL_OFFSET; 1 = real proof, 0 = dummy)
+	//   PI[5..9]   = AN  (TX_DATA_OFFSET, 4 fields — account nullifier)
+	//   PI[9..13]  = AC  (4 fields — account commitment out)
+	//   PI[13..45] = NN  (8×4 fields — note nullifiers)
+	//   PI[45..77] = NC  (8×4 fields — note commitments)
+	// PI[77..85] (act_root, nct_root) are consumed by the aggregator and not propagated per slot.
 	use tessera_trees::proof_aggregation::TX_DATA_OFFSET;
 
 	let f4_to_bytes32 = |fields: &[F]| -> [u8; 32] {

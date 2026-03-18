@@ -97,7 +97,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU256<F, D>
 
 		let mut out: [U32Target; 8] = array::from_fn(|_| self.add_virtual_u32_target());
 
-		for limb_idx in 0..8 {
+		for (limb_idx, out_limb) in out.iter_mut().enumerate() {
 			let mut limb_inputs = vec![input.0[limb_idx].0];
 			(0..LEN).for_each(|i| limb_inputs.push(chain[i].0[limb_idx].0));
 
@@ -126,7 +126,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU256<F, D>
 			let rhs = self.add(result.0, carry_scaled);
 			self.connect(lhs, rhs);
 
-			out[limb_idx] = result;
+			*out_limb = result;
 
 			carry = carry_out;
 		}
