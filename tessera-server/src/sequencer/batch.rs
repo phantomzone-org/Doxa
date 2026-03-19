@@ -7,11 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy::primitives::FixedBytes;
-use tessera_trees::{
-	proof_aggregation::SubtreeRootCircuit,
-	tree::hasher::HashOutput,
-	F,
-};
+use tessera_trees::{proof_aggregation::SubtreeRootCircuit, tree::hasher::HashOutput, F};
 
 use crate::{
 	dummy::derive_dummy_leaf,
@@ -542,21 +538,19 @@ impl FinalizedBatch {
 
 	/// Assemble a [`ProveRequestV2`] from the finalized V2 batch.
 	///
-	/// The `nc_leaves` and `tx_proofs_by_slot` come from the batch; the three
-	/// root values are provided by the caller from the Sequencer's current
+	/// The `nc_leaves` and `tx_proofs_by_slot` come from the batch; the root and
+	/// pool-config root are provided by the caller from the Sequencer's current
 	/// on-chain state.
 	pub fn into_prove_request_v2(
 		&self,
 		batch_id: u64,
-		ac_root: HashOutput,
-		nc_root: HashOutput,
+		root: HashOutput,
 		main_pool_cfg_root: [u8; 32],
 	) -> ProveRequestV2 {
 		ProveRequestV2 {
 			batch_id,
 			nc_leaves: self.nc_leaves.clone(),
-			ac_root,
-			nc_root,
+			root,
 			main_pool_cfg_root,
 			tx_proofs_by_slot: self.tx_proofs_by_slot.clone(),
 		}
@@ -621,15 +615,13 @@ impl FinalizedConsumeBatch {
 	pub fn into_prove_request(
 		&self,
 		batch_id: u64,
-		ac_root: HashOutput,
-		nc_root: HashOutput,
+		root: HashOutput,
 		main_pool_cfg_root: [u8; 32],
 	) -> ConsumeProveRequest {
 		ConsumeProveRequest {
 			batch_id,
 			nc_leaves: self.nc_leaves.clone(),
-			ac_root,
-			nc_root,
+			root,
 			main_pool_cfg_root,
 			consume_proofs_by_slot: self.consume_proofs_by_slot.clone(),
 		}
@@ -1065,16 +1057,14 @@ mod tests {
 		.unwrap();
 		let fb = bb.finalize();
 
-		let ac_root = HashOutput::new([F::from_canonical_u64(1), F::ZERO, F::ZERO, F::ZERO]);
-		let nc_root = HashOutput::new([F::from_canonical_u64(2), F::ZERO, F::ZERO, F::ZERO]);
+		let root = HashOutput::new([F::from_canonical_u64(1), F::ZERO, F::ZERO, F::ZERO]);
 		let cfg_root = [0x11u8; 32];
 
-		let req = fb.into_prove_request_v2(42, ac_root, nc_root, cfg_root);
+		let req = fb.into_prove_request_v2(42, root, cfg_root);
 
 		assert_eq!(req.batch_id, 42);
 		assert_eq!(req.nc_leaves, fb.nc_leaves);
-		assert_eq!(req.ac_root, ac_root);
-		assert_eq!(req.nc_root, nc_root);
+		assert_eq!(req.root, root);
 		assert_eq!(req.main_pool_cfg_root, cfg_root);
 		assert_eq!(req.tx_proofs_by_slot, fb.tx_proofs_by_slot);
 	}
@@ -1187,16 +1177,14 @@ mod tests {
 		cb.add_note(dummy_leaf(2), None).unwrap();
 		let fb = cb.finalize();
 
-		let ac_root = HashOutput::new([F::from_canonical_u64(10), F::ZERO, F::ZERO, F::ZERO]);
-		let nc_root = HashOutput::new([F::from_canonical_u64(20), F::ZERO, F::ZERO, F::ZERO]);
+		let root = HashOutput::new([F::from_canonical_u64(10), F::ZERO, F::ZERO, F::ZERO]);
 		let cfg_root = [0x22u8; 32];
 
-		let req = fb.into_prove_request(99, ac_root, nc_root, cfg_root);
+		let req = fb.into_prove_request(99, root, cfg_root);
 
 		assert_eq!(req.batch_id, 99);
 		assert_eq!(req.nc_leaves, fb.nc_leaves);
-		assert_eq!(req.ac_root, ac_root);
-		assert_eq!(req.nc_root, nc_root);
+		assert_eq!(req.root, root);
 		assert_eq!(req.main_pool_cfg_root, cfg_root);
 		assert_eq!(req.consume_proofs_by_slot, fb.consume_proofs_by_slot);
 	}

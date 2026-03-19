@@ -52,7 +52,4 @@ path = "src/bin/aggregation_prover.rs"
 name = "consume_artifacts"
 path = "src/bin/consume_artifacts.rs"
 
-[[bin]]
-name = "client"
-path = "src/bin/client.rs"
 

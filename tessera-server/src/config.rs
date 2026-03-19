@@ -17,8 +17,6 @@ pub struct SequencerConfig {
 	pub poll_interval_secs: u64,
 	/// Max time to wait before flushing a partially filled batch (default: 12).
 	pub batch_timeout_secs: u64,
-	/// HTTP bind address for direct consume requests API (default: 127.0.0.1:8081).
-	pub api_bind_addr: String,
 	/// Base directory for persisted tree state (WAL + snapshots).
 	pub tree_store_path: PathBuf,
 	/// Snapshot frequency in committed batches (default: 1).
@@ -27,18 +25,13 @@ pub struct SequencerConfig {
 	pub prover_api_url: String,
 	/// Timeout in seconds for one prover request (default: 1800).
 	pub prover_api_timeout_secs: u64,
-	/// Optional path to pre-built `GenericAggregator` artifacts.
-	/// When set, the API layer validates private-tx proof bytes cryptographically.
-	/// Set via `TESSERA_AGGREGATOR_ARTIFACTS_PATH`.
-	pub aggregator_artifacts_path: Option<PathBuf>,
-	/// Optional path to pre-built consume-circuit artifacts.
-	/// When set, the API layer validates /consume-request proof bytes cryptographically.
-	/// Set via `TESSERA_CONSUME_ARTIFACTS_PATH`.
-	pub consume_artifacts_path: Option<PathBuf>,
 	/// Number of account-level slots per batch (V2 sequencer).
 	/// Must equal SubtreeRootCircuit leaf count ÷ 8.
 	/// Set via `TESSERA_ACCOUNT_BATCH_SIZE` (default `16`).
 	pub account_batch_size: usize,
+	/// Enable test-only API endpoints (`/test/*`).
+	/// Set via `TESSERA_TESTING=1` (default `false`).
+	pub testing: bool,
 }
 
 /// Configuration for the V2 prover service (`prover_v2`).
@@ -206,8 +199,6 @@ impl SequencerConfig {
 			.unwrap_or_else(|_| "12".to_string())
 			.parse()
 			.context("invalid TESSERA_BATCH_TIMEOUT_SECS")?;
-		let api_bind_addr = std::env::var("TESSERA_SEQUENCER_API_ADDR")
-			.unwrap_or_else(|_| "127.0.0.1:8081".to_string());
 
 		let tree_store_path: PathBuf = std::env::var("TESSERA_TREE_STORE_PATH")
 			.map(PathBuf::from)
@@ -228,18 +219,14 @@ impl SequencerConfig {
 			.parse()
 			.context("invalid TESSERA_PROVER_API_TIMEOUT_SECS")?;
 
-		let aggregator_artifacts_path = std::env::var("TESSERA_AGGREGATOR_ARTIFACTS_PATH")
-			.ok()
-			.map(PathBuf::from);
-
-		let consume_artifacts_path = std::env::var("TESSERA_CONSUME_ARTIFACTS_PATH")
-			.ok()
-			.map(PathBuf::from);
-
 		let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
 			.unwrap_or_else(|_| "16".to_string())
 			.parse()
 			.context("invalid TESSERA_ACCOUNT_BATCH_SIZE")?;
+
+		let testing = std::env::var("TESSERA_TESTING")
+			.map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+			.unwrap_or(false);
 
 		Ok(Self {
 			rpc_url,
@@ -248,14 +235,12 @@ impl SequencerConfig {
 			chain_id,
 			poll_interval_secs,
 			batch_timeout_secs,
-			api_bind_addr,
 			tree_store_path,
 			snapshot_every_batches,
 			prover_api_url,
 			prover_api_timeout_secs,
-			aggregator_artifacts_path,
-			consume_artifacts_path,
 			account_batch_size,
+			testing,
 		})
 	}
 }

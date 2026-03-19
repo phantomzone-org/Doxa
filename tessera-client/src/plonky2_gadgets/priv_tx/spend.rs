@@ -41,15 +41,15 @@ use crate::{
 /// Amounts and `asset_exists` flags are derived from `accin.ast` and the
 /// computed `accout`.
 ///
-/// The ACT/NCT circuit-compatible roots are computed from the supplied proofs.
+/// The root is the on-chain Poseidon IMT root used for both the account
+/// commitment (ACT) and input-note commitment (NCT) Merkle proofs.
 #[allow(clippy::too_many_arguments)]
 pub fn set_spend_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
 	accin: &StandardAccount,
-	act_root: HashOutput,
-	nct_root: HashOutput,
-	// MarkleProof of commitment of AccIn in ACT
+	root: HashOutput,
+	// MerkleProof of commitment of AccIn in the on-chain IMT
 	accin_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
 	inotes: &[StandardNote],
 	// MerkleProof of commitments of inotes in NCT
@@ -151,8 +151,7 @@ pub fn set_spend_tx_witness(
 		pw,
 		t,
 		main_pool.root(),
-		act_root,
-		nct_root,
+		root,
 		approval_key,
 		rejection_key,
 		consume_key,
@@ -328,8 +327,7 @@ pub fn set_spend_tx_witness(
 pub fn set_fake_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
-	nct_root: HashOutput,
-	act_root: HashOutput,
+	root: HashOutput,
 	mainpool_config_root: HashOutput,
 	accin_null_override: [F; 4],
 	accout_comm_override: [F; 4],
@@ -363,8 +361,7 @@ pub fn set_fake_tx_witness(
 		pw,
 		t,
 		mainpool_config_root,
-		act_root,
-		nct_root,
+		root,
 		&fake_approval_cpk,
 		&fake_rejection_cpk,
 		&fake_consume_cpk,
@@ -540,9 +537,9 @@ mod tests {
 		let mut main_pool = MainPoolConfigTree::new();
 		main_pool.set_subpool(0, subpool_id, subpool.root());
 
-		// ── Create commitment trees ───────────────────────────────────────────
-		let mut act = CommitmentTree::<HashOutput>::new(crate::ACT_DEPTH);
-		let mut nct = CommitmentTree::<HashOutput>::new(crate::NCT_DEPTH);
+		// ── Single unified IMT (V2: accounts and notes share one on-chain tree) ─
+		// Insert all commitments first, then generate all proofs against the final root.
+		let mut tree = CommitmentTree::<HashOutput>::new(crate::ACT_DEPTH);
 
 		// ── Sample accounts ───────────────────────────────────────────────────
 		let mut rng = ChaCha8Rng::seed_from_u64(1);
@@ -557,16 +554,6 @@ mod tests {
 		acc0.spend_auth = SpendAuth {
 			spend_pk: Some(spend_cpk),
 		};
-
-		// Insert acc0 commitment into ACT
-		let acc0_pos = act.insert(acc0.commitment().0).unwrap().path; // = 0
-		let acc0_act_proof = CommitmentTreeMerkleProof::new(
-			acc0.commitment().0,
-			act.merkle_path(acc0_pos, 0, ACT_DEPTH).unwrap(),
-			acc0_pos,
-			act.num_leaves(),
-		);
-		assert!(acc0_act_proof.verify(act.get_root()));
 
 		// ── Create notes N0, N1 ───────────────────────────────────────────────
 		let asset_id_val = crate::AssetId(F::ONE);
@@ -594,24 +581,33 @@ mod tests {
 			.ast
 			.insert_or_update_asset(asset_id_val, U256::from(150u64));
 
-		// Insert note commitments into NCT
-		let n0_nct_proof = nct.insert(n0.commitment().0).unwrap();
-		let n1_nct_proof = nct.insert(n1.commitment().0).unwrap();
-		let n0_pos = n0_nct_proof.path;
-		let n1_pos = n1_nct_proof.path;
+		// Insert all commitments into the unified tree before generating proofs
+		let acc0_pos = tree.insert(acc0.commitment().0).unwrap().path;
+		let n0_pos = tree.insert(n0.commitment().0).unwrap().path;
+		let n1_pos = tree.insert(n1.commitment().0).unwrap().path;
+
+		// Generate all Merkle proofs against the FINAL tree root
+		let acc0_act_proof = CommitmentTreeMerkleProof::new(
+			acc0.commitment().0,
+			tree.merkle_path(acc0_pos, 0, ACT_DEPTH).unwrap(),
+			acc0_pos,
+			tree.num_leaves(),
+		);
+		assert!(acc0_act_proof.verify(tree.get_root()));
+
 		let inotes = [n0, n1];
 		let inotes_nct_proofs = [
 			CommitmentTreeMerkleProof::new(
 				inotes[0].commitment().0,
-				nct.merkle_path(n0_pos, 0, NCT_DEPTH).unwrap(),
+				tree.merkle_path(n0_pos, 0, NCT_DEPTH).unwrap(),
 				n0_pos,
-				nct.num_leaves(),
+				tree.num_leaves(),
 			),
 			CommitmentTreeMerkleProof::new(
 				inotes[1].commitment().0,
-				nct.merkle_path(n1_pos, 0, NCT_DEPTH).unwrap(),
+				tree.merkle_path(n1_pos, 0, NCT_DEPTH).unwrap(),
 				n1_pos,
-				nct.num_leaves(),
+				tree.num_leaves(),
 			),
 		];
 
@@ -683,8 +679,7 @@ mod tests {
 			&mut pw,
 			&t,
 			&acc0,
-			act.get_root(),
-			nct.get_root(),
+			tree.get_root(),
 			acc0_act_proof,
 			&inotes,
 			&inotes_nct_proofs,
@@ -770,7 +765,6 @@ mod tests {
 		set_fake_tx_witness(
 			&mut pw,
 			&t,
-			zerohash,
 			zerohash,
 			zerohash,
 			[F::ZERO; 4],

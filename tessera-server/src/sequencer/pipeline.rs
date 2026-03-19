@@ -5,7 +5,7 @@ use super::*;
 use crate::{
 	contract::{self, ITesseraRollupV2},
 	sequencer::revert::humanize_bridge_revert,
-	types::{ConsumeOutcome, ConsumeProveRequest, ProveRequestV2},
+	types::{ConsumeOutcome, ConsumeProveRequest, ProveOutcomeV2, ProveRequestV2},
 };
 
 impl Sequencer {
@@ -70,15 +70,16 @@ impl Sequencer {
 		}
 	}
 
-	/// Finalize the batch builder, submit on-chain, and dispatch a prove request.
-	pub(super) async fn flush_batch<P: Provider + Clone>(
+	/// Finalize the batch builder, submit on-chain, and return `(batch_id, pi_commitment,
+	/// prove_request)`. Does **not** call the prover — the caller decides the proof path
+	/// (real prover vs. test zero-proof).
+	pub(super) async fn submit_tx_batch_on_chain<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
-	) -> anyhow::Result<()> {
-		let bb = self
-			.batch_builder
-			.take()
-			.ok_or_else(|| anyhow::anyhow!("flush_batch called with no batch builder"))?;
+	) -> anyhow::Result<(u64, [u8; 32], ProveRequestV2)> {
+		let bb = self.batch_builder.take().ok_or_else(|| {
+			anyhow::anyhow!("submit_tx_batch_on_chain called with no batch builder")
+		})?;
 		self.batch_pending_since = None;
 
 		debug!(slots = bb.len(), "flushing V2 batch");
@@ -112,13 +113,12 @@ impl Sequencer {
 		// batchPoseidonRoot: Poseidon Merkle root of nc_leaves.
 		let batch_poseidon_root = contract::hash_to_u256_le(&finalized.batch_poseidon_root);
 
-		// acRoot / ncRoot: both reference the current confirmed Poseidon IMT root.
-		let ac_root = contract::hash_to_u256_le(&self.confirmed_root);
-		let nc_root = contract::hash_to_u256_le(&self.confirmed_root);
+		// acRoot / ncRoot: both are the current confirmed Poseidon IMT root.
+		let root = contract::hash_to_u256_le(&self.confirmed_root);
 
 		let batch = ITesseraRollupV2::TransactionBatch {
-			acRoot: ac_root,
-			ncRoot: nc_root,
+			acRoot: root,
+			ncRoot: root,
 			mainPoolConfigRoot: pool_cfg_root.into(),
 			noteCommitments: note_commitments,
 			noteNullifiers: note_nullifiers,
@@ -175,21 +175,27 @@ impl Sequencer {
 			"batch submitted on-chain"
 		);
 
-		// Build and dispatch V2 prove request.
-		let prove_request = finalized.into_prove_request_v2(
-			batch_id,
-			self.confirmed_root,
-			self.confirmed_root,
-			pool_cfg_root,
-		);
-		self.submit_prove_request_v2_with_retry(prove_request)?;
+		// Build the prove request (returned to caller — may or may not be dispatched).
+		let prove_request =
+			finalized.into_prove_request_v2(batch_id, self.confirmed_root, pool_cfg_root);
 
+		Ok((batch_id, pi_commitment, prove_request))
+	}
+
+	/// Finalize the batch builder, submit on-chain, and dispatch a prove request.
+	pub(super) async fn flush_batch<P: Provider + Clone>(
+		&mut self,
+		provider: &P,
+	) -> anyhow::Result<()> {
+		let (batch_id, pi_commitment, prove_request) =
+			self.submit_tx_batch_on_chain(provider).await?;
 		self.pending_batches.insert(
 			batch_id,
 			TxBatchV2 {
 				pi_commitment,
 			},
 		);
+		self.submit_prove_request_v2_with_retry(prove_request)?;
 		self.log_pool_status("batch submitted, pending proof");
 		Ok(())
 	}
@@ -204,7 +210,7 @@ impl Sequencer {
 	}
 
 	/// On proof success, call `proveTransactionBatch` on-chain and update state.
-	async fn confirm_tx_batch<P: Provider + Clone>(
+	pub(super) async fn confirm_tx_batch<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
 		outcome: ProveOutcomeV2,
@@ -374,13 +380,15 @@ impl Sequencer {
 		Ok(())
 	}
 
-	/// Finalize the consume batch builder, submit on-chain, and dispatch a prove request.
-	pub(super) async fn flush_consume_batch<P: Provider + Clone>(
+	/// Finalize the consume batch builder, submit on-chain, and return `(batch_id,
+	/// pi_commitment, prove_request)`. Does **not** call the prover — the caller decides the
+	/// proof path (real prover vs. test zero-proof).
+	pub(super) async fn submit_consume_batch_on_chain<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
-	) -> anyhow::Result<()> {
+	) -> anyhow::Result<(u64, [u8; 32], ConsumeProveRequest)> {
 		let cb = self.consume_batch_builder.take().ok_or_else(|| {
-			anyhow::anyhow!("flush_consume_batch called with no consume batch builder")
+			anyhow::anyhow!("submit_consume_batch_on_chain called with no consume batch builder")
 		})?;
 		self.consume_batch_pending_since = None;
 
@@ -392,8 +400,7 @@ impl Sequencer {
 			ITesseraRollupV2::ITesseraRollupV2Instance::new(self.config.bridge_address, provider);
 		let pool_cfg_root: [u8; 32] = rollup.poolConfigRoot().call().await?.into();
 
-		let ac_root = contract::hash_to_u256_le(&self.confirmed_root);
-		let nc_root = contract::hash_to_u256_le(&self.confirmed_root);
+		let root = contract::hash_to_u256_le(&self.confirmed_root);
 		let batch_poseidon_root = contract::hash_to_u256_le(&finalized.batch_poseidon_root);
 
 		let deposit_note_commitments: Vec<alloy::primitives::FixedBytes<32>> = finalized
@@ -403,8 +410,8 @@ impl Sequencer {
 			.collect();
 
 		let batch = ITesseraRollupV2::DepositBatch {
-			acRoot: ac_root,
-			ncRoot: nc_root,
+			acRoot: root,
+			ncRoot: root,
 			mainPoolConfigRoot: pool_cfg_root.into(),
 			depositNoteCommitments: deposit_note_commitments,
 			batchPoseidonRoot: batch_poseidon_root,
@@ -454,20 +461,26 @@ impl Sequencer {
 			"consume batch submitted on-chain"
 		);
 
-		let prove_request = finalized.into_prove_request(
-			batch_id,
-			self.confirmed_root,
-			self.confirmed_root,
-			pool_cfg_root,
-		);
-		self.submit_consume_request_with_retry(prove_request)?;
+		let prove_request =
+			finalized.into_prove_request(batch_id, self.confirmed_root, pool_cfg_root);
 
+		Ok((batch_id, pi_commitment, prove_request))
+	}
+
+	/// Finalize the consume batch builder, submit on-chain, and dispatch a prove request.
+	pub(super) async fn flush_consume_batch<P: Provider + Clone>(
+		&mut self,
+		provider: &P,
+	) -> anyhow::Result<()> {
+		let (batch_id, pi_commitment, prove_request) =
+			self.submit_consume_batch_on_chain(provider).await?;
 		self.pending_consume_batches.insert(
 			batch_id,
-			super::ConsumeBatchV2 {
+			ConsumeBatchV2 {
 				pi_commitment,
 			},
 		);
+		self.submit_consume_request_with_retry(prove_request)?;
 		Ok(())
 	}
 
@@ -481,7 +494,7 @@ impl Sequencer {
 	}
 
 	/// On consume proof success, call `proveDepositBatch` on-chain.
-	async fn confirm_consume_batch<P: Provider + Clone>(
+	pub(super) async fn confirm_consume_batch<P: Provider + Clone>(
 		&mut self,
 		provider: &P,
 		outcome: ConsumeOutcome,

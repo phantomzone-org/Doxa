@@ -318,8 +318,8 @@ pub fn priv_tx_circuit<
 	//   [9-12] = AC
 	//   [13-44]= NN (8×4)
 	//   [45-76]= NC (8×4)
-	//   [77-80]= act_root  (binds proof to ACT state)
-	//   [81-84]= nct_root  (binds proof to NCT state)
+	//   [77-80]= root  (on-chain Poseidon IMT root; V2 uses a single IMT)
+	//   [81-84]= root  (same value repeated — two legacy PI slots, both carry root)
 	builder.register_public_input(accin.subpool_id.0);
 	builder.register_public_input(accout.subpool_id.0);
 	builder.register_public_input(not_fake_tx.target);
@@ -494,7 +494,6 @@ fn prove_priv_tx(
 			new_spend_auth,
 			new_consume_auth,
 			HashOutput([F::ZERO; 4]),
-			HashOutput([F::ZERO; 4]),
 			approval_cpk,
 			rejection_cpk,
 			consume_cpk,
@@ -512,7 +511,6 @@ fn prove_priv_tx(
 		spend::set_fake_tx_witness(
 			&mut pw,
 			t,
-			HashOutput([F::ZERO; 4]),
 			HashOutput([F::ZERO; 4]),
 			HashOutput([F::ZERO; 4]),
 			[F::ZERO; 4],
@@ -593,9 +591,9 @@ pub fn build_priv_tx_circuit() -> (
 /// - [`PrivTxInputs::Reject`]   — real proof (`not_fake_tx=1`), operator rejects notes.
 /// - [`PrivTxInputs::Fake`]     — dummy proof (`not_fake_tx=0`), pads empty slots.
 ///
-/// For real variants the `act_root` / `nct_root` fields in the input struct are
-/// registered as PI[77-80] / PI[81-84] and must match the Merkle proofs supplied
-/// (the circuit enforces this when `not_fake_tx=1`).
+/// For real variants the `root` field in the input struct is registered as both
+/// PI[77-80] and PI[81-84] (V2 uses a single on-chain IMT) and must match the
+/// Merkle proofs supplied (the circuit enforces this when `not_fake_tx=1`).
 pub fn prove_real_priv_tx(
 	circuit: &tessera_trees::CircuitDataNative,
 	targets: &PrivTxTargets<{ tessera_trees::D }>,
@@ -615,8 +613,7 @@ pub fn prove_real_priv_tx(
 			&i.accin,
 			i.new_spend_auth,
 			i.new_consume_auth,
-			i.act_root,
-			i.nct_root,
+			i.root,
 			i.approval_key,
 			i.rejection_key,
 			i.consume_key,
@@ -630,8 +627,7 @@ pub fn prove_real_priv_tx(
 			&mut pw,
 			targets,
 			&i.accin,
-			i.act_root,
-			i.nct_root,
+			i.root,
 			i.accin_merkle_proof,
 			&i.inotes,
 			&i.inotes_nct_proofs,
@@ -652,8 +648,7 @@ pub fn prove_real_priv_tx(
 			targets,
 			&i.accin,
 			i.accin_act_merkle_proof,
-			i.act_root,
-			i.nct_root,
+			i.root,
 			&i.inotes,
 			&i.inotes_nct_proofs,
 			&i.onotes,
@@ -671,8 +666,7 @@ pub fn prove_real_priv_tx(
 			spend::set_fake_tx_witness(
 				&mut pw,
 				targets,
-				i.nct_root,
-				i.act_root,
+				i.root,
 				i.mainpool_config_root,
 				i.override_an,
 				i.override_ac,
@@ -712,8 +706,7 @@ pub fn prove_dummy_priv_tx(
 		circuit,
 		targets,
 		PrivTxInputs::Fake(FakeTxInputs {
-			act_root: HashOutput([F::ZERO; 4]),
-			nct_root: HashOutput([F::ZERO; 4]),
+			root: HashOutput([F::ZERO; 4]),
 			mainpool_config_root: HashOutput([F::ZERO; 4]),
 			override_an,
 			override_ac,

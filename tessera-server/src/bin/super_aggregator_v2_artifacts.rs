@@ -253,7 +253,7 @@ fn main() -> Result<()> {
 	println!("\n[7] Proving SuperAggregatorV2 (dummy)...");
 	let now = Instant::now();
 	let zero_hash = HashOutput::new([F::ZERO; 4]);
-	let dummy_sa_proof = sav2.prove(agg_result.proof, sr_proof, zero_hash, zero_hash, [0u8; 32])?;
+	let dummy_sa_proof = sav2.prove(agg_result.proof, sr_proof, zero_hash, [0u8; 32])?;
 	sav2.circuit_data.verify(dummy_sa_proof.clone())?;
 	println!("  SAV2 dummy proof verified [{:?}]", now.elapsed());
 	assert_eq!(

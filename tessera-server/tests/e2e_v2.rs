@@ -107,8 +107,7 @@ async fn deploy_with_args<P: Provider + Clone>(
 ///
 /// Each uint256 is encoded as 32 big-endian bytes; bytes32 is passed as-is.
 fn compute_tx_pi_commitment(
-	ac_root: U256,
-	nc_root: U256,
+	root: U256,
 	pool_config_root: [u8; 32],
 	batch_poseidon_root: U256,
 	account_commitment: U256,
@@ -117,8 +116,8 @@ fn compute_tx_pi_commitment(
 	note_nullifiers: &[U256],
 ) -> B256 {
 	let mut pre: Vec<u8> = Vec::new();
-	pre.extend_from_slice(&ac_root.to_be_bytes::<32>());
-	pre.extend_from_slice(&nc_root.to_be_bytes::<32>());
+	pre.extend_from_slice(&root.to_be_bytes::<32>());
+	pre.extend_from_slice(&root.to_be_bytes::<32>());
 	pre.extend_from_slice(&pool_config_root);
 	pre.extend_from_slice(&batch_poseidon_root.to_be_bytes::<32>());
 	pre.extend_from_slice(&account_commitment.to_be_bytes::<32>());
@@ -137,15 +136,14 @@ fn compute_tx_pi_commitment(
 ///
 /// depositNoteCommitments are bytes32, passed as-is (32 bytes each).
 fn compute_deposit_pi_commitment(
-	ac_root: U256,
-	nc_root: U256,
+	root: U256,
 	pool_config_root: [u8; 32],
 	batch_poseidon_root: U256,
 	deposit_note_commitments: &[B256],
 ) -> B256 {
 	let mut pre: Vec<u8> = Vec::new();
-	pre.extend_from_slice(&ac_root.to_be_bytes::<32>());
-	pre.extend_from_slice(&nc_root.to_be_bytes::<32>());
+	pre.extend_from_slice(&root.to_be_bytes::<32>());
+	pre.extend_from_slice(&root.to_be_bytes::<32>());
 	pre.extend_from_slice(&pool_config_root);
 	pre.extend_from_slice(&batch_poseidon_root.to_be_bytes::<32>());
 	for nc in deposit_note_commitments {
@@ -255,8 +253,7 @@ async fn setup(reject_tx: bool) -> (TestEnv, impl Provider + Clone) {
 async fn submit_tx_batch<P: Provider + Clone>(
 	rollup_addr: Address,
 	provider: &P,
-	ac_root: U256,
-	nc_root: U256,
+	root: U256,
 	nc_leaves: &[HashOutput],
 	account_commitment: U256,
 	account_nullifier: U256,
@@ -266,8 +263,7 @@ async fn submit_tx_batch<P: Provider + Clone>(
 	let note_nullifiers: Vec<U256> = vec![];
 
 	let expected_pi = compute_tx_pi_commitment(
-		ac_root,
-		nc_root,
+		root,
 		PCR,
 		batch_poseidon_root,
 		account_commitment,
@@ -277,8 +273,8 @@ async fn submit_tx_batch<P: Provider + Clone>(
 	);
 
 	let batch = ITesseraRollupV2::TransactionBatch {
-		acRoot: ac_root,
-		ncRoot: nc_root,
+		acRoot: root,
+		ncRoot: root,
 		mainPoolConfigRoot: B256::from(PCR),
 		noteCommitments: note_commitments,
 		noteNullifiers: note_nullifiers,
@@ -365,7 +361,6 @@ async fn test_e2e_tx_batch() {
 		env.rollup,
 		&provider,
 		env.genesis_root,
-		env.genesis_root,
 		&make_nc_leaves(),
 		U256::from(0x1000u64),
 		U256::from(0x2000u64),
@@ -399,7 +394,6 @@ async fn test_e2e_second_batch_references_first_root() {
 		env.rollup,
 		&provider,
 		env.genesis_root,
-		env.genesis_root,
 		&make_nc_leaves(),
 		U256::from(0x1001u64),
 		U256::from(0x2001u64),
@@ -407,11 +401,10 @@ async fn test_e2e_second_batch_references_first_root() {
 	.await;
 	let root1 = prove_tx_batch(env.rollup, &provider, pi1).await;
 
-	// Second batch uses root1 as both acRoot and ncRoot.
+	// Second batch uses root1.
 	let pi2 = submit_tx_batch(
 		env.rollup,
 		&provider,
-		root1,
 		root1,
 		&make_nc_leaves_2(),
 		U256::from(0x1002u64),
@@ -487,13 +480,8 @@ async fn test_e2e_deposit_batch() {
 
 	// Build deposit batch piCommitment.
 	let batch_poseidon_root = U256::from(0xDEAD_BEEFu64); // arbitrary non-zero
-	let expected_pi = compute_deposit_pi_commitment(
-		env.genesis_root,
-		env.genesis_root,
-		PCR,
-		batch_poseidon_root,
-		&[deposit_nc],
-	);
+	let expected_pi =
+		compute_deposit_pi_commitment(env.genesis_root, PCR, batch_poseidon_root, &[deposit_nc]);
 
 	// Submit deposit batch (operator-only).
 	let deposit_batch = ITesseraRollupV2::DepositBatch {

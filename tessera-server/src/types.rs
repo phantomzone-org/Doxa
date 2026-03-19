@@ -15,10 +15,8 @@ pub struct ProveRequestV2 {
 	/// Note-commitment leaves in arrival (slot) order.
 	/// Length = `account_batch_size × notes_per_slot`.
 	pub nc_leaves: Vec<[u8; 32]>,
-	/// On-chain account commitment tree root before this batch.
-	pub ac_root: HashOutput,
-	/// On-chain note commitment tree root before this batch.
-	pub nc_root: HashOutput,
+	/// On-chain Poseidon IMT root before this batch (used for both acRoot and ncRoot).
+	pub root: HashOutput,
 	/// Contract `poolConfigRoot` (bytes32, big-endian).
 	pub main_pool_cfg_root: [u8; 32],
 	/// Client-supplied PrivTx proof bytes keyed by account slot index.
@@ -57,10 +55,8 @@ pub struct ConsumeProveRequest {
 	/// Deposit note-commitment leaves in arrival (slot) order.
 	/// Length = `account_batch_size × notes_per_slot`.
 	pub nc_leaves: Vec<[u8; 32]>,
-	/// On-chain account commitment tree root before this batch.
-	pub ac_root: HashOutput,
-	/// On-chain note commitment tree root before this batch.
-	pub nc_root: HashOutput,
+	/// On-chain Poseidon IMT root before this batch (used for both acRoot and ncRoot).
+	pub root: HashOutput,
 	/// Contract `poolConfigRoot` (bytes32, big-endian).
 	pub main_pool_cfg_root: [u8; 32],
 	/// Client-supplied consume proof bytes keyed by account slot index.

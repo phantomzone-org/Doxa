@@ -5,6 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {PoseidonGoldilocks} from "../src/PoseidonGoldilocks.sol";
 import {TesseraRollupV2} from "../src/TesseraRollupV2.sol";
 import {VerifierSuperAggregatorV2} from "../src/VerifierSuperAggregatorV2.sol";
+import {AcceptAllVerifier} from "../src/AcceptAllVerifier.sol";
 import {ToyUSDT} from "../src/ToyUSDT.sol";
 import {ToyUser} from "../src/ToyUser.sol";
 
