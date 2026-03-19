@@ -18,9 +18,7 @@ async fn main() -> Result<()> {
 	let config = SequencerConfig::from_env()?;
 
 	// Start sequencer (polls on-chain events, delegates proving to remote prover API).
-	let mut sequencer = Sequencer::new(config);
-	// println!("genesis_consumed_root: {:?}",
-	// contract::hash_to_bytes32(&SequencerState::genesis_consumed_root()));
+	let (mut sequencer, _handle) = Sequencer::new(config);
 	sequencer.run().await?;
 
 	Ok(())
