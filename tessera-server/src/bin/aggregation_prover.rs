@@ -19,10 +19,8 @@ use tessera_server::{
 	aggregation_pipeline::types::{ProveNodeRequest, ProveNodeResponse},
 	config::AggregatorProverConfig,
 };
-use tessera_trees::{
-	proof_aggregation::{GenericAggregator, LocalNodeProver, NodeProver},
-	ConfigNative, ProofNative, D, F,
-};
+use tessera_server::proof_aggregation::{GenericAggregator, LocalNodeProver, NodeProver};
+use tessera_trees::{ConfigNative, ProofNative, D, F};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 

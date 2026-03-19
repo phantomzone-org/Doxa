@@ -32,9 +32,9 @@ use plonky2::{
 	util::serialization::DefaultGateSerializer,
 };
 
-use crate::{
+use crate::groth::serializer::TesseraGeneratorSerializer;
+use tessera_trees::{
 	CircuitDataNative, ConfigNative, D, F, ProofNative,
-	groth::serializer::TesseraGeneratorSerializer,
 	tree::hasher::{HashOutput, MerkleHash, MerkleHashCircuit, MerkleHashTarget},
 };
 
@@ -261,7 +261,7 @@ mod tests {
 	use rand::{SeedableRng, rngs::StdRng};
 
 	use super::*;
-	use crate::tree::hasher::{MerkleHash, NewRandom};
+	use tessera_trees::tree::hasher::{MerkleHash, NewRandom};
 
 	/// Depth-1 tree (2 leaves): verifies both the hash direction and PI layout.
 	///

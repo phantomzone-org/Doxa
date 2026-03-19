@@ -19,11 +19,10 @@ use plonky2::{
 	util::serialization::{DefaultGateSerializer, DefaultGeneratorSerializer},
 };
 use serde::Serialize;
+use tessera_trees::{CircuitDataNative, ConfigNative, F, ProofNative};
 
 use super::serializer::TesseraGeneratorSerializer;
-use crate::{
-	CircuitDataBN128, CircuitDataNative, ConfigBN128, ConfigNative, F, ProofBN128, ProofNative,
-};
+use crate::{CircuitDataBN128, ConfigBN128, ProofBN128};
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
@@ -239,19 +238,6 @@ impl Groth16Wrapper {
 	/// Formats the raw proof and public-input byte blobs returned by
 	/// [`prove`] as a JSON object compatible with the generated Solidity
 	/// verifier contract.
-	///
-	/// The JSON layout mirrors `verifyProof`'s calldata:
-	/// ```json
-	/// {
-	///   "proof":          ["0x…", …],   // uint256[8]  – A, B, C (EIP-197)
-	///   "commitments":    ["0x…", …],   // uint256[2]  – Pedersen commitment
-	///   "commitmentPok":  ["0x…", …],   // uint256[2]  – proof of knowledge
-	///   "publicInputs":   ["0x…", …]    // uint256[N]  – public witness
-	/// }
-	/// ```
-	///
-	/// Parsing and field-element conversion happen in Go (where the gnark
-	/// types live); this method is a thin FFI bridge.
 	pub fn proof_to_solidity_json(proof_bytes: &[u8], pub_inp_bytes: &[u8]) -> Result<String> {
 		Self::info_log("groth16 format solidity json (ffi) starting");
 		let proof_len = c_int::try_from(proof_bytes.len()).map_err(|_| {
@@ -288,7 +274,7 @@ impl Groth16Wrapper {
 	/// `prepare_public_inputs`), and encodes it as a byte-array compatible with
 	/// Gnark encoding
 	#[cfg(test)]
-	pub fn encode_public_inputs_gnark(pub_inp: Vec<crate::F>) -> Vec<u8> {
+	pub fn encode_public_inputs_gnark(pub_inp: Vec<F>) -> Vec<u8> {
 		// encode it as big-endian bytes compatible with Gnark:
 		//   0..4: num public inputs
 		//   4..8: num secret inputs (0 in the case of only public inputs))
@@ -406,9 +392,6 @@ impl BN128Wrapper {
 
 	/// Store the full circuit data (native + BN128) as binary files alongside
 	/// the existing JSON files used by the Go R1CS compiler.
-	///
-	/// Call this during artifact generation so that [`BN128Wrapper::from_artifacts`]
-	/// can reconstruct the wrapper without re-deriving the circuit or generating a new proof.
 	pub fn store_full_circuit_data(&self, path: &Path) -> Result<()> {
 		// Existing JSON files required by the Go R1CS compiler.
 		self.store_circuit_data_bn128(path)?;
@@ -423,14 +406,11 @@ impl BN128Wrapper {
 					"serialize native circuit failed (plonky2 IoError — no inner detail available). \
 				 TesseraGeneratorSerializer covers all 24 standard generators plus the 10 custom \
 				 Keccak-256 / SHA-256 / u32 generators. If a new custom generator was added to the circuit, \
-				 register it in tessera-trees/src/groth/serializer.rs."
+				 register it in tessera-server/src/groth/serializer.rs."
 				)
 			})?;
 		fs::write(path.join(NATIVE_CIRCUIT_DATA_PATH), native_bytes)?;
 
-		// The BN128 circuit's generators all operate over GoldilocksField; they do not
-		// use PoseidonBN128Hash (which is not AlgebraicHasher), so ConfigNative's serializer
-		// handles them correctly.
 		let bn128_bytes = self
 			.circuit_data_bn128
 			.to_bytes(&gate_ser, &DefaultGeneratorSerializer::<ConfigNative, 2>::default())
@@ -448,10 +428,6 @@ impl BN128Wrapper {
 
 	/// Reconstruct a [`BN128Wrapper`] from pre-generated artifacts without
 	/// re-deriving the circuit or generating a new proof.
-	///
-	/// Loads `circuit_data` (native) and `circuit_data_bn128` (BN128, including
-	/// the proving key) from binary files, then cheaply rebuilds the circuit
-	/// targets by replaying the deterministic builder operations.
 	pub fn from_artifacts(path: &Path) -> Result<Self> {
 		let gate_ser = DefaultGateSerializer;
 
@@ -489,11 +465,6 @@ impl BN128Wrapper {
 		let proof_with_pis_bn128: ProofBN128 =
 			serde_json::from_str(&fs::read_to_string(path.join(PROOF_WITH_PI))?)?;
 
-		// Rebuild the circuit targets cheaply. The four builder operations below are
-		// deterministic: given the same `circuit_data.common` / `verifier_only`, plonky2's
-		// sequential wire allocator always produces the same target indices. No `build()` or
-		// `prove()` call is needed; the builder is dropped immediately after obtaining the
-		// targets.
 		let mut builder = CircuitBuilder::<F, 2>::new(CircuitConfig::standard_recursion_config());
 		let proof_with_pis_target = builder.add_virtual_proof_with_pis(&circuit_data.common);
 		let verifier_circuit_target = builder.constant_verifier_data(&circuit_data.verifier_only);

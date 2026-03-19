@@ -20,7 +20,7 @@ use plonky2::{
 	hash::hash_types::RichField,
 	plonk::{config::GenericConfig, proof::ProofWithPublicInputs},
 };
-use tessera_trees::proof_aggregation::{GenericAggregator, LocalNodeProver, NodeProver};
+use crate::proof_aggregation::{GenericAggregator, LocalNodeProver, NodeProver};
 use tracing::warn;
 
 use super::types::{ProveNodeRequest, ProveNodeResponse};

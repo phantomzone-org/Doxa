@@ -45,7 +45,7 @@
 
 use std::{fs, path::Path};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use plonky2::{
 	field::types::PrimeField64,
 	hash::poseidon::PoseidonHash,
@@ -69,9 +69,7 @@ pub const TX_LEAF_PI_SIZE: usize = 77;
 pub const IS_REAL_OFFSET: usize = 4;
 /// Offset of the first TX data field (account nullifier) within a TX leaf's public inputs.
 pub const TX_DATA_OFFSET: usize = 5;
-use crate::{
-	CircuitDataNative, ConfigNative, D, F, ProofNative,
-	groth::serializer::TesseraGeneratorSerializer,
+use tessera_trees::{
 	plonky2_gadgets::{
 		keccak256::{
 			builder::BuilderKeccak256, field_decompose::decompose_field_to_u32_pair,
@@ -80,7 +78,10 @@ use crate::{
 		u32::add_u8_range_check_lookup_table,
 	},
 	tree::hasher::HashOutput,
+	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
+
+use crate::groth::serializer::TesseraGeneratorSerializer;
 
 // ---------------------------------------------------------------------------
 // Artifact path constants
@@ -691,13 +692,11 @@ mod tests {
 		iop::{target::Target, witness::PartialWitness},
 		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 	};
-	use rand::{SeedableRng, rngs::StdRng};
+	use rand::{rngs::StdRng, SeedableRng};
+	use tessera_trees::tree::hasher::NewRandom;
 
 	use super::*;
-	use crate::{
-		proof_aggregation::{SubtreeRootCircuit, TX_LEAF_PI_SIZE},
-		tree::hasher::{HashOutput, NewRandom},
-	};
+	use crate::proof_aggregation::{SubtreeRootCircuit, TX_LEAF_PI_SIZE};
 
 	// -----------------------------------------------------------------
 	// Helpers for synthetic TX aggregation proofs
@@ -705,7 +704,7 @@ mod tests {
 
 	/// Build a minimal "TX aggregation" leaf circuit with exactly
 	/// `n_tx_slots * TX_LEAF_PI_SIZE` public inputs.
-	fn build_tx_agg(n_tx_slots: usize) -> (crate::CircuitDataNative, Vec<Target>) {
+	fn build_tx_agg(n_tx_slots: usize) -> (CircuitDataNative, Vec<Target>) {
 		let n_pi = n_tx_slots * TX_LEAF_PI_SIZE;
 		let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
 		let targets: Vec<Target> = (0..n_pi).map(|_| builder.add_virtual_target()).collect();
@@ -718,7 +717,7 @@ mod tests {
 	/// Set all PI values for a TX agg proof.
 	/// `slot_values[s]` is a `Vec<u64>` of exactly `TX_LEAF_PI_SIZE` elements.
 	fn prove_tx_agg(
-		cd: &crate::CircuitDataNative,
+		cd: &CircuitDataNative,
 		targets: &[Target],
 		slot_values: &[Vec<u64>],
 	) -> ProofNative {
@@ -763,7 +762,7 @@ mod tests {
 		v[10] = ac[1];
 		v[11] = ac[2];
 		v[12] = ac[3]; // AC
-		// NN at [13..45] (8×4=32 fields)
+				 // NN at [13..45] (8×4=32 fields)
 		assert_eq!(nn_flat.len(), v[13..45].len());
 		v[13..45].copy_from_slice(nn_flat);
 		// NC at [45..77] (8×4=32 fields)
@@ -927,12 +926,7 @@ mod tests {
 		};
 		let agg = SuperAggregatorV2::build(inner)?;
 
-		let result = agg.prove(
-			tx_proof,
-			sr_proof,
-			HashOutput::new([F::ZERO; 4]),
-			[0u8; 32],
-		);
+		let result = agg.prove(tx_proof, sr_proof, HashOutput::new([F::ZERO; 4]), [0u8; 32]);
 		assert!(result.is_err(), "prove should fail when SR leaves != TX NC");
 		Ok(())
 	}

@@ -25,7 +25,7 @@ use plonky2::{
 
 use crate::plonky2_gadgets::u32::{CircuitBuilderU32, U32Target};
 
-pub(crate) fn decompose_field_to_u32_pair<F: RichField + Extendable<D>, const D: usize>(
+pub fn decompose_field_to_u32_pair<F: RichField + Extendable<D>, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
 	value: Target,
 	range_lut: usize,
@@ -83,7 +83,7 @@ pub(crate) fn decompose_field_to_u32_pair<F: RichField + Extendable<D>, const D:
 
 /// Witness generator that splits a field element into high and low u32 halves.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FieldDecompositionGenerator {
+pub struct FieldDecompositionGenerator {
 	input: Target,
 	lo: Target,
 	hi: Target,
@@ -135,7 +135,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 /// Given `diff`, produces `hi_is_max = (diff == 0) ? 1 : 0` and
 /// `diff_inv = (diff != 0) ? diff⁻¹ : 0`.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct CanonicalCheckGenerator {
+pub struct CanonicalCheckGenerator {
 	diff: Target,
 	hi_is_max: Target,
 	diff_inv: Target,

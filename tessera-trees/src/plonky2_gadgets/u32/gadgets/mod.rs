@@ -370,7 +370,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderU32<F, D>
 
 /// Witness generator that decomposes a `u32` field element into 4 LE bytes.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ByteDecompositionGenerator {
+pub struct ByteDecompositionGenerator {
 	input: Target,
 	bytes: [Target; 4],
 }
@@ -425,7 +425,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 /// Witness generator that decomposes a `u32` field element into LE chunks
 /// of `chunk_bits` bits each.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ChunkDecompositionGenerator {
+pub struct ChunkDecompositionGenerator {
 	input: Target,
 	chunks: Vec<Target>,
 	chunk_bits: usize,
@@ -483,7 +483,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
 
 /// Witness generator that decomposes a `u32` field element into 2 LE 16-bit limbs.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct U16LimbDecompositionGenerator {
+pub struct U16LimbDecompositionGenerator {
 	input: Target,
 	limbs: [Target; 2],
 }
@@ -605,7 +605,7 @@ mod tests {
 
 /// Witness generator that decomposes a 16-bit limb into 2 LE bytes.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LimbByteDecompositionGenerator {
+pub struct LimbByteDecompositionGenerator {
 	input: Target,
 	bytes: [Target; 2],
 }

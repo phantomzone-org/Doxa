@@ -24,14 +24,14 @@ use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use plonky2::{field::types::PrimeField64, plonk::proof::ProofWithPublicInputs};
-use tessera_trees::{
+use tessera_trees::{tree::hasher::HashOutput, ConfigNative, ProofNative, D, F};
+
+use crate::{
 	groth::{BN128Wrapper, Groth16Wrapper},
 	proof_aggregation::{
 		validate_subtree_nc_offcircuit, GenericAggregator, SubtreeRootCircuit, SuperAggregatorV2,
 		TX_LEAF_PI_SIZE,
 	},
-	tree::hasher::HashOutput,
-	ConfigNative, ProofNative, D, F,
 };
 use tracing::{error, info};
 

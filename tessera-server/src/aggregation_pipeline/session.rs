@@ -30,10 +30,10 @@ use plonky2::{
 	hash::hash_types::RichField,
 	plonk::{circuit_data::CommonCircuitData, config::GenericConfig, proof::ProofWithPublicInputs},
 };
-use tessera_trees::proof_aggregation::GenericAggregator;
 use tokio::sync::{mpsc, oneshot};
 
 use super::pool::NodeProverPool;
+use crate::proof_aggregation::GenericAggregator;
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -429,14 +429,12 @@ mod tests {
 			proof::ProofWithPublicInputs,
 		},
 	};
-	use tessera_trees::{
-		proof_aggregation::{GenericAggregator, GenericAggregatorConfig},
-		ConfigNative, D, F,
-	};
+	use tessera_trees::{ConfigNative, D, F};
 
 	use super::*;
-	use crate::aggregation_pipeline::pool::{
-		AsyncNodeProver, LocalAsyncNodeProver, NodeProverPool,
+	use crate::{
+		aggregation_pipeline::pool::{AsyncNodeProver, LocalAsyncNodeProver, NodeProverPool},
+		proof_aggregation::GenericAggregatorConfig,
 	};
 
 	// -----------------------------------------------------------------------

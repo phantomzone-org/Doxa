@@ -742,7 +742,7 @@ mod tests {
 	/// Fix: dummy proofs use set_fake_tx_witness (is_fresh_acc=false).
 	#[test]
 	fn dummy_proof_has_not_fake_tx_zero() {
-		use tessera_trees::proof_aggregation::IS_REAL_OFFSET;
+		const IS_REAL_OFFSET: usize = 4;
 
 		let (circuit, targets) = build_priv_tx_circuit();
 		let proof = prove_dummy_priv_tx(
@@ -770,7 +770,7 @@ mod tests {
 	/// Dummy proofs' AN PIs must equal override_an at TX_DATA_OFFSET.
 	#[test]
 	fn dummy_proof_an_override_matches_pi() {
-		use tessera_trees::proof_aggregation::TX_DATA_OFFSET;
+		const TX_DATA_OFFSET: usize = 5;
 
 		let (circuit, targets) = build_priv_tx_circuit();
 		let override_an = [

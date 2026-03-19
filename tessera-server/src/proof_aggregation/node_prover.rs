@@ -119,7 +119,8 @@ mod tests {
 	};
 
 	use super::*;
-	use crate::{ConfigNative, D, F, proof_aggregation::GenericAggregatorConfig};
+	use tessera_trees::{ConfigNative, D, F};
+	use crate::proof_aggregation::GenericAggregatorConfig;
 
 	fn build_leaf_circuit(n_pi: usize) -> (CircuitData<F, ConfigNative, D>, Vec<Target>) {
 		let config = CircuitConfig::standard_recursion_config();

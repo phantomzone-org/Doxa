@@ -324,7 +324,7 @@ where
 // `(GoldilocksField, 2)`, so these methods must live on a monomorphised impl
 // block rather than the generic one above.
 
-impl GenericAggregator<crate::F, crate::ConfigNative, 2> {
+impl GenericAggregator<tessera_trees::F, tessera_trees::ConfigNative, 2> {
 	/// Persist all circuit artifacts to `path`.
 	///
 	/// Creates the directory if it does not exist.  Overwrites any existing
@@ -604,7 +604,7 @@ mod tests {
 	};
 
 	use super::*;
-	use crate::{ConfigNative, D, F};
+	use tessera_trees::{ConfigNative, D, F};
 
 	// -----------------------------------------------------------------------
 	// Helpers

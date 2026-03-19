@@ -35,7 +35,7 @@ use plonky2::{
 #[allow(unused_imports)]
 use plonky2::{get_generator_tag_impl, read_generator_impl};
 
-use crate::{
+use tessera_trees::{
 	ConfigNative, F,
 	plonky2_gadgets::{
 		keccak256::field_decompose::{CanonicalCheckGenerator, FieldDecompositionGenerator},
