@@ -16,11 +16,10 @@ pub struct FreshAccInputs {
 	pub accin: StandardAccount,
 	pub new_spend_auth: SpendAuth,
 	pub new_consume_auth: ConsumeAuth,
-	/// ACT root at proof time. Not checked by the circuit for FreshAcc, but
-	/// registered as PI[77-80] so the super-aggregator can bind to it.
-	pub act_root: HashOutput,
-	/// NCT root at proof time. Same caveat as `act_root`.
-	pub nct_root: HashOutput,
+	/// On-chain Poseidon IMT root at proof time. Registered as both PI[77-80]
+	/// and PI[81-84] (V2 uses a single IMT for accounts and notes). Not
+	/// checked by the circuit for FreshAcc, but bound in the super-aggregator.
+	pub root: HashOutput,
 	pub approval_key: CompPubKey,
 	pub rejection_key: CompPubKey,
 	pub consume_key: CompPubKey,
@@ -33,14 +32,14 @@ pub struct FreshAccInputs {
 
 /// Inputs for a Spend (private) transaction.
 ///
-/// Transfers assets between notes. `accin` must exist in the ACT at `act_root`,
-/// and each active input note must exist in the NCT at `nct_root`.
+/// Transfers assets between notes. `accin` must exist in the on-chain IMT at
+/// `root`, and each active input note must also exist in the same IMT.
 pub struct SpendTxInputs {
 	pub accin: StandardAccount,
-	/// ACT root that `accin_merkle_proof` is valid against.
-	pub act_root: HashOutput,
-	/// NCT root that `inotes_nct_proofs` are valid against.
-	pub nct_root: HashOutput,
+	/// On-chain Poseidon IMT root. Used for both the account commitment (ACT)
+	/// and input-note commitment (NCT) Merkle proofs. In V2 both PI slots
+	/// (PI[77-80] and PI[81-84]) carry this same value.
+	pub root: HashOutput,
 	pub accin_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
 	pub inotes: Vec<StandardNote>,
 	pub inotes_nct_proofs: Vec<CommitmentTreeMerkleProof<NCT_DEPTH>>,
@@ -64,14 +63,14 @@ pub struct SpendTxInputs {
 /// Inputs for a Reject transaction.
 ///
 /// The operator rejects a set of pending notes back to the sender.
-/// `accin` must exist in the ACT and the input notes must exist in the NCT.
+/// `accin` must exist in the on-chain IMT and the input notes must also exist there.
 pub struct RejectTxInputs {
 	pub accin: StandardAccount,
 	pub accin_act_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
-	/// ACT root that `accin_act_merkle_proof` is valid against.
-	pub act_root: HashOutput,
-	/// NCT root that `inotes_nct_proofs` are valid against.
-	pub nct_root: HashOutput,
+	/// On-chain Poseidon IMT root. Used for both the account commitment (ACT)
+	/// and input-note commitment (NCT) Merkle proofs. In V2 both PI slots
+	/// (PI[77-80] and PI[81-84]) carry this same value.
+	pub root: HashOutput,
 	pub inotes: Vec<StandardNote>,
 	pub inotes_nct_proofs: Vec<CommitmentTreeMerkleProof<NCT_DEPTH>>,
 	pub onotes: Vec<StandardNote>,
@@ -93,8 +92,7 @@ pub struct RejectTxInputs {
 /// proof's public inputs for AN/AC/NN/NC, allowing alignment with tree padding
 /// leaves chosen by the sequencer.
 pub struct FakeTxInputs {
-	pub act_root: HashOutput,
-	pub nct_root: HashOutput,
+	pub root: HashOutput,
 	pub mainpool_config_root: HashOutput,
 	pub override_an: [F; 4],
 	pub override_ac: [F; 4],

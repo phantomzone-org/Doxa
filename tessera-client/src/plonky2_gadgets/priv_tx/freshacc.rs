@@ -47,8 +47,8 @@ use crate::{
 /// The returned arrays are suitable as `dinotes` / `donotes` inputs to
 /// [`set_freshacc_tx_witness`].
 ///
-/// `nct_root` and `act_root` are [F::ZERO; 4] for a normal FreshAcc (no notes,
-/// account not yet in ACT).
+/// `root` is `HashOutput([F::ZERO; 4])` for a normal FreshAcc (account not yet
+/// in the on-chain IMT; no notes to prove membership for).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn set_freshacc_tx_witness(
 	pw: &mut PartialWitness<F>,
@@ -57,8 +57,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	accin: &StandardAccount,
 	new_spend_auth: SpendAuth,
 	new_consume_auth: ConsumeAuth,
-	act_root: HashOutput,
-	nct_root: HashOutput,
+	root: HashOutput,
 	approval_key: CompPubKey,
 	rejection_key: CompPubKey,
 	consume_key: CompPubKey,
@@ -103,8 +102,7 @@ pub(crate) fn set_freshacc_tx_witness(
 		pw,
 		t,
 		main_pool.root(),
-		act_root,
-		nct_root,
+		root,
 		&approval_key,
 		&rejection_key,
 		&consume_key,
@@ -320,8 +318,7 @@ mod tests {
 			&accin,
 			new_spend_auth,
 			new_consume_auth,
-			HashOutput([F::ZERO; 4]), // act_root: not in ACT yet
-			HashOutput([F::ZERO; 4]), // nct_root: no notes for FreshAcc
+			HashOutput([F::ZERO; 4]), // root: not in IMT yet; no notes for FreshAcc
 			approval_cpk,
 			rejection_cpk,
 			consume_cpk,

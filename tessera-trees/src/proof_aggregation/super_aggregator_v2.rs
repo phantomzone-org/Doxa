@@ -15,7 +15,7 @@
 //! 2. Verify SubtreeRoot proof (`(1 + batch_size) × 4` PIs).
 //! 3. Cross-check: for each real TX slot `s` and note index `j`, assert `sr_leaf[s * notes_per_slot
 //!    + j] == tx_nc[s][j]`.
-//! 4. Allocate private witnesses: `ac_root[4]`, `nc_root[4]` (Goldilocks),
+//! 4. Allocate private witnesses: `root[4]` (Goldilocks, used for both acRoot and ncRoot),
 //!    `main_pool_cfg_root_u32s[8]` (raw bytes32).
 //! 5. Collect all piCommitment fields, encode as EVM `abi.encodePacked` bytes, and hash with
 //!    Keccak-256.
@@ -144,7 +144,7 @@ struct SuperAggregatorV2Targets {
 /// agg.store_artifacts(Path::new("artifacts/super-aggregator-v2"))?;
 ///
 /// let agg = SuperAggregatorV2::from_artifacts(Path::new("artifacts/super-aggregator-v2"))?;
-/// let proof = agg.prove(tx, sr, ac_root, nc_root, main_pool_cfg_root)?;
+/// let proof = agg.prove(tx, sr, root, main_pool_cfg_root)?;
 /// ```
 pub struct SuperAggregatorV2 {
 	/// Compiled circuit data (needed by `BN128Wrapper::new`).
@@ -170,16 +170,15 @@ impl SuperAggregatorV2 {
 	/// Public inputs of the root proof: 8 Goldilocks field elements holding
 	/// the big-endian u32 words of `Keccak256(V2 piCommitment preimage)`.
 	///
-	/// `ac_root` and `nc_root` are the on-chain Poseidon IMT roots before this
-	/// batch. `main_pool_cfg_root` is the bytes32 pool config root.
+	/// `root` is the on-chain Poseidon IMT root before this batch (used for both
+	/// acRoot and ncRoot). `main_pool_cfg_root` is the bytes32 pool config root.
 	///
 	/// `accountCommitment` / `accountNullifier` are derived from TX slot 0.
 	pub fn prove(
 		&self,
 		tx: ProofNative,
 		sr: ProofNative,
-		ac_root: HashOutput,
-		nc_root: HashOutput,
+		root: HashOutput,
 		main_pool_cfg_root: [u8; 32],
 	) -> Result<ProofNative> {
 		use plonky2::field::types::Field;
@@ -197,11 +196,11 @@ impl SuperAggregatorV2 {
 
 		// Private witnesses — acRoot and ncRoot as Goldilocks fields.
 		for (k, &t) in self.targets.ac_root.iter().enumerate() {
-			pw.set_target(t, ac_root.0[k])
+			pw.set_target(t, root.0[k])
 				.map_err(|e| anyhow!("set ac_root[{k}]: {e}"))?;
 		}
 		for (k, &t) in self.targets.nc_root.iter().enumerate() {
-			pw.set_target(t, nc_root.0[k])
+			pw.set_target(t, root.0[k])
 				.map_err(|e| anyhow!("set nc_root[{k}]: {e}"))?;
 		}
 
@@ -228,8 +227,7 @@ impl SuperAggregatorV2 {
 	/// `[e3_be8, e2_be8, e1_be8, e0_be8]`.
 	#[allow(clippy::too_many_arguments)]
 	pub fn compute_pi_commitment_native(
-		ac_root: HashOutput,
-		nc_root: HashOutput,
+		root: HashOutput,
 		main_pool_cfg_root: [u8; 32],
 		batch_poseidon_root: HashOutput,
 		account_commitment: HashOutput,
@@ -248,8 +246,9 @@ impl SuperAggregatorV2 {
 			}
 		};
 
-		push_hash(&mut words, &ac_root);
-		push_hash(&mut words, &nc_root);
+		// acRoot and ncRoot are always the same value in V2.
+		push_hash(&mut words, &root);
+		push_hash(&mut words, &root);
 
 		// mainPoolConfigRoot: raw bytes32 big-endian.
 		for i in 0..8 {
@@ -863,17 +862,10 @@ mod tests {
 		let agg = SuperAggregatorV2::build(inner)?;
 
 		// Private witnesses.
-		let ac_root = HashOutput::new([F::from_canonical_u64(0xAC00), F::ZERO, F::ZERO, F::ZERO]);
-		let nc_root = HashOutput::new([F::from_canonical_u64(0xBC00), F::ZERO, F::ZERO, F::ZERO]);
+		let root = HashOutput::new([F::from_canonical_u64(0xAC00), F::ZERO, F::ZERO, F::ZERO]);
 		let main_pool_cfg_root = [0x01u8; 32];
 
-		let proof = agg.prove(
-			tx_proof.clone(),
-			sr_proof.clone(),
-			ac_root,
-			nc_root,
-			main_pool_cfg_root,
-		)?;
+		let proof = agg.prove(tx_proof.clone(), sr_proof.clone(), root, main_pool_cfg_root)?;
 		agg.circuit_data.verify(proof.clone())?;
 
 		// Compare circuit output against native computation.
@@ -884,8 +876,7 @@ mod tests {
 		let note_nullifiers = SuperAggregatorV2::nn_from_tx_proof(&tx_proof, 2, 8);
 
 		let expected = SuperAggregatorV2::compute_pi_commitment_native(
-			ac_root,
-			nc_root,
+			root,
 			main_pool_cfg_root,
 			batch_poseidon_root,
 			account_commitment,
@@ -939,7 +930,6 @@ mod tests {
 		let result = agg.prove(
 			tx_proof,
 			sr_proof,
-			HashOutput::new([F::ZERO; 4]),
 			HashOutput::new([F::ZERO; 4]),
 			[0u8; 32],
 		);

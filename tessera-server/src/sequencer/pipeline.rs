@@ -113,13 +113,12 @@ impl Sequencer {
 		// batchPoseidonRoot: Poseidon Merkle root of nc_leaves.
 		let batch_poseidon_root = contract::hash_to_u256_le(&finalized.batch_poseidon_root);
 
-		// acRoot / ncRoot: both reference the current confirmed Poseidon IMT root.
-		let ac_root = contract::hash_to_u256_le(&self.confirmed_root);
-		let nc_root = contract::hash_to_u256_le(&self.confirmed_root);
+		// acRoot / ncRoot: both are the current confirmed Poseidon IMT root.
+		let root = contract::hash_to_u256_le(&self.confirmed_root);
 
 		let batch = ITesseraRollupV2::TransactionBatch {
-			acRoot: ac_root,
-			ncRoot: nc_root,
+			acRoot: root,
+			ncRoot: root,
 			mainPoolConfigRoot: pool_cfg_root.into(),
 			noteCommitments: note_commitments,
 			noteNullifiers: note_nullifiers,
@@ -177,12 +176,8 @@ impl Sequencer {
 		);
 
 		// Build the prove request (returned to caller — may or may not be dispatched).
-		let prove_request = finalized.into_prove_request_v2(
-			batch_id,
-			self.confirmed_root,
-			self.confirmed_root,
-			pool_cfg_root,
-		);
+		let prove_request =
+			finalized.into_prove_request_v2(batch_id, self.confirmed_root, pool_cfg_root);
 
 		Ok((batch_id, pi_commitment, prove_request))
 	}
@@ -405,8 +400,7 @@ impl Sequencer {
 			ITesseraRollupV2::ITesseraRollupV2Instance::new(self.config.bridge_address, provider);
 		let pool_cfg_root: [u8; 32] = rollup.poolConfigRoot().call().await?.into();
 
-		let ac_root = contract::hash_to_u256_le(&self.confirmed_root);
-		let nc_root = contract::hash_to_u256_le(&self.confirmed_root);
+		let root = contract::hash_to_u256_le(&self.confirmed_root);
 		let batch_poseidon_root = contract::hash_to_u256_le(&finalized.batch_poseidon_root);
 
 		let deposit_note_commitments: Vec<alloy::primitives::FixedBytes<32>> = finalized
@@ -416,8 +410,8 @@ impl Sequencer {
 			.collect();
 
 		let batch = ITesseraRollupV2::DepositBatch {
-			acRoot: ac_root,
-			ncRoot: nc_root,
+			acRoot: root,
+			ncRoot: root,
 			mainPoolConfigRoot: pool_cfg_root.into(),
 			depositNoteCommitments: deposit_note_commitments,
 			batchPoseidonRoot: batch_poseidon_root,
@@ -467,12 +461,8 @@ impl Sequencer {
 			"consume batch submitted on-chain"
 		);
 
-		let prove_request = finalized.into_prove_request(
-			batch_id,
-			self.confirmed_root,
-			self.confirmed_root,
-			pool_cfg_root,
-		);
+		let prove_request =
+			finalized.into_prove_request(batch_id, self.confirmed_root, pool_cfg_root);
 
 		Ok((batch_id, pi_commitment, prove_request))
 	}

@@ -35,8 +35,7 @@ pub(crate) fn set_reject_tx_witness(
 	t: &TxCircuitTargets,
 	accin: &StandardAccount,
 	accin_act_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
-	act_root: HashOutput,
-	nct_root: HashOutput,
+	root: HashOutput,
 	inotes: &[StandardNote],
 	inotes_nct_proofs: &[CommitmentTreeMerkleProof<NCT_DEPTH>],
 	onotes: &[StandardNote],
@@ -105,8 +104,7 @@ pub(crate) fn set_reject_tx_witness(
 		pw,
 		t,
 		main_pool.root(),
-		act_root,
-		nct_root,
+		root,
 		approval_key,
 		rejection_key,
 		consume_key,
@@ -320,16 +318,10 @@ mod tests {
 			spend_pk: Some(spend_cpk),
 		};
 
-		// ── Insert acc into ACT ───────────────────────────────────────────────
-		let mut act = CommitmentTree::<HashOutput>::new(ACT_DEPTH);
-		let acc_pos = act.insert(acc.commitment().0).unwrap().path;
-		let acc_act_proof = CommitmentTreeMerkleProof::new(
-			acc.commitment().0,
-			act.merkle_path(acc_pos, 0, ACT_DEPTH).unwrap(),
-			acc_pos,
-			act.num_leaves(),
-		);
-		assert!(acc_act_proof.verify(act.get_root()));
+		// ── Single unified IMT (V2: accounts and notes share one on-chain tree) ─
+		// Insert all commitments first, then generate all proofs against the final root.
+		let mut tree = CommitmentTree::<HashOutput>::new(ACT_DEPTH);
+		let acc_pos = tree.insert(acc.commitment().0).unwrap().path;
 
 		// ── Sender address ────────────────────────────────────────────────────
 		let sender_priv = [F::from_canonical_u64(77), F::from_canonical_u64(88)];
@@ -363,22 +355,30 @@ mod tests {
 			sender: sender_addr,
 		};
 
-		// ── NCT ───────────────────────────────────────────────────────────────
-		let mut nct = CommitmentTree::<HashOutput>::new(NCT_DEPTH);
-		let n0_pos = nct.insert(note0.commitment().0).unwrap().path;
-		let n1_pos = nct.insert(note1.commitment().0).unwrap().path;
+		// Insert notes into the same unified tree, then generate all proofs against final root
+		let n0_pos = tree.insert(note0.commitment().0).unwrap().path;
+		let n1_pos = tree.insert(note1.commitment().0).unwrap().path;
+
+		let acc_act_proof = CommitmentTreeMerkleProof::new(
+			acc.commitment().0,
+			tree.merkle_path(acc_pos, 0, ACT_DEPTH).unwrap(),
+			acc_pos,
+			tree.num_leaves(),
+		);
+		assert!(acc_act_proof.verify(tree.get_root()));
+
 		let inotes_nct_proofs = [
 			CommitmentTreeMerkleProof::new(
 				note0.commitment().0,
-				nct.merkle_path(n0_pos, 0, NCT_DEPTH).unwrap(),
+				tree.merkle_path(n0_pos, 0, NCT_DEPTH).unwrap(),
 				n0_pos,
-				nct.num_leaves(),
+				tree.num_leaves(),
 			),
 			CommitmentTreeMerkleProof::new(
 				note1.commitment().0,
-				nct.merkle_path(n1_pos, 0, NCT_DEPTH).unwrap(),
+				tree.merkle_path(n1_pos, 0, NCT_DEPTH).unwrap(),
 				n1_pos,
-				nct.num_leaves(),
+				tree.num_leaves(),
 			),
 		];
 
@@ -450,8 +450,7 @@ mod tests {
 			&t,
 			&acc,
 			acc_act_proof,
-			act.get_root(),
-			nct.get_root(),
+			tree.get_root(),
 			&[note0, note1],
 			&inotes_nct_proofs,
 			&[onote0, onote1],

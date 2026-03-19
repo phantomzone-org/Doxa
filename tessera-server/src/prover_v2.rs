@@ -138,13 +138,12 @@ impl SuperAggregatorV2Service {
 		&self,
 		tx_agg: ProofNative,
 		sr: ProofNative,
-		ac_root: HashOutput,
-		nc_root: HashOutput,
+		root: HashOutput,
 		main_pool_cfg_root: [u8; 32],
 	) -> Result<(ProofNative, [u8; 32])> {
 		let root_proof = self
 			.super_agg
-			.prove(tx_agg, sr, ac_root, nc_root, main_pool_cfg_root)
+			.prove(tx_agg, sr, root, main_pool_cfg_root)
 			.map_err(|e| anyhow::anyhow!("SAV2 plonky2 prove: {e}"))?;
 
 		let pis = &root_proof.public_inputs;
@@ -317,8 +316,7 @@ impl ProverRuntimeV2 {
 		let tx_request = ProveRequestV2 {
 			batch_id,
 			nc_leaves: request.nc_leaves,
-			ac_root: request.ac_root,
-			nc_root: request.nc_root,
+			root: request.root,
 			main_pool_cfg_root: request.main_pool_cfg_root,
 			tx_proofs_by_slot: request.consume_proofs_by_slot,
 		};
@@ -424,8 +422,7 @@ impl ProverRuntimeV2 {
 			.prove_plonky2(
 				tx_agg_proof,
 				sr_proof,
-				request.ac_root,
-				request.nc_root,
+				request.root,
 				request.main_pool_cfg_root,
 			)
 			.map_err(|e| anyhow::anyhow!("SAV2 plonky2: {e}"))?;
