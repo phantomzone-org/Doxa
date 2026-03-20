@@ -6,7 +6,7 @@
 
 use alloy::{primitives::U256, providers::Provider};
 use plonky2::field::types::Field;
-use tessera_trees::tree::hasher::HashOutput;
+use tessera_utils::hasher::HashOutput;
 
 use super::{ConsumeBatchV2, Sequencer, TestTxRequest, TxBatchV2};
 use crate::types::{ConsumeOutcome, ProveOutcomeV2, SolidityProof};
@@ -51,7 +51,7 @@ impl Sequencer {
 
 		let fake = ConsumeOutcome::Success {
 			batch_id,
-			batch_poseidon_root: HashOutput::new([tessera_trees::F::ZERO; 4]),
+			batch_poseidon_root: HashOutput::new([tessera_utils::F::ZERO; 4]),
 			solidity_proof: zero_solidity_proof(),
 			super_pi_commitment: [0u8; 32],
 		};
@@ -74,7 +74,7 @@ impl Sequencer {
 
 		let fake = ProveOutcomeV2::Success {
 			batch_id,
-			batch_poseidon_root: HashOutput::new([tessera_trees::F::ZERO; 4]),
+			batch_poseidon_root: HashOutput::new([tessera_utils::F::ZERO; 4]),
 			solidity_proof: zero_solidity_proof(),
 			super_pi_commitment: [0u8; 32],
 		};

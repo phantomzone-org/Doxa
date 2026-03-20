@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use tessera_trees::tree::{hasher::HashOutput, CommitmentTree};
+use tessera_trees::{hasher::HashOutput, CommitmentTree};
 
 use crate::{
 	states::{EventOrderKey, PendingRequest},

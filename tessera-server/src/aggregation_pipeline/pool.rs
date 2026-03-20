@@ -20,10 +20,10 @@ use plonky2::{
 	hash::hash_types::RichField,
 	plonk::{config::GenericConfig, proof::ProofWithPublicInputs},
 };
-use tessera_trees::proof_aggregation::{GenericAggregator, LocalNodeProver, NodeProver};
 use tracing::warn;
 
 use super::types::{ProveNodeRequest, ProveNodeResponse};
+use crate::proof_aggregation::{GenericAggregator, LocalNodeProver, NodeProver};
 
 // ---------------------------------------------------------------------------
 // AsyncNodeProver trait
@@ -305,7 +305,7 @@ mod tests {
 	use anyhow::Result;
 	use async_trait::async_trait;
 	use plonky2::plonk::proof::ProofWithPublicInputs;
-	use tessera_trees::{ConfigNative, D, F};
+	use tessera_utils::{ConfigNative, D, F};
 
 	use super::{AsyncNodeProver, NodeProverPool};
 

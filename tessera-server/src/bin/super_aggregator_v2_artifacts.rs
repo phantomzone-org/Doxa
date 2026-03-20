@@ -28,14 +28,17 @@ use std::{fs, path::PathBuf, time::Instant};
 use anyhow::{ensure, Result};
 use plonky2::field::types::Field;
 use tessera_client::TesseraGateSerializer;
-use tessera_trees::{
-	groth::{BN128Wrapper, Groth16Wrapper},
+use tessera_server::{
 	proof_aggregation::{
 		GenericAggregator, GenericAggregatorConfig, SubtreeRootCircuit, SuperAggregatorV2,
 		SuperAggregatorV2CircuitData, TX_DATA_OFFSET, TX_LEAF_PI_SIZE,
 	},
-	tree::hasher::HashOutput,
-	ProofBN128, ProofNative, F,
+	ProofBN128,
+};
+use tessera_utils::{
+	groth::{BN128Wrapper, Groth16Wrapper},
+	hasher::HashOutput,
+	ProofNative, F,
 };
 
 const ARITY: usize = 2;

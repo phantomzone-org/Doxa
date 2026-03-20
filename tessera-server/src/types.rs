@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
-use tessera_trees::tree::hasher::HashOutput;
+use tessera_utils::hasher::HashOutput;
 
 /// Sent from Sequencer V2 to ProverRuntimeV2 for TX batches.
 ///

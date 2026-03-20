@@ -3,9 +3,9 @@ use std::array;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
-use tessera_trees::{
+use tessera_utils::{
 	F,
-	tree::hasher::{HashOutput, MerkleHashCircuit},
+	hasher::{HashOutput, MerkleHashCircuit},
 };
 
 use super::{
@@ -14,7 +14,7 @@ use super::{
 	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
 };
 use crate::{
-	ACT_DEPTH, AccountAddress, AssetId, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH,
+	AccountAddress, AssetId, COM_TREE_DEPTH, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH,
 	NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, PrivateIdentifier, SpendAuth,
 	StandardAccount, SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
@@ -50,10 +50,10 @@ pub fn set_spend_tx_witness(
 	accin: &StandardAccount,
 	root: HashOutput,
 	// MerkleProof of commitment of AccIn in the on-chain IMT
-	accin_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
+	accin_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
 	inotes: &[StandardNote],
 	// MerkleProof of commitments of inotes in NCT
-	inotes_nct_proofs: &[CommitmentTreeMerkleProof<NCT_DEPTH>],
+	inotes_nct_proofs: &[CommitmentTreeMerkleProof<COM_TREE_DEPTH>],
 	onotes: &[StandardNote],
 	dinotes: [[F; 4]; NOTE_BATCH],
 	donotes: [[F; 4]; NOTE_BATCH],
@@ -204,7 +204,7 @@ pub fn set_spend_tx_witness(
 			t.inotes[i].set_witness(pw, &inactive_inote);
 			pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 			pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
-			t.inotes_nct_merkle[i].set_dummy_witness(pw, NCT_DEPTH);
+			t.inotes_nct_merkle[i].set_dummy_witness(pw, COM_TREE_DEPTH);
 		}
 	}
 
@@ -380,7 +380,7 @@ pub fn set_fake_tx_witness(
 	pw.set_target(t.accin_pos, F::ZERO).unwrap();
 
 	// ── ACT Merkle proof (all zeros) ──────────────────────────────────────────
-	t.accin_act_merkle.set_dummy_witness(pw, ACT_DEPTH);
+	t.accin_act_merkle.set_dummy_witness(pw, COM_TREE_DEPTH);
 
 	// ── AST Merkle proof (real path of default leaf at index 0) ──────────────
 	t.accin_ast_merkle
@@ -399,7 +399,7 @@ pub fn set_fake_tx_witness(
 		t.inotes[i].set_witness(pw, &inactive_inote);
 		pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 		pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
-		t.inotes_nct_merkle[i].set_dummy_witness(pw, NCT_DEPTH);
+		t.inotes_nct_merkle[i].set_dummy_witness(pw, COM_TREE_DEPTH);
 	}
 
 	// ── Output notes (all inactive) ───────────────────────────────────────────
@@ -500,7 +500,7 @@ mod tests {
 	};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::CommitmentTree;
+	use tessera_trees::CommitmentTree;
 
 	use super::*;
 	use crate::{
@@ -539,7 +539,7 @@ mod tests {
 
 		// ── Single unified IMT (V2: accounts and notes share one on-chain tree) ─
 		// Insert all commitments first, then generate all proofs against the final root.
-		let mut tree = CommitmentTree::<HashOutput>::new(crate::ACT_DEPTH);
+		let mut tree = CommitmentTree::<HashOutput>::new(crate::COM_TREE_DEPTH);
 
 		// ── Sample accounts ───────────────────────────────────────────────────
 		let mut rng = ChaCha8Rng::seed_from_u64(1);
@@ -589,7 +589,7 @@ mod tests {
 		// Generate all Merkle proofs against the FINAL tree root
 		let acc0_act_proof = CommitmentTreeMerkleProof::new(
 			acc0.commitment().0,
-			tree.merkle_path(acc0_pos, 0, ACT_DEPTH).unwrap(),
+			tree.merkle_path(acc0_pos, 0, COM_TREE_DEPTH).unwrap(),
 			acc0_pos,
 			tree.num_leaves(),
 		);
@@ -599,13 +599,13 @@ mod tests {
 		let inotes_nct_proofs = [
 			CommitmentTreeMerkleProof::new(
 				inotes[0].commitment().0,
-				tree.merkle_path(n0_pos, 0, NCT_DEPTH).unwrap(),
+				tree.merkle_path(n0_pos, 0, COM_TREE_DEPTH).unwrap(),
 				n0_pos,
 				tree.num_leaves(),
 			),
 			CommitmentTreeMerkleProof::new(
 				inotes[1].commitment().0,
-				tree.merkle_path(n1_pos, 0, NCT_DEPTH).unwrap(),
+				tree.merkle_path(n1_pos, 0, COM_TREE_DEPTH).unwrap(),
 				n1_pos,
 				tree.num_leaves(),
 			),

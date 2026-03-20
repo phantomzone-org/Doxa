@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tessera_client::NoteCommitment;
-use tessera_trees::tree::hasher::HashOutput;
+use tessera_utils::hasher::HashOutput;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteCommitmentBatch {

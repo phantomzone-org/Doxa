@@ -10,12 +10,9 @@ use plonky2::{
 	plonk::config::{AlgebraicHasher, Hasher},
 };
 use plonky2_field::types::Field;
-use tessera_trees::{
-	F,
-	tree::{
-		HASH_SIZE,
-		hasher::{HashOutput, MerkleHash},
-	},
+use tessera_utils::{
+	F, HASH_SIZE,
+	hasher::{HashOutput, MerkleHash},
 };
 
 // #[derive(Clone, Debug, PartialEq, Eq)]

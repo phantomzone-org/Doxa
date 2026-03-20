@@ -2,10 +2,7 @@ use std::hash::Hash;
 
 use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
 use plonky2_field::types::{Field, PrimeField64};
-use tessera_trees::{
-	F,
-	tree::{HASH_SIZE, hasher::HashOutput},
-};
+use tessera_utils::{F, HASH_SIZE, hasher::HashOutput};
 
 use crate::{
 	MAIN_POOL_CONFIG_DEPTH, SubpoolId,

@@ -14,14 +14,14 @@ use plonky2_field::{
 	types::{Field, PrimeField64},
 };
 use primitive_types::{H160, U256};
-use tessera_trees::{
+use tessera_utils::{
 	F,
-	plonky2_gadgets::u32::add_u8_range_check_lookup_table,
-	tree::hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
+	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
+	plonky2_gadgets::u32::gadgets::add_u8_range_check_lookup_table,
 };
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, AccountAddress, AssetId, MAIN_POOL_CONFIG_DEPTH, Nonce,
+	ACC_AST_DEPTH, AccountAddress, AssetId, COM_TREE_DEPTH, MAIN_POOL_CONFIG_DEPTH, Nonce,
 	SUBPOOL_CONFIG_DEPTH, StandardAccount, SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
 	derive_deposit_tx_hash,
@@ -247,7 +247,7 @@ pub(crate) fn set_deposit_tx_witness(
 	act_root: HashOutput,
 	main_pool: MainPoolConfigTree,
 	accin: &StandardAccount,
-	accin_act_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
+	accin_act_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
 	deposit_note: &DepositNote,
 	eth_address: &H160,
 	approval_key: &CompPubKey,
@@ -419,7 +419,7 @@ pub(crate) fn set_fake_deposit_tx_witness(
 	pw.set_target(t.accin_pos, F::ZERO).unwrap();
 
 	// ── ACT Merkle proof (all zeros) ──────────────────────────────────────────
-	t.accin_act_merkle.set_dummy_witness(pw, ACT_DEPTH);
+	t.accin_act_merkle.set_dummy_witness(pw, COM_TREE_DEPTH);
 
 	// ── AST Merkle proof (real path of default leaf at index 0) ──────────────
 	t.accin_ast_merkle
@@ -496,11 +496,12 @@ mod tests {
 	use primitive_types::{H160, U256};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::{CommitmentTree, hasher::HashOutput};
+	use tessera_trees::CommitmentTree;
+	use tessera_utils::hasher::HashOutput;
 
 	use super::*;
 	use crate::{
-		ACT_DEPTH, AccountAddress, AssetId, Nonce, StandardAccount, SubpoolId,
+		AccountAddress, AssetId, COM_TREE_DEPTH, Nonce, StandardAccount, SubpoolId,
 		account::AccountStateTreeLeaf,
 		derive_deposit_tx_hash,
 		note::DepositNote,
@@ -538,7 +539,7 @@ mod tests {
 		};
 
 		// ── Insert accin into ACT ─────────────────────────────────────────────
-		let mut act = CommitmentTree::<HashOutput>::new(ACT_DEPTH);
+		let mut act = CommitmentTree::<HashOutput>::new(COM_TREE_DEPTH);
 		let accin_insert = act.insert(accin.commitment().0).unwrap();
 		assert_eq!(&accin_insert.siblings_new, &accin_insert.siblings_old);
 		let accin_merkle_proof = CommitmentTreeMerkleProof::new(

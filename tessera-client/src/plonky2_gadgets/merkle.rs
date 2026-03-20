@@ -24,12 +24,9 @@ use plonky2_field::{
 	extension::Extendable,
 	types::{Field, Field64},
 };
-use tessera_trees::{
-	F,
-	tree::{
-		HASH_SIZE,
-		hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
-	},
+use tessera_utils::{
+	F, HASH_SIZE,
+	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 };
 
 use crate::tree::{CommitmentTreeMerkleProof, MerkleProof, Node};

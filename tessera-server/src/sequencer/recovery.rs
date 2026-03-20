@@ -5,7 +5,7 @@ use alloy::{
 	rpc::types::{Filter, Log},
 	sol_types::SolEvent,
 };
-use tessera_trees::tree::hasher::HashOutput;
+use tessera_utils::hasher::HashOutput;
 use tracing::{debug, info};
 
 use crate::contract::{self, ITesseraRollupV2};

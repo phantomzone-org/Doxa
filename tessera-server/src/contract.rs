@@ -1,6 +1,6 @@
 use alloy::{primitives::B256, sol};
 use plonky2::field::types::Field;
-use tessera_trees::{tree::hasher::HashOutput, F};
+use tessera_utils::{hasher::HashOutput, F};
 
 /// Convert a `HashOutput` (4 Goldilocks field elements) to `bytes32`.
 ///

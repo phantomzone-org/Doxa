@@ -7,10 +7,11 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy::primitives::FixedBytes;
-use tessera_trees::{proof_aggregation::SubtreeRootCircuit, tree::hasher::HashOutput, F};
+use tessera_utils::{hasher::HashOutput, F};
 
 use crate::{
 	dummy::derive_dummy_leaf,
+	proof_aggregation::SubtreeRootCircuit,
 	types::{ConsumeProveRequest, ProveRequestV2},
 };
 

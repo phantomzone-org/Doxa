@@ -15,14 +15,14 @@ use plonky2_field::{
 	types::{Field, PrimeField64},
 };
 use primitive_types::{H160, U256};
-use tessera_trees::{
+use tessera_utils::{
 	F,
+	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 	plonky2_gadgets::u32::add_u8_range_check_lookup_table,
-	tree::hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 };
 
 use crate::{
-	ACT_DEPTH, AssetId, NOTE_BATCH, Nonce, StandardAccount, SubpoolId,
+	AssetId, COM_TREE_DEPTH, NOTE_BATCH, Nonce, StandardAccount, SubpoolId,
 	account::AccountStateTreeLeaf,
 	derive_withdraw_tx_hash,
 	ecgfp5::PointEw,
@@ -240,7 +240,7 @@ pub(crate) fn set_withdraw_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &WithdrawTxTargets,
 	accin: &StandardAccount,
-	accin_act_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
+	accin_act_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
 	act_root: HashOutput,
 	main_pool: &MainPoolConfigTree,
 	withdrawals: &[(AssetId, U256)],
@@ -381,11 +381,12 @@ mod tests {
 	use primitive_types::{H160, U256};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::{CommitmentTree, hasher::HashOutput};
+	use tessera_trees::CommitmentTree;
+	use tessera_utils::hasher::HashOutput;
 
 	use super::*;
 	use crate::{
-		ACT_DEPTH, AssetId, Nonce, SpendAuth, StandardAccount, SubpoolId,
+		AssetId, COM_TREE_DEPTH, Nonce, SpendAuth, StandardAccount, SubpoolId,
 		account::AccountStateTreeLeaf,
 		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
@@ -436,7 +437,7 @@ mod tests {
 			.unwrap();
 
 		// ── Insert accin into ACT ─────────────────────────────────────────
-		let mut act = CommitmentTree::<HashOutput>::new(ACT_DEPTH);
+		let mut act = CommitmentTree::<HashOutput>::new(COM_TREE_DEPTH);
 		let accin_insert = act.insert(accin.commitment().0).unwrap();
 		let accin_act_proof = CommitmentTreeMerkleProof::new(
 			accin.commitment().0,

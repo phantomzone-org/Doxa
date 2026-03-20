@@ -19,7 +19,7 @@ use std::{fs, path::PathBuf, time::Instant};
 use anyhow::Result;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use tessera_client::TesseraGateSerializer;
-use tessera_trees::proof_aggregation::{GenericAggregator, GenericAggregatorConfig};
+use tessera_server::proof_aggregation::{GenericAggregator, GenericAggregatorConfig};
 
 fn debug_enabled() -> bool {
 	std::env::var("TESSERA_DEBUG")

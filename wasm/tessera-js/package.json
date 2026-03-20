@@ -1,0 +1,14 @@
+{
+  "name": "tessera-js",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build:wasm": "cd ../tessera-client-wasm && wasm-pack build --target bundler --out-dir ../tessera-js/wasm",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  }
+}
