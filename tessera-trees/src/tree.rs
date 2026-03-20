@@ -4,11 +4,9 @@ use alloc::{vec, vec::Vec};
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
+use tessera_utils::hasher::MerkleHash;
 
-use crate::tree::{
-	error::{MerkleTreeError, MerkleTreeResult},
-	hasher::MerkleHash,
-};
+use crate::error::{MerkleTreeError, MerkleTreeResult};
 
 /// Represents an indexed nullifier merkle tree.
 ///

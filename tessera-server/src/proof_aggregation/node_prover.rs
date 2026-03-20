@@ -117,9 +117,9 @@ mod tests {
 			circuit_data::{CircuitConfig, CircuitData},
 		},
 	};
+	use tessera_utils::{ConfigNative, D, F};
 
 	use super::*;
-	use tessera_trees::{ConfigNative, D, F};
 	use crate::proof_aggregation::GenericAggregatorConfig;
 
 	fn build_leaf_circuit(n_pi: usize) -> (CircuitData<F, ConfigNative, D>, Vec<Target>) {

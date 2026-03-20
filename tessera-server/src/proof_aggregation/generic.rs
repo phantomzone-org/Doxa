@@ -6,7 +6,7 @@
 
 use std::{fs, path::Path, time::Instant};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use plonky2::{
 	field::extension::Extendable,
 	hash::hash_types::RichField,
@@ -23,11 +23,11 @@ use plonky2::{
 	util::serialization::{DefaultGateSerializer, GateSerializer},
 };
 use serde::{Deserialize, Serialize};
+use tessera_utils::groth::TesseraGeneratorSerializer;
 
 use super::artifacts::{
-	LEAF_COMMON_PATH, LEAF_VERIFIER_PATH, MANIFEST_PATH, MANIFEST_VERSION, level_circuit_path,
+	level_circuit_path, LEAF_COMMON_PATH, LEAF_VERIFIER_PATH, MANIFEST_PATH, MANIFEST_VERSION,
 };
-use crate::groth::serializer::TesseraGeneratorSerializer;
 
 // ---------------------------------------------------------------------------
 // Public manifest version cap
@@ -324,7 +324,7 @@ where
 // `(GoldilocksField, 2)`, so these methods must live on a monomorphised impl
 // block rather than the generic one above.
 
-impl GenericAggregator<tessera_trees::F, tessera_trees::ConfigNative, 2> {
+impl GenericAggregator<tessera_utils::F, tessera_utils::ConfigNative, 2> {
 	/// Persist all circuit artifacts to `path`.
 	///
 	/// Creates the directory if it does not exist.  Overwrites any existing
@@ -602,9 +602,9 @@ mod tests {
 		},
 		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 	};
+	use tessera_utils::{ConfigNative, D, F};
 
 	use super::*;
-	use tessera_trees::{ConfigNative, D, F};
 
 	// -----------------------------------------------------------------------
 	// Helpers

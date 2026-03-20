@@ -11,11 +11,9 @@ use plonky2::{
 	},
 	plonk::circuit_builder::CircuitBuilder,
 };
+use tessera_utils::hasher::{MerkleHashCircuit, MerkleHashTarget};
 
-use crate::tree::{
-	BatchCommitmentProof,
-	hasher::{MerkleHashCircuit, MerkleHashTarget},
-};
+use crate::BatchCommitmentProof;
 
 pub struct BatchCommitmentProofTargets<const N: usize> {
 	pub leaves: Vec<MerkleHashTarget<N>>,
@@ -230,11 +228,9 @@ mod test {
 		},
 	};
 	use rand::{SeedableRng, rngs::StdRng};
+	use tessera_utils::hasher::{HashOutput, MerkleHashCircuit, NewRandom};
 
-	use crate::tree::{
-		BatchCommitmentProofTargets, CommitmentTree,
-		hasher::{HashOutput, MerkleHashCircuit, NewRandom},
-	};
+	use crate::{BatchCommitmentProofTargets, CommitmentTree};
 
 	const D: usize = 2;
 	pub type C = PoseidonGoldilocksConfig;

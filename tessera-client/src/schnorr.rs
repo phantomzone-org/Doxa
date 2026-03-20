@@ -6,7 +6,7 @@ use plonky2_field::{
 	goldilocks_field::GoldilocksField,
 	types::{Field, PrimeField64},
 };
-use tessera_trees::F;
+use tessera_utils::F;
 
 use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 

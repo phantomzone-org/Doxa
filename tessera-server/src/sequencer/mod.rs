@@ -9,7 +9,7 @@ use alloy::{
 	signers::{local::PrivateKeySigner, Signer},
 };
 use anyhow::Context;
-use tessera_trees::{tree::hasher::HashOutput, F};
+use tessera_utils::{hasher::HashOutput, F};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 

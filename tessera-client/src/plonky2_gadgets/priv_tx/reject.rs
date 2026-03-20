@@ -1,7 +1,7 @@
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
-use tessera_trees::{F, tree::hasher::HashOutput};
+use tessera_utils::{F, hasher::HashOutput};
 
 use super::{
 	double_hash_native,
@@ -264,10 +264,8 @@ mod tests {
 	use primitive_types::U256;
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::{
-		CommitmentTree,
-		hasher::{HashOutput, MerkleHashCircuit},
-	};
+	use tessera_trees::CommitmentTree;
+	use tessera_utils::hasher::{HashOutput, MerkleHashCircuit};
 
 	use super::*;
 	use crate::{

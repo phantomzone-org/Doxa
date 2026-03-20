@@ -11,6 +11,7 @@ rand = {workspace = true}
 rand_chacha = {workspace = true}
 itertools = {workspace = true}
 tessera-trees = {workspace = true}
+tessera-utils = {workspace = true}
 primitive-types = {workspace = true}
 digest = {workspace = true}
 serde = {workspace = true}

@@ -5,10 +5,7 @@ use plonky2_field::types::{Field, Field64, PrimeField64};
 use primitive_types::{H160, U256};
 use rand::{CryptoRng, Rng, RngExt};
 use serde::{Deserialize, Serialize};
-use tessera_trees::{
-	F,
-	tree::{HASH_SIZE, hasher::HashOutput},
-};
+use tessera_utils::{F, HASH_SIZE, hasher::HashOutput};
 
 use crate::{
 	ACC_AST_DEPTH, AST_DEFAULT_LEAF, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,

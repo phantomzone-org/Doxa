@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use tessera_trees::tree::{hasher::HashOutput, CommitmentTree};
+use tessera_trees::CommitmentTree;
+use tessera_utils::hasher::HashOutput;
 
 use crate::TREE_DEPTH;
 

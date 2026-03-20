@@ -69,19 +69,18 @@ pub const TX_LEAF_PI_SIZE: usize = 77;
 pub const IS_REAL_OFFSET: usize = 4;
 /// Offset of the first TX data field (account nullifier) within a TX leaf's public inputs.
 pub const TX_DATA_OFFSET: usize = 5;
-use tessera_trees::{
+use tessera_utils::{
+	groth::TesseraGeneratorSerializer,
+	hasher::HashOutput,
 	plonky2_gadgets::{
 		keccak256::{
 			builder::BuilderKeccak256, field_decompose::decompose_field_to_u32_pair,
 			utils::solidity_keccak256,
 		},
-		u32::add_u8_range_check_lookup_table,
+		u32::gadgets::add_u8_range_check_lookup_table,
 	},
-	tree::hasher::HashOutput,
 	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
-
-use crate::groth::serializer::TesseraGeneratorSerializer;
 
 // ---------------------------------------------------------------------------
 // Artifact path constants
@@ -693,7 +692,7 @@ mod tests {
 		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 	};
 	use rand::{rngs::StdRng, SeedableRng};
-	use tessera_trees::tree::hasher::NewRandom;
+	use tessera_utils::hasher::NewRandom;
 
 	use super::*;
 	use crate::proof_aggregation::{SubtreeRootCircuit, TX_LEAF_PI_SIZE};

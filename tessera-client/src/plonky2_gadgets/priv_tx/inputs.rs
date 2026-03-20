@@ -1,4 +1,4 @@
-use tessera_trees::{F, tree::hasher::HashOutput};
+use tessera_utils::{F, hasher::HashOutput};
 
 use crate::{
 	ACT_DEPTH, ConsumeAuth, NCT_DEPTH, NOTE_BATCH, SpendAuth, StandardAccount, SubpoolId,

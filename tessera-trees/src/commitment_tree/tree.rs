@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use tessera_utils::hasher::MerkleHash;
 
-use crate::tree::{
-	BatchCommitmentProof, CommitmentInsertProof, MerkleTree, error::MerkleTreeResult,
-	hasher::MerkleHash,
-};
+use crate::{BatchCommitmentProof, CommitmentInsertProof, MerkleTree, error::MerkleTreeResult};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(
@@ -143,11 +141,9 @@ mod tests {
 
 	use anyhow::Result;
 	use rand::{SeedableRng, rngs::StdRng};
+	use tessera_utils::hasher::{HashOutput, NewRandom};
 
-	use crate::tree::{
-		BatchCommitmentProof, CommitmentInsertProof, CommitmentTree,
-		hasher::{HashOutput, NewRandom},
-	};
+	use crate::{BatchCommitmentProof, CommitmentInsertProof, CommitmentTree};
 
 	const DEPTH: usize = 10;
 	const NUM_INSERTS: usize = 256;

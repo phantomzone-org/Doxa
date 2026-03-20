@@ -24,7 +24,7 @@ use plonky2::{
 	},
 	util::serialization::{DefaultGateSerializer, DefaultGeneratorSerializer},
 };
-use tessera_trees::{ConfigNative, D, F};
+use tessera_utils::{ConfigNative, D, F};
 
 const N_PI: usize = 4;
 

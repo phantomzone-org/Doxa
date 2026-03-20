@@ -14,10 +14,10 @@ use plonky2_field::{
 	types::{Field, PrimeField64},
 };
 use primitive_types::{H160, U256};
-use tessera_trees::{
+use tessera_utils::{
 	F,
-	plonky2_gadgets::u32::add_u8_range_check_lookup_table,
-	tree::hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
+	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
+	plonky2_gadgets::u32::gadgets::add_u8_range_check_lookup_table,
 };
 
 use crate::{
@@ -496,7 +496,8 @@ mod tests {
 	use primitive_types::{H160, U256};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::{CommitmentTree, hasher::HashOutput};
+	use tessera_trees::CommitmentTree;
+	use tessera_utils::hasher::HashOutput;
 
 	use super::*;
 	use crate::{

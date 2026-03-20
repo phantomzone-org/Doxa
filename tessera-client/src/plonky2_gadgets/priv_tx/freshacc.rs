@@ -6,7 +6,7 @@ use plonky2::{
 };
 use plonky2_field::types::Field;
 use rand::Rng;
-use tessera_trees::{F, tree::hasher::HashOutput};
+use tessera_utils::{F, hasher::HashOutput};
 
 use super::{
 	double_hash_native,
@@ -231,7 +231,7 @@ mod tests {
 	use plonky2_field::types::Field;
 	use rand::{SeedableRng, rand_core::Rng};
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::hasher::{HashOutput, MerkleHashCircuit};
+	use tessera_utils::hasher::{HashOutput, MerkleHashCircuit};
 
 	use super::*;
 	use crate::{

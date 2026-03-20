@@ -29,14 +29,17 @@ use anyhow::{ensure, Result};
 use plonky2::field::types::Field;
 use tessera_client::TesseraGateSerializer;
 use tessera_server::{
-	groth::{BN128Wrapper, Groth16Wrapper},
 	proof_aggregation::{
 		GenericAggregator, GenericAggregatorConfig, SubtreeRootCircuit, SuperAggregatorV2,
 		SuperAggregatorV2CircuitData, TX_DATA_OFFSET, TX_LEAF_PI_SIZE,
 	},
 	ProofBN128,
 };
-use tessera_trees::{tree::hasher::HashOutput, ProofNative, F};
+use tessera_utils::{
+	groth::{BN128Wrapper, Groth16Wrapper},
+	hasher::HashOutput,
+	ProofNative, F,
+};
 
 const ARITY: usize = 2;
 const NOTES_PER_SLOT: usize = tessera_client::NOTE_BATCH;

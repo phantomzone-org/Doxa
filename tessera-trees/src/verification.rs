@@ -1,9 +1,9 @@
 use anyhow::anyhow;
+use tessera_utils::hasher::MerkleHash;
 
-use crate::tree::{
+use crate::{
 	MerkleTree,
 	error::{MerkleTreeError, MerkleTreeResult},
-	hasher::MerkleHash,
 };
 
 impl<H: MerkleHash> MerkleTree<H> {

@@ -3,9 +3,9 @@ use std::array;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
-use tessera_trees::{
+use tessera_utils::{
 	F,
-	tree::hasher::{HashOutput, MerkleHashCircuit},
+	hasher::{HashOutput, MerkleHashCircuit},
 };
 
 use super::{
@@ -500,7 +500,7 @@ mod tests {
 	};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::CommitmentTree;
+	use tessera_trees::CommitmentTree;
 
 	use super::*;
 	use crate::{

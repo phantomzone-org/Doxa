@@ -7,12 +7,10 @@ use plonky2::{
 	plonk::circuit_builder::CircuitBuilder,
 };
 use plonky2_field::extension::Extendable;
-use tessera_trees::{
+use tessera_utils::{
+	HASH_SIZE,
+	hasher::{MerkleHashCircuit, MerkleHashTarget},
 	plonky2_gadgets::u32::{U32Target, add_u8_range_check_lookup_table},
-	tree::{
-		HASH_SIZE,
-		hasher::{MerkleHashCircuit, MerkleHashTarget},
-	},
 };
 
 use crate::{

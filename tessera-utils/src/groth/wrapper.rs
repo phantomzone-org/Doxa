@@ -19,12 +19,15 @@ use plonky2::{
 	util::serialization::{DefaultGateSerializer, DefaultGeneratorSerializer},
 };
 use serde::Serialize;
-use tessera_trees::{CircuitDataNative, ConfigNative, F, ProofNative};
 
-use super::serializer::TesseraGeneratorSerializer;
-use crate::{CircuitDataBN128, ConfigBN128, ProofBN128};
+use super::{CircuitDataBN128, ConfigBN128, ProofBN128, serializer::TesseraGeneratorSerializer};
+use crate::{CircuitDataNative, ConfigNative, F, ProofNative};
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+#[allow(warnings)]
+mod bindings {
+	include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+use bindings::*;
 
 const PROVING_KEY_PATH: &str = "proving.key";
 const VERIFYING_KEY_PATH: &str = "verifying.key";
@@ -38,6 +41,7 @@ const BN128_CIRCUIT_DATA_PATH: &str = "bn128_circuit_data.bin";
 pub struct Groth16Wrapper {}
 
 impl Groth16Wrapper {
+	#[allow(dead_code)]
 	#[inline]
 	fn debug_enabled() -> bool {
 		std::env::var("TESSERA_DEBUG")
@@ -45,6 +49,7 @@ impl Groth16Wrapper {
 			.unwrap_or(false)
 	}
 
+	#[allow(dead_code)]
 	#[inline]
 	fn debug_log(msg: &str) {
 		if Self::debug_enabled() {

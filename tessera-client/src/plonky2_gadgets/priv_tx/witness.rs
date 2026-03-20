@@ -1,5 +1,5 @@
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
-use tessera_trees::{F, tree::hasher::HashOutput};
+use tessera_utils::{F, hasher::HashOutput};
 
 use super::targets::TxCircuitTargets;
 use crate::{

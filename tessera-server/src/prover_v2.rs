@@ -24,14 +24,10 @@ use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use plonky2::{field::types::PrimeField64, plonk::proof::ProofWithPublicInputs};
-use tessera_trees::{tree::hasher::HashOutput, ConfigNative, ProofNative, D, F};
-
-use crate::{
+use tessera_utils::{
 	groth::{BN128Wrapper, Groth16Wrapper},
-	proof_aggregation::{
-		validate_subtree_nc_offcircuit, GenericAggregator, SubtreeRootCircuit, SuperAggregatorV2,
-		TX_LEAF_PI_SIZE,
-	},
+	hasher::HashOutput,
+	ConfigNative, ProofNative, D, F,
 };
 use tracing::{error, info};
 
@@ -39,6 +35,10 @@ use crate::{
 	aggregation_pipeline::{
 		start_aggregation_session, AsyncNodeProver, LocalAsyncNodeProver, NodeProverPool,
 		RemoteNodeProver,
+	},
+	proof_aggregation::{
+		validate_subtree_nc_offcircuit, GenericAggregator, SubtreeRootCircuit, SuperAggregatorV2,
+		TX_LEAF_PI_SIZE,
 	},
 	types::{ConsumeOutcome, ConsumeProveRequest, ProveOutcomeV2, ProveRequestV2, SolidityProof},
 };
@@ -549,7 +549,7 @@ pub struct AssociatedInputAggregatorService {
 	aggregator: Arc<GenericAggregator<F, ConfigNative, D>>,
 	pool: Arc<NodeProverPool<F, ConfigNative, D>>,
 	/// The inner PrivTx circuit data (needed for proof deserialization).
-	pub(crate) inner_circuit: tessera_trees::CircuitDataNative,
+	pub(crate) inner_circuit: tessera_utils::CircuitDataNative,
 }
 
 impl AssociatedInputAggregatorService {

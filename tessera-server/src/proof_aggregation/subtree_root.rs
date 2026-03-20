@@ -25,17 +25,16 @@
 
 use std::{fs, path::Path};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use plonky2::{
 	iop::witness::PartialWitness,
 	plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 	util::serialization::DefaultGateSerializer,
 };
-
-use crate::groth::serializer::TesseraGeneratorSerializer;
-use tessera_trees::{
-	CircuitDataNative, ConfigNative, D, F, ProofNative,
-	tree::hasher::{HashOutput, MerkleHash, MerkleHashCircuit, MerkleHashTarget},
+use tessera_utils::{
+	groth::TesseraGeneratorSerializer,
+	hasher::{HashOutput, MerkleHash, MerkleHashCircuit, MerkleHashTarget},
+	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
 
 // ---------------------------------------------------------------------------
@@ -258,10 +257,10 @@ impl SubtreeRootCircuit {
 mod tests {
 	use anyhow::Result;
 	use plonky2::field::types::Field;
-	use rand::{SeedableRng, rngs::StdRng};
+	use rand::{rngs::StdRng, SeedableRng};
+	use tessera_utils::hasher::{MerkleHash, NewRandom};
 
 	use super::*;
-	use tessera_trees::tree::hasher::{MerkleHash, NewRandom};
 
 	/// Depth-1 tree (2 leaves): verifies both the hash direction and PI layout.
 	///

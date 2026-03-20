@@ -1,4 +1,4 @@
-use crate::tree::hasher::MerkleHash;
+use tessera_utils::hasher::MerkleHash;
 
 /// A Merkle membership proof for single leaf insertion.
 ///

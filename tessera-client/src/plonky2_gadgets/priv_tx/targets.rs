@@ -6,7 +6,7 @@ use plonky2::{
 	},
 };
 use plonky2_field::types::Field;
-use tessera_trees::F;
+use tessera_utils::F;
 
 use crate::{
 	ACC_AST_DEPTH, ACT_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK,

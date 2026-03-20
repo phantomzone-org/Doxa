@@ -5,7 +5,7 @@ use plonky2::{
 		witness::{PartialWitness, WitnessWrite},
 	},
 };
-use tessera_trees::F;
+use tessera_utils::F;
 
 use crate::{
 	ACC_AST_DEPTH, ACT_DEPTH,

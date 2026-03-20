@@ -1,10 +1,7 @@
 use digest::{Digest, Output};
 use plonky2_field::types::{Field, PrimeField64};
 use serde::{Deserialize, Serialize};
-use tessera_trees::{
-	F,
-	tree::{HASH_SIZE, hasher::HashOutput},
-};
+use tessera_utils::{F, HASH_SIZE, hasher::HashOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Commitment(pub [u8; 32]);

@@ -4,7 +4,7 @@ use plonky2_field::types::{Field, Field64};
 use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt, distr::Uniform};
 use serde::{Deserialize, Serialize};
-use tessera_trees::{F, tree::hasher::HashOutput};
+use tessera_utils::{F, hasher::HashOutput};
 
 use crate::{AccountAddress, AssetId, account::NullifierKey};
 

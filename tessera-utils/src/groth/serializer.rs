@@ -35,26 +35,24 @@ use plonky2::{
 #[allow(unused_imports)]
 use plonky2::{get_generator_tag_impl, read_generator_impl};
 
-use tessera_trees::{
-	ConfigNative, F,
-	plonky2_gadgets::{
-		keccak256::field_decompose::{CanonicalCheckGenerator, FieldDecompositionGenerator},
-		keccak256::generators::{
-			single_generator::Keccak256SingleGenerator,
-			stark_proof_generator::Keccak256StarkProofGenerator,
-		},
-		u32::gadgets::{
-			// defined directly in gadgets/mod.rs
-			ByteDecompositionGenerator,
-			ChunkDecompositionGenerator,
-			LimbByteDecompositionGenerator,
-			U16LimbDecompositionGenerator,
-			// pub(crate) in submodules — not re-exported by `pub use arithmetic::*`
-			arithmetic::U32WrappingAddGenerator,
-			rotation::SplitLowHighGenerator,
-		},
+use crate::plonky2_gadgets::{
+	keccak256::field_decompose::{CanonicalCheckGenerator, FieldDecompositionGenerator},
+	keccak256::generators::{
+		single_generator::Keccak256SingleGenerator,
+		stark_proof_generator::Keccak256StarkProofGenerator,
+	},
+	u32::gadgets::{
+		// defined directly in gadgets/mod.rs
+		ByteDecompositionGenerator,
+		ChunkDecompositionGenerator,
+		LimbByteDecompositionGenerator,
+		U16LimbDecompositionGenerator,
+		// pub(crate) in submodules — not re-exported by `pub use arithmetic::*`
+		arithmetic::U32WrappingAddGenerator,
+		rotation::SplitLowHighGenerator,
 	},
 };
+use crate::{ConfigNative, F};
 
 const D: usize = 2;
 

@@ -429,7 +429,7 @@ mod tests {
 			proof::ProofWithPublicInputs,
 		},
 	};
-	use tessera_trees::{ConfigNative, D, F};
+	use tessera_utils::{ConfigNative, D, F};
 
 	use super::*;
 	use crate::{

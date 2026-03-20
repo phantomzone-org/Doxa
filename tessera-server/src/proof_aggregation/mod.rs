@@ -6,6 +6,7 @@
 mod artifacts;
 pub mod generic;
 pub mod node_prover;
+pub mod plonky2_gadgets;
 pub mod subtree_root;
 pub mod super_aggregator_v2;
 
@@ -16,6 +17,6 @@ pub use generic::{
 pub use node_prover::{LocalNodeProver, NodeProver};
 pub use subtree_root::SubtreeRootCircuit;
 pub use super_aggregator_v2::{
-	IS_REAL_OFFSET, SuperAggregatorV2, SuperAggregatorV2CircuitData, TX_DATA_OFFSET,
-	TX_LEAF_PI_SIZE, validate_subtree_nc_offcircuit,
+	validate_subtree_nc_offcircuit, SuperAggregatorV2, SuperAggregatorV2CircuitData,
+	IS_REAL_OFFSET, TX_DATA_OFFSET, TX_LEAF_PI_SIZE,
 };

@@ -3,8 +3,7 @@ use plonky2::{
 	hash::hash_types::RichField,
 };
 use serde::{Deserialize, Serialize};
-
-use crate::tree::hasher::{CommitmentPreimage, DataCommitment, MerkleHash, ToHashOut};
+use tessera_utils::hasher::{CommitmentPreimage, DataCommitment, MerkleHash, ToHashOut};
 
 /// A Merkle proof for batch leaf insertion.
 ///
@@ -200,11 +199,9 @@ where
 mod test {
 	use anyhow::Result;
 	use rand::{SeedableRng, rngs::StdRng};
+	use tessera_utils::hasher::{HashOutput, NewRandom};
 
-	use crate::tree::{
-		BatchCommitmentProof, CommitmentTree,
-		hasher::{HashOutput, NewRandom},
-	};
+	use crate::{BatchCommitmentProof, CommitmentTree};
 
 	#[test]
 	fn test_batch_merkle_proof() -> Result<()> {

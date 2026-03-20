@@ -9,9 +9,9 @@ use plonky2::{
 };
 use plonky2_field::{extension::Extendable, types::Field};
 use rand::{CryptoRng, Rng};
-use tessera_trees::{
+use tessera_utils::{
 	F,
-	tree::hasher::{MerkleHashCircuit, MerkleHashTarget},
+	hasher::{MerkleHashCircuit, MerkleHashTarget},
 };
 
 use crate::{
@@ -389,22 +389,22 @@ pub fn priv_tx_circuit<
 /// Returns `(circuit_data, proof)`.
 fn build_circuit_and_proof_inner(
 	not_fake_tx: bool,
-) -> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+) -> (tessera_utils::CircuitDataNative, tessera_utils::ProofNative) {
 	build_circuit_and_proof_seeded(not_fake_tx, 0xDEAD_BEEF_CAFE_0000)
 }
 
 fn build_circuit_and_proof_seeded(
 	not_fake_tx: bool,
 	seed: u64,
-) -> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+) -> (tessera_utils::CircuitDataNative, tessera_utils::ProofNative) {
 	use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
-	use tessera_trees::tree::hasher::HashOutput;
+	use tessera_utils::hasher::HashOutput;
 
 	let config = CircuitConfig::standard_recursion_config();
-	let mut builder = CircuitBuilder::<F, { tessera_trees::D }>::new(config);
+	let mut builder = CircuitBuilder::<F, { tessera_utils::D }>::new(config);
 	HashOutput::register_luts(&mut builder);
-	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder, &());
-	let circuit = builder.build::<tessera_trees::ConfigNative>();
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder, &());
+	let circuit = builder.build::<tessera_utils::ConfigNative>();
 	let proof = prove_priv_tx(&circuit, &t, not_fake_tx, seed);
 	(circuit, proof)
 }
@@ -414,18 +414,18 @@ fn build_circuit_and_proof_seeded(
 /// Different seeds produce different accounts, notes, nullifiers, and commitments,
 /// ensuring each proof is unique.
 fn prove_priv_tx(
-	circuit: &tessera_trees::CircuitDataNative,
-	t: &PrivTxTargets<{ tessera_trees::D }>,
+	circuit: &tessera_utils::CircuitDataNative,
+	t: &PrivTxTargets<{ tessera_utils::D }>,
 	not_fake_tx: bool,
 	seed: u64,
-) -> tessera_trees::ProofNative {
+) -> tessera_utils::ProofNative {
 	use std::array;
 
 	use plonky2::iop::witness::PartialWitness;
 	use plonky2_field::types::Field;
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::tree::hasher::HashOutput;
+	use tessera_utils::hasher::HashOutput;
 
 	use crate::{
 		ConsumeAuth, Nonce, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
@@ -537,7 +537,7 @@ fn prove_priv_tx(
 /// - `dummy_proof` is a valid proof with `PI[0]=0` (not_fake_tx=false), used for padding empty
 ///   aggregation slots on the server.
 pub fn build_circuit_and_dummy_proof()
--> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+-> (tessera_utils::CircuitDataNative, tessera_utils::ProofNative) {
 	build_circuit_and_proof_inner(false)
 }
 
@@ -548,7 +548,7 @@ pub fn build_circuit_and_dummy_proof()
 /// - `real_proof` is a valid proof with `PI[0]=1` (not_fake_tx=true) and all constraints enforced.
 ///   Suitable for E2E testing with the full proof pipeline.
 pub fn build_circuit_and_real_proof()
--> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+-> (tessera_utils::CircuitDataNative, tessera_utils::ProofNative) {
 	build_circuit_and_proof_inner(true)
 }
 
@@ -559,7 +559,7 @@ pub fn build_circuit_and_real_proof()
 /// [`build_priv_tx_circuit`] + [`prove_real_priv_tx`] to reuse the circuit.
 pub fn build_circuit_and_real_proof_seeded(
 	seed: u64,
-) -> (tessera_trees::CircuitDataNative, tessera_trees::ProofNative) {
+) -> (tessera_utils::CircuitDataNative, tessera_utils::ProofNative) {
 	build_circuit_and_proof_seeded(true, seed)
 }
 
@@ -567,17 +567,17 @@ pub fn build_circuit_and_real_proof_seeded(
 ///
 /// Returns `(circuit_data, targets)` for use with [`prove_real_priv_tx`].
 pub fn build_priv_tx_circuit() -> (
-	tessera_trees::CircuitDataNative,
-	PrivTxTargets<{ tessera_trees::D }>,
+	tessera_utils::CircuitDataNative,
+	PrivTxTargets<{ tessera_utils::D }>,
 ) {
 	use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
-	use tessera_trees::tree::hasher::HashOutput;
+	use tessera_utils::hasher::HashOutput;
 
 	let config = CircuitConfig::standard_recursion_config();
-	let mut builder = CircuitBuilder::<F, { tessera_trees::D }>::new(config);
+	let mut builder = CircuitBuilder::<F, { tessera_utils::D }>::new(config);
 	HashOutput::register_luts(&mut builder);
-	let t = priv_tx_circuit::<HashOutput, F, { tessera_trees::D }>(&mut builder, &());
-	let circuit = builder.build::<tessera_trees::ConfigNative>();
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder, &());
+	let circuit = builder.build::<tessera_utils::ConfigNative>();
 	(circuit, t)
 }
 
@@ -595,10 +595,10 @@ pub fn build_priv_tx_circuit() -> (
 /// PI[77-80] and PI[81-84] (V2 uses a single on-chain IMT) and must match the
 /// Merkle proofs supplied (the circuit enforces this when `not_fake_tx=1`).
 pub fn prove_real_priv_tx(
-	circuit: &tessera_trees::CircuitDataNative,
-	targets: &PrivTxTargets<{ tessera_trees::D }>,
+	circuit: &tessera_utils::CircuitDataNative,
+	targets: &PrivTxTargets<{ tessera_utils::D }>,
 	inputs: PrivTxInputs,
-) -> tessera_trees::ProofNative {
+) -> tessera_utils::ProofNative {
 	use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 	use plonky2_field::types::Field;
 
@@ -693,14 +693,14 @@ pub fn prove_real_priv_tx(
 /// The override fields become the proof's public inputs, allowing the sequencer
 /// to align each padding slot with nullifier- and commitment-tree padding leaves.
 pub fn prove_dummy_priv_tx(
-	circuit: &tessera_trees::CircuitDataNative,
-	targets: &PrivTxTargets<{ tessera_trees::D }>,
+	circuit: &tessera_utils::CircuitDataNative,
+	targets: &PrivTxTargets<{ tessera_utils::D }>,
 	override_an: [F; 4],
 	override_nn: [[F; 4]; NOTE_BATCH],
 	override_ac: [F; 4],
 	override_nc: [[F; 4]; NOTE_BATCH],
-) -> tessera_trees::ProofNative {
-	use tessera_trees::tree::hasher::HashOutput;
+) -> tessera_utils::ProofNative {
+	use tessera_utils::hasher::HashOutput;
 
 	prove_real_priv_tx(
 		circuit,
@@ -723,10 +723,10 @@ pub fn prove_dummy_priv_tx(
 ///
 /// For production proofs provide a proper [`PrivTxInputs`] to [`prove_real_priv_tx`].
 pub fn prove_real_priv_tx_seeded(
-	circuit: &tessera_trees::CircuitDataNative,
-	targets: &PrivTxTargets<{ tessera_trees::D }>,
+	circuit: &tessera_utils::CircuitDataNative,
+	targets: &PrivTxTargets<{ tessera_utils::D }>,
 	seed: u64,
-) -> tessera_trees::ProofNative {
+) -> tessera_utils::ProofNative {
 	prove_priv_tx(circuit, targets, true, seed)
 }
 
