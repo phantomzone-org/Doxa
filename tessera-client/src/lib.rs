@@ -6,7 +6,7 @@ pub(crate) mod note;
 pub(crate) mod plonky2_gadgets;
 pub use plonky2_gadgets::serialization::TesseraGateSerializer;
 pub(crate) mod pool_config;
-pub(crate) mod schnorr;
+pub mod schnorr;
 pub(crate) mod tree;
 pub(crate) mod utils;
 

@@ -249,26 +249,6 @@ pub fn priv_tx_circuit<
 		})
 	});
 
-	// Free override targets for all four PI fields (AN, NN, AC, NC).
-	// When not_fake_tx=1, each is enforced equal to its derived counterpart.
-	// When not_fake_tx=0, the prover supplies fixed padding values directly.
-	let override_nn: [[Target; 4]; NOTE_BATCH] =
-		core::array::from_fn(|_| core::array::from_fn(|_| builder.add_virtual_target()));
-	let override_nc: [[Target; 4]; NOTE_BATCH] =
-		core::array::from_fn(|_| core::array::from_fn(|_| builder.add_virtual_target()));
-
-	for i in 0..NOTE_BATCH {
-		for j in 0..4 {
-			let diff_nn = builder.sub(override_nn[i][j], effective_inotes_null[i].0.elements[j]);
-			let gated_nn = builder.mul(not_fake_tx.target, diff_nn);
-			builder.assert_zero(gated_nn);
-
-			let diff_nc = builder.sub(override_nc[i][j], derived_onotes_comm[i].0.elements[j]);
-			let gated_nc = builder.mul(not_fake_tx.target, diff_nc);
-			builder.assert_zero(gated_nc);
-		}
-	}
-
 	let tx_hash = builder.derive_tx_hash(
 		effective_inotes_null,
 		derived_onotes_comm,
@@ -326,16 +306,16 @@ pub fn priv_tx_circuit<
 	builder.register_public_inputs(&accin_null.0.elements);
 	builder.register_public_inputs(&accout_comm.0.elements);
 	builder.register_public_inputs(
-		override_nn
+		effective_inotes_null
 			.iter()
-			.flat_map(|v| v.iter().copied())
+			.flat_map(|v| v.0.elements.iter().copied())
 			.collect_vec()
 			.as_slice(),
 	);
 	builder.register_public_inputs(
-		override_nc
+		donotes_comm
 			.iter()
-			.flat_map(|v| v.iter().copied())
+			.flat_map(|v| v.0.elements.iter().copied())
 			.collect_vec()
 			.as_slice(),
 	);
@@ -376,8 +356,6 @@ pub fn priv_tx_circuit<
 		inotes_nct_merkle: inotes_mrkltrgt,
 		accin_null,
 		accout_comm,
-		override_nn,
-		override_nc,
 	}
 }
 
@@ -672,7 +650,6 @@ pub fn prove_real_priv_tx(
 				i.override_ac,
 				i.override_nc,
 			);
-			set_hash_blocks(&mut pw, &targets.override_nn, &i.override_nn);
 		},
 	}
 

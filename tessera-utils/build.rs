@@ -7,6 +7,12 @@ use std::{
 };
 
 fn main() {
+	let target = env::var("TARGET").unwrap_or_default();
+	println!("cargo:rerun-if-env-changed=TARGET");
+	if target.contains("wasm32") {
+		return;
+	}
+
 	let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
 	println!("out_path: {:?}", out_path);
 

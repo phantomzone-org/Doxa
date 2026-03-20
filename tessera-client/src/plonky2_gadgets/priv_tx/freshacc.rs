@@ -11,7 +11,7 @@ use tessera_utils::{F, hasher::HashOutput};
 use super::{
 	double_hash_native,
 	targets::TxCircuitTargets,
-	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
+	witness::{TxKindFlags, set_common_tx_witness, set_tx_kind_flags},
 };
 use crate::{
 	ACT_DEPTH, AccountAddress, AssetId, ConsumeAuth, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH,
@@ -166,14 +166,6 @@ pub(crate) fn set_freshacc_tx_witness(
 	// For real TXs these equal the derived values (enforced by circuit).
 	set_hash(pw, t.accin_null.0, accin.nullifier(None).0.0);
 	set_hash(pw, t.accout_comm.0, accout.commitment().0.0);
-	// All inotes are inactive for FreshAcc: effective_inotes_null[i] = double_hash(dinotes[i]).
-	// All onotes are inactive for FreshAcc: derived_onotes_comm[i] = double_hash(donotes[i]).
-	set_note_hash_overrides(
-		pw,
-		t,
-		&array::from_fn(|i| double_hash_native(dinotes[i])),
-		&array::from_fn(|i| double_hash_native(donotes[i])),
-	);
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
 	set_subpool_full_proof(

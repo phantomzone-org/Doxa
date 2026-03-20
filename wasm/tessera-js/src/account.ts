@@ -1,6 +1,6 @@
 import {
   WasmAccount,
-  decode_hash,
+  decodeHash,
 } from "../wasm/tessera_client_wasm.js";
 
 export type HashBytes = Uint8Array;
@@ -18,9 +18,9 @@ export class Account {
     this.inner = inner;
   }
 
-  /** Create a new random account in the given subpool. */
-  static create(subpoolId: bigint): Account {
-    return new Account(new WasmAccount(subpoolId));
+  /** Create a deterministic account from a 32-byte seed and subpool id. */
+  static createWithSeed(seed: Uint8Array, subpoolId: bigint): Account {
+    return new Account(WasmAccount.newWithSeed(seed, subpoolId));
   }
 
   /**
@@ -36,12 +36,12 @@ export class Account {
    * via a one-way Poseidon hash.
    */
   publicId(): HashBytes {
-    return this.inner.public_id();
+    return this.inner.publicId();
   }
 
   /** The nullifier key used to derive note and account nullifiers. */
   nullifierKey(): HashBytes {
-    return this.inner.nullifier_key();
+    return this.inner.nullifierKey();
   }
 
   /**
@@ -49,7 +49,7 @@ export class Account {
    * nonce = 0, no spend/consume auth keys, no assets.
    */
   isFresh(): boolean {
-    return this.inner.is_fresh();
+    return this.inner.isFresh();
   }
 
   /**
@@ -64,7 +64,7 @@ export class Account {
 
   /** Decode a 32-byte hash into 4 × u64 limbs (little-endian). Useful for debugging. */
   static decodeHash(bytes: HashBytes): BigInt64Array {
-    const limbs = decode_hash(bytes);
+    const limbs = decodeHash(bytes);
     return BigInt64Array.from(limbs.map(BigInt));
   }
 }

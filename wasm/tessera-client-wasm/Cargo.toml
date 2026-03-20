@@ -21,6 +21,7 @@ plonky2_field = { workspace = true }
 # rand needs getrandom with wasm_js feature to source entropy in the browser
 getrandom = { version = "0.4", features = ["wasm_js"] }
 rand = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

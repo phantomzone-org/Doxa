@@ -6,7 +6,7 @@ use tessera_utils::{F, hasher::HashOutput};
 use super::{
 	double_hash_native,
 	targets::TxCircuitTargets,
-	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
+	witness::{TxKindFlags, set_common_tx_witness, set_tx_kind_flags},
 };
 use crate::{
 	ACT_DEPTH, AccountAddress, AssetId, NCT_DEPTH, NOTE_BATCH, Nonce, NoteCommitment,
@@ -196,14 +196,6 @@ pub(crate) fn set_reject_tx_witness(
 	// ── Dummy note hashes ─────────────────────────────────────────────────────
 	set_hash_blocks(pw, &t.dinotes.map(|note| note.0), &dinotes);
 	set_hash_blocks(pw, &t.donotes.map(|note| note.0), &donotes);
-
-	// ── NN/NC override targets — must match effective nullifiers/commitments in the circuit ─
-	set_note_hash_overrides(
-		pw,
-		t,
-		&tx_inote_nulls.map(|nullifier| nullifier.0.0),
-		&tx_onote_comms.map(|commitment| commitment.0.0),
-	);
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
 	set_subpool_full_proof(

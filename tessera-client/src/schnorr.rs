@@ -6,13 +6,14 @@ use plonky2_field::{
 	goldilocks_field::GoldilocksField,
 	types::{Field, PrimeField64},
 };
+use rand::RngExt;
 use tessera_utils::F;
 
 use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 
 /// A scalar (integer modulo the prime group order n).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Scalar([u64; 5]);
+pub struct Scalar([u64; 5]);
 
 // TODO: ack Thomas Pornin
 
@@ -38,6 +39,14 @@ impl Scalar {
 		0xD1D796CC91CF8525,
 		0xAADFFF5D1574C1D8,
 		0x4ACA13B28CA251F5,
+	]);
+	// 2^632 mod n.
+	const T632: Self = Self([
+		0x2B0266F317CA91B3,
+		0xEC1D26528E984773,
+		0x8651D7865E12DB94,
+		0xDA2ADFF5941574D0,
+		0x53CACA12110CA256,
 	]);
 	// Group order n is slightly below 2^319. We store values over five
 	// 64-bit limbs.
@@ -137,17 +146,72 @@ impl Scalar {
 		self.montymul(Self::R2).montymul(rhs)
 	}
 
-	/// Sample a uniformly random scalar in `[0, N)` using rejection sampling.
-	// TODO: I don't know whether this is secure.
-	pub(crate) fn sample<R: rand::Rng>(rng: &mut R) -> Self {
-		loop {
-			let mut limbs: [u64; 5] = std::array::from_fn(|_| rng.next_u64());
-			limbs[4] &= 0x7FFFFFFFFFFFFFFF; // N < 2^319; clear bit 63
-			let candidate = Self(limbs);
-			if candidate.sub_inner(Self::N).1 == 1 {
-				return candidate;
+	/// Decode the provided byte slice into a scalar. The bytes are
+	/// interpreted into an integer in little-endian unsigned convention.
+	/// All slice bytes are read. Returns `Some(scalar)` if the decoded
+	/// integer is lower than the group order, `None` otherwise.
+	pub fn decode(buf: &[u8]) -> Option<Self> {
+		let n = buf.len();
+		let mut r = Self::ZERO;
+		let mut extra: u8 = 0;
+		for i in 0..n {
+			if i < 40 {
+				r.0[i >> 3] |= (buf[i] as u64).wrapping_shl(((i as u32) & 7) << 3);
+			} else {
+				extra |= buf[i];
 			}
 		}
+
+		// If input buffer is at most 39 bytes then the result is
+		// necessarily in range; we can skip the reduction tests.
+		if n <= 39 {
+			return Some(r);
+		}
+
+		// Output is valid iff extra == 0 and the value is lower than n
+		// (checked via overflow flag from sub_inner).
+		let (_, c) = r.sub_inner(Self::N);
+		let valid = c & ((extra as u64).wrapping_add(0xFF) >> 8).wrapping_sub(1);
+		if valid != 0 { Some(r) } else { None }
+	}
+
+	/// Decode the provided byte slice into a scalar. The bytes are
+	/// interpreted into an integer in little-endian unsigned convention.
+	/// All slice bytes are read, and the value is REDUCED modulo n. This
+	/// function never fails; it accepts arbitrary input values.
+	pub fn decode_reduce(buf: &[u8]) -> Self {
+		// We inject the value by chunks of 312 bits, in high-to-low
+		// order. We multiply by 2^312 the intermediate result, which
+		// is equivalent to performing a Montgomery multiplication
+		// by 2^632 mod n.
+
+		// If buffer length is at most 39 bytes, then the plain decode()
+		// function works.
+		let n = buf.len();
+		if n <= 39 {
+			return Self::decode(buf).unwrap();
+		}
+
+		// We can now assume that we have at least 40 bytes of input.
+
+		// Compute k as a multiple of 39 such that n-39 <= k < n. Since
+		// n >= 40, this implies that k >= 1. We decode the top chunk
+		// (which has length _at most_ 39 bytes) into acc.
+		let mut k = ((n - 1) / 39) * 39;
+		let mut acc = Self::decode(&buf[k..n]).unwrap();
+		while k > 0 {
+			k -= 39;
+			let b = Self::decode(&buf[k..k + 39]).unwrap();
+			acc = acc.montymul(Self::T632).add(b);
+		}
+		acc
+	}
+
+	/// Sample a uniformly random scalar in `[0, N)`.
+	pub(crate) fn sample<R: rand::Rng>(rng: &mut R) -> Self {
+		let mut bytes = [0u8; 40];
+		rng.fill(&mut bytes);
+		Self::decode_reduce(&bytes)
 	}
 
 	/// Reduce 5 Goldilocks field elements (320 bits) to scalar < N.
@@ -207,6 +271,11 @@ impl PrivateKey {
 		self.0
 	}
 
+	/// Decode a byte slice into a private key, reducing modulo N.
+	pub fn decode_reduce(buf: &[u8]) -> Self {
+		Self(Scalar::decode_reduce(buf))
+	}
+
 	/// Derive the corresponding public key.
 	pub fn public_key<F: Extendable<5>>(&self) -> PublicKey<F> {
 		PublicKey(PointEw::generator().scalar_mul(&self.0))
@@ -220,12 +289,7 @@ impl PrivateKey {
 	// Decode a private key from 40 bytes.
 	// Returns `None` if the encoding is invalid or represents zero.
 	// pub fn from_bytes(bytes: &[u8; 40]) -> Option<Self> {
-	//     let (scalar, valid) = Scalar::decode_buf(bytes);
-	//     if valid != 0 && scalar.iszero() == 0 {
-	//         Some(Self(scalar))
-	//     } else {
-	//         None
-	//     }
+	//     Scalar::decode(bytes).filter(|s| s.iszero() == 0).map(Self)
 	// }
 }
 

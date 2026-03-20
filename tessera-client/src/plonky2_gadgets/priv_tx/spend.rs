@@ -11,7 +11,7 @@ use tessera_utils::{
 use super::{
 	double_hash_native,
 	targets::TxCircuitTargets,
-	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
+	witness::{TxKindFlags, set_common_tx_witness, set_tx_kind_flags},
 };
 use crate::{
 	ACT_DEPTH, AccountAddress, AssetId, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH,
@@ -230,14 +230,6 @@ pub fn set_spend_tx_witness(
 	// ── Dummy note hashes ─────────────────────────────────────────────────────
 	set_hash_blocks(pw, &t.dinotes.map(|note| note.0), &dinotes);
 	set_hash_blocks(pw, &t.donotes.map(|note| note.0), &donotes);
-
-	// ── NN/NC override targets — must match circuit's effective nullifiers/commitments ─
-	set_note_hash_overrides(
-		pw,
-		t,
-		&tx_inote_nulls.map(|nullifier| nullifier.0.0),
-		&tx_onote_comms.map(|commitment| commitment.0.0),
-	);
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
 	set_subpool_full_proof(
@@ -481,9 +473,6 @@ pub fn set_fake_tx_witness(
 		[21, 22, 23, 24, 25],
 		[31, 32, 33, 34, 35],
 	);
-
-	// ── NN/NC override targets (set to caller-supplied values for fake TX) ──────
-	set_note_hash_overrides(pw, t, &[[F::ZERO; 4]; NOTE_BATCH], &override_nc);
 }
 
 #[cfg(test)]
