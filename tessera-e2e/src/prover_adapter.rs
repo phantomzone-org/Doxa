@@ -8,7 +8,7 @@ use std::{future::Future, path::Path, pin::Pin, sync::Arc};
 
 use tessera_server::{
 	prover_client::ProverClient,
-	prover_v2::ProverRuntimeV2,
+	prover_v2::{DepositPipelineConfig, ProverRuntimeV2},
 	types::{ConsumeOutcome, ConsumeProveRequest, ProveOutcomeV2, ProveRequestV2},
 };
 use tokio::sync::Mutex;
@@ -29,32 +29,68 @@ impl InProcessProver {
 	/// Expects the standard Tessera artifact layout under `artifact_dir`:
 	/// ```text
 	/// artifact_dir/
-	///   subtree-root/                  SubtreeRootCircuit
-	///   v2-tx-aggregator/              GenericAggregator + dummy proof
-	///   super-aggregator-v2/           SAV2 Plonky2 + BN128 + Groth16
+	///   subtree-root/                  SubtreeRootCircuit (TX)
+	///   v2-tx-aggregator/              GenericAggregator + dummy proof (TX)
+	///   super-aggregator-v2/           SAV2 Plonky2 + BN128 + Groth16 (TX)
+	///   deposit-tx-aggregator/         GenericAggregator + dummy proof (deposit, optional)
+	///   deposit-subtree-root/          SubtreeRootCircuit (deposit, optional)
+	///   deposit-super-aggregator-v2/   DSAV2 Plonky2 + BN128 + Groth16 (deposit, optional)
 	/// ```
 	///
-	/// Returns `None` if any required directory is absent.
+	/// Returns `None` if any required TX directory is absent.
+	/// Deposit directories are loaded when present; absent deposit dirs disable the deposit
+	/// pipeline.
 	pub fn from_artifacts(artifact_dir: &Path) -> Option<Self> {
 		let sr_path = artifact_dir.join("subtree-root");
 		let sav2_path = artifact_dir.join("super-aggregator-v2");
 		let agg_path = artifact_dir.join("v2-tx-aggregator");
 
-		if !sr_path.exists() || !sav2_path.exists() || !agg_path.exists() {
-			return None;
+		for (name, path) in [
+			("subtree-root", &sr_path),
+			("super-aggregator-v2", &sav2_path),
+			("v2-tx-aggregator", &agg_path),
+		] {
+			if !path.exists() {
+				eprintln!(
+					"InProcessProver: required TX artifact dir '{}' not found at {}",
+					name,
+					path.display()
+				);
+				return None;
+			}
 		}
 
 		let sr_batch_size = tessera_client::PRIV_TX_BATCH_SIZE * tessera_client::NOTE_BATCH;
 
-		let runtime = ProverRuntimeV2::init(
+		// Deposit pipeline is optional — load when all three directories are present.
+		let dep_agg_path = artifact_dir.join("deposit-tx-aggregator");
+		let dep_sr_path = artifact_dir.join("deposit-subtree-root");
+		let dep_sav2_path = artifact_dir.join("deposit-super-aggregator-v2");
+		let deposit = if dep_agg_path.exists() && dep_sr_path.exists() && dep_sav2_path.exists() {
+			Some(DepositPipelineConfig {
+				deposit_tx_aggregator_path: dep_agg_path,
+				deposit_subtree_root_path: dep_sr_path,
+				deposit_super_aggregator_path: dep_sav2_path,
+			})
+		} else {
+			None
+		};
+
+		let runtime = match ProverRuntimeV2::init(
 			sr_path,
 			sr_batch_size,
 			sav2_path,
 			Some(agg_path),
 			vec![],
 			300,
-		)
-		.ok()?;
+			deposit,
+		) {
+			Ok(r) => r,
+			Err(e) => {
+				eprintln!("ProverRuntimeV2::init failed: {e:#}");
+				return None;
+			},
+		};
 
 		Some(Self {
 			runtime: Arc::new(Mutex::new(runtime)),

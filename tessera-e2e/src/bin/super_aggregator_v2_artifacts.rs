@@ -4,16 +4,15 @@
 //! initialise the in-process prover (`ProverRuntimeV2`):
 //!
 //! 1. **PrivTx circuit** — inner leaf circuit for private transactions.
-//! 2. **V2 TX aggregator** — binary tree of depth 6 that merges 64 PrivTx
-//!    leaf proofs into one root proof.  During artifact generation the tree is
-//!    seeded with a single dummy proof and doubled up level-by-level
-//!    (`merge(p, p) → p_next`) — only 6 prove calls instead of 127.
-//! 3. **SubtreeRootCircuit** — proves `batchPoseidonRoot = Poseidon(NC leaves)`
-//!    over the 512-leaf note-commitment array.
-//! 4. **SuperAggregatorV2** — merges the TX-aggregator root and the SR proof,
-//!    producing 8 Goldilocks field elements as public inputs.
-//! 5. **BN128 wrapper + Groth16 trusted setup** — wraps the SAV2 Plonky2
-//!    proof into a Groth16 proof verifiable on-chain.
+//! 2. **V2 TX aggregator** — binary tree of depth 6 that merges 64 PrivTx leaf proofs into one root
+//!    proof.  During artifact generation the tree is seeded with a single dummy proof and doubled
+//!    up level-by-level (`merge(p, p) → p_next`) — only 6 prove calls instead of 127.
+//! 3. **SubtreeRootCircuit** — proves `batchPoseidonRoot = Poseidon(NC leaves)` over the 512-leaf
+//!    note-commitment array.
+//! 4. **SuperAggregatorV2** — merges the TX-aggregator root and the SR proof, producing 8
+//!    Goldilocks field elements as public inputs.
+//! 5. **BN128 wrapper + Groth16 trusted setup** — wraps the SAV2 Plonky2 proof into a Groth16 proof
+//!    verifiable on-chain.
 //!
 //! An end-to-end dummy round-trip (Plonky2 → BN128 → Groth16) is executed to
 //! validate all artifacts before they are written to disk.
@@ -43,7 +42,10 @@
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::{ensure, Result};
-use plonky2::{field::types::Field, iop::witness::{PartialWitness, WitnessWrite}};
+use plonky2::{
+	field::types::Field,
+	iop::witness::{PartialWitness, WitnessWrite},
+};
 use tessera_client::TesseraGateSerializer;
 use tessera_server::{
 	proof_aggregation::{
@@ -101,7 +103,9 @@ fn artifacts_root() -> PathBuf {
 fn main() -> Result<()> {
 	let priv_tx_batch_size: usize = tessera_client::PRIV_TX_BATCH_SIZE;
 
-	let sr_batch_size = priv_tx_batch_size * NOTES_PER_SLOT;
+	// SR has NOTE_BATCH NC + 1 AC per TX slot = NOTE_BATCH+1 = 8 leaves per slot.
+	let leaves_per_slot = NOTES_PER_SLOT + 1;
+	let sr_batch_size = priv_tx_batch_size * leaves_per_slot;
 	let agg_depth = priv_tx_batch_size.trailing_zeros() as usize; // log2 of power-of-two
 	ensure!(
 		ARITY.pow(agg_depth as u32) == priv_tx_batch_size,
@@ -119,7 +123,7 @@ fn main() -> Result<()> {
 
 	println!("=== SuperAggregatorV2 Artifact Builder ===");
 	println!("priv_tx_batch_size : {priv_tx_batch_size}");
-	println!("notes_per_slot     : {NOTES_PER_SLOT}");
+	println!("notes_per_slot     : {NOTES_PER_SLOT} NC + 1 AC = {leaves_per_slot} SR leaves/slot");
 	println!("sr_batch_size      : {sr_batch_size}");
 	println!(
 		"agg_depth          : {agg_depth}  (ARITY={ARITY}, {ARITY}^{agg_depth}={priv_tx_batch_size})"
@@ -230,23 +234,30 @@ fn main() -> Result<()> {
 	);
 
 	// =======================================================================
-	// 4. Extract NC leaves from TX aggregated proof PIs
+	// 4. Extract SR leaves from TX aggregated proof PIs
+	//
+	// SR leaf layout per slot: [NC[0], NC[1], ..., NC[NOTE_BATCH-1], AC]
+	// NC starts at TX_DATA_OFFSET + AN(4) + AC(4) + NN(NOTE_BATCH×4).
+	// AC is at TX_DATA_OFFSET + AN(4).
 	// =======================================================================
-	let nc_off = TX_DATA_OFFSET + 40; // AN(4) + AC(4) + NN(8×4) = 40
+	let nc_off = TX_DATA_OFFSET + 8 + NOTES_PER_SLOT * 4; // AN(4) + AC(4) + NN(NOTE_BATCH×4)
+	let ac_off = TX_DATA_OFFSET + 4; // AN(4)
 	let nc_leaves: Vec<HashOutput> = (0..n_tx_slots)
 		.flat_map(|s| {
-			(0..NOTES_PER_SLOT).map(move |j| {
-				HashOutput::new(extract_hash(tx_pis, s * TX_LEAF_PI_SIZE + nc_off + j * 4))
-			})
+			let base = s * TX_LEAF_PI_SIZE;
+			let ncs = (0..NOTES_PER_SLOT)
+				.map(move |j| HashOutput::new(extract_hash(tx_pis, base + nc_off + j * 4)));
+			let ac = HashOutput::new(extract_hash(tx_pis, base + ac_off));
+			ncs.chain(std::iter::once(ac))
 		})
 		.collect();
 	ensure!(
 		nc_leaves.len() == sr_batch_size,
-		"NC leaves count ({}) != sr_batch_size ({})",
+		"SR leaves count ({}) != sr_batch_size ({})",
 		nc_leaves.len(),
 		sr_batch_size
 	);
-	println!("  Extracted {sr_batch_size} NC leaves");
+	println!("  Extracted {sr_batch_size} SR leaves ({NOTES_PER_SLOT} NC + 1 AC per slot)");
 
 	// =======================================================================
 	// 5. Build SubtreeRootCircuit + prove SR on NC leaves
@@ -380,8 +391,8 @@ fn main() -> Result<()> {
 	));
 
 	// =======================================================================
-	// 12. Copy Verifier.sol → tessera-solidity/src/VerifierSuperAggregatorV2.sol
-	//     Copy proof_solidity.json → tessera-solidity/test/fixtures/groth16_proof.json
+	// 12. Copy Verifier.sol → tessera-solidity/src/VerifierSuperAggregatorV2.sol Copy
+	//     proof_solidity.json → tessera-solidity/test/fixtures/groth16_proof.json
 	// =======================================================================
 	println!("\n[12] Syncing Solidity artifacts...");
 	let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -410,6 +421,61 @@ fn main() -> Result<()> {
 		println!("  groth16_proof.json → {}", fixture_dst.display());
 	} else {
 		println!("  Could not create fixtures dir — skipping proof fixture copy.");
+	}
+
+	// =======================================================================
+	// 13. Build and serialize 2-slot unit-test SAV2 circuit
+	//
+	// The unit tests in `proof_aggregation::super_aggregator_v2::tests` build
+	// a small SuperAggregatorV2 (2 TX slots × 8 SR leaves = 16 leaves) on
+	// every `cargo test` run, which takes ~30s.  We serialize it here so
+	// the tests can load from disk instead of rebuilding.
+	//
+	// Layout under artifacts/sav2-unit-test/:
+	//   circuit_data.bin, tx_common.bin, tx_verifier.bin,
+	//   sr_common.bin, sr_verifier.bin  — SuperAggregatorV2 (2 slots)
+	//   subtree-root/circuit_data.bin   — SubtreeRootCircuit (16 leaves)
+	// =======================================================================
+	let unit_test_dir = artifacts_root.join("sav2-unit-test");
+	if SuperAggregatorV2::has_artifacts(&unit_test_dir) {
+		println!("\n[13] Unit-test SAV2 artifacts already exist, skipping.");
+	} else {
+		println!("\n[13] Building 2-slot unit-test SAV2 circuit...");
+		let now = Instant::now();
+
+		// Synthetic TX-agg circuit: 2 slots × TX_LEAF_PI_SIZE PIs.
+		let n_unit_slots: usize = 2;
+		let unit_sr_leaves: usize = n_unit_slots * leaves_per_slot; // = 16
+		let unit_tx_cd = {
+			use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
+			use tessera_utils::{ConfigNative, D};
+			let n_pi = n_unit_slots * TX_LEAF_PI_SIZE;
+			let mut b = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+			let targets: Vec<_> = (0..n_pi).map(|_| b.add_virtual_target()).collect();
+			for &t in &targets {
+				b.register_public_input(t);
+			}
+			b.build::<ConfigNative>()
+		};
+		println!("  synthetic TX-agg circuit built [{:?}]", now.elapsed());
+
+		let now = Instant::now();
+		let unit_sr = SubtreeRootCircuit::build(unit_sr_leaves)?;
+		println!("  SubtreeRootCircuit({unit_sr_leaves}) built [{:?}]", now.elapsed());
+
+		let unit_inner = SuperAggregatorV2CircuitData {
+			tx_common: unit_tx_cd.common.clone(),
+			tx_verifier: unit_tx_cd.verifier_only.clone(),
+			sr_common: unit_sr.circuit_data.common.clone(),
+			sr_verifier: unit_sr.circuit_data.verifier_only.clone(),
+		};
+		let now = Instant::now();
+		let unit_sav2 = SuperAggregatorV2::build(unit_inner)?;
+		println!("  SuperAggregatorV2 built [{:?}]", now.elapsed());
+
+		unit_sav2.store_artifacts(&unit_test_dir)?;
+		unit_sr.store_artifacts(&unit_test_dir.join("subtree-root"))?;
+		println!("  stored unit-test artifacts → {}", unit_test_dir.display());
 	}
 
 	println!("\n=== SuperAggregatorV2 artifacts generated successfully ===");

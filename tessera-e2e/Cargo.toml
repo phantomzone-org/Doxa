@@ -7,6 +7,7 @@ edition = "2021"
 tessera-trees = {workspace = true}
 tessera-client = {workspace = true}
 tessera-server = {path = "../tessera-server"}
+tessera-utils = {workspace = true}
 anyhow = {workspace = true}
 rand = {workspace = true}
 rand_chacha = {workspace = true}

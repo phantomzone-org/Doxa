@@ -17,12 +17,11 @@ use tessera_client::{
 	schnorr::{schnorr_sign, PrivateKey, Scalar},
 	tree::CommitmentTreeMerkleProof,
 	ConsumeAuth, FreshAccInputs, Nonce, NoteCommitment, NoteNullifier, PrivTxInputs,
-	PrivateIdentifier, SpendAuth, SpendTxInputs, StandardAccount, SubpoolId, ACT_DEPTH, NOTE_BATCH,
+	PrivateIdentifier, SpendAuth, SpendTxInputs, StandardAccount, SubpoolId, COM_TREE_DEPTH,
+	NOTE_BATCH,
 };
-use tessera_trees::{
-	tree::{hasher::HashOutput, CommitmentTree},
-	CircuitDataNative, D, F,
-};
+use tessera_trees::CommitmentTree;
+use tessera_utils::{hasher::HashOutput, CircuitDataNative, D, F};
 
 /// Client-side state mirroring what is committed on-chain.
 ///
@@ -77,7 +76,7 @@ impl TesseraClientState {
 			targets,
 			account: None,
 			account_pos: None,
-			local_tree: CommitmentTree::new(ACT_DEPTH),
+			local_tree: CommitmentTree::new(COM_TREE_DEPTH),
 			subpool_id,
 			approval_sk,
 			rejection_sk,
@@ -219,9 +218,9 @@ impl TesseraClientState {
 		// Merkle proof for the account commitment in the local ACT.
 		let acc_path = self
 			.local_tree
-			.merkle_path(acc_pos as usize, 0, ACT_DEPTH)
+			.merkle_path(acc_pos as usize, 0, COM_TREE_DEPTH)
 			.map_err(|e| anyhow::anyhow!("ACT merkle_path: {e:?}"))?;
-		let accin_merkle_proof = CommitmentTreeMerkleProof::<ACT_DEPTH>::new(
+		let accin_merkle_proof = CommitmentTreeMerkleProof::<COM_TREE_DEPTH>::new(
 			accin.commitment().0,
 			acc_path,
 			acc_pos as usize,
@@ -300,7 +299,7 @@ pub struct ProvenTx {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn extract_proven_tx(proof: tessera_trees::ProofNative) -> ProvenTx {
+fn extract_proven_tx(proof: tessera_utils::ProofNative) -> ProvenTx {
 	let pi = &proof.public_inputs;
 	let an = hash_output_to_bytes32(&pi[5..9]);
 	let ac = hash_output_to_bytes32(&pi[9..13]);

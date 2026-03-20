@@ -727,11 +727,10 @@ impl ConsumeBatchBuilder {
 #[cfg(test)]
 mod tests {
 	use plonky2::field::types::Field;
+	use tessera_client::PRIV_TX_BATCH_SIZE;
 
 	use super::*;
 	use crate::contract;
-
-	use tessera_client::PRIV_TX_BATCH_SIZE;
 	/// Total NC-leaf capacity per batch (= PRIV_TX_BATCH_SIZE × NOTES_PER_SLOT).
 	const CONSUME_BATCH: usize = PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT;
 
@@ -921,7 +920,11 @@ mod tests {
 
 		assert_eq!(fb.ac_leaves.len(), PRIV_TX_BATCH_SIZE, "ac_leaves len");
 		assert_eq!(fb.an_sorted.len(), PRIV_TX_BATCH_SIZE, "an_sorted len");
-		assert_eq!(fb.an_sort_perm.len(), PRIV_TX_BATCH_SIZE, "an_sort_perm len");
+		assert_eq!(
+			fb.an_sort_perm.len(),
+			PRIV_TX_BATCH_SIZE,
+			"an_sort_perm len"
+		);
 		assert_eq!(
 			fb.nc_leaves.len(),
 			PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT,

@@ -38,6 +38,7 @@ pub const DEFAULT_SPEND_AUTH_PK: [u64; 5] = [
 ];
 
 pub const NOTE_BATCH: usize = 7;
+pub const PRIV_TX_BATCH_SIZE: usize = 64;
 pub const ACC_AST_DEPTH: usize = 10;
 pub const COM_TREE_DEPTH: usize = 32;
 pub const SUBPOOL_CONFIG_DEPTH: usize = 2;
@@ -45,10 +46,13 @@ pub const MAIN_POOL_CONFIG_DEPTH: usize = 20;
 
 pub use account::*;
 pub use note::*;
-pub use plonky2_gadgets::priv_tx::{
-	FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, RejectTxInputs, SpendTxInputs,
-	build_circuit_and_dummy_proof, build_circuit_and_real_proof, build_priv_tx_circuit,
-	double_hash_native, prove_dummy_priv_tx, prove_real_priv_tx, prove_real_priv_tx_seeded,
-	sample_dummy_notes,
+pub use plonky2_gadgets::{
+	deposit_tx::{DepositTxCircuit, build_deposit_tx_circuit},
+	priv_tx::{
+		FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, RejectTxInputs, SpendTxInputs,
+		build_circuit_and_dummy_proof, build_circuit_and_real_proof, build_priv_tx_circuit,
+		double_hash_native, prove_dummy_priv_tx, prove_real_priv_tx, prove_real_priv_tx_seeded,
+		sample_dummy_notes,
+	},
 };
 use tessera_utils::HASH_SIZE;

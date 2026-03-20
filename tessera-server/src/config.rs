@@ -50,6 +50,15 @@ pub struct ProverV2Config {
 	/// Per-request HTTP timeout for remote aggregation provers (seconds).
 	/// Set via `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default `300`).
 	pub aggregation_prover_timeout_secs: u64,
+	/// Optional deposit-TX aggregator artifact directory.
+	/// Set via `TESSERA_DEPOSIT_TX_AGGREGATOR_PATH`.
+	pub deposit_tx_aggregator_path: Option<PathBuf>,
+	/// Optional deposit SubtreeRootCircuit artifact directory.
+	/// Set via `TESSERA_DEPOSIT_SR_ARTIFACTS_PATH`.
+	pub deposit_subtree_root_path: Option<PathBuf>,
+	/// Optional DepositSuperAggregatorV2 artifact directory.
+	/// Set via `TESSERA_DEPOSIT_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH`.
+	pub deposit_super_aggregator_path: Option<PathBuf>,
 	/// HTTP bind address for the V2 prover API.
 	/// Set via `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`).
 	pub api_bind_addr: String,
@@ -104,6 +113,17 @@ impl ProverV2Config {
 		let api_bind_addr = std::env::var("TESSERA_PROVER_API_ADDR")
 			.unwrap_or_else(|_| "127.0.0.1:8091".to_string());
 
+		let deposit_tx_aggregator_path = std::env::var("TESSERA_DEPOSIT_TX_AGGREGATOR_PATH")
+			.ok()
+			.map(PathBuf::from);
+		let deposit_subtree_root_path = std::env::var("TESSERA_DEPOSIT_SR_ARTIFACTS_PATH")
+			.ok()
+			.map(PathBuf::from);
+		let deposit_super_aggregator_path =
+			std::env::var("TESSERA_DEPOSIT_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH")
+				.ok()
+				.map(PathBuf::from);
+
 		Ok(Self {
 			sr_artifacts_path,
 			sr_batch_size,
@@ -111,6 +131,9 @@ impl ProverV2Config {
 			aggregator_artifacts_path,
 			aggregation_prover_urls,
 			aggregation_prover_timeout_secs,
+			deposit_tx_aggregator_path,
+			deposit_subtree_root_path,
+			deposit_super_aggregator_path,
 			api_bind_addr,
 		})
 	}

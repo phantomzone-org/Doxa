@@ -442,9 +442,16 @@ impl Sequencer {
 
 					let nc: [[u8; 32]; 8] = {
 						let mut arr = [[0u8; 32]; 8];
-						for (i, note) in tx_req.output_notes.iter().enumerate().take(8) {
+						// NC[0..NOTE_BATCH] = output notes; NC[NOTE_BATCH] = AC (8th SR leaf).
+						for (i, note) in tx_req
+							.output_notes
+							.iter()
+							.enumerate()
+							.take(tessera_client::NOTE_BATCH)
+						{
 							arr[i] = *note;
 						}
+						arr[tessera_client::NOTE_BATCH] = tx_req.output_account_leaf;
 						arr
 					};
 					let nn: [[u8; 32]; 8] = {

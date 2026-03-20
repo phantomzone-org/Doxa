@@ -309,17 +309,17 @@ pub fn priv_tx_circuit<
 	//  - not_is_fake bool target
 	//  - NCT root
 	//  - ACT root
-	// PI layout (85 total):
+	// PI layout (77 total, NOTE_BATCH=7):
 	//   [0-1]  = subpool_id_in/out auto-registered by add_virtual_account_target
 	//   [2]    = subpool_id_in  (explicit, same wire as [0])
 	//   [3]    = subpool_id_out (explicit, same wire as [1])
 	//   [4]    = not_fake_tx    (IS_REAL_OFFSET)
 	//   [5-8]  = AN             (TX_DATA_OFFSET)
 	//   [9-12] = AC
-	//   [13-44]= NN (8×4)
-	//   [45-76]= NC (8×4)
-	//   [77-80]= root  (on-chain Poseidon IMT root; V2 uses a single IMT)
-	//   [81-84]= root  (same value repeated — two legacy PI slots, both carry root)
+	//   [13-40]= NN (7×4=28, NOTE_BATCH=7)
+	//   [41-68]= NC (7×4=28)
+	//   [69-72]= act_root
+	//   [73-76]= nct_root
 	builder.register_public_input(accin.subpool_id.0);
 	builder.register_public_input(accout.subpool_id.0);
 	builder.register_public_input(not_fake_tx.target);

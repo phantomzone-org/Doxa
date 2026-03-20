@@ -39,6 +39,28 @@ var commonCircuitData types.CommonCircuitData
 var lastErrMu sync.Mutex
 var lastErr string
 
+// ---------------------------------------------------------------------------
+// Labeled Groth16 instances (supports multiple independent circuits)
+// ---------------------------------------------------------------------------
+
+type groth16Instance struct {
+	r1cs                    constraint.ConstraintSystem
+	pk                      groth16.ProvingKey
+	vk                      groth16.VerifyingKey
+	verifierOnlyCircuitData variables.VerifierOnlyCircuitData
+	commonCircuitData       types.CommonCircuitData
+}
+
+var instances sync.Map // map[string]*groth16Instance
+
+func getInstance(label string) (*groth16Instance, bool) {
+	v, ok := instances.Load(label)
+	if !ok {
+		return nil, false
+	}
+	return v.(*groth16Instance), true
+}
+
 func setLastErr(err string) {
 	lastErrMu.Lock()
 	lastErr = err
@@ -291,6 +313,203 @@ func GoFree(ptr *C.uchar) {
 	if ptr != nil {
 		C.free(unsafe.Pointer(ptr))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Labeled Groth16 FFI — supports multiple independent instances
+// ---------------------------------------------------------------------------
+
+//export TrustedSetupWithLabel
+func TrustedSetupWithLabel(labelChar *C.char, inputsPathChar *C.char, outputsPathChar *C.char) *C.char {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("TrustedSetupWithLabel panic", r))
+		}
+	}()
+	label := C.GoString(labelChar)
+	inputsPath := C.GoString(inputsPathChar)
+	outputsPath := C.GoString(outputsPathChar)
+
+	_ = os.Mkdir(outputsPath, os.ModePerm)
+
+	inst := &groth16Instance{}
+	inst.commonCircuitData = types.ReadCommonCircuitData(filepath.Join(inputsPath, "common_circuit_data.json"))
+	proofWithPis := variables.DeserializeProofWithPublicInputs(types.ReadProofWithPublicInputs(filepath.Join(inputsPath, "proof_with_public_inputs.json")))
+	inst.verifierOnlyCircuitData = variables.DeserializeVerifierOnlyCircuitData(types.ReadVerifierOnlyCircuitData(filepath.Join(inputsPath, "verifier_only_circuit_data.json")))
+	fmt.Printf("(go) [%s] plonky2's common_circuit_data & proof_with_pis & verifier_only_circuit_data loaded\n", label)
+
+	fmt.Printf("(go) [%s] build r1cs circuit\n", label)
+	r1csLocal := wrapper.R1csCircuit(proofWithPis, inst.verifierOnlyCircuitData, inst.commonCircuitData, outputsPath)
+
+	fmt.Printf("(go) [%s] start to generate trusted setup\n", label)
+	_, _ = wrapper.TrustedSetup(r1csLocal, outputsPath)
+	fmt.Printf("(go) [%s] trusted setup generated\n", label)
+
+	instances.Store(label, inst)
+	setLastErr("")
+	return C.CString("trusted setup generated")
+}
+
+//export InitWithLabel
+func InitWithLabel(labelChar *C.char, inputsPathChar *C.char, outputsPathChar *C.char) *C.char {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("InitWithLabel panic", r))
+		}
+	}()
+	label := C.GoString(labelChar)
+	inputsPath := C.GoString(inputsPathChar)
+	outputsPath := C.GoString(outputsPathChar)
+
+	inst := &groth16Instance{}
+
+	fmt.Printf("(go) [%s] start to load r1cs\n", label)
+	start := time.Now()
+	inst.r1cs = groth16.NewCS(bn254.ID)
+	r1csBuf, err := os.ReadFile(filepath.Join(outputsPath, "r1cs"))
+	checkErr(err)
+	_, err = inst.r1cs.ReadFrom(bytes.NewBuffer(r1csBuf))
+	checkErr(err)
+	fmt.Printf("(go) [%s] loading r1cs took: %dms\n", label, time.Since(start).Milliseconds())
+
+	fmt.Printf("(go) [%s] start to load pk & vk\n", label)
+	inst.pk = groth16.NewProvingKey(bn254.ID)
+	inst.vk = groth16.NewVerifyingKey(bn254.ID)
+	start = time.Now()
+	pkBuf, err := os.ReadFile(filepath.Join(outputsPath, "proving.key"))
+	checkErr(err)
+	_, err = inst.pk.ReadFrom(bytes.NewBuffer(pkBuf))
+	checkErr(err)
+	vkBuf, err := os.ReadFile(filepath.Join(outputsPath, "verifying.key"))
+	checkErr(err)
+	_, err = inst.vk.ReadFrom(bytes.NewBuffer(vkBuf))
+	checkErr(err)
+	fmt.Printf("(go) [%s] loading pk & vk took: %dms\n", label, time.Since(start).Milliseconds())
+
+	inst.commonCircuitData = types.ReadCommonCircuitData(filepath.Join(inputsPath, "common_circuit_data.json"))
+	inst.verifierOnlyCircuitData = variables.DeserializeVerifierOnlyCircuitData(types.ReadVerifierOnlyCircuitData(filepath.Join(inputsPath, "verifier_only_circuit_data.json")))
+	fmt.Printf("(go) [%s] plonky2's common_circuit_data & verifier_only_circuit_data loaded\n", label)
+
+	instances.Store(label, inst)
+	setLastErr("")
+	return C.CString("r1cs, pk, vk loaded")
+}
+
+//export CheckInitWithLabel
+func CheckInitWithLabel(labelChar *C.char) *C.char {
+	label := C.GoString(labelChar)
+	inst, ok := getInstance(label)
+	if !ok {
+		setLastErr(fmt.Sprintf("CheckInitWithLabel: no instance for label %q", label))
+		return C.CString(fmt.Sprintf("error: no instance for label %q", label))
+	}
+	internal, secret, public := inst.r1cs.GetNbVariables()
+	setLastErr("")
+	return C.CString(fmt.Sprintf("internal: %d, secret: %d, public: %d", internal, secret, public))
+}
+
+//export Groth16ProofWithLabel
+func Groth16ProofWithLabel(labelChar *C.char, ptr *C.uchar, inLen C.int, outProofLen *C.int, outWitLen *C.int) (*C.uchar, *C.uchar) {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("Groth16ProofWithLabel panic", r))
+			*outProofLen = 0
+			*outWitLen = 0
+		}
+	}()
+	label := C.GoString(labelChar)
+	inst, ok := getInstance(label)
+	if !ok {
+		setLastErr(fmt.Sprintf("Groth16ProofWithLabel: no instance for label %q", label))
+		*outProofLen = 0
+		*outWitLen = 0
+		return nil, nil
+	}
+
+	proofWithPisBytes := C.GoBytes(unsafe.Pointer(ptr), inLen)
+	var proofWithPisRaw types.ProofWithPublicInputsRaw
+	err := json.Unmarshal(proofWithPisBytes, &proofWithPisRaw)
+	if err != nil {
+		setLastErr(fmt.Sprintf("Groth16ProofWithLabel: json.Unmarshal: %v", err))
+		*outProofLen = 0
+		*outWitLen = 0
+		return nil, nil
+	}
+	proofWithPis := variables.DeserializeProofWithPublicInputs(proofWithPisRaw)
+	fmt.Printf("(go) [%s] proofWithPis parsed\n", label)
+
+	fmt.Printf("(go) [%s] generate Groth16 proof\n", label)
+	start := time.Now()
+	g16Proof, witnessPublic, err := wrapper.Groth16Proof(inst.r1cs, inst.pk, inst.vk, proofWithPis, inst.verifierOnlyCircuitData, inst.commonCircuitData)
+	if err != nil {
+		setLastErr(fmt.Sprintf("Groth16ProofWithLabel: wrapper.Groth16Proof: %v", err))
+		*outProofLen = 0
+		*outWitLen = 0
+		return nil, nil
+	}
+	fmt.Printf("(go) [%s] generating Groth16 proof took: %dms\n", label, time.Since(start).Milliseconds())
+
+	var buf bytes.Buffer
+	g16Proof.WriteRawTo(&buf)
+	proofBytes := buf.Bytes()
+
+	var bufW bytes.Buffer
+	witnessPublic.WriteTo(&bufW)
+	witBytes := bufW.Bytes()
+
+	if len(proofBytes) == 0 {
+		panic("len(proofBytes)==0")
+	}
+	outPtr := C.malloc(C.size_t(len(proofBytes)))
+	out := unsafe.Slice((*byte)(outPtr), len(proofBytes))
+	copy(out, proofBytes)
+	*outProofLen = C.int(len(proofBytes))
+
+	if len(witBytes) == 0 {
+		panic("len(witBytes)==0")
+	}
+	outWitPtr := C.malloc(C.size_t(len(witBytes)))
+	outWit := unsafe.Slice((*byte)(outWitPtr), len(witBytes))
+	copy(outWit, witBytes)
+	*outWitLen = C.int(len(witBytes))
+
+	setLastErr("")
+	return (*C.uchar)(outPtr), (*C.uchar)(outWitPtr)
+}
+
+//export Groth16VerifyWithLabel
+func Groth16VerifyWithLabel(labelChar *C.char, proofPtr *C.uchar, proofInLen C.int, witPtr *C.uchar, witInLen C.int) *C.char {
+	defer func() {
+		if r := recover(); r != nil {
+			setLastErr(recoveredErr("Groth16VerifyWithLabel panic", r))
+		}
+	}()
+	label := C.GoString(labelChar)
+	inst, ok := getInstance(label)
+	if !ok {
+		setLastErr(fmt.Sprintf("Groth16VerifyWithLabel: no instance for label %q", label))
+		return C.CString(fmt.Sprintf("error: no instance for label %q", label))
+	}
+
+	proofBytes := C.GoBytes(unsafe.Pointer(proofPtr), proofInLen)
+	witnessPublicBytes := C.GoBytes(unsafe.Pointer(witPtr), witInLen)
+
+	proof := groth16.NewProof(bn254.ID)
+	_, err := proof.ReadFrom(bytes.NewBuffer(proofBytes))
+	checkErr(err)
+
+	witnessPublic, err := witness.New(ecc.BN254.ScalarField())
+	checkErr(err)
+	_, err = witnessPublic.ReadFrom(bytes.NewBuffer(witnessPublicBytes))
+	checkErr(err)
+
+	err = groth16.Verify(proof, inst.vk, witnessPublic, backend.WithVerifierHashToFieldFunction(sha3.NewLegacyKeccak256()))
+	if err != nil {
+		setLastErr(fmt.Sprintf("Groth16VerifyWithLabel: %v", err))
+		return C.CString(fmt.Sprintf("err: %s", err))
+	}
+	setLastErr("")
+	return C.CString("ok")
 }
 
 func main() {}

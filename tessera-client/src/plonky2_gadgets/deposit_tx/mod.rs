@@ -372,6 +372,51 @@ pub(crate) fn set_deposit_tx_witness(
 	);
 }
 
+/// Compiled deposit_tx circuit together with its targets.
+///
+/// The targets are kept private so that `DepositTxTargets` (which is
+/// `pub(crate)`) does not need to be exposed publicly.
+pub struct DepositTxCircuit {
+	/// Compiled circuit data — exposes `common` and `verifier_only` to
+	/// external callers (e.g. for constructing a `GenericAggregator`).
+	pub circuit_data: tessera_utils::CircuitDataNative,
+	targets: DepositTxTargets,
+}
+
+impl DepositTxCircuit {
+	/// Generate a dummy deposit_tx proof (`not_fake_tx=0`).
+	///
+	/// Used to seed the `GenericAggregator` for artifact generation
+	/// (O(log N) doubling) and as the padding proof at runtime.
+	pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
+		use plonky2::iop::witness::PartialWitness;
+		use tessera_utils::hasher::HashOutput;
+
+		let mut pw = PartialWitness::new();
+		let zero_root = HashOutput([F::ZERO; 4]);
+		set_fake_deposit_tx_witness(&mut pw, &self.targets, zero_root, zero_root);
+		self.circuit_data
+			.prove(pw)
+			.expect("dummy deposit_tx proof generation failed")
+	}
+}
+
+/// Build the deposit_tx circuit using `HashOutput` as the Merkle hasher.
+pub fn build_deposit_tx_circuit() -> DepositTxCircuit {
+	use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
+	use tessera_utils::hasher::HashOutput;
+
+	let config = CircuitConfig::standard_recursion_config();
+	let mut builder = CircuitBuilder::<F, { tessera_utils::D }>::new(config);
+	let ctx = HashOutput::register_luts(&mut builder);
+	let targets = deposit_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder, &ctx);
+	let circuit_data = builder.build::<tessera_utils::ConfigNative>();
+	DepositTxCircuit {
+		circuit_data,
+		targets,
+	}
+}
+
 pub(crate) fn set_fake_deposit_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &DepositTxTargets,
