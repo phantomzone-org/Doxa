@@ -14,9 +14,9 @@ use tessera_utils::{
 };
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT,
+	ACC_AST_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT, COM_TREE_DEPTH,
 	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF,
-	DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH,
+	DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH,
 	SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
 		merkle::{
@@ -85,7 +85,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		act_root: ActRootTarget,
 		condition: BoolTarget,
 		ctx: &H::CircuitContext,
-	) -> CommitmentTreeMerkleTarget<ACT_DEPTH>;
+	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH>;
 
 	fn derive_nullifier_key(&mut self, priv_id: PrivateIdentifierTarget) -> NullifierKeyTarget;
 
@@ -159,7 +159,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
 		ctx: &H::CircuitContext,
-	) -> [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH];
+	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
 
@@ -308,8 +308,8 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		act_root: ActRootTarget,
 		condition: BoolTarget,
 		ctx: &H::CircuitContext,
-	) -> CommitmentTreeMerkleTarget<ACT_DEPTH> {
-		conditional_merkle_verify_commitment_tree_gadget::<H, F, D, ACT_DEPTH>(
+	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH> {
+		conditional_merkle_verify_commitment_tree_gadget::<H, F, D, COM_TREE_DEPTH>(
 			self, acc_comm.0, act_root.0, condition, ctx,
 		)
 	}
@@ -564,8 +564,8 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
 		ctx: &H::CircuitContext,
-	) -> [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH] {
-		let merkle_proofs: [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH] =
+	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] {
+		let merkle_proofs: [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] =
 			core::array::from_fn(|i| {
 				conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
 					self,

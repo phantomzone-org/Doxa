@@ -9,8 +9,8 @@ use plonky2_field::types::Field;
 use tessera_utils::F;
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK,
-	MAIN_POOL_CONFIG_DEPTH, NCT_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH, StandardAccount,
+	ACC_AST_DEPTH, COM_TREE_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK,
+	MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH, StandardAccount,
 	plonky2_gadgets::{
 		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget, ConditionalMerkleTarget},
 		signature::{PubkeyTarget, SchnorrTargets},
@@ -204,11 +204,11 @@ pub struct TxCircuitTargets {
 	// accin position (needed for nullifier witness)
 	pub(crate) accin_pos: Target,
 	// merkle targets
-	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<ACT_DEPTH>,
+	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<COM_TREE_DEPTH>,
 	pub(crate) accin_ast_merkle: ComputeMerkleRootTarget<ACC_AST_DEPTH>,
-	pub(crate) inotes_nct_merkle: [CommitmentTreeMerkleTarget<NCT_DEPTH>; NOTE_BATCH], /* inotes NCT merkle
-	                                                                                    * proofs (one per
-	                                                                                    * inote) */
+	pub(crate) inotes_nct_merkle: [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH], /* inotes NCT merkle
+	                                                                                         * proofs (one per
+	                                                                                         * inote) */
 	// notes
 	pub(crate) inotes: [NoteTarget; NOTE_BATCH],
 	pub(crate) inotes_pos: [Target; NOTE_BATCH],
