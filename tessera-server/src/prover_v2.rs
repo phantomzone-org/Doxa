@@ -55,7 +55,7 @@ pub struct SubtreeRootProverService {
 impl SubtreeRootProverService {
 	/// Load from pre-built artifacts at `path`.
 	///
-	/// `batch_size` must match the size the circuit was built for (= account_batch_size ×
+	/// `batch_size` must match the size the circuit was built for (= priv_tx_batch_size ×
 	/// notes_per_slot).
 	pub fn from_artifacts(path: &Path, batch_size: usize) -> Result<Self> {
 		if !SubtreeRootCircuit::has_artifacts(path) {
@@ -201,7 +201,7 @@ impl ProverRuntimeV2 {
 	///
 	/// # Parameters
 	/// - `sr_artifacts_path`: SubtreeRootCircuit artifact directory.
-	/// - `sr_batch_size`: leaf count for the SubtreeRoot circuit (= account_batch_size ×
+	/// - `sr_batch_size`: leaf count for the SubtreeRoot circuit (= priv_tx_batch_size ×
 	///   notes_per_slot).
 	/// - `super_aggregator_v2_artifacts_path`: SAV2 artifact directory; also used to load
 	///   `dummy_inner_tx_proof.bin`.
@@ -262,7 +262,6 @@ impl ProverRuntimeV2 {
 	/// needed in V2 because there is no multiset equality constraint.
 	fn build_and_aggregate_tx_proofs(
 		aggregator: &Option<AssociatedInputAggregatorService>,
-		account_batch_size: usize,
 		tx_proofs_by_slot: &HashMap<usize, Vec<u8>>,
 		dummy_proof_bytes: &[u8],
 	) -> Result<ProofNative> {
@@ -270,8 +269,8 @@ impl ProverRuntimeV2 {
 			anyhow::bail!("no TX aggregator configured (set TESSERA_AGGREGATOR_ARTIFACTS_PATH)");
 		};
 
-		let mut leaf_proofs: Vec<Vec<u8>> = Vec::with_capacity(account_batch_size);
-		for s in 0..account_batch_size {
+		let mut leaf_proofs: Vec<Vec<u8>> = Vec::with_capacity(tessera_client::PRIV_TX_BATCH_SIZE);
+		for s in 0..tessera_client::PRIV_TX_BATCH_SIZE {
 			if let Some(inner_proof_bytes) = tx_proofs_by_slot.get(&s) {
 				// Real slot: validate proof structure, then use as-is.
 				ProofWithPublicInputs::<F, ConfigNative, D>::from_bytes(
@@ -368,7 +367,7 @@ impl ProverRuntimeV2 {
 		let batch_id = request.batch_id;
 		let notes_per_slot = tessera_client::NOTE_BATCH;
 		let sr_batch_size = self.subtree_root.batch_size();
-		let account_batch_size = sr_batch_size / notes_per_slot;
+		let priv_tx_batch_size = sr_batch_size / notes_per_slot;
 
 		anyhow::ensure!(
 			request.nc_leaves.len() == sr_batch_size,
@@ -378,10 +377,9 @@ impl ProverRuntimeV2 {
 		);
 
 		// ── 1. Build & aggregate TX leaf proofs ─────────────────────────────
-		info!(batch_id, account_batch_size, "building TX leaf proofs (V2)");
+		info!(batch_id, "building TX leaf proofs (V2)");
 		let tx_agg_proof = Self::build_and_aggregate_tx_proofs(
 			&self.aggregator,
-			account_batch_size,
 			&request.tx_proofs_by_slot,
 			&self.dummy_inner_proof_bytes,
 		)
@@ -402,8 +400,8 @@ impl ProverRuntimeV2 {
 		// ── 4. Off-circuit cross-check (NC in TX proof ↔ SR leaves) ─────────
 		let n_tx_slots = tx_agg_proof.public_inputs.len() / TX_LEAF_PI_SIZE;
 		anyhow::ensure!(
-			n_tx_slots >= account_batch_size,
-			"TX n_tx_slots ({n_tx_slots}) < account_batch_size ({account_batch_size})"
+			n_tx_slots >= priv_tx_batch_size,
+			"TX n_tx_slots ({n_tx_slots}) < priv_tx_batch_size ({priv_tx_batch_size})"
 		);
 		info!(batch_id, n_tx_slots, "running off-circuit NC cross-check");
 		validate_subtree_nc_offcircuit(

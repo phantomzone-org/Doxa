@@ -173,8 +173,15 @@ pub type MainPoolConfigNode = GenericNode<MainPoolConfigLeaf>;
 /// A depth-20 Merkle tree where position `subpool_id` holds
 /// TODO: swap the order below
 /// `H(SubpoolConfigRoot || subpool_id)`.
+#[derive(Clone)]
 pub struct MainPoolConfigTree {
 	inner: MerkleTree<MAIN_POOL_CONFIG_DEPTH, MainPoolConfigNode>,
+}
+
+impl Default for MainPoolConfigTree {
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 impl MainPoolConfigTree {

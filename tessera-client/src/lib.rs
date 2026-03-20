@@ -5,9 +5,9 @@ pub(crate) mod ecgfp5;
 pub(crate) mod note;
 pub(crate) mod plonky2_gadgets;
 pub use plonky2_gadgets::serialization::TesseraGateSerializer;
-pub(crate) mod pool_config;
-pub(crate) mod schnorr;
-pub(crate) mod tree;
+pub mod pool_config;
+pub mod schnorr;
+pub mod tree;
 pub(crate) mod utils;
 
 pub const DS_NULLIFIER_KEY: u64 = 12;
@@ -48,6 +48,7 @@ pub use note::*;
 pub use plonky2_gadgets::priv_tx::{
 	FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, RejectTxInputs, SpendTxInputs,
 	build_circuit_and_dummy_proof, build_circuit_and_real_proof, build_priv_tx_circuit,
-	prove_dummy_priv_tx, prove_real_priv_tx, prove_real_priv_tx_seeded,
+	double_hash_native, prove_dummy_priv_tx, prove_real_priv_tx, prove_real_priv_tx_seeded,
+	sample_dummy_notes,
 };
 use tessera_utils::HASH_SIZE;

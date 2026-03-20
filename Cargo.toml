@@ -1,4 +1,5 @@
 [workspace]
+members = ["tessera-client","tessera-server", "tessera-trees", "tessera-e2e"]
 members = ["tessera-client","tessera-server", "tessera-trees", "tessera-utils", "wasm/tessera-client-wasm"]
 resolver = "2"
 

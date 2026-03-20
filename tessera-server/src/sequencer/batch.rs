@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy::primitives::FixedBytes;
+use tessera_client::PRIV_TX_BATCH_SIZE;
 use tessera_utils::{hasher::HashOutput, F};
 
 use crate::{
@@ -73,9 +74,9 @@ pub enum BatchSlot {
 /// Leaf arrays produced by [`BatchBuilder::finalize`].
 #[allow(dead_code)]
 pub struct FinalizedBatch {
-	/// AC leaves in arrival order (len = `account_batch_size`).
+	/// AC leaves in arrival order (len = `priv_tx_batch_size`).
 	pub ac_leaves: Vec<[u8; 32]>,
-	/// AN leaves sorted as `[u64; 4]` big-endian (len = `account_batch_size`).
+	/// AN leaves sorted as `[u64; 4]` big-endian (len = `priv_tx_batch_size`).
 	pub an_sorted: Vec<[u8; 32]>,
 	/// Sorting permutation for AN: `an_sort_perm[slot] = sorted_position`.
 	/// The prover recovers a slot's AN value via `an_sorted[an_sort_perm[slot]]`.
@@ -98,14 +99,13 @@ pub struct FinalizedBatch {
 	pub batch_poseidon_root: HashOutput,
 }
 
-/// Incrementally builds a batch of `account_batch_size` slots.
+/// Incrementally builds a batch of `priv_tx_batch_size` slots.
 ///
 /// Tree batch sizes:
-///   - AC, AN: `account_batch_size` leaves (1 per slot).
-///   - NC, NN: `note_batch_size = account_batch_size × NOTES_PER_SLOT` leaves (8 per slot).
+///   - AC, AN: `priv_tx_batch_size` leaves (1 per slot).
+///   - NC, NN: `note_batch_size = priv_tx_batch_size × NOTES_PER_SLOT` leaves (8 per slot).
 pub struct BatchBuilder {
 	slots: Vec<BatchSlot>,
-	account_batch_size: usize,
 	note_batch_size: usize,
 	/// Index of the current open deposit mini-batch slot (`nc_filled < 8`).
 	/// `None` when no open deposit slot exists.
@@ -132,11 +132,10 @@ impl BatchBuilder {
 	/// Uses `dummy_root` for deterministic dummy leaf derivation and zero-based
 	/// start indices for all four leaf arrays.  In V2, the root and start index
 	/// only affect padding leaves, which are discarded after proving.
-	pub fn new_v2(account_batch_size: usize, dummy_root: [u8; 32]) -> Self {
-		let note_batch_size = account_batch_size * NOTES_PER_SLOT;
+	pub fn new_v2(dummy_root: [u8; 32]) -> Self {
+		let note_batch_size = PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT;
 		Self {
-			slots: Vec::with_capacity(account_batch_size),
-			account_batch_size,
+			slots: Vec::with_capacity(PRIV_TX_BATCH_SIZE),
 			note_batch_size,
 			open_deposit: None,
 			ac_root: dummy_root,
@@ -175,7 +174,7 @@ impl BatchBuilder {
 
 	/// Whether the batch is full (all account-level slots allocated).
 	pub fn is_full(&self) -> bool {
-		self.slots.len() >= self.account_batch_size
+		self.slots.len() >= PRIV_TX_BATCH_SIZE
 	}
 
 	/// Add a real private TX to the batch.
@@ -312,7 +311,7 @@ impl BatchBuilder {
 	}
 
 	/// Fill remaining NC positions in open deposit slots with dummies and
-	/// pad remaining slots with `Empty` up to `account_batch_size`.
+	/// pad remaining slots with `Empty` up to `priv_tx_batch_size`.
 	///
 	/// Idempotent: calling `pad()` on an already-padded builder is a no-op.
 	pub fn pad(&mut self) {
@@ -338,7 +337,7 @@ impl BatchBuilder {
 		}
 
 		// 2. Pad remaining slots with Empty.
-		while self.slots.len() < self.account_batch_size {
+		while self.slots.len() < PRIV_TX_BATCH_SIZE {
 			let slot_idx = self.slots.len();
 			let ac = derive_dummy_leaf(self.ac_start + slot_idx, &self.ac_root);
 			let an = derive_dummy_leaf(self.an_start + slot_idx, &self.an_root);
@@ -368,8 +367,8 @@ impl BatchBuilder {
 		self.pad();
 
 		// 3. Build leaf arrays from slot data.
-		let mut ac_leaves = Vec::with_capacity(self.account_batch_size);
-		let mut an_unsorted = Vec::with_capacity(self.account_batch_size);
+		let mut ac_leaves = Vec::with_capacity(PRIV_TX_BATCH_SIZE);
+		let mut an_unsorted = Vec::with_capacity(PRIV_TX_BATCH_SIZE);
 		let mut nc_leaves = Vec::with_capacity(self.note_batch_size);
 		let mut nn_unsorted = Vec::with_capacity(self.note_batch_size);
 		let mut tx_proofs_by_slot = HashMap::new();
@@ -638,7 +637,7 @@ impl FinalizedConsumeBatch {
 pub struct ConsumeBatchBuilder {
 	/// Real deposit notes in arrival order, paired with their consume proofs.
 	notes: Vec<([u8; 32], Option<Vec<u8>>)>,
-	/// Total capacity (= `account_batch_size × NOTES_PER_SLOT`).
+	/// Total capacity (= `priv_tx_batch_size × NOTES_PER_SLOT`).
 	note_batch_size: usize,
 	/// Dummy-leaf derivation root (= `confirmed_root` bytes at creation time).
 	dummy_root: [u8; 32],
@@ -647,7 +646,7 @@ pub struct ConsumeBatchBuilder {
 impl ConsumeBatchBuilder {
 	/// Create a new consume batch builder.
 	///
-	/// - `note_batch_size`: total leaf capacity (= account_batch_size × 8).
+	/// - `note_batch_size`: total leaf capacity (= priv_tx_batch_size × 8).
 	/// - `dummy_root`: bytes used for deterministic dummy-leaf derivation.
 	pub fn new(note_batch_size: usize, dummy_root: [u8; 32]) -> Self {
 		Self {
@@ -732,8 +731,9 @@ mod tests {
 	use super::*;
 	use crate::contract;
 
-	const ACCOUNT_BATCH: usize = 4;
-	const NOTE_BATCH: usize = ACCOUNT_BATCH * NOTES_PER_SLOT;
+	use tessera_client::PRIV_TX_BATCH_SIZE;
+	/// Total NC-leaf capacity per batch (= PRIV_TX_BATCH_SIZE × NOTES_PER_SLOT).
+	const CONSUME_BATCH: usize = PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT;
 
 	fn dummy_root() -> [u8; 32] {
 		[0u8; 32]
@@ -745,8 +745,8 @@ mod tests {
 
 	#[test]
 	fn add_private_tx_fills_batch() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
-		for i in 0..ACCOUNT_BATCH {
+		let mut bb = BatchBuilder::new_v2(dummy_root());
+		for i in 0..PRIV_TX_BATCH_SIZE {
 			let full = bb
 				.add_private_tx(
 					vec![i as u8],
@@ -756,7 +756,7 @@ mod tests {
 					[dummy_leaf(i as u8 + 20); 8],
 				)
 				.unwrap();
-			assert_eq!(full, i == ACCOUNT_BATCH - 1);
+			assert_eq!(full, i == PRIV_TX_BATCH_SIZE - 1);
 		}
 		assert!(bb.is_full());
 
@@ -768,7 +768,7 @@ mod tests {
 
 	#[test]
 	fn deposit_mini_batching() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 
 		// Add 5 deposits: should create 1 slot (8 NC positions, 5 filled).
 		for i in 0..5 {
@@ -793,7 +793,7 @@ mod tests {
 
 	#[test]
 	fn finalize_pads_and_sorts() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 
 		// 1 real TX + 2 deposits
 		bb.add_private_tx(
@@ -809,11 +809,11 @@ mod tests {
 
 		let batch = bb.finalize();
 
-		// Should have ACCOUNT_BATCH AC leaves and ACCOUNT_BATCH * 8 NC leaves.
-		assert_eq!(batch.ac_leaves.len(), ACCOUNT_BATCH);
-		assert_eq!(batch.nc_leaves.len(), ACCOUNT_BATCH * NOTES_PER_SLOT);
-		assert_eq!(batch.an_sorted.len(), ACCOUNT_BATCH);
-		assert_eq!(batch.nn_sorted.len(), ACCOUNT_BATCH * NOTES_PER_SLOT);
+		// Should have PRIV_TX_BATCH_SIZE AC leaves and PRIV_TX_BATCH_SIZE * 8 NC leaves.
+		assert_eq!(batch.ac_leaves.len(), PRIV_TX_BATCH_SIZE);
+		assert_eq!(batch.nc_leaves.len(), PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT);
+		assert_eq!(batch.an_sorted.len(), PRIV_TX_BATCH_SIZE);
+		assert_eq!(batch.nn_sorted.len(), PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT);
 
 		// Real slots: only slot 0 (has a tx proof).
 		assert_eq!(batch.tx_proofs_by_slot.len(), 1);
@@ -834,7 +834,7 @@ mod tests {
 
 	#[test]
 	fn tx_pi_matches_after_finalize() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 
 		// 1 real TX + 2 deposits (partially filling one deposit slot)
 		bb.add_private_tx(
@@ -852,26 +852,26 @@ mod tests {
 		bb.pad();
 
 		// Snapshot PIs from builder
-		let builder_pis: Vec<SlotPI> = (0..ACCOUNT_BATCH).map(|i| bb.tx_pi(i)).collect();
+		let builder_pis: Vec<SlotPI> = (0..PRIV_TX_BATCH_SIZE).map(|i| bb.tx_pi(i)).collect();
 
 		// Finalize (consumes builder)
 		let fb = bb.finalize();
 
 		// Compare slot-by-slot
-		for i in 0..ACCOUNT_BATCH {
+		for (i, bpi) in builder_pis.iter().enumerate().take(PRIV_TX_BATCH_SIZE) {
 			let fb_pi = fb.tx_pi(i);
-			assert_eq!(builder_pis[i].ac, fb_pi.ac, "AC mismatch at slot {i}");
-			assert_eq!(builder_pis[i].an, fb_pi.an, "AN mismatch at slot {i}");
-			assert_eq!(builder_pis[i].nc, fb_pi.nc, "NC mismatch at slot {i}");
-			assert_eq!(builder_pis[i].nn, fb_pi.nn, "NN mismatch at slot {i}");
+			assert_eq!(bpi.ac, fb_pi.ac, "AC mismatch at slot {i}");
+			assert_eq!(bpi.an, fb_pi.an, "AN mismatch at slot {i}");
+			assert_eq!(bpi.nc, fb_pi.nc, "NC mismatch at slot {i}");
+			assert_eq!(bpi.nn, fb_pi.nn, "NN mismatch at slot {i}");
 		}
 	}
 
 	#[test]
 	fn v2_fills_to_capacity() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 		assert!(!bb.is_full());
-		for i in 0..ACCOUNT_BATCH {
+		for i in 0..PRIV_TX_BATCH_SIZE {
 			let full = bb
 				.add_private_tx(
 					vec![i as u8],
@@ -883,7 +883,7 @@ mod tests {
 				.unwrap();
 			assert_eq!(
 				full,
-				i == ACCOUNT_BATCH - 1,
+				i == PRIV_TX_BATCH_SIZE - 1,
 				"is_full signal wrong at slot {i}"
 			);
 		}
@@ -896,7 +896,7 @@ mod tests {
 	#[test]
 	fn v2_finalize_leaf_counts() {
 		// 2 private TXs + 3 deposits → 3 slots (deposit packs into 1 slot).
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 		bb.add_private_tx(
 			vec![1],
 			dummy_leaf(1),
@@ -919,22 +919,22 @@ mod tests {
 
 		let fb = bb.finalize();
 
-		assert_eq!(fb.ac_leaves.len(), ACCOUNT_BATCH, "ac_leaves len");
-		assert_eq!(fb.an_sorted.len(), ACCOUNT_BATCH, "an_sorted len");
-		assert_eq!(fb.an_sort_perm.len(), ACCOUNT_BATCH, "an_sort_perm len");
+		assert_eq!(fb.ac_leaves.len(), PRIV_TX_BATCH_SIZE, "ac_leaves len");
+		assert_eq!(fb.an_sorted.len(), PRIV_TX_BATCH_SIZE, "an_sorted len");
+		assert_eq!(fb.an_sort_perm.len(), PRIV_TX_BATCH_SIZE, "an_sort_perm len");
 		assert_eq!(
 			fb.nc_leaves.len(),
-			ACCOUNT_BATCH * NOTES_PER_SLOT,
+			PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT,
 			"nc_leaves len"
 		);
 		assert_eq!(
 			fb.nn_sorted.len(),
-			ACCOUNT_BATCH * NOTES_PER_SLOT,
+			PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT,
 			"nn_sorted len"
 		);
 		assert_eq!(
 			fb.nn_sort_perm.len(),
-			ACCOUNT_BATCH * NOTES_PER_SLOT,
+			PRIV_TX_BATCH_SIZE * NOTES_PER_SLOT,
 			"nn_sort_perm len"
 		);
 		// 2 real TX slots.
@@ -945,7 +945,7 @@ mod tests {
 
 	#[test]
 	fn v2_finalize_poseidon_root() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 		bb.add_private_tx(
 			vec![0xFF],
 			dummy_leaf(1),
@@ -968,7 +968,7 @@ mod tests {
 
 	#[test]
 	fn v2_tx_proofs_keyed_by_slot() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 		// Slot 0: private TX with proof bytes [0xAA].
 		bb.add_private_tx(
 			vec![0xAA],
@@ -1011,9 +1011,9 @@ mod tests {
 
 	#[test]
 	fn v2_sorted_leaves() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 		// Add slots with deliberately out-of-order AN / NN bytes.
-		for i in (0..ACCOUNT_BATCH as u8).rev() {
+		for i in (0..PRIV_TX_BATCH_SIZE as u8).rev() {
 			bb.add_private_tx(
 				vec![i],
 				dummy_leaf(i),
@@ -1030,7 +1030,7 @@ mod tests {
 
 	#[test]
 	fn v2_contains_an_nn_dedup() {
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 		let an = dummy_leaf(0xAA);
 		let nn = dummy_leaf(0xBB);
 
@@ -1047,7 +1047,7 @@ mod tests {
 	#[test]
 	fn v2_into_prove_request() {
 		use plonky2::field::types::Field;
-		let mut bb = BatchBuilder::new_v2(ACCOUNT_BATCH, dummy_root());
+		let mut bb = BatchBuilder::new_v2(dummy_root());
 		bb.add_private_tx(
 			vec![0xCC],
 			dummy_leaf(1),
@@ -1076,9 +1076,9 @@ mod tests {
 
 	#[test]
 	fn consume_builder_fills_to_capacity() {
-		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		let mut cb = ConsumeBatchBuilder::new(CONSUME_BATCH, dummy_root());
 		assert!(cb.is_empty());
-		for i in 0..NOTE_BATCH {
+		for i in 0..CONSUME_BATCH {
 			cb.add_note(dummy_leaf(i as u8), None).unwrap();
 			assert_eq!(cb.len(), i + 1);
 		}
@@ -1092,7 +1092,7 @@ mod tests {
 	#[test]
 	fn consume_finalize_leaf_counts() {
 		let real_notes = 5usize;
-		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		let mut cb = ConsumeBatchBuilder::new(CONSUME_BATCH, dummy_root());
 		for i in 0..real_notes {
 			cb.add_note(dummy_leaf(i as u8), None).unwrap();
 		}
@@ -1100,7 +1100,7 @@ mod tests {
 
 		assert_eq!(
 			fb.nc_leaves.len(),
-			NOTE_BATCH,
+			CONSUME_BATCH,
 			"nc_leaves must be padded to full note_batch_size"
 		);
 		assert_eq!(
@@ -1112,7 +1112,7 @@ mod tests {
 
 	#[test]
 	fn consume_finalize_real_notes_first() {
-		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		let mut cb = ConsumeBatchBuilder::new(CONSUME_BATCH, dummy_root());
 		let note_a = [0xAAu8; 32];
 		let note_b = [0xBBu8; 32];
 		cb.add_note(note_a, None).unwrap();
@@ -1129,7 +1129,7 @@ mod tests {
 
 	#[test]
 	fn consume_finalize_poseidon_root() {
-		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		let mut cb = ConsumeBatchBuilder::new(CONSUME_BATCH, dummy_root());
 		for i in 0..3u8 {
 			cb.add_note(dummy_leaf(i), Some(vec![i])).unwrap();
 		}
@@ -1155,7 +1155,7 @@ mod tests {
 
 	#[test]
 	fn consume_finalize_proofs_by_slot() {
-		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		let mut cb = ConsumeBatchBuilder::new(CONSUME_BATCH, dummy_root());
 		// Note 0: has proof.
 		cb.add_note(dummy_leaf(1), Some(vec![0xAA])).unwrap();
 		// Note 1: no proof.
@@ -1173,7 +1173,7 @@ mod tests {
 
 	#[test]
 	fn consume_into_prove_request() {
-		let mut cb = ConsumeBatchBuilder::new(NOTE_BATCH, dummy_root());
+		let mut cb = ConsumeBatchBuilder::new(CONSUME_BATCH, dummy_root());
 		cb.add_note(dummy_leaf(1), Some(vec![0xDD])).unwrap();
 		cb.add_note(dummy_leaf(2), None).unwrap();
 		let fb = cb.finalize();

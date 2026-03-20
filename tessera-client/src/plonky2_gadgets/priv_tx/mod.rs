@@ -45,13 +45,13 @@ pub use inputs::{FakeTxInputs, FreshAccInputs, PrivTxInputs, RejectTxInputs, Spe
 /// and [`prove_real_priv_tx`].
 pub type PrivTxTargets<const D: usize> = targets::TxCircuitTargets;
 
-fn double_hash_native(elems: [F; 4]) -> [F; 4] {
+pub fn double_hash_native(elems: [F; 4]) -> [F; 4] {
 	use plonky2::plonk::config::Hasher;
 	let h0 = <PoseidonHash as Hasher<F>>::hash_no_pad(&elems).elements;
 	<PoseidonHash as Hasher<F>>::hash_no_pad(&h0).elements
 }
 
-pub(crate) fn sample_dummy_notes<R: CryptoRng>(
+pub fn sample_dummy_notes<R: CryptoRng>(
 	rng: &mut R,
 ) -> ([[F; 4]; NOTE_BATCH], [[F; 4]; NOTE_BATCH]) {
 	// TODO: sample field element at random

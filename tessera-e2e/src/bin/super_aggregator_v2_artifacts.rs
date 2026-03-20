@@ -1,37 +1,54 @@
 //! Generate V2 artifacts: V2 TX aggregator, SubtreeRootCircuit, SuperAggregatorV2.
 //!
-//! This binary is self-contained: it builds the V2 TX aggregator (sized for
-//! `TESSERA_ACCOUNT_BATCH_SIZE` slots), the SubtreeRootCircuit, and the
-//! SuperAggregatorV2, then verifies an end-to-end dummy round-trip through
-//! Plonky2 → BN128 → Groth16.
+//! This binary is self-contained: it builds every artifact needed to
+//! initialise the in-process prover (`ProverRuntimeV2`):
 //!
-//! V2 batch dimensions (defaults):
-//!   account_batch_size = 16   (TESSERA_ACCOUNT_BATCH_SIZE)
+//! 1. **PrivTx circuit** — inner leaf circuit for private transactions.
+//! 2. **V2 TX aggregator** — binary tree of depth 6 that merges 64 PrivTx
+//!    leaf proofs into one root proof.  During artifact generation the tree is
+//!    seeded with a single dummy proof and doubled up level-by-level
+//!    (`merge(p, p) → p_next`) — only 6 prove calls instead of 127.
+//! 3. **SubtreeRootCircuit** — proves `batchPoseidonRoot = Poseidon(NC leaves)`
+//!    over the 512-leaf note-commitment array.
+//! 4. **SuperAggregatorV2** — merges the TX-aggregator root and the SR proof,
+//!    producing 8 Goldilocks field elements as public inputs.
+//! 5. **BN128 wrapper + Groth16 trusted setup** — wraps the SAV2 Plonky2
+//!    proof into a Groth16 proof verifiable on-chain.
+//!
+//! An end-to-end dummy round-trip (Plonky2 → BN128 → Groth16) is executed to
+//! validate all artifacts before they are written to disk.
+//!
+//! V2 batch dimensions (from `tessera_client::PRIV_TX_BATCH_SIZE = 64`):
+//!   priv_tx_batch_size = 64   (tessera_client::PRIV_TX_BATCH_SIZE, fixed)
 //!   notes_per_slot     = 8    (tessera_client::NOTE_BATCH, fixed)
-//!   sr_batch_size      = 128  (= account_batch_size × notes_per_slot)
-//!   agg_depth          = 4    (2^4 = 16 = account_batch_size, ARITY=2)
+//!   sr_batch_size      = 512  (= 64 × 8)
+//!   agg_depth          = 6    (2^6 = 64, ARITY=2)
 //!
-//! Artifact layout:
-//!   artifacts/v2-tx-aggregator/          — TX GenericAggregator for V2 batch size
-//!   artifacts/v2-tx-aggregator/dummy_inner_tx_proof.bin  — single dummy PrivTx proof
-//!   artifacts/subtree-root/              — SubtreeRootCircuit
-//!   artifacts/super-aggregator-v2/       — SuperAggregatorV2 Plonky2 data
-//!   artifacts/super-aggregator-v2/dummy_root_proof.bin   — dummy SA root proof
-//!   artifacts/super-aggregator-v2/plonky2-proof/         — BN128 wrapper
-//!   artifacts/super-aggregator-v2/groth-artifacts/       — Groth16 keys
+//! Artifact layout (under TESSERA_ARTIFACTS_DIR or <workspace>/artifacts):
+//!   v2-tx-aggregator/          — TX GenericAggregator
+//!   v2-tx-aggregator/dummy_inner_tx_proof.bin  — single dummy PrivTx proof
+//!   subtree-root/              — SubtreeRootCircuit
+//!   super-aggregator-v2/       — SuperAggregatorV2 Plonky2 data
+//!   super-aggregator-v2/dummy_root_proof.bin   — dummy SA root proof
+//!   super-aggregator-v2/plonky2-proof/         — BN128 wrapper
+//!   super-aggregator-v2/groth-artifacts/       — Groth16 keys
 //!
 //! Usage:
-//!   TESSERA_ACCOUNT_BATCH_SIZE=16 cargo run --bin super_aggregator_v2_artifacts --release
+//!   cargo run -p tessera-e2e --bin super_aggregator_v2_artifacts --release
+//!
+//! Output directory (in order of precedence):
+//!   1. $TESSERA_ARTIFACTS_DIR
+//!   2. <workspace-root>/artifacts/
 
 use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::{ensure, Result};
-use plonky2::field::types::Field;
+use plonky2::{field::types::Field, iop::witness::{PartialWitness, WitnessWrite}};
 use tessera_client::TesseraGateSerializer;
 use tessera_server::{
 	proof_aggregation::{
-		GenericAggregator, GenericAggregatorConfig, SubtreeRootCircuit, SuperAggregatorV2,
-		SuperAggregatorV2CircuitData, TX_DATA_OFFSET, TX_LEAF_PI_SIZE,
+		AggregatedProof, GenericAggregator, GenericAggregatorConfig, SubtreeRootCircuit,
+		SuperAggregatorV2, SuperAggregatorV2CircuitData, TX_DATA_OFFSET, TX_LEAF_PI_SIZE,
 	},
 	ProofBN128,
 };
@@ -65,27 +82,35 @@ fn extract_hash(pis: &[F], offset: usize) -> [F; 4] {
 	]
 }
 
+/// Resolve artifact output directory.
+///
+/// Priority:
+///   1. `$TESSERA_ARTIFACTS_DIR` environment variable
+///   2. `<workspace-root>/artifacts/`  (sibling of this crate's manifest dir)
+fn artifacts_root() -> PathBuf {
+	std::env::var("TESSERA_ARTIFACTS_DIR")
+		.map(PathBuf::from)
+		.unwrap_or_else(|_| {
+			PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+				.parent()
+				.expect("tessera-e2e has a workspace parent")
+				.join("artifacts")
+		})
+}
+
 fn main() -> Result<()> {
-	let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
-		.unwrap_or_else(|_| "16".to_string())
-		.parse()
-		.expect("TESSERA_ACCOUNT_BATCH_SIZE must be a valid usize");
+	let priv_tx_batch_size: usize = tessera_client::PRIV_TX_BATCH_SIZE;
 
+	let sr_batch_size = priv_tx_batch_size * NOTES_PER_SLOT;
+	let agg_depth = priv_tx_batch_size.trailing_zeros() as usize; // log2 of power-of-two
 	ensure!(
-		account_batch_size.is_power_of_two() && account_batch_size >= 2,
-		"TESSERA_ACCOUNT_BATCH_SIZE ({account_batch_size}) must be a power of two >= 2"
-	);
-
-	let sr_batch_size = account_batch_size * NOTES_PER_SLOT;
-	let agg_depth = account_batch_size.trailing_zeros() as usize; // log2 of power-of-two
-	ensure!(
-		ARITY.pow(agg_depth as u32) == account_batch_size,
-		"ARITY^depth ({}) != account_batch_size ({})",
+		ARITY.pow(agg_depth as u32) == priv_tx_batch_size,
+		"ARITY^depth ({}) != priv_tx_batch_size ({})",
 		ARITY.pow(agg_depth as u32),
-		account_batch_size
+		priv_tx_batch_size
 	);
 
-	let artifacts_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("artifacts");
+	let artifacts_root = artifacts_root();
 	let tx_agg_dir = artifacts_root.join("v2-tx-aggregator");
 	let sr_dir = artifacts_root.join("subtree-root");
 	let sav2_dir = artifacts_root.join("super-aggregator-v2");
@@ -93,10 +118,13 @@ fn main() -> Result<()> {
 	let groth_path = sav2_dir.join("groth-artifacts");
 
 	println!("=== SuperAggregatorV2 Artifact Builder ===");
-	println!("account_batch_size : {account_batch_size}");
+	println!("priv_tx_batch_size : {priv_tx_batch_size}");
 	println!("notes_per_slot     : {NOTES_PER_SLOT}");
 	println!("sr_batch_size      : {sr_batch_size}");
-	println!("agg_depth          : {agg_depth}  (ARITY={ARITY}, {ARITY}^{agg_depth}={account_batch_size})");
+	println!(
+		"agg_depth          : {agg_depth}  (ARITY={ARITY}, {ARITY}^{agg_depth}={priv_tx_batch_size})"
+	);
+	println!("artifacts root     : {}", artifacts_root.display());
 	println!("tx-aggregator dir  : {}", tx_agg_dir.display());
 	println!("subtree-root dir   : {}", sr_dir.display());
 	println!("super-agg-v2 dir   : {}", sav2_dir.display());
@@ -141,7 +169,7 @@ fn main() -> Result<()> {
 		depth: agg_depth,
 	};
 	let tx_agg = GenericAggregator::new(
-		agg_config,
+		agg_config.clone(),
 		priv_tx_cd.common.clone(),
 		priv_tx_cd.verifier_only.clone(),
 	)?;
@@ -163,33 +191,36 @@ fn main() -> Result<()> {
 	);
 
 	// =======================================================================
-	// 3. Generate account_batch_size dummy TX proofs, aggregate them
+	// 3. Aggregate TX tree using O(log N) doubling: merge(p, p) → p_next
+	//
+	// Instead of proving all priv_tx_batch_size=64 leaf proofs and doing the
+	// full tree aggregation (127 prove calls), we prove one leaf and double
+	// it up through each level: agg_depth=6 prove calls total.
 	// =======================================================================
-	println!("\n[3] Generating {account_batch_size} dummy TX proofs + aggregating...");
-	let now = Instant::now();
-	// Reuse the same dummy proof for all slots — is_real=0 so cross-check is gated off.
-	let dummy_tx_proofs: Vec<ProofNative> = (0..account_batch_size)
-		.map(|_s| {
-			tessera_client::prove_dummy_priv_tx(
-				&priv_tx_cd,
-				&priv_tx_targets,
-				zero_an,
-				zero_nn,
-				zero_ac,
-				zero_nc,
-			)
-		})
-		.collect();
 	println!(
-		"  {account_batch_size} dummy TX proofs [{:?}]",
-		now.elapsed()
+		"\n[3] Aggregating TX tree via O(log N) doubling ({agg_depth} merges, \
+		 arity={ARITY}, depth={agg_depth})..."
 	);
-
-	println!("  Aggregating...");
-	let now = Instant::now();
-	let agg_result = tx_agg.aggregate(dummy_tx_proofs)?;
+	// Reuse the single dummy inner proof from step 1 as the leaf proof p0.
+	let mut current: ProofNative = dummy_inner_proof.clone();
+	for level_idx in 0..agg_depth {
+		let level = tx_agg.level_circuit(level_idx)?;
+		let inner_verifier = tx_agg.inner_verifier_for_level(level_idx);
+		let mut pw = PartialWitness::new();
+		pw.set_verifier_data_target(&level.verifier_target, inner_verifier)?;
+		for i in 0..ARITY {
+			pw.set_proof_with_pis_target(&level.proof_targets[i], &current)?;
+		}
+		let now = Instant::now();
+		current = level.circuit_data.prove(pw)?;
+		println!("  level {level_idx} merged [{:?}]", now.elapsed());
+	}
+	let agg_result = AggregatedProof {
+		proof: current,
+		config: agg_config.clone(),
+	};
 	tx_agg.verify_root(&agg_result.proof)?;
-	println!("  TX aggregation done [{:?}]", now.elapsed());
+	println!("  TX aggregation done ({agg_depth} steps instead of {priv_tx_batch_size})");
 
 	let tx_pis = &agg_result.proof.public_inputs;
 	let n_tx_slots = tx_pis.len() / TX_LEAF_PI_SIZE;
@@ -349,8 +380,8 @@ fn main() -> Result<()> {
 	));
 
 	// =======================================================================
-	// 12. Copy Verifier.sol → tessera-solidity/src/VerifierSuperAggregatorV2.sol Copy
-	//     proof_solidity.json → tessera-solidity/test/fixtures/groth16_proof.json
+	// 12. Copy Verifier.sol → tessera-solidity/src/VerifierSuperAggregatorV2.sol
+	//     Copy proof_solidity.json → tessera-solidity/test/fixtures/groth16_proof.json
 	// =======================================================================
 	println!("\n[12] Syncing Solidity artifacts...");
 	let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

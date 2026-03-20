@@ -12,7 +12,7 @@ use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 
 /// A scalar (integer modulo the prime group order n).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Scalar([u64; 5]);
+pub struct Scalar(pub [u64; 5]);
 
 // TODO: ack Thomas Pornin
 
@@ -139,7 +139,7 @@ impl Scalar {
 
 	/// Sample a uniformly random scalar in `[0, N)` using rejection sampling.
 	// TODO: I don't know whether this is secure.
-	pub(crate) fn sample<R: rand::Rng>(rng: &mut R) -> Self {
+	pub fn sample<R: rand::Rng>(rng: &mut R) -> Self {
 		loop {
 			let mut limbs: [u64; 5] = std::array::from_fn(|_| rng.next_u64());
 			limbs[4] &= 0x7FFFFFFFFFFFFFFF; // N < 2^319; clear bit 63
@@ -285,11 +285,7 @@ pub(crate) fn schnorr_challenge(
 }
 
 /// Sign: R = k*G, e = H(R || Q || m), s = k + d*-e
-pub(crate) fn schnorr_sign(
-	privkey: &PrivateKey,
-	message: &[GoldilocksField],
-	k: Scalar,
-) -> Signature {
+pub fn schnorr_sign(privkey: &PrivateKey, message: &[GoldilocksField], k: Scalar) -> Signature {
 	let g = PointEw::generator();
 	let r = g.scalar_mul(&k);
 

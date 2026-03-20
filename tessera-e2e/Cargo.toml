@@ -1,0 +1,19 @@
+[package]
+name = "tessera-e2e"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tessera-trees = {workspace = true}
+tessera-client = {workspace = true}
+tessera-server = {path = "../tessera-server"}
+anyhow = {workspace = true}
+rand = {workspace = true}
+rand_chacha = {workspace = true}
+plonky2 = {workspace = true}
+tokio = {workspace = true}
+alloy = {workspace = true}
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
+hex = {workspace = true}
+serde_json = {workspace = true}
