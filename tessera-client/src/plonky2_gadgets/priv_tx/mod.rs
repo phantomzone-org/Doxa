@@ -138,20 +138,10 @@ pub fn priv_tx_circuit<
 
 	// AccIn nullifier — free virtual target; prover supplies the real or padding value.
 	// When not_fake_tx=1, the circuit enforces accin_null == derived_null below.
-	let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
-	let accin_null_fresh = builder.derive_fresh_account_nullifier(accin_comm, nk);
-	let derived_null = HashOutTarget {
-		elements: core::array::from_fn(|i| {
-			builder._if(
-				is_fresh_acc,
-				accin_null_fresh.0.elements[i],
-				accin_null_regular.0.elements[i],
-			)
-		}),
-	};
+	let derived_null = builder.derive_account_nullifier(accin_comm, nk);
 	let accin_null = AccountNullifierTarget(builder.add_virtual_hash());
 	for i in 0..4 {
-		let diff = builder.sub(accin_null.0.elements[i], derived_null.elements[i]);
+		let diff = builder.sub(accin_null.0.elements[i], derived_null.0.elements[i]);
 		let gated = builder.mul(not_fake_tx.target, diff);
 		builder.assert_zero(gated);
 	}

@@ -59,13 +59,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	fn derive_account_nullifier(
 		&mut self,
 		acc: AccountCommitmentTarget,
-		pos: Target,
-		nk: NullifierKeyTarget,
-	) -> AccountNullifierTarget;
-
-	fn derive_fresh_account_nullifier(
-		&mut self,
-		acc: AccountCommitmentTarget,
 		nk: NullifierKeyTarget,
 	) -> AccountNullifierTarget;
 
@@ -317,22 +310,9 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 	fn derive_account_nullifier(
 		&mut self,
 		acc: AccountCommitmentTarget,
-		pos: Target,
 		nk: NullifierKeyTarget,
 	) -> AccountNullifierTarget {
 		let mut input = Vec::with_capacity(9);
-		input.extend_from_slice(&acc.0.elements);
-		input.extend_from_slice(&nk.0.elements);
-		input.push(pos);
-		AccountNullifierTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
-	}
-
-	fn derive_fresh_account_nullifier(
-		&mut self,
-		acc: AccountCommitmentTarget,
-		nk: NullifierKeyTarget,
-	) -> AccountNullifierTarget {
-		let mut input = Vec::with_capacity(8);
 		input.extend_from_slice(&acc.0.elements);
 		input.extend_from_slice(&nk.0.elements);
 		AccountNullifierTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))

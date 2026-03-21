@@ -73,7 +73,10 @@ pub struct AssetId(pub(crate) F);
 
 impl AssetId {
 	pub fn from_u64(v: u64) -> anyhow::Result<Self> {
-		anyhow::ensure!(v < F::ORDER, "AssetId value {v} is out of Goldilocks field range");
+		anyhow::ensure!(
+			v < F::ORDER,
+			"AssetId value {v} is out of Goldilocks field range"
+		);
 		Ok(Self(F::from_canonical_u64(v)))
 	}
 }
@@ -295,23 +298,6 @@ impl StandardAccount {
 	}
 
 	pub fn nullifier(&self, pos: Option<u64>) -> AccountNullifier {
-		if self.is_fresh() {
-			self.fresh_acc_nullifier()
-		} else {
-			assert!(pos.is_some());
-			self.old_acc_nullifier(pos.unwrap())
-		}
-	}
-
-	pub fn is_fresh(&self) -> bool {
-		self.nonce.0 == F::ZERO
-			&& self.spend_auth.spend_pk.is_none()
-			&& !self.consume_auth.config
-			&& self.consume_auth.pk.is_none()
-			&& self.ast.size() == 0
-	}
-
-	fn fresh_acc_nullifier(&self) -> AccountNullifier {
 		let mut inp = Vec::with_capacity(4 + 4);
 		inp.extend(self.commitment().0.0);
 		inp.extend(self.nk().0);
@@ -321,17 +307,12 @@ impl StandardAccount {
 		))
 	}
 
-	fn old_acc_nullifier(&self, pos: u64) -> AccountNullifier {
-		let pos = F::from_canonical_u64(pos);
-
-		let mut inp = Vec::with_capacity(4 + 1 + 4);
-		inp.extend(self.commitment().0.0);
-		inp.extend(self.nk().0);
-		inp.push(pos);
-
-		AccountNullifier(HashOutput(
-			<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements,
-		))
+	pub fn is_fresh(&self) -> bool {
+		self.nonce.0 == F::ZERO
+			&& self.spend_auth.spend_pk.is_none()
+			&& !self.consume_auth.config
+			&& self.consume_auth.pk.is_none()
+			&& self.ast.size() == 0
 	}
 }
 
@@ -366,9 +347,9 @@ impl AccountAddress {
 		let subpool_raw = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
 		let mut pub_id = [F::ZERO; 4];
 		for i in 0..4 {
-			pub_id[i] = F::from_canonical_u64(
-				u64::from_le_bytes(bytes[8 + i * 8..16 + i * 8].try_into().unwrap()),
-			);
+			pub_id[i] = F::from_canonical_u64(u64::from_le_bytes(
+				bytes[8 + i * 8..16 + i * 8].try_into().unwrap(),
+			));
 		}
 		Ok(Self {
 			subpool_id: SubpoolId(F::from_canonical_u64(subpool_raw)),

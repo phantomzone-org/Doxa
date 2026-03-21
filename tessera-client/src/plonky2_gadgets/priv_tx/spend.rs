@@ -655,7 +655,7 @@ mod tests {
 		};
 
 		// ── Build circuit ──────────────────────────────────────────────────────
-		let config = CircuitConfig::standard_recursion_zk_config();
+		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let ctx = HashOutput::register_luts(&mut builder);
 		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
