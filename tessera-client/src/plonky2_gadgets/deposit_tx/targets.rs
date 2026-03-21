@@ -8,7 +8,7 @@ use plonky2::{
 use tessera_utils::F;
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH,
+	ACC_AST_DEPTH, COM_TREE_DEPTH,
 	note::DepositNote,
 	plonky2_gadgets::{
 		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget},
@@ -85,7 +85,7 @@ pub(crate) struct DepositTxTargets {
 	// accin position (needed for nullifier witness)
 	pub(crate) accin_pos: Target,
 	// merkle targets
-	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<ACT_DEPTH>,
+	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<COM_TREE_DEPTH>,
 	pub(crate) accin_ast_merkle: ComputeMerkleRootTarget<ACC_AST_DEPTH>,
 	// deposit note
 	pub(crate) deposit_note: DepositNoteTarget,

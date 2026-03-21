@@ -22,7 +22,7 @@ use tessera_utils::{
 };
 
 use crate::{
-	ACT_DEPTH, AssetId, NOTE_BATCH, Nonce, StandardAccount, SubpoolId,
+	AssetId, COM_TREE_DEPTH, NOTE_BATCH, Nonce, StandardAccount, SubpoolId,
 	account::AccountStateTreeLeaf,
 	derive_withdraw_tx_hash,
 	ecgfp5::PointEw,
@@ -236,7 +236,7 @@ pub(crate) fn set_withdraw_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &WithdrawTxTargets,
 	accin: &StandardAccount,
-	accin_act_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
+	accin_act_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
 	act_root: HashOutput,
 	main_pool: &MainPoolConfigTree,
 	withdrawals: &[(AssetId, U256)],
@@ -382,7 +382,7 @@ mod tests {
 
 	use super::*;
 	use crate::{
-		ACT_DEPTH, AssetId, Nonce, SpendAuth, StandardAccount, SubpoolId,
+		AssetId, COM_TREE_DEPTH, Nonce, SpendAuth, StandardAccount, SubpoolId,
 		account::AccountStateTreeLeaf,
 		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
@@ -433,7 +433,7 @@ mod tests {
 			.unwrap();
 
 		// ── Insert accin into ACT ─────────────────────────────────────────
-		let mut act = CommitmentTree::<HashOutput>::new(ACT_DEPTH);
+		let mut act = CommitmentTree::<HashOutput>::new(COM_TREE_DEPTH);
 		let accin_insert = act.insert(accin.commitment().0).unwrap();
 		let accin_act_proof = CommitmentTreeMerkleProof::new(
 			accin.commitment().0,

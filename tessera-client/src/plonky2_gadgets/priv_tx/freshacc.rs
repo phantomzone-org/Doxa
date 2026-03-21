@@ -14,9 +14,9 @@ use super::{
 	witness::{TxKindFlags, set_common_tx_witness, set_tx_kind_flags},
 };
 use crate::{
-	ACT_DEPTH, AccountAddress, AssetId, ConsumeAuth, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH,
-	NCT_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, SUBPOOL_CONFIG_DEPTH, SpendAuth,
-	StandardAccount, SubpoolId,
+	AccountAddress, AssetId, COM_TREE_DEPTH, ConsumeAuth, DEFAULT_SPEND_AUTH_PK,
+	MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, SUBPOOL_CONFIG_DEPTH,
+	SpendAuth, StandardAccount, SubpoolId,
 	account::PublicIdentifier,
 	derive_priv_tx_hash,
 	ecgfp5::CompressedPoint,
@@ -121,7 +121,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	// ── Merkle proofs ─────────────────────────────────────────────────────────
 
 	// ACT: not enforced for FreshAcc
-	t.accin_act_merkle.set_dummy_witness(pw, ACT_DEPTH);
+	t.accin_act_merkle.set_dummy_witness(pw, COM_TREE_DEPTH);
 
 	// accin AST at index 0 (asset not in tree → Empty leaf)
 	t.accin_ast_merkle
@@ -142,7 +142,7 @@ pub(crate) fn set_freshacc_tx_witness(
 		pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 		pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
 		// NCT: not enforced (selector = false)
-		t.inotes_nct_merkle[i].set_dummy_witness(pw, NCT_DEPTH);
+		t.inotes_nct_merkle[i].set_dummy_witness(pw, COM_TREE_DEPTH);
 	}
 
 	// ── Output notes (all inactive) ───────────────────────────────────────────

@@ -1,7 +1,7 @@
 use tessera_utils::{F, hasher::HashOutput};
 
 use crate::{
-	ACT_DEPTH, ConsumeAuth, NCT_DEPTH, NOTE_BATCH, SpendAuth, StandardAccount, SubpoolId,
+	COM_TREE_DEPTH, ConsumeAuth, NOTE_BATCH, SpendAuth, StandardAccount, SubpoolId,
 	note::StandardNote,
 	pool_config::{CompPubKey, MainPoolConfigTree},
 	schnorr::Signature,
@@ -40,9 +40,9 @@ pub struct SpendTxInputs {
 	/// and input-note commitment (NCT) Merkle proofs. In V2 both PI slots
 	/// (PI[77-80] and PI[81-84]) carry this same value.
 	pub root: HashOutput,
-	pub accin_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
+	pub accin_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
 	pub inotes: Vec<StandardNote>,
-	pub inotes_nct_proofs: Vec<CommitmentTreeMerkleProof<NCT_DEPTH>>,
+	pub inotes_nct_proofs: Vec<CommitmentTreeMerkleProof<COM_TREE_DEPTH>>,
 	pub onotes: Vec<StandardNote>,
 	pub dinotes: [[F; 4]; NOTE_BATCH],
 	pub donotes: [[F; 4]; NOTE_BATCH],
@@ -66,13 +66,13 @@ pub struct SpendTxInputs {
 /// `accin` must exist in the on-chain IMT and the input notes must also exist there.
 pub struct RejectTxInputs {
 	pub accin: StandardAccount,
-	pub accin_act_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
+	pub accin_act_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
 	/// On-chain Poseidon IMT root. Used for both the account commitment (ACT)
 	/// and input-note commitment (NCT) Merkle proofs. In V2 both PI slots
 	/// (PI[77-80] and PI[81-84]) carry this same value.
 	pub root: HashOutput,
 	pub inotes: Vec<StandardNote>,
-	pub inotes_nct_proofs: Vec<CommitmentTreeMerkleProof<NCT_DEPTH>>,
+	pub inotes_nct_proofs: Vec<CommitmentTreeMerkleProof<COM_TREE_DEPTH>>,
 	pub onotes: Vec<StandardNote>,
 	pub dinotes: [[F; 4]; NOTE_BATCH],
 	pub donotes: [[F; 4]; NOTE_BATCH],

@@ -37,12 +37,9 @@ pub const DEFAULT_SPEND_AUTH_PK: [u64; 5] = [
 	3857357297380158342,
 ];
 
-pub const NOTE_BATCH: usize = 8;
+pub const NOTE_BATCH: usize = 7;
 pub const ACC_AST_DEPTH: usize = 10;
-pub const NCT_DEPTH: usize = 32;
-pub const ACT_DEPTH: usize = 32;
-pub const ANT_DEPTH: usize = 32;
-pub const NNT_DEPTH: usize = 32;
+pub const COM_TREE_DEPTH: usize = 32;
 pub const SUBPOOL_CONFIG_DEPTH: usize = 2;
 pub const MAIN_POOL_CONFIG_DEPTH: usize = 20;
 

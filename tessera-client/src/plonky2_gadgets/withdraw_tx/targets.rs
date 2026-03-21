@@ -1,7 +1,7 @@
 use plonky2::iop::target::{BoolTarget, Target};
 
 use crate::{
-	ACC_AST_DEPTH, ACT_DEPTH, NOTE_BATCH,
+	ACC_AST_DEPTH, COM_TREE_DEPTH, NOTE_BATCH,
 	plonky2_gadgets::{
 		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget},
 		priv_tx::targets::{
@@ -38,7 +38,7 @@ pub(crate) struct WithdrawTxTargets {
 	// Withdrawal destination: Ethereum address as 5 u32 field elements
 	pub(crate) w_acc_addr: [Target; 5],
 	// Merkle targets
-	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<ACT_DEPTH>,
+	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<COM_TREE_DEPTH>,
 	/// One AST merkle proof per withdrawal slot (indexed from accin side).
 	/// ast_merkles[i] proves the leaf update from intermediate AST[i] → AST[i+1].
 	pub(crate) ast_merkles: [ComputeMerkleRootTarget<ACC_AST_DEPTH>; NOTE_BATCH],
