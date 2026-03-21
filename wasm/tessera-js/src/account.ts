@@ -62,6 +62,11 @@ export class Account {
     return this.inner.nullifier(position);
   }
 
+  /** Returns the account address as a hex string (`hex(subpool_id) | hex(public_id)`). */
+  address(): string {
+    return this.inner.address().toHex();
+  }
+
   /** Decode a 32-byte hash into 4 × u64 limbs (little-endian). Useful for debugging. */
   static decodeHash(bytes: HashBytes): BigInt64Array {
     const limbs = decodeHash(bytes);

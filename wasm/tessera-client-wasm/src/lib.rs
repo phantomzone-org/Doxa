@@ -8,8 +8,8 @@ use plonky2_field::{
 };
 use sha2::{Digest, Sha256};
 use tessera_client::{
-	AccountNullifier, PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId,
 	schnorr::{CompressedPublicKey, PrivateKey},
+	AccountAddress, AccountNullifier, PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId,
 };
 use wasm_bindgen::prelude::*;
 
@@ -83,7 +83,9 @@ impl WasmAccount {
 			private_identifier,
 			SubpoolId(F::from_canonical_u64(subpool_id)),
 		);
-		acc.spend_auth = SpendAuth { spend_pk: Some(spend_pk) };
+		acc.spend_auth = SpendAuth {
+			spend_pk: Some(spend_pk),
+		};
 
 		WasmAccount(Rc::new(RefCell::new(acc)))
 	}
@@ -114,6 +116,11 @@ impl WasmAccount {
 		self.0.borrow().is_fresh()
 	}
 
+	/// Returns the account address (`subpool_id | public_id`).
+	pub fn address(&self) -> WasmAccountAddress {
+		WasmAccountAddress(AccountAddress::from_acc(&self.0.borrow()))
+	}
+
 	/// Returns the account nullifier.
 	///
 	/// - Fresh accounts (nonce = 0, no auth): pass `position = undefined`.
@@ -122,6 +129,20 @@ impl WasmAccount {
 		let acc = self.0.borrow();
 		let null: AccountNullifier = acc.nullifier(position);
 		hash_to_bytes(&null.0 .0)
+	}
+}
+
+// ── WasmAccountAddress ───────────────────────────────────────────────────────
+
+#[wasm_bindgen]
+pub struct WasmAccountAddress(AccountAddress);
+
+#[wasm_bindgen]
+impl WasmAccountAddress {
+	/// Returns the address as a hex string: `hex(subpool_id) | hex(public_id)`.
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		self.0.to_hex()
 	}
 }
 
@@ -139,3 +160,11 @@ pub fn decode_hash(bytes: &[u8]) -> Result<Vec<u64>, JsError> {
 		.collect();
 	Ok(limbs)
 }
+
+
+// --- Spend Transaction --------------------------------------------------------
+
+pub fn create_spend_tx(
+    accin: WasmAccount,
+    inotes: 
+)

@@ -241,6 +241,10 @@ impl StandardAccount {
 		next
 	}
 
+	pub fn address(&self) -> AccountAddress {
+		AccountAddress::from_acc(self)
+	}
+
 	pub fn public_id(&self) -> PublicIdentifier {
 		let mut input = [F::ZERO; 3];
 		input[0] = F::from_canonical_u64(DS_PUBLIC_IDENTIFIER);
@@ -343,6 +347,18 @@ impl AccountAddress {
 			subpool_id: SubpoolId(F::ZERO),
 			public_id: PublicIdentifier::ZERO,
 		}
+	}
+
+	/// Encode as `hex(subpool_id) | hex(public_id)`.
+	/// - `subpool_id`: 8 bytes (u64 little-endian) → 16 hex chars
+	/// - `public_id`:  32 bytes (4 × u64 LE)       → 64 hex chars
+	pub fn to_hex(&self) -> String {
+		let mut bytes = [0u8; 40];
+		bytes[..8].copy_from_slice(&self.subpool_id.0.to_canonical_u64().to_le_bytes());
+		for (i, f) in self.public_id.0.0.iter().enumerate() {
+			bytes[8 + i * 8..8 + (i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
+		}
+		bytes.iter().map(|b| format!("{b:02x}")).collect()
 	}
 }
 
