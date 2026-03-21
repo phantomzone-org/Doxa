@@ -227,7 +227,7 @@ pub(crate) fn set_reject_tx_witness(
 		pw,
 		&t.sig_targets.consume,
 		*consume_key,
-		&tx_hash,
+		&tx_hash.0,
 		consume_sig,
 	);
 
@@ -236,7 +236,7 @@ pub(crate) fn set_reject_tx_witness(
 		pw,
 		&t.sig_targets.approval,
 		*approval_key,
-		&tx_hash,
+		&tx_hash.0,
 		approval_sig,
 	);
 }
@@ -423,8 +423,10 @@ mod tests {
 		);
 
 		// ── Signatures ────────────────────────────────────────────────────────
-		let consume_sig = schnorr_sign(&consume_sk, &tx_hash, Scalar::from_raw([7, 8, 9, 10, 11]));
-		let approval_sig = schnorr_sign(&approval_sk, &tx_hash, Scalar::from_raw([1, 2, 3, 4, 5]));
+		let consume_sig =
+			schnorr_sign(&consume_sk, &tx_hash.0, Scalar::from_raw([7, 8, 9, 10, 11]));
+		let approval_sig =
+			schnorr_sign(&approval_sk, &tx_hash.0, Scalar::from_raw([1, 2, 3, 4, 5]));
 
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();

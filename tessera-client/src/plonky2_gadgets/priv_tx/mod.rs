@@ -45,7 +45,7 @@ pub use inputs::{FakeTxInputs, FreshAccInputs, PrivTxInputs, RejectTxInputs, Spe
 /// and [`prove_real_priv_tx`].
 pub type PrivTxTargets<const D: usize> = targets::TxCircuitTargets;
 
-fn double_hash_native(elems: [F; 4]) -> [F; 4] {
+pub fn double_hash_native(elems: [F; 4]) -> [F; 4] {
 	use plonky2::plonk::config::Hasher;
 	let h0 = <PoseidonHash as Hasher<F>>::hash_no_pad(&elems).elements;
 	<PoseidonHash as Hasher<F>>::hash_no_pad(&h0).elements
@@ -460,7 +460,7 @@ fn prove_priv_tx(
 		donote_comms,
 	);
 	let k = Scalar::from_raw(array::from_fn(|_| 1u64));
-	let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
+	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 	let mut pw = PartialWitness::new();
 	if not_fake_tx {

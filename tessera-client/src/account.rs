@@ -71,6 +71,13 @@ pub struct ConsumeAuth {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct AssetId(pub(crate) F);
 
+impl AssetId {
+	pub fn from_u64(v: u64) -> anyhow::Result<Self> {
+		anyhow::ensure!(v < F::ORDER, "AssetId value {v} is out of Goldilocks field range");
+		Ok(Self(F::from_canonical_u64(v)))
+	}
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct AccountStateTreeLeaf {
 	pub asset_id: AssetId,
@@ -235,7 +242,7 @@ impl StandardAccount {
 		}
 	}
 
-	pub(crate) fn clone_with_incremented_nonce(&self) -> Self {
+	pub fn clone_with_incremented_nonce(&self) -> Self {
 		let mut next = self.clone();
 		next.nonce = self.nonce.incremented();
 		next
@@ -352,6 +359,23 @@ impl AccountAddress {
 	/// Encode as `hex(subpool_id) | hex(public_id)`.
 	/// - `subpool_id`: 8 bytes (u64 little-endian) → 16 hex chars
 	/// - `public_id`:  32 bytes (4 × u64 LE)       → 64 hex chars
+	/// Decode from the 80-hex-char encoding produced by `to_hex`.
+	pub fn from_hex(s: &str) -> anyhow::Result<Self> {
+		anyhow::ensure!(s.len() == 80, "expected 80 hex chars, got {}", s.len());
+		let bytes = hex::decode(s)?;
+		let subpool_raw = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+		let mut pub_id = [F::ZERO; 4];
+		for i in 0..4 {
+			pub_id[i] = F::from_canonical_u64(
+				u64::from_le_bytes(bytes[8 + i * 8..16 + i * 8].try_into().unwrap()),
+			);
+		}
+		Ok(Self {
+			subpool_id: SubpoolId(F::from_canonical_u64(subpool_raw)),
+			public_id: PublicIdentifier(HashOutput(pub_id)),
+		})
+	}
+
 	pub fn to_hex(&self) -> String {
 		let mut bytes = [0u8; 40];
 		bytes[..8].copy_from_slice(&self.subpool_id.0.to_canonical_u64().to_le_bytes());
@@ -367,7 +391,7 @@ pub fn derive_priv_tx_hash(
 	accout_comm: AccountCommitment,
 	inotes_null: [NoteNullifier; NOTE_BATCH],
 	onotes_comm: [NoteCommitment; NOTE_BATCH],
-) -> [F; 4] {
+) -> HashOutput {
 	use plonky2::plonk::config::Hasher;
 	let mut inp = Vec::with_capacity(4 + 4 + 4 * crate::NOTE_BATCH + 4 * crate::NOTE_BATCH);
 	inp.extend_from_slice(&accin_null.0.0);
@@ -378,7 +402,8 @@ pub fn derive_priv_tx_hash(
 	for c in &onotes_comm {
 		inp.extend(c.0.0);
 	}
-	<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements
+
+	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements)
 }
 
 pub fn derive_deposit_tx_hash(

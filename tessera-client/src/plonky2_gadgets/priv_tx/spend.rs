@@ -251,7 +251,7 @@ pub fn set_spend_tx_witness(
 				pw,
 				&t.sig_targets.spend,
 				accin.spend_auth.spend_pk.unwrap(),
-				&tx_hash,
+				&tx_hash.0,
 				sig,
 			);
 		} else {
@@ -280,7 +280,7 @@ pub fn set_spend_tx_witness(
 				pw,
 				&t.sig_targets.consume,
 				consume_public_key,
-				&tx_hash,
+				&tx_hash.0,
 				sig,
 			);
 		} else {
@@ -299,7 +299,7 @@ pub fn set_spend_tx_witness(
 		pw,
 		&t.sig_targets.approval,
 		*approval_key,
-		&tx_hash,
+		&tx_hash.0,
 		approval_sig,
 	);
 }
@@ -645,13 +645,13 @@ mod tests {
 		// consume_auth.config = false → circuit uses subpool consume key (consume_cpk)
 		let consume_sig = {
 			let k_c = Scalar::from_raw([7, 8, 9, 10, 11]);
-			schnorr_sign(&consume_sk, &tx_hash, k_c)
+			schnorr_sign(&consume_sk, &tx_hash.0, k_c)
 		};
 
 		// Approval (REAL): always required
 		let approval_sig = {
 			let k = Scalar::from_raw([1, 2, 3, 4, 5]);
-			schnorr_sign(&approval_sk, &tx_hash, k)
+			schnorr_sign(&approval_sk, &tx_hash.0, k)
 		};
 
 		// ── Build circuit ──────────────────────────────────────────────────────

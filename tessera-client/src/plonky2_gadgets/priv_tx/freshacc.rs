@@ -203,7 +203,7 @@ pub(crate) fn set_freshacc_tx_witness(
 		pw,
 		&t.sig_targets.approval,
 		approval_key,
-		&tx_hash,
+		&tx_hash.0,
 		approval_sig,
 	);
 }
@@ -292,7 +292,7 @@ mod tests {
 
 		// TODO: sample randomly and reduce mod n
 		let k = Scalar::from_raw(array::from_fn(|_| 1));
-		let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
+		let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();

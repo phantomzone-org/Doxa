@@ -51,6 +51,8 @@ pub use note::*;
 pub use plonky2_gadgets::priv_tx::{
 	FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, RejectTxInputs, SpendTxInputs,
 	build_circuit_and_dummy_proof, build_circuit_and_real_proof, build_priv_tx_circuit,
+	double_hash_native,
 	prove_dummy_priv_tx, prove_real_priv_tx, prove_real_priv_tx_seeded,
 };
+pub use tessera_utils::hasher::HashOutput;
 use tessera_utils::HASH_SIZE;
