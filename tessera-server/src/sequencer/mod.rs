@@ -362,6 +362,10 @@ impl Sequencer {
 						error!("failed to flush batch: {e}");
 						break;
 					}
+					if let Err(e) = self.try_flush_consume_batch_if_ready(&provider, batch_timeout).await {
+						error!("failed to flush consume batch: {e}");
+						break;
+					}
 				}
 
 				// Deposit: add NC note to the consume batch builder.

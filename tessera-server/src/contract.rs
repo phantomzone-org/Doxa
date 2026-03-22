@@ -116,8 +116,7 @@ sol! {
 		}
 
 		struct TransactionBatch {
-			uint256   acRoot;
-			uint256   ncRoot;
+			uint256   root;
 			bytes32   mainPoolConfigRoot;
 			uint256[] noteCommitments;
 			uint256[] noteNullifiers;
@@ -128,8 +127,7 @@ sol! {
 		}
 
 		struct DepositBatch {
-			uint256   acRoot;
-			uint256   ncRoot;
+			uint256   root;
 			bytes32   mainPoolConfigRoot;
 			bytes32[] depositNoteCommitments;
 			uint256   batchPoseidonRoot;

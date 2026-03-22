@@ -66,7 +66,6 @@ pub fn deposit_tx_circuit<
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
-	ctx: &H::CircuitContext,
 ) -> DepositTxTargets {
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
@@ -131,7 +130,6 @@ pub fn deposit_tx_circuit<
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
-		ctx,
 	);
 
 	// Enforce recipient match: deposit_note must target accin
@@ -408,8 +406,7 @@ pub fn build_deposit_tx_circuit() -> DepositTxCircuit {
 
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, { tessera_utils::D }>::new(config);
-	let ctx = HashOutput::register_luts(&mut builder);
-	let targets = deposit_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder, &ctx);
+	let targets = deposit_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder);
 	let circuit_data = builder.build::<tessera_utils::ConfigNative>();
 	DepositTxCircuit {
 		circuit_data,
@@ -628,8 +625,7 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let ctx = HashOutput::register_luts(&mut builder);
-		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
+		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let data = builder.build::<C>();
 
 		// ── Fill witness ──────────────────────────────────────────────────────
@@ -661,8 +657,7 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let ctx = HashOutput::register_luts(&mut builder);
-		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
+		let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 

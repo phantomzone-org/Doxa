@@ -37,7 +37,9 @@ async fn test_e2e_freshacc_groth16() -> Result<(), String> {
 		common::setup_env_real_verifier(pool_config_root, &verifier_bytecode).await;
 	let rollup = ITesseraRollupV2::ITesseraRollupV2Instance::new(env.rollup, &provider);
 
-	let proven = client.prove_freshacc(&mut rng).expect("FreshAcc prove failed");
+	let proven = client
+		.prove_freshacc(&mut rng)
+		.expect("FreshAcc prove failed");
 
 	let (handle, _jh) = common::start_sequencer(&env, prover);
 	tokio::time::sleep(Duration::from_secs(2)).await;
@@ -63,11 +65,20 @@ async fn test_e2e_freshacc_groth16() -> Result<(), String> {
 			break;
 		}
 	}
-	assert!(confirmed, "batch was not confirmed by the real Groth16 verifier within timeout");
+	assert!(
+		confirmed,
+		"batch was not confirmed by the real Groth16 verifier within timeout"
+	);
 
 	let root = rollup.currentRoot().call().await.expect("currentRoot");
-	let is_confirmed =
-		rollup.confirmedRoots(root).call().await.expect("confirmedRoots");
-	assert!(is_confirmed, "currentRoot not in confirmedRoots after real Groth16 proof");
+	let is_confirmed = rollup
+		.confirmedRoots(root)
+		.call()
+		.await
+		.expect("confirmedRoots");
+	assert!(
+		is_confirmed,
+		"currentRoot not in confirmedRoots after real Groth16 proof"
+	);
 	Ok(())
 }

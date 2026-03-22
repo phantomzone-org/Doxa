@@ -183,8 +183,11 @@ impl TesseraClientState {
 
 	/// Insert output note commitments (from a previous TX's `nc` array) into
 	/// the local tree.  Returns each leaf's position.
-	pub fn insert_note_commitments(&mut self, nc: &[[u8; 32]; 8]) -> anyhow::Result<Vec<u64>> {
-		let mut positions = Vec::with_capacity(8);
+	pub fn insert_note_commitments(
+		&mut self,
+		nc: &[[u8; 32]; NOTE_BATCH],
+	) -> anyhow::Result<Vec<u64>> {
+		let mut positions = Vec::with_capacity(NOTE_BATCH);
 		for nc_bytes in nc {
 			let hash = bytes32_to_hash_output(*nc_bytes);
 			let proof = self
@@ -289,10 +292,10 @@ pub struct ProvenTx {
 	pub an: [u8; 32],
 	/// Account commitment leaf (AC) — 32 bytes, big-endian u64s.
 	pub ac: [u8; 32],
-	/// Note nullifier leaves — 8 × 32 bytes.
-	pub nn: [[u8; 32]; 8],
-	/// Note commitment leaves — 8 × 32 bytes.
-	pub nc: [[u8; 32]; 8],
+	/// Note nullifier leaves — NOTE_BATCH × 32 bytes.
+	pub nn: [[u8; 32]; NOTE_BATCH],
+	/// Note commitment leaves — NOTE_BATCH × 32 bytes.
+	pub nc: [[u8; 32]; NOTE_BATCH],
 }
 
 // ---------------------------------------------------------------------------
@@ -301,13 +304,19 @@ pub struct ProvenTx {
 
 fn extract_proven_tx(proof: tessera_utils::ProofNative) -> ProvenTx {
 	let pi = &proof.public_inputs;
-	let an = hash_output_to_bytes32(&pi[5..9]);
-	let ac = hash_output_to_bytes32(&pi[9..13]);
-	let mut nn = [[0u8; 32]; 8];
-	let mut nc = [[0u8; 32]; 8];
-	for i in 0..8 {
-		nn[i] = hash_output_to_bytes32(&pi[13 + i * 4..17 + i * 4]);
-		nc[i] = hash_output_to_bytes32(&pi[45 + i * 4..49 + i * 4]);
+	// PI layout (TX_DATA_OFFSET=5): [5..9]=AN, [9..13]=AC,
+	// [13..13+NOTE_BATCH*4]=NN, [13+NOTE_BATCH*4..]=NC
+	const AN_OFF: usize = 5;
+	const AC_OFF: usize = 9;
+	const NN_OFF: usize = 13;
+	const NC_OFF: usize = 13 + NOTE_BATCH * 4; // = 41 when NOTE_BATCH=7
+	let an = hash_output_to_bytes32(&pi[AN_OFF..AN_OFF + 4]);
+	let ac = hash_output_to_bytes32(&pi[AC_OFF..AC_OFF + 4]);
+	let mut nn = [[0u8; 32]; NOTE_BATCH];
+	let mut nc = [[0u8; 32]; NOTE_BATCH];
+	for i in 0..NOTE_BATCH {
+		nn[i] = hash_output_to_bytes32(&pi[NN_OFF + i * 4..NN_OFF + i * 4 + 4]);
+		nc[i] = hash_output_to_bytes32(&pi[NC_OFF + i * 4..NC_OFF + i * 4 + 4]);
 	}
 	let proof_bytes = proof.to_bytes();
 	ProvenTx {

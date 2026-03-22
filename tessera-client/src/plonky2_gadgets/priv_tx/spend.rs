@@ -668,8 +668,7 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_zk_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let ctx = HashOutput::register_luts(&mut builder);
-		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let inner_data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 
@@ -756,8 +755,7 @@ mod tests {
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let ctx = HashOutput::register_luts(&mut builder);
-		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
+		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let data = builder.build::<C>();
 		let mut pw = PartialWitness::new();
 

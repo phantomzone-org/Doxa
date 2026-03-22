@@ -766,12 +766,19 @@ mod tests {
 			// Try loading SAV2 + SR from pre-built artifacts.
 			if let Some(dir) = unit_test_artifact_dir() {
 				let sr_dir = dir.join("subtree-root");
-				if SuperAggregatorV2::has_artifacts(&dir) && SubtreeRootCircuit::has_artifacts(&sr_dir) {
+				if SuperAggregatorV2::has_artifacts(&dir)
+					&& SubtreeRootCircuit::has_artifacts(&sr_dir)
+				{
 					if let (Ok(sr), Ok(sav2)) = (
 						SubtreeRootCircuit::from_artifacts(&sr_dir, 16),
 						SuperAggregatorV2::from_artifacts(&dir),
 					) {
-						return TestCircuits { tx_cd, tx_targets, sr, sav2 };
+						return TestCircuits {
+							tx_cd,
+							tx_targets,
+							sr,
+							sav2,
+						};
 					}
 				}
 			}
@@ -785,7 +792,12 @@ mod tests {
 				sr_verifier: sr.circuit_data.verifier_only.clone(),
 			};
 			let sav2 = SuperAggregatorV2::build(inner).expect("SuperAggregatorV2::build");
-			TestCircuits { tx_cd, tx_targets, sr, sav2 }
+			TestCircuits {
+				tx_cd,
+				tx_targets,
+				sr,
+				sav2,
+			}
 		})
 	}
 
@@ -947,7 +959,9 @@ mod tests {
 		let root = HashOutput::new([F::from_canonical_u64(0xAC00), F::ZERO, F::ZERO, F::ZERO]);
 		let main_pool_cfg_root = [0x01u8; 32];
 
-		let proof = tc.sav2.prove(tx_proof.clone(), sr_proof.clone(), root, main_pool_cfg_root)?;
+		let proof = tc
+			.sav2
+			.prove(tx_proof.clone(), sr_proof.clone(), root, main_pool_cfg_root)?;
 		tc.sav2.circuit_data.verify(proof.clone())?;
 
 		// Compare circuit output against native computation.
@@ -1000,8 +1014,9 @@ mod tests {
 			(0..16).map(|_| HashOutput::new_random(&mut rng)).collect();
 		let sr_proof = tc.sr.prove(&wrong_leaves)?;
 
-		let result =
-			tc.sav2.prove(tx_proof, sr_proof, HashOutput::new([F::ZERO; 4]), [0u8; 32]);
+		let result = tc
+			.sav2
+			.prove(tx_proof, sr_proof, HashOutput::new([F::ZERO; 4]), [0u8; 32]);
 		assert!(result.is_err(), "prove should fail when SR leaves != TX NC");
 		Ok(())
 	}

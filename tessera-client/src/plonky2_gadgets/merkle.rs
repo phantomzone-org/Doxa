@@ -239,7 +239,6 @@ pub fn conditional_merkle_verify_commitment_tree_gadget<
 	leaf: HashOutTarget,
 	expected_root: HashOutTarget,
 	selector: BoolTarget,
-	ctx: &H::CircuitContext,
 ) -> CommitmentTreeMerkleTarget<DEPTH> {
 	let siblings: [HashOutTarget; DEPTH] = core::array::from_fn(|_| builder.add_virtual_hash());
 	let bits: [BoolTarget; DEPTH] =
@@ -253,10 +252,10 @@ pub fn conditional_merkle_verify_commitment_tree_gadget<
 			let sib = MerkleHashTarget::from_hash_out_target(siblings[DEPTH - 1]);
 			let left = H::select_hash(builder, dir, &sib, &current);
 			let right = H::select_hash(builder, dir, &current, &sib);
-			current = H::hash_root_circuit(builder, ctx, num_leaves, left, right);
+			current = H::hash_root_circuit(builder, num_leaves, left, right);
 		} else {
 			let sib = MerkleHashTarget::from_hash_out_target(siblings[level]);
-			current = H::hash_2_to_1_circuit(builder, ctx, current, sib, bits[level]);
+			current = H::hash_2_to_1_circuit(builder, current, sib, bits[level]);
 		}
 	}
 

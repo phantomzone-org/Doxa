@@ -67,7 +67,8 @@ use tessera_utils::{
 const ARITY: usize = 2;
 
 /// Number of deposit-TX slots per batch.  Must be a power of two.
-const DEPOSIT_BATCH_SIZE: usize = 64;
+/// Matches TX batch size: PRIV_TX_BATCH_SIZE × NOTES_PER_SLOT = 64 × 8 = 512.
+const DEPOSIT_BATCH_SIZE: usize = 512;
 
 fn debug_enabled() -> bool {
 	std::env::var("TESSERA_DEBUG")

@@ -107,8 +107,7 @@ contract TesseraRollupV2Test is Test {
         uint256[] memory empty = new uint256[](0);
         uint256 an = _nc++;
         b = TesseraRollupV2.TransactionBatch({
-            acRoot:            genesis,
-            ncRoot:            genesis,
+            root:              genesis,
             mainPoolConfigRoot: PCR,
             noteCommitments:   empty,
             noteNullifiers:    empty,
@@ -126,17 +125,17 @@ contract TesseraRollupV2Test is Test {
     /// @dev Computes the tx piCommitment — must mirror contract's _computeTxPiCommitment.
     function _txPI(TesseraRollupV2.TransactionBatch memory b) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(
-            b.acRoot, b.ncRoot, b.mainPoolConfigRoot, b.batchPoseidonRoot,
+            b.root, b.root, b.mainPoolConfigRoot, b.batchPoseidonRoot,
             b.accountCommitment, b.accountNullifier,
             b.noteCommitments, b.noteNullifiers
         ));
     }
 
     /// @dev Computes the deposit piCommitment — mirrors contract's _computeDepositPiCommitment.
+    ///      depositNoteCommitments are excluded; batchPoseidonRoot commits to them.
     function _depositPI(TesseraRollupV2.DepositBatch memory b) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(
-            b.acRoot, b.ncRoot, b.mainPoolConfigRoot, b.batchPoseidonRoot,
-            b.depositNoteCommitments
+            b.root, b.root, b.mainPoolConfigRoot, b.batchPoseidonRoot
         ));
     }
 
@@ -309,31 +308,13 @@ contract TesseraRollupV2Test is Test {
         assertEq(rollup.leafCount(), 1);
     }
 
-    /// Unknown acRoot reverts RootNotConfirmed.
-    function test_submit_unknownAcRoot() public {
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
+    /// Unknown root reverts RootNotConfirmed.
+    function test_submit_unknownRoot() public {
         uint256 unknown = 0xDEAD;
         uint256[] memory empty = new uint256[](0);
         uint256 an = _nc++;
         TesseraRollupV2.TransactionBatch memory b = TesseraRollupV2.TransactionBatch({
-            acRoot: unknown, ncRoot: genesis, mainPoolConfigRoot: PCR,
-            noteCommitments: empty, noteNullifiers: empty,
-            accountCommitment: an + 1, accountNullifier: an,
-            batchPoseidonRoot: 1, confirmed: false
-        });
-        vm.prank(OP);
-        vm.expectRevert(abi.encodeWithSelector(TesseraRollupV2.RootNotConfirmed.selector, unknown));
-        rollup.submitTransactionBatch(b);
-    }
-
-    /// Unknown ncRoot reverts RootNotConfirmed.
-    function test_submit_unknownNcRoot() public {
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        uint256 unknown = 0xBEEF;
-        uint256[] memory empty = new uint256[](0);
-        uint256 an = _nc++;
-        TesseraRollupV2.TransactionBatch memory b = TesseraRollupV2.TransactionBatch({
-            acRoot: genesis, ncRoot: unknown, mainPoolConfigRoot: PCR,
+            root: unknown, mainPoolConfigRoot: PCR,
             noteCommitments: empty, noteNullifiers: empty,
             accountCommitment: an + 1, accountNullifier: an,
             batchPoseidonRoot: 1, confirmed: false
@@ -349,7 +330,7 @@ contract TesseraRollupV2Test is Test {
         uint256[] memory empty = new uint256[](0);
         uint256 an = _nc++;
         TesseraRollupV2.TransactionBatch memory b = TesseraRollupV2.TransactionBatch({
-            acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: bytes32(uint256(0x1BAD)),
+            root: genesis, mainPoolConfigRoot: bytes32(uint256(0x1BAD)),
             noteCommitments: empty, noteNullifiers: empty,
             accountCommitment: an + 1, accountNullifier: an,
             batchPoseidonRoot: 1, confirmed: false
@@ -372,7 +353,7 @@ contract TesseraRollupV2Test is Test {
         // Prove a batch that spends knownNullifier.
         {
             TesseraRollupV2.TransactionBatch memory b = TesseraRollupV2.TransactionBatch({
-                acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: PCR,
+                root: genesis, mainPoolConfigRoot: PCR,
                 noteCommitments: empty, noteNullifiers: empty,
                 accountCommitment: _nc++, accountNullifier: knownNullifier,
                 batchPoseidonRoot: 0x1111, confirmed: false
@@ -385,7 +366,7 @@ contract TesseraRollupV2Test is Test {
 
         // Submit a second batch reusing knownNullifier — submit succeeds.
         TesseraRollupV2.TransactionBatch memory b2 = TesseraRollupV2.TransactionBatch({
-            acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: PCR,
+            root: genesis, mainPoolConfigRoot: PCR,
             noteCommitments: empty, noteNullifiers: empty,
             accountCommitment: _nc++, accountNullifier: knownNullifier,
             batchPoseidonRoot: 0x2222, confirmed: false
@@ -509,7 +490,7 @@ contract TesseraRollupV2Test is Test {
         uint256 acNull = 0xF003;
 
         TesseraRollupV2.TransactionBatch memory b = TesseraRollupV2.TransactionBatch({
-            acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: PCR,
+            root: genesis, mainPoolConfigRoot: PCR,
             noteCommitments: empty, noteNullifiers: nns,
             accountCommitment: _nc++, accountNullifier: acNull,
             batchPoseidonRoot: 0xEEEE, confirmed: false
@@ -603,7 +584,7 @@ contract TesseraRollupV2Test is Test {
         dncs[1] = nc2;
 
         TesseraRollupV2.DepositBatch memory db = TesseraRollupV2.DepositBatch({
-            acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: PCR,
+            root: genesis, mainPoolConfigRoot: PCR,
             depositNoteCommitments: dncs, batchPoseidonRoot: 0x1234, confirmed: false
         });
         vm.prank(OP);
@@ -621,7 +602,7 @@ contract TesseraRollupV2Test is Test {
         dncs[0] = missing;
 
         TesseraRollupV2.DepositBatch memory db = TesseraRollupV2.DepositBatch({
-            acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: PCR,
+            root: genesis, mainPoolConfigRoot: PCR,
             depositNoteCommitments: dncs, batchPoseidonRoot: 1, confirmed: false
         });
         vm.prank(OP);
@@ -642,7 +623,7 @@ contract TesseraRollupV2Test is Test {
         dncs[1] = nc2;
 
         TesseraRollupV2.DepositBatch memory db = TesseraRollupV2.DepositBatch({
-            acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: PCR,
+            root: genesis, mainPoolConfigRoot: PCR,
             depositNoteCommitments: dncs, batchPoseidonRoot: 0x5678, confirmed: false
         });
         bytes32 pic = _depositPI(db);
@@ -664,7 +645,7 @@ contract TesseraRollupV2Test is Test {
         bytes32[] memory dncs = new bytes32[](1);
         dncs[0] = nc;
         TesseraRollupV2.DepositBatch memory db = TesseraRollupV2.DepositBatch({
-            acRoot: genesis, ncRoot: genesis, mainPoolConfigRoot: PCR,
+            root: genesis, mainPoolConfigRoot: PCR,
             depositNoteCommitments: dncs, batchPoseidonRoot: 0x9ABC, confirmed: false
         });
         bytes32 pic = _depositPI(db);
@@ -803,7 +784,7 @@ contract TesseraRollupV2Test is Test {
         uint256 genesis = rollup.zeros(rollup.treeDepth());
         uint256[] memory empty = new uint256[](0);
         TesseraRollupV2.TransactionBatch memory b = TesseraRollupV2.TransactionBatch({
-            acRoot: genesis, ncRoot: genesis,
+            root: genesis,
             mainPoolConfigRoot: PCR,  // old value
             noteCommitments: empty, noteNullifiers: empty,
             accountCommitment: _nc++, accountNullifier: _nc++,

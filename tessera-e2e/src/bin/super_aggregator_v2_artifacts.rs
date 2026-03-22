@@ -19,8 +19,9 @@
 //!
 //! V2 batch dimensions (from `tessera_client::PRIV_TX_BATCH_SIZE = 64`):
 //!   priv_tx_batch_size = 64   (tessera_client::PRIV_TX_BATCH_SIZE, fixed)
-//!   notes_per_slot     = 8    (tessera_client::NOTE_BATCH, fixed)
-//!   sr_batch_size      = 512  (= 64 × 8)
+//!   note_batch         = 7    (tessera_client::NOTE_BATCH: NC/NN per TX slot)
+//!   leaves_per_slot    = 8    (= NOTE_BATCH + 1: 7 NC + 1 AC per TX slot)
+//!   sr_batch_size      = 512  (= 64 × 8 SR leaves)
 //!   agg_depth          = 6    (2^6 = 64, ARITY=2)
 //!
 //! Artifact layout (under TESSERA_ARTIFACTS_DIR or <workspace>/artifacts):
@@ -74,7 +75,9 @@ const SOLIDITY_TREE_DEPTH: usize = 4;
 fn compute_genesis_root(depth: usize) -> HashOutput {
 	let mut h = HashOutput::new([F::ZERO; 4]);
 	for _ in 0..depth {
-		let data = [h.0[0], h.0[1], h.0[2], h.0[3], h.0[0], h.0[1], h.0[2], h.0[3]];
+		let data = [
+			h.0[0], h.0[1], h.0[2], h.0[3], h.0[0], h.0[1], h.0[2], h.0[3],
+		];
 		let out: HashOut<F> = PoseidonHash::hash_no_pad(&data);
 		h = HashOutput::new(out.elements);
 	}
@@ -331,7 +334,7 @@ fn main() -> Result<()> {
 	// =======================================================================
 	// 7. Prove SuperAggregatorV2 with all-dummy input + zero private witnesses
 	//
-	// Use the genesis root (zeros[SOLIDITY_TREE_DEPTH]) as acRoot/ncRoot so the
+	// Use the genesis root (zeros[SOLIDITY_TREE_DEPTH]) as the single IMT root so the
 	// dummy proof is accepted by the Solidity rollup in integration tests.
 	// =======================================================================
 	println!("\n[7] Proving SuperAggregatorV2 (dummy)...");
@@ -431,10 +434,10 @@ fn main() -> Result<()> {
 		sr_proof.public_inputs[2],
 		sr_proof.public_inputs[3],
 	]);
-	let nc_per_slot = NOTES_PER_SLOT; // = NOTE_BATCH = 7 (NNs per slot)
+	let nc_per_slot = NOTES_PER_SLOT; // = NOTE_BATCH = 7 (NC and NN count per TX slot)
 	let nn_count = n_tx_slots * nc_per_slot;
 	let mut fixture: serde_json::Value = serde_json::from_str(&solidity_json)?;
-	fixture["acRoot"] = serde_json::Value::String(hash_to_bytes32_hex(&genesis_root));
+	fixture["root"] = serde_json::Value::String(hash_to_bytes32_hex(&genesis_root));
 	fixture["batchPoseidonRoot"] = serde_json::Value::String(hash_to_bytes32_hex(&sr_root_hash));
 	fixture["noteCommitmentsCount"] = serde_json::json!(sr_batch_size);
 	fixture["noteNullifiersCount"] = serde_json::json!(nn_count);
@@ -518,7 +521,10 @@ fn main() -> Result<()> {
 
 		let now = Instant::now();
 		let unit_sr = SubtreeRootCircuit::build(unit_sr_leaves)?;
-		println!("  SubtreeRootCircuit({unit_sr_leaves}) built [{:?}]", now.elapsed());
+		println!(
+			"  SubtreeRootCircuit({unit_sr_leaves}) built [{:?}]",
+			now.elapsed()
+		);
 
 		let unit_inner = SuperAggregatorV2CircuitData {
 			tx_common: unit_tx_cd.common.clone(),

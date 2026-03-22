@@ -215,7 +215,6 @@ impl DepositSuperAggregatorV2 {
 		act_root: HashOutput,
 		main_pool_cfg_root: [u8; 32],
 		batch_poseidon_root: HashOutput,
-		deposit_note_commitments: &[HashOutput],
 	) -> [u32; 8] {
 		use plonky2::field::types::PrimeField64;
 
@@ -229,7 +228,7 @@ impl DepositSuperAggregatorV2 {
 			}
 		};
 
-		// acRoot and ncRoot — both are the on-chain IMT root.
+		// root — appears twice to match the circuit's acRoot/ncRoot positions.
 		push_hash(&mut words, &act_root);
 		push_hash(&mut words, &act_root);
 
@@ -240,11 +239,8 @@ impl DepositSuperAggregatorV2 {
 			));
 		}
 
+		// batchPoseidonRoot already commits to all NC leaves via Poseidon.
 		push_hash(&mut words, &batch_poseidon_root);
-
-		for dnc in deposit_note_commitments {
-			push_hash(&mut words, dnc);
-		}
 
 		solidity_keccak256(&words)
 	}
@@ -395,16 +391,11 @@ fn setup_builder(
 	u32_targets.extend_from_slice(&main_pool_cfg_root_u32s);
 
 	// 4. batchPoseidonRoot (uint256 LE-packed) — SR proof PI[0..4]
+	// batchPoseidonRoot already commits to all NC leaves via Poseidon; no need
+	// to repeat individual leaves in the Keccak preimage.
 	let sr_root: [Target; 4] = core::array::from_fn(|k| sr_proof.public_inputs[k]);
 	let sr_root_words = pack_hash_le_to_u32s(&mut builder, sr_root, byte_range_lut);
 	u32_targets.extend_from_slice(&sr_root_words);
-
-	// 5. depositNoteCommitments[0..N] — SR proof leaves PI[4 + i*4 .. 4 + i*4 + 4]
-	for i in 0..n_deposit_slots {
-		let leaf: [Target; 4] = core::array::from_fn(|k| sr_proof.public_inputs[4 + i * 4 + k]);
-		let leaf_words = pack_hash_le_to_u32s(&mut builder, leaf, byte_range_lut);
-		u32_targets.extend_from_slice(&leaf_words);
-	}
 
 	// --- Keccak-256 → 8 output words → public inputs ---
 	let hash = builder.keccak256::<ConfigNative>(&u32_targets);
@@ -687,13 +678,11 @@ mod tests {
 
 		// Compare circuit PIs against native computation.
 		let batch_poseidon_root = SubtreeRootCircuit::root_from_proof(&sr_proof);
-		let deposit_note_comms = SubtreeRootCircuit::leaves_from_proof(&sr_proof, 2);
 
 		let expected = DepositSuperAggregatorV2::compute_deposit_pi_commitment_native(
 			act_root,
 			main_pool_cfg_root,
 			batch_poseidon_root,
-			&deposit_note_comms,
 		);
 
 		let actual: Vec<u64> = proof

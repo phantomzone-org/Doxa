@@ -84,7 +84,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		acc_comm: AccountCommitmentTarget,
 		act_root: ActRootTarget,
 		condition: BoolTarget,
-		ctx: &H::CircuitContext,
 	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH>;
 
 	fn derive_nullifier_key(&mut self, priv_id: PrivateIdentifierTarget) -> NullifierKeyTarget;
@@ -158,7 +157,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
-		ctx: &H::CircuitContext,
 	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
@@ -307,10 +305,9 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		acc_comm: AccountCommitmentTarget,
 		act_root: ActRootTarget,
 		condition: BoolTarget,
-		ctx: &H::CircuitContext,
 	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH> {
 		conditional_merkle_verify_commitment_tree_gadget::<H, F, D, COM_TREE_DEPTH>(
-			self, acc_comm.0, act_root.0, condition, ctx,
+			self, acc_comm.0, act_root.0, condition,
 		)
 	}
 
@@ -563,7 +560,6 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		nct_root: NctRootTarget,
-		ctx: &H::CircuitContext,
 	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] {
 		let merkle_proofs: [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] =
 			core::array::from_fn(|i| {
@@ -572,7 +568,6 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 					inotes_comm[i].0,
 					nct_root.0,
 					inote_isactive[i],
-					ctx,
 				)
 			});
 

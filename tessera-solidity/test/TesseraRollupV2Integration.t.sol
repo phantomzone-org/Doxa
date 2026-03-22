@@ -82,21 +82,21 @@ contract TesseraRollupV2IntegrationTest is Test {
     }
 
     /// Load the batch parameters written by `super_aggregator_v2_artifacts`:
-    ///   acRoot            — genesis root used as acRoot and ncRoot in the dummy proof
+    ///   root              — genesis root used as the single IMT root in the dummy proof
     ///   batchPoseidonRoot — Goldilocks Poseidon Merkle root of all NC leaves (all zero)
     ///   noteCommitmentsCount / noteNullifiersCount — array sizes (512 / 448)
     function _loadBatchParams()
         internal
         view
         returns (
-            uint256 acRoot,
+            uint256 root,
             uint256 batchPoseidonRoot,
             uint256 noteCommitmentsCount,
             uint256 noteNullifiersCount
         )
     {
         string memory json = vm.readFile(FIXTURE);
-        acRoot               = vm.parseJsonUint(json, ".acRoot");
+        root                 = vm.parseJsonUint(json, ".root");
         batchPoseidonRoot    = vm.parseJsonUint(json, ".batchPoseidonRoot");
         noteCommitmentsCount = vm.parseJsonUint(json, ".noteCommitmentsCount");
         noteNullifiersCount  = vm.parseJsonUint(json, ".noteNullifiersCount");
@@ -149,7 +149,7 @@ contract TesseraRollupV2IntegrationTest is Test {
     /// End-to-end: submit + prove a TX batch using the real Groth16 verifier.
     ///
     /// The dummy SAV2 proof is generated with:
-    ///   acRoot = ncRoot    = genesis root (zeros[SOLIDITY_TREE_DEPTH])
+    ///   root               = genesis root (zeros[SOLIDITY_TREE_DEPTH])
     ///   mainPoolConfigRoot = 0
     ///   batchPoseidonRoot  = Goldilocks Poseidon Merkle root of 512 all-zero NC leaves
     ///   noteCommitments    = 512 × uint256(0)
@@ -168,7 +168,7 @@ contract TesseraRollupV2IntegrationTest is Test {
         ) = _loadProof();
 
         (
-            uint256 acRoot,
+            uint256 root,
             uint256 batchPoseidonRoot,
             uint256 ncCount,
             uint256 nnCount
@@ -187,8 +187,7 @@ contract TesseraRollupV2IntegrationTest is Test {
         uint256[] memory noteCommitments = new uint256[](ncCount);
         uint256[] memory noteNullifiers  = new uint256[](nnCount);
         TesseraRollupV2.TransactionBatch memory batch = TesseraRollupV2.TransactionBatch({
-            acRoot:             acRoot,
-            ncRoot:             acRoot,
+            root:               root,
             mainPoolConfigRoot: PCR,
             noteCommitments:    noteCommitments,
             noteNullifiers:     noteNullifiers,
@@ -200,7 +199,7 @@ contract TesseraRollupV2IntegrationTest is Test {
 
         // Verify our local piCommitment matches what the contract will compute.
         bytes32 computed = keccak256(abi.encodePacked(
-            batch.acRoot, batch.ncRoot, batch.mainPoolConfigRoot, batch.batchPoseidonRoot,
+            batch.root, batch.root, batch.mainPoolConfigRoot, batch.batchPoseidonRoot,
             batch.accountCommitment, batch.accountNullifier,
             batch.noteCommitments, batch.noteNullifiers
         ));

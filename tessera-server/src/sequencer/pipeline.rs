@@ -113,12 +113,10 @@ impl Sequencer {
 		// batchPoseidonRoot: Poseidon Merkle root of nc_leaves.
 		let batch_poseidon_root = contract::hash_to_u256_le(&finalized.batch_poseidon_root);
 
-		// acRoot / ncRoot: both are the current confirmed Poseidon IMT root.
 		let root = contract::hash_to_u256_le(&self.confirmed_root);
 
 		let batch = ITesseraRollupV2::TransactionBatch {
-			acRoot: root,
-			ncRoot: root,
+			root,
 			mainPoolConfigRoot: pool_cfg_root.into(),
 			noteCommitments: note_commitments,
 			noteNullifiers: note_nullifiers,
@@ -410,8 +408,7 @@ impl Sequencer {
 			.collect();
 
 		let batch = ITesseraRollupV2::DepositBatch {
-			acRoot: root,
-			ncRoot: root,
+			root,
 			mainPoolConfigRoot: pool_cfg_root.into(),
 			depositNoteCommitments: deposit_note_commitments,
 			batchPoseidonRoot: batch_poseidon_root,
@@ -504,11 +501,10 @@ impl Sequencer {
 				batch_id,
 				error,
 			} => {
-				error!(
-					batch_id,
-					error, "consume prover failure; batch will not be confirmed"
-				);
 				self.pending_consume_batches.remove(&batch_id);
+				return Err(anyhow::anyhow!(
+					"consume prover failure for batch {batch_id}: {error}"
+				));
 			},
 
 			ConsumeOutcome::Success {

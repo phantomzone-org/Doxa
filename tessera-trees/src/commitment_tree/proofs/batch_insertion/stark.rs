@@ -65,11 +65,8 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 		}
 	}
 
-	pub fn connect<H, F, const D: usize>(
-		&self,
-		builder: &mut CircuitBuilder<F, D>,
-		ctx: &H::CircuitContext,
-	) where
+	pub fn connect<H, F, const D: usize>(&self, builder: &mut CircuitBuilder<F, D>)
+	where
 		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
@@ -95,7 +92,7 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 		let mut empty_batch_root = H::constant_hash(builder, &H::HEAD);
 		for _ in 0..batch_depth {
 			empty_batch_root =
-				H::hash_2_to_1_circuit(builder, ctx, empty_batch_root, empty_batch_root, f)
+				H::hash_2_to_1_circuit(builder, empty_batch_root, empty_batch_root, f)
 			// TODO add specific circuit to avoid bool target
 		}
 
@@ -105,7 +102,6 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 			&self.upper_siblings_old,
 			&path[batch_depth..],
 			self.start_index,
-			ctx,
 		);
 
 		H::connect_hashes(builder, &empty_batch_root, &self.root_old);
@@ -118,7 +114,7 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 			for i in 0..parent_len {
 				let left: MerkleHashTarget<N> = leaves[2 * i];
 				let right: MerkleHashTarget<N> = leaves[2 * i + 1];
-				leaves[i] = H::hash_2_to_1_circuit(builder, ctx, left, right, f);
+				leaves[i] = H::hash_2_to_1_circuit(builder, left, right, f);
 				// TODO add specific circuit to avoid bool target
 			}
 			leaves.truncate(parent_len);
@@ -130,7 +126,6 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 			&self.upper_siblings_new,
 			&path[batch_depth..],
 			new_index,
-			ctx,
 		);
 
 		H::connect_hashes(builder, &new_batch_root, &self.root_new);
@@ -142,7 +137,6 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 		siblings: &[MerkleHashTarget<N>],
 		path: &[BoolTarget],
 		num_leaves: Target,
-		ctx: &H::CircuitContext,
 	) -> MerkleHashTarget<N>
 	where
 		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
@@ -159,9 +153,9 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 				// Select left and right based on direction
 				let left = H::select_hash(builder, dir, sibling, &current);
 				let right = H::select_hash(builder, dir, &current, sibling);
-				current = H::hash_root_circuit(builder, ctx, num_leaves, left, right);
+				current = H::hash_root_circuit(builder, num_leaves, left, right);
 			} else {
-				current = H::hash_2_to_1_circuit(builder, ctx, current, *sibling, dir);
+				current = H::hash_2_to_1_circuit(builder, current, *sibling, dir);
 			}
 		}
 		current
@@ -228,7 +222,7 @@ mod test {
 		},
 	};
 	use rand::{SeedableRng, rngs::StdRng};
-	use tessera_utils::hasher::{HashOutput, MerkleHashCircuit, NewRandom};
+	use tessera_utils::hasher::{HashOutput, NewRandom};
 
 	use crate::{BatchCommitmentProofTargets, CommitmentTree};
 
@@ -272,8 +266,7 @@ mod test {
 
 		print!("Connect: ");
 		let now: Instant = Instant::now();
-		let ctx = HashOutput::register_luts(&mut builder);
-		targets.connect::<HashOutput, F, D>(&mut builder, &ctx);
+		targets.connect::<HashOutput, F, D>(&mut builder);
 		println!("{:?}", now.elapsed());
 
 		print!("Set Witnesses: ");

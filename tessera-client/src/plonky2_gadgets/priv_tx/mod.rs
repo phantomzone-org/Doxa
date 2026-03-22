@@ -67,7 +67,6 @@ pub fn priv_tx_circuit<
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
-	ctx: &H::CircuitContext,
 ) -> TxCircuitTargets {
 	// Mint constants
 	// let ds_nullifier_key = builder.constant(F::from_canonical_u64(DS_NULLIFIER_KEY));
@@ -133,7 +132,7 @@ pub fn priv_tx_circuit<
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
 	let check_act = builder.and(not_is_fresh_acc, not_fake_tx);
 	let accin_merkletrgts = builder.conditionally_assert_account_commitment_exists_in_act::<H>(
-		accin_comm, act_root, check_act, ctx,
+		accin_comm, act_root, check_act,
 	);
 
 	// AccIn nullifier — free virtual target; prover supplies the real or padding value.
@@ -209,7 +208,6 @@ pub fn priv_tx_circuit<
 		public_identifier,
 		subpool_id,
 		nct_root,
-		ctx,
 	);
 
 	// Balance invariant: AccIn.amt + Sum([INote.amt]) == AccOut.amt + Sum([Onote.amt]) //
@@ -402,8 +400,7 @@ fn build_circuit_and_proof_seeded(
 
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, { tessera_utils::D }>::new(config);
-	HashOutput::register_luts(&mut builder);
-	let t = priv_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder, &());
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder);
 	let circuit = builder.build::<tessera_utils::ConfigNative>();
 	let proof = prove_priv_tx(&circuit, &t, not_fake_tx, seed);
 	(circuit, proof)
@@ -575,8 +572,7 @@ pub fn build_priv_tx_circuit() -> (
 
 	let config = CircuitConfig::standard_recursion_config();
 	let mut builder = CircuitBuilder::<F, { tessera_utils::D }>::new(config);
-	HashOutput::register_luts(&mut builder);
-	let t = priv_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder, &());
+	let t = priv_tx_circuit::<HashOutput, F, { tessera_utils::D }>(&mut builder);
 	let circuit = builder.build::<tessera_utils::ConfigNative>();
 	(circuit, t)
 }

@@ -56,7 +56,6 @@ pub fn withdraw_tx_circuit<
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
-	ctx: &H::CircuitContext,
 ) -> WithdrawTxTargets {
 	// ── Tx flag ───────────────────────────────────────────────────────────────
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
@@ -106,7 +105,6 @@ pub fn withdraw_tx_circuit<
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
-		ctx,
 	);
 
 	// ── Account invariants ───────────────────────────────────────────────────
@@ -487,8 +485,7 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let ctx = HashOutput::register_luts(&mut builder);
-		let t = withdraw_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
+		let t = withdraw_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let data = builder.build::<C>();
 
 		// ── Fill witness ──────────────────────────────────────────────────

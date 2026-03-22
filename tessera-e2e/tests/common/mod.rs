@@ -15,7 +15,7 @@ use alloy::{
 	sol_types::SolValue,
 };
 use tessera_e2e::{
-	contract_bytecodes::{ACCEPT_BYTECODE, POSEIDON_BYTECODE, ROLLUP_BYTECODE, TOKEN_BYTECODE},
+	contract_bytecodes::{POSEIDON_BYTECODE, ROLLUP_BYTECODE, TOKEN_BYTECODE},
 	prover_adapter::InProcessProver,
 };
 use tessera_server::{config::SequencerConfig, sequencer::Sequencer};
@@ -25,8 +25,7 @@ use tessera_server::{config::SequencerConfig, sequencer::Sequencer};
 pub const TREE_DEPTH_VAL: u64 = 23;
 
 /// Anvil's default first account private key.
-pub const OPERATOR_KEY: &str =
-	"0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+pub const OPERATOR_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 sol! {
 	#[sol(rpc)]
@@ -86,43 +85,7 @@ pub async fn deploy_with_args<P: Provider + Clone>(
 // Environment setup variants
 // ---------------------------------------------------------------------------
 
-/// Spawn Anvil and deploy all contracts with `AcceptAllVerifier` for both
-/// TX and deposit verifiers.
-pub async fn setup_env(pool_config_root: [u8; 32]) -> (TestEnv, impl Provider + Clone) {
-	let anvil = Anvil::new().try_spawn().expect("anvil spawn");
-	let url = anvil.endpoint_url().to_string();
-	let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-	let operator = signer.address();
-	let wallet = EthereumWallet::from(signer);
-	let provider = ProviderBuilder::new()
-		.wallet(wallet)
-		.connect_http(anvil.endpoint_url());
-
-	let accept_addr = deploy_no_args(&provider, ACCEPT_BYTECODE).await;
-	let poseidon_addr = deploy_no_args(&provider, POSEIDON_BYTECODE).await;
-	let token_addr = deploy_no_args(&provider, TOKEN_BYTECODE).await;
-
-	let constructor_args = (
-		accept_addr, // txVerifier (AcceptAll)
-		accept_addr, // depositVerifier (AcceptAll)
-		poseidon_addr,
-		operator,
-		token_addr,
-		B256::from(pool_config_root),
-		U256::from(TREE_DEPTH_VAL),
-	)
-		.abi_encode();
-
-	let rollup_addr = deploy_with_args(&provider, ROLLUP_BYTECODE, constructor_args).await;
-
-	(
-		TestEnv { rollup: rollup_addr, token: token_addr, operator, url, _anvil: anvil },
-		provider,
-	)
-}
-
-/// Like [`setup_env`] but deploys the real `VerifierSuperAggregatorV2` for
-/// both TX and deposit verifiers.
+/// Deploys the real `VerifierSuperAggregatorV2` for both TX and deposit verifiers.
 pub async fn setup_env_real_verifier(
 	pool_config_root: [u8; 32],
 	verifier_bytecode_hex: &str,
@@ -154,15 +117,22 @@ pub async fn setup_env_real_verifier(
 	let rollup_addr = deploy_with_args(&provider, ROLLUP_BYTECODE, constructor_args).await;
 
 	(
-		TestEnv { rollup: rollup_addr, token: token_addr, operator, url, _anvil: anvil },
+		TestEnv {
+			rollup: rollup_addr,
+			token: token_addr,
+			operator,
+			url,
+			_anvil: anvil,
+		},
 		provider,
 	)
 }
 
-/// Like [`setup_env`] but deploys `AcceptAllVerifier` for TX and the real
+/// Deploys the real `VerifierSuperAggregatorV2` for TX and the real
 /// `VerifierDepositSuperAggregatorV2` for deposits.
 pub async fn setup_env_real_deposit_verifier(
 	pool_config_root: [u8; 32],
+	tx_verifier_bytecode_hex: &str,
 	deposit_verifier_bytecode_hex: &str,
 ) -> (TestEnv, impl Provider + Clone) {
 	let anvil = Anvil::new().try_spawn().expect("anvil spawn");
@@ -174,13 +144,13 @@ pub async fn setup_env_real_deposit_verifier(
 		.wallet(wallet)
 		.connect_http(anvil.endpoint_url());
 
-	let accept_addr = deploy_no_args(&provider, ACCEPT_BYTECODE).await;
+	let tx_verifier_addr = deploy_no_args(&provider, tx_verifier_bytecode_hex).await;
 	let deposit_verifier_addr = deploy_no_args(&provider, deposit_verifier_bytecode_hex).await;
 	let poseidon_addr = deploy_no_args(&provider, POSEIDON_BYTECODE).await;
 	let token_addr = deploy_no_args(&provider, TOKEN_BYTECODE).await;
 
 	let constructor_args = (
-		accept_addr,           // txVerifier — AcceptAll
+		tx_verifier_addr,      // txVerifier — real Groth16
 		deposit_verifier_addr, // depositVerifier — real Groth16
 		poseidon_addr,
 		operator,
@@ -193,7 +163,13 @@ pub async fn setup_env_real_deposit_verifier(
 	let rollup_addr = deploy_with_args(&provider, ROLLUP_BYTECODE, constructor_args).await;
 
 	(
-		TestEnv { rollup: rollup_addr, token: token_addr, operator, url, _anvil: anvil },
+		TestEnv {
+			rollup: rollup_addr,
+			token: token_addr,
+			operator,
+			url,
+			_anvil: anvil,
+		},
 		provider,
 	)
 }
@@ -206,7 +182,10 @@ pub async fn setup_env_real_deposit_verifier(
 pub fn start_sequencer(
 	env: &TestEnv,
 	prover: Arc<InProcessProver>,
-) -> (tessera_server::sequencer::SequencerHandle, tokio::task::JoinHandle<()>) {
+) -> (
+	tessera_server::sequencer::SequencerHandle,
+	tokio::task::JoinHandle<()>,
+) {
 	let config = SequencerConfig {
 		rpc_url: env.url.clone(),
 		operator_private_key: OPERATOR_KEY.into(),
@@ -258,7 +237,11 @@ pub fn try_load_verifier_bytecode() -> Option<String> {
 	let json: serde_json::Value = serde_json::from_str(&content).ok()?;
 	let hex = json["bytecode"]["object"].as_str()?;
 	let hex = hex.strip_prefix("0x").unwrap_or(hex);
-	if hex.is_empty() { None } else { Some(hex.to_string()) }
+	if hex.is_empty() {
+		None
+	} else {
+		Some(hex.to_string())
+	}
 }
 
 /// Load the `VerifierDepositSuperAggregatorV2` deployment bytecode from the Foundry
@@ -277,7 +260,11 @@ pub fn try_load_deposit_verifier_bytecode() -> Option<String> {
 	let json: serde_json::Value = serde_json::from_str(&content).ok()?;
 	let hex = json["bytecode"]["object"].as_str()?;
 	let hex = hex.strip_prefix("0x").unwrap_or(hex);
-	if hex.is_empty() { None } else { Some(hex.to_string()) }
+	if hex.is_empty() {
+		None
+	} else {
+		Some(hex.to_string())
+	}
 }
 
 // ---------------------------------------------------------------------------

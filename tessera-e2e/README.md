@@ -32,7 +32,7 @@ NC commitments  ─────────────────────�
 |---|---|---|
 | **PrivTx** | Inner leaf circuit for each private transaction | _(embedded in aggregator artifacts)_ |
 | **TX Aggregator** | `GenericAggregator` binary tree, depth 6, 64 leaves | `v2-tx-aggregator/` |
-| **SubtreeRoot** | Proves `batchPoseidonRoot = Poseidon(512 NC leaves)` | `subtree-root/` |
+| **SubtreeRoot** | Proves `batchPoseidonRoot = Poseidon(512 SR leaves: 7 NC + 1 AC per slot)` | `subtree-root/` |
 | **SuperAggregatorV2** | Merges TX-agg root + SR proof → 8-word PI commitment | `super-aggregator-v2/` |
 | **BN128 + Groth16** | Wraps SAV2 Plonky2 proof into on-chain Groth16 proof | `super-aggregator-v2/plonky2-proof/` + `groth-artifacts/` |
 
