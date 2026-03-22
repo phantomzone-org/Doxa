@@ -221,13 +221,21 @@ contract TesseraRollupV2 {
     // -------------------------------------------------------------------------
 
     modifier onlyOperator() {
-        if (msg.sender != operator) revert NotOperator();
+        _onlyOperator();
         _;
     }
 
     modifier whenNotPaused() {
-        if (paused) revert PausedErr();
+        _whenNotPaused();
         _;
+    }
+
+    function _onlyOperator() internal view {
+        if (msg.sender != operator) revert NotOperator();
+    }
+
+    function _whenNotPaused() internal view {
+        if (paused) revert PausedErr();
     }
 
     // -------------------------------------------------------------------------

@@ -14,7 +14,9 @@ fn main() {
 	let header_filepath = out_path.join("libgo.h");
 	let go_filepath = Path::new("ffi/main.go");
 
+	let bindings_filepath = out_path.join("bindings.rs");
 	if !static_filepath.exists()
+		|| !bindings_filepath.exists()
 		|| static_filepath.metadata().unwrap().modified().unwrap()
 			< go_filepath.metadata().unwrap().modified().unwrap()
 	{
@@ -29,11 +31,12 @@ fn main() {
 			.arg("build")
 			.arg("-buildmode=c-archive")
 			.arg("-o")
-			.arg(static_filepath)
+			.arg(&static_filepath)
 			.arg(go_filepath)
 			.env("GOCACHE", &go_cache);
 
-		go_build.status().expect("Go build failed");
+		let status = go_build.status().expect("failed to run Go build");
+		assert!(status.success(), "Go build exited with: {status}");
 
 		let bindings = bindgen::Builder::default()
 			.header(header_filepath.to_str().unwrap())
@@ -42,7 +45,7 @@ fn main() {
 			.expect("Unable to generate bindings");
 
 		bindings
-			.write_to_file(out_path.join("bindings.rs"))
+			.write_to_file(&bindings_filepath)
 			.expect("Couldn't write bindings!");
 	}
 

@@ -58,7 +58,18 @@ Consume-validation proofs (deposit pipeline) additionally require the
 ## Generating Artifacts
 
 All artifact binaries read the output directory from `TESSERA_ARTIFACTS_DIR`.
-If unset they default to `<workspace-root>/artifacts/`.
+If unset they default to `<workspace-root>/artifacts/`. The commands below pin
+it to `tessera-e2e/artifacts` (relative to the workspace root).
+
+### Generate everything (all steps in one go)
+
+```bash
+export TESSERA_ARTIFACTS_DIR=$(pwd)/tessera-e2e/artifacts
+
+cargo run -p tessera-e2e --bin super_aggregator_v2_artifacts --release && \
+cargo run -p tessera-e2e --bin consume_artifacts --release && \
+(cd tessera-solidity && forge build)
+```
 
 ### Step 1 — All prover artifacts (main)
 
@@ -70,7 +81,7 @@ leaf proof is proved once, then merged with itself at each tree level
 (`merge(p, p) → p_next`).  For depth 6 this is 6 prove calls instead of 127.
 
 ```bash
-TESSERA_ARTIFACTS_DIR=/path/to/artifacts \
+TESSERA_ARTIFACTS_DIR=$(pwd)/tessera-e2e/artifacts \
 cargo run -p tessera-e2e --bin super_aggregator_v2_artifacts --release
 ```
 
@@ -114,7 +125,7 @@ Required for the deposit-validation pipeline.  Produces the leaf circuit used
 by the client to prove each note consumption:
 
 ```bash
-TESSERA_ARTIFACTS_DIR=/path/to/artifacts \
+TESSERA_ARTIFACTS_DIR=$(pwd)/tessera-e2e/artifacts \
 cargo run -p tessera-e2e --bin consume_artifacts --release
 ```
 
@@ -135,7 +146,7 @@ Compiled artifact: `tessera-solidity/out/VerifierSuperAggregatorV2.sol/VerifierS
 ### Legacy V1 aggregator (rarely needed)
 
 ```bash
-TESSERA_ARTIFACTS_DIR=/path/to/artifacts \
+TESSERA_ARTIFACTS_DIR=$(pwd)/tessera-e2e/artifacts \
 cargo run -p tessera-e2e --bin aggregator_artifacts --release
 ```
 
@@ -147,7 +158,7 @@ Output: `$TESSERA_ARTIFACTS_DIR/associated-input-aggregator/`
 
 ```bash
 # All tests — skip gracefully when TESSERA_ARTIFACTS_DIR is not set.
-TESSERA_ARTIFACTS_DIR=/path/to/artifacts \
+TESSERA_ARTIFACTS_DIR=$(pwd)/tessera-e2e/artifacts \
 cargo test -p tessera-e2e --release -- --nocapture
 ```
 
@@ -192,10 +203,9 @@ After any change to the PrivTx circuit **all artifacts must be rebuilt** from
 scratch:
 
 ```bash
+export TESSERA_ARTIFACTS_DIR=$(pwd)/tessera-e2e/artifacts
 rm -rf $TESSERA_ARTIFACTS_DIR
-TESSERA_ARTIFACTS_DIR=/path/to/artifacts \
-cargo run -p tessera-e2e --bin super_aggregator_v2_artifacts --release
-TESSERA_ARTIFACTS_DIR=/path/to/artifacts \
-cargo run -p tessera-e2e --bin consume_artifacts --release
-cd tessera-solidity && forge build
+cargo run -p tessera-e2e --bin super_aggregator_v2_artifacts --release && \
+cargo run -p tessera-e2e --bin consume_artifacts --release && \
+(cd tessera-solidity && forge build)
 ```

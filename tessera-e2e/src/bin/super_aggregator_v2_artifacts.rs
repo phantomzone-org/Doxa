@@ -43,8 +43,10 @@ use std::{fs, path::PathBuf, time::Instant};
 
 use anyhow::{ensure, Result};
 use plonky2::{
-	field::types::Field,
+	field::types::{Field, PrimeField64},
+	hash::{hash_types::HashOut, poseidon::PoseidonHash},
 	iop::witness::{PartialWitness, WitnessWrite},
+	plonk::config::Hasher,
 };
 use tessera_client::TesseraGateSerializer;
 use tessera_server::{
@@ -59,6 +61,40 @@ use tessera_utils::{
 	hasher::HashOutput,
 	ProofNative, F,
 };
+
+/// Tree depth used by the Solidity integration test rollup.
+/// Must match `treeDepth` passed to `TesseraRollupV2` in
+/// `TesseraRollupV2IntegrationTest.setUp()`.
+const SOLIDITY_TREE_DEPTH: usize = 4;
+
+/// Compute the on-chain genesis root: `zeros[depth]` where
+/// `zeros[0] = 0` and `zeros[i] = Poseidon.compress(zeros[i-1], zeros[i-1])`.
+///
+/// This matches the Goldilocks Poseidon used in `TesseraRollupV2.sol`.
+fn compute_genesis_root(depth: usize) -> HashOutput {
+	let mut h = HashOutput::new([F::ZERO; 4]);
+	for _ in 0..depth {
+		let data = [h.0[0], h.0[1], h.0[2], h.0[3], h.0[0], h.0[1], h.0[2], h.0[3]];
+		let out: HashOut<F> = PoseidonHash::hash_no_pad(&data);
+		h = HashOutput::new(out.elements);
+	}
+	h
+}
+
+/// Pack a `HashOutput` to a `0x`-prefixed hex bytes32 string using the same
+/// big-endian LE-packed uint256 layout as `compute_pi_commitment_native`.
+fn hash_to_bytes32_hex(h: &HashOutput) -> String {
+	let mut bytes = [0u8; 32];
+	let mut pos = 0usize;
+	// Reversed field-element order, each element as [hi32, lo32] big-endian bytes.
+	for &field in &[h.0[3], h.0[2], h.0[1], h.0[0]] {
+		let v = field.to_canonical_u64();
+		bytes[pos..pos + 4].copy_from_slice(&((v >> 32) as u32).to_be_bytes());
+		bytes[pos + 4..pos + 8].copy_from_slice(&(v as u32).to_be_bytes());
+		pos += 8;
+	}
+	format!("0x{}", hex::encode(bytes))
+}
 
 const ARITY: usize = 2;
 const NOTES_PER_SLOT: usize = tessera_client::NOTE_BATCH;
@@ -294,11 +330,14 @@ fn main() -> Result<()> {
 
 	// =======================================================================
 	// 7. Prove SuperAggregatorV2 with all-dummy input + zero private witnesses
+	//
+	// Use the genesis root (zeros[SOLIDITY_TREE_DEPTH]) as acRoot/ncRoot so the
+	// dummy proof is accepted by the Solidity rollup in integration tests.
 	// =======================================================================
 	println!("\n[7] Proving SuperAggregatorV2 (dummy)...");
 	let now = Instant::now();
-	let zero_hash = HashOutput::new([F::ZERO; 4]);
-	let dummy_sa_proof = sav2.prove(agg_result.proof, sr_proof, zero_hash, [0u8; 32])?;
+	let genesis_root = compute_genesis_root(SOLIDITY_TREE_DEPTH);
+	let dummy_sa_proof = sav2.prove(agg_result.proof, sr_proof.clone(), genesis_root, [0u8; 32])?;
 	sav2.circuit_data.verify(dummy_sa_proof.clone())?;
 	println!("  SAV2 dummy proof verified [{:?}]", now.elapsed());
 	assert_eq!(
@@ -383,11 +422,29 @@ fn main() -> Result<()> {
 	println!("  Groth16 verify ok");
 
 	let solidity_json = Groth16Wrapper::proof_to_solidity_json(&g16_proof, &g16_pub_inp)?;
+
+	// Augment with batch parameters needed by the Solidity integration test so it
+	// can reconstruct the exact TransactionBatch that matches this proof's piCommitment.
+	let sr_root_hash = HashOutput::new([
+		sr_proof.public_inputs[0],
+		sr_proof.public_inputs[1],
+		sr_proof.public_inputs[2],
+		sr_proof.public_inputs[3],
+	]);
+	let nc_per_slot = NOTES_PER_SLOT; // = NOTE_BATCH = 7 (NNs per slot)
+	let nn_count = n_tx_slots * nc_per_slot;
+	let mut fixture: serde_json::Value = serde_json::from_str(&solidity_json)?;
+	fixture["acRoot"] = serde_json::Value::String(hash_to_bytes32_hex(&genesis_root));
+	fixture["batchPoseidonRoot"] = serde_json::Value::String(hash_to_bytes32_hex(&sr_root_hash));
+	fixture["noteCommitmentsCount"] = serde_json::json!(sr_batch_size);
+	fixture["noteNullifiersCount"] = serde_json::json!(nn_count);
+	let augmented_json = serde_json::to_string_pretty(&fixture)?;
+
 	let json_path = groth_path.join("proof_solidity.json");
-	fs::write(&json_path, &solidity_json)?;
+	fs::write(&json_path, &augmented_json)?;
 	println!("  wrote proof: {}", json_path.display());
 	debug_log(&format!(
-		"\n(rust) Solidity proof JSON written to {json_path:?}\n{solidity_json}"
+		"\n(rust) Solidity proof JSON written to {json_path:?}\n{augmented_json}"
 	));
 
 	// =======================================================================

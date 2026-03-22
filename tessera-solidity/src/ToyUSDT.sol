@@ -66,8 +66,26 @@ contract ToyUSDT {
         if (block.timestamp > deadline) revert PermitExpired();
 
         uint256 nonce = nonces[owner]++;
-        bytes32 structHash = keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonce, deadline));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        bytes32 domainSep = DOMAIN_SEPARATOR;
+        bytes32 structHash;
+        assembly {
+            let ptr := mload(0x40)
+            mstore(ptr,        0x6e71edae12b1b97f4d1f60370fef10105fa2faae0126114a169c64845d6126c9)
+            mstore(add(ptr, 0x20), owner)
+            mstore(add(ptr, 0x40), spender)
+            mstore(add(ptr, 0x60), value)
+            mstore(add(ptr, 0x80), nonce)
+            mstore(add(ptr, 0xa0), deadline)
+            structHash := keccak256(ptr, 0xc0)
+        }
+        bytes32 digest;
+        assembly {
+            let ptr := mload(0x40)
+            mstore(ptr,        0x1901000000000000000000000000000000000000000000000000000000000000)
+            mstore(add(ptr, 0x02), domainSep)
+            mstore(add(ptr, 0x22), structHash)
+            digest := keccak256(ptr, 0x42)
+        }
 
         address recovered = ecrecover(digest, v, r, s);
         if (recovered == address(0) || recovered != owner) revert InvalidPermitSignature();
