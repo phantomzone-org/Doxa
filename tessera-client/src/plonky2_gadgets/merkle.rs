@@ -171,6 +171,7 @@ where
 			expected_root.elements[i],
 		);
 	}
+
 	ConditionalMerkleTarget {
 		siblings: merkletrgt.siblings,
 		bits: merkletrgt.bits,
@@ -197,16 +198,23 @@ where
 	let bits: [BoolTarget; DEPTH] =
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 
-	let mut current = MerkleHashTarget::<4> { elements: leaf.elements };
+	let mut current = MerkleHashTarget::<4> {
+		elements: leaf.elements,
+	};
 	for level in 0..DEPTH {
 		let sib = MerkleHashTarget::from_hash_out_target(siblings[level]);
-		current = <HashOutput as MerkleHashCircuit<F, D>>::hash_2_to_1_circuit(
-			builder, current, sib, bits[level],
+		current = <HashOutput as MerkleHashCircuit<F, D>>::hash_leaf_circuit(
+			builder,
+			current,
+			sib,
+			bits[level],
 		);
 	}
 
 	ComputeMerkleRootTarget {
-		root: HashOutTarget { elements: current.elements },
+		root: HashOutTarget {
+			elements: current.elements,
+		},
 		siblings,
 		bits,
 	}
@@ -235,15 +243,11 @@ pub fn conditional_merkle_verify_commitment_tree_gadget<
 
 	let mut current = MerkleHashTarget::from_hash_out_target(leaf);
 	for level in 0..DEPTH {
+		let sib = MerkleHashTarget::from_hash_out_target(siblings[level]);
 		if level == DEPTH - 1 {
-			let dir = bits[DEPTH - 1];
-			let sib = MerkleHashTarget::from_hash_out_target(siblings[DEPTH - 1]);
-			let left = H::select_hash(builder, dir, &sib, &current);
-			let right = H::select_hash(builder, dir, &current, &sib);
-			current = H::hash_root_circuit(builder, num_leaves, left, right);
+			current = H::hash_root_circuit(builder, num_leaves, current, sib, bits[level]);
 		} else {
-			let sib = MerkleHashTarget::from_hash_out_target(siblings[level]);
-			current = H::hash_2_to_1_circuit(builder, current, sib, bits[level]);
+			current = H::hash_leaf_circuit(builder, current, sib, bits[level]);
 		}
 	}
 
