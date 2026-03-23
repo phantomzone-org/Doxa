@@ -332,7 +332,7 @@ impl Signature {
 		for (i, f) in self.r.encode().w.0.iter().enumerate() {
 			out[i * 8..i * 8 + 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
 		}
-		for (i, limb) in self.s.to_limbs().iter().enumerate() {
+		for (i, limb) in self.s.0.iter().enumerate() {
 			out[40 + i * 8..40 + i * 8 + 8].copy_from_slice(&limb.to_le_bytes());
 		}
 		out
@@ -363,11 +363,7 @@ pub(crate) fn schnorr_challenge(
 }
 
 /// Sign: R = k*G, e = H(R || Q || m), s = k + d*-e
-pub fn schnorr_sign(
-	privkey: &PrivateKey,
-	message: &[GoldilocksField],
-	k: Scalar,
-) -> Signature {
+pub fn schnorr_sign(privkey: &PrivateKey, message: &[GoldilocksField], k: Scalar) -> Signature {
 	let g = PointEw::generator();
 	let r = g.scalar_mul(&k);
 

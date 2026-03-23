@@ -161,7 +161,7 @@ fn prove_priv_tx(
 	accout.spend_auth = new_spend_auth.clone();
 	accout.consume_auth = new_consume_auth.clone();
 	let tx_hash = derive_priv_tx_hash(
-		accin.nullifier(None),
+		accin.nullifier(),
 		accout.commitment(),
 		dinote_nulls,
 		donote_comms,
