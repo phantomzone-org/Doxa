@@ -72,13 +72,12 @@ async fn test_e2e_deposit_groth16() -> Result<(), String> {
 	let client = TesseraClientState::new(&mut rng, 0);
 	let pool_config_root = hash_output_to_bytes32(&client.pool_config.root().0);
 
-	let (env, provider) =
-		common::setup_env_real_deposit_verifier(
-			pool_config_root,
-			&tx_verifier_bytecode,
-			&deposit_verifier_bytecode,
-		)
-		.await;
+	let (env, provider) = common::setup_env_real_deposit_verifier(
+		pool_config_root,
+		&tx_verifier_bytecode,
+		&deposit_verifier_bytecode,
+	)
+	.await;
 	let rollup = ITesseraRollupV2::ITesseraRollupV2Instance::new(env.rollup, &provider);
 	let token = IToyUSDT::IToyUSDTInstance::new(env.token, &provider);
 

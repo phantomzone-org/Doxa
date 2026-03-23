@@ -1,12 +1,67 @@
 use itertools::Itertools;
-use plonky2::{hash::{hash_types::{HashOutTarget, RichField}, poseidon::Poseidon}, iop::target::{BoolTarget, Target}, plonk::circuit_builder::CircuitBuilder};
+use plonky2::{
+	hash::{
+		hash_types::{HashOutTarget, RichField},
+		poseidon::Poseidon,
+	},
+	iop::target::{BoolTarget, Target},
+	plonk::circuit_builder::CircuitBuilder,
+};
 use plonky2_field::extension::Extendable;
-use tessera_utils::hasher::{MerkleHashCircuit, MerkleHashTarget};
+use tessera_utils::{
+	HASH_SIZE,
+	hasher::{MerkleHashCircuit, MerkleHashTarget},
+};
 
-use crate::{NOTE_BATCH, plonky2_gadgets::{priv_tx::{cb::PrivTxCircuitBuilder, targets::{AccountCommitmentTarget, AccountNullifierTarget, RootTarget, AssetIdTarget, DummyNoteTarget, MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget, SubpoolIdTarget, TxCircuitTargets}}, u256::CircuitBuilderU256}};
+use crate::{
+	NOTE_BATCH,
+	plonky2_gadgets::{
+		priv_tx::{
+			circuit_builder::PrivTxCircuitBuilder,
+			targets::{
+				AccountCommitmentTarget, AccountNullifierTarget, AssetIdTarget, DummyNoteTarget,
+				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
+				RootTarget, SubpoolIdTarget, TxCircuitTargets,
+			},
+		},
+		u256::CircuitBuilderU256,
+	},
+};
 
-
-
+/// Build the Plonky2 private transaction circuit.
+///
+/// A single circuit handles four transaction kinds selected by boolean flags:
+///
+/// | Kind          | `is_fresh_acc` | `is_rjct` | `is_update_auth` | `is_priv_tx` |
+/// |---------------|:--------------:|:---------:|:----------------:|:------------:|
+/// | FreshAcc      | 1              | 0         | 0                | 0            |
+/// | Reject        | 0              | 1         | 0                | 0            |
+/// | UpdateAuth    | 0              | 0         | 1                | 0            |
+/// | Spend/transfer| 0              | 0         | 0                | 1            |
+///
+/// # Constraints enforced
+/// 1. **Account commitment / nullifier** — derived from account witness; for real txs constrained
+///    to match free PI targets `accin_null` / `accout_comm`.
+/// 2. **FreshAcc check** — when `is_fresh_acc`, `accin` must be in the default state.
+/// 3. **Account transition invariants** — per-kind rules for immutable fields.
+/// 4. **ACT membership** — for non-fresh accounts gated on `not_fake_tx`.
+/// 5. **AST update** — asset leaf updated at the same position in accin/accout ASTs.
+/// 6. **Note processing** — NCT membership, spend-condition checks, reject mirroring.
+/// 7. **Balance invariant** — conservation of assets across notes and accounts.
+/// 8. **Subpool membership** — three key proofs + main pool proof.
+/// 9. **Signatures** — spend / consume / approval Schnorr signatures.
+///
+/// # Public inputs (77 elements for NOTE_BATCH=7)
+/// ```text
+/// [0]    subpool_id_in   (auto-PI from add_virtual_account_target)
+/// [1]    subpool_id_out
+/// [2]    not_fake_tx
+/// [3-6]  accin_null  (AN)
+/// [7-10] accout_comm (AC)
+/// [11-38] effective inote nullifiers (7×4)
+/// [39-66] effective onote commitments (7×4, donote_comm when slot inactive)
+/// [67-70] act_root
+/// ```
 pub fn priv_tx_circuit<
 	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 	F: RichField + Extendable<D> + Poseidon,
@@ -14,11 +69,9 @@ pub fn priv_tx_circuit<
 >(
 	builder: &mut CircuitBuilder<F, D>,
 ) -> TxCircuitTargets {
-	// Mint constants
-	// let ds_nullifier_key = builder.constant(F::from_canonical_u64(DS_NULLIFIER_KEY));
-
-	// not_fake_tx is a PI and set to 1 for tx that are not fake. It may be se to 0 to produce a
-	// dummy proof (used at proof aggregation stage)
+	// not_fake_tx = 1 for real transactions; 0 for dummy/padding proofs.
+	// Gating on this flag allows all constraint checks to be bypassed for
+	// dummy proofs while keeping the same compiled circuit.
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// Tx kinds
@@ -48,21 +101,19 @@ pub fn priv_tx_circuit<
 
 	let accin_comm = builder.derive_account_commitment(accin);
 	let derived_accout_comm = builder.derive_account_commitment(accout);
-	// Free virtual target — prover supplies the real or padding value.
-	// When not_fake_tx=1, enforced to equal derived_accout_comm below.
+	// Step 1: AccOut commitment — free PI target.
+	// For real txs (not_fake_tx=1) the circuit enforces accout_comm == derived_accout_comm.
+	// For dummy proofs the prover may supply any value (constraints are bypassed).
 	let accout_comm = AccountCommitmentTarget(builder.add_virtual_hash());
-	for i in 0..4 {
-		let diff = builder.sub(accout_comm.0.elements[i], derived_accout_comm.0.elements[i]);
-		let gated = builder.mul(not_fake_tx.target, diff);
-		builder.assert_zero(gated);
-	}
+	builder.conditionally_assert_hash_equal(not_fake_tx, accout_comm.0, derived_accout_comm.0);
 
-	// Assert AccIn matches FreshAccount defaults when is_fresh_acc
+	// Step 2: FreshAcc check — when is_fresh_acc, accin must be in the default state
+	// (nonce=0, default keys, empty AST).
 	builder.assert_fresh_account(accin, is_fresh_acc);
 
-	// AccIn → AccOut transition invariants
-	// private_identifier, subpool_id are immutable for all tx kinds — enforced by sharing the
-	// same wires in `derive_account_commitment` for both accin and accout.
+	// Step 3: Account transition invariants (per-kind rules for immutable fields + nonce).
+	// private_identifier and subpool_id are immutable for all tx kinds — enforced by sharing
+	// the same wires in derive_account_commitment for both accin and accout.
 	builder.assert_account_invariants(
 		accin,
 		accout,
@@ -72,25 +123,22 @@ pub fn priv_tx_circuit<
 		is_priv_tx,
 	);
 
-	// Check Comm(AccIn) in ACT iff !fresh && not_fake == 1
+	// Step 4: ACT membership — verify accin's commitment is in the ACT.
+	// Condition: only for non-fresh accounts and real transactions.
 	let accin_pos = builder.add_virtual_target();
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
 	let check_act = builder.and(not_is_fresh_acc, not_fake_tx);
-	let accin_merkletrgts = builder.conditionally_assert_account_commitment_exists_in_act::<H>(
-		accin_comm, root, check_act,
-	);
+	let accin_merkletrgts = builder
+		.conditionally_assert_account_commitment_exists_in_act::<H>(accin_comm, root, check_act);
 
-	// AccIn nullifier — free virtual target; prover supplies the real or padding value.
-	// When not_fake_tx=1, the circuit enforces accin_null == derived_null below.
+	// Step 5: AccIn nullifier — free PI target.
+	// For real txs enforced == derived_null; for dummy proofs any value is accepted.
 	let derived_null = builder.derive_account_nullifier(accin_comm, nk);
 	let accin_null = AccountNullifierTarget(builder.add_virtual_hash());
-	for i in 0..4 {
-		let diff = builder.sub(accin_null.0.elements[i], derived_null.0.elements[i]);
-		let gated = builder.mul(not_fake_tx.target, diff);
-		builder.assert_zero(gated);
-	}
+	builder.conditionally_assert_hash_equal(not_fake_tx, accin_null.0, derived_null.0);
 
-	// Verify asset/amt proofs in AccIn and AccOut ASTs; enforce same leaf position was updated
+	// Step 6: AST update — prove accin and accout ASTs both contain the asset at the same
+	// leaf position, with amounts differing by the transferred value.
 	let accin_ast_merkle = builder.assert_ast_update(
 		asset_id,
 		accin_amt,
@@ -101,8 +149,8 @@ pub fn priv_tx_circuit<
 		asset_exists_in_accout,
 	);
 
-	// Input and Output notes //
-
+	// Step 7: Allocate NOTE_BATCH input and output note slots.
+	// Inactive slots are filled with dummy values; all are padded to NOTE_BATCH.
 	let inotes: [NoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_note_target());
 	let inotes_pos: [Target; NOTE_BATCH] = core::array::from_fn(|_| builder.add_virtual_target());
@@ -118,6 +166,7 @@ pub fn priv_tx_circuit<
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 	let onotes_comm = onotes.map(|n| builder.derive_note_commitment(n));
 
+	// Dummy notes provide deterministic padding nullifiers / commitments for inactive slots.
 	let dinotes: [DummyNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
 	let dinotes_null: [NoteNullifierTarget; NOTE_BATCH] =
@@ -127,15 +176,16 @@ pub fn priv_tx_circuit<
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
 	let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
 
-	// check is_rjct
+	// Step 8: Reject check — when is_rjct, each onote is the mirror of the corresponding
+	// inote with spend/reject conditions swapped (note returns to sender).
 	builder.assert_is_reject(is_rjct, inotes, inotes_isactive, onotes, onotes_isactive);
 
-	// All inotes and onotes share the same asset_id
+	// All inotes and onotes must share the same asset_id as the transaction.
 	for note in inotes.iter().chain(onotes.iter()) {
 		builder.connect(note.asset_id.0, asset_id.0);
 	}
 
-	// for each inote verify NCT membership, and check spend auth
+	// Step 9: Input note validity — NCT membership + spend-condition check.
 	let inotes_mrkltrgt = builder.assert_inotes_valid::<H>(
 		inotes,
 		inotes_isactive,
@@ -145,7 +195,8 @@ pub fn priv_tx_circuit<
 		root,
 	);
 
-	// Balance invariant: AccIn.amt + Sum([INote.amt]) == AccOut.amt + Sum([Onote.amt]) //
+	// Step 10: Balance invariant — assets are conserved across accounts and notes.
+	// accin_amt + Σ(active inote amounts) == accout_amt + Σ(active onote amounts)
 	builder.assert_balance_invariant(
 		accin_amt,
 		accout_amt,
@@ -155,9 +206,9 @@ pub fn priv_tx_circuit<
 		onotes_isactive,
 	);
 
-	// Derive tx hash //
-
-	// select valid inote nullifiers, onote commitments as per respective isactive selector
+	// Step 11: Derive tx hash.
+	// For inactive inote slots use dummy nullifiers; for inactive onote slots use dummy comms.
+	// This makes the tx hash deterministic even when fewer than NOTE_BATCH notes are used.
 	let effective_inotes_null: [NoteNullifierTarget; NOTE_BATCH] = core::array::from_fn(|i| {
 		NoteNullifierTarget(HashOutTarget {
 			elements: core::array::from_fn(|j| {
@@ -169,7 +220,7 @@ pub fn priv_tx_circuit<
 			}),
 		})
 	});
-	// Derived NC (for real TX enforcement).
+	// For real txs the circuit enforces onotes_comm matches the PI; dummy proofs get donote_comm.
 	let derived_onotes_comm: [NoteCommitmentTarget; NOTE_BATCH] = core::array::from_fn(|i| {
 		NoteCommitmentTarget(HashOutTarget {
 			elements: core::array::from_fn(|j| {
@@ -189,10 +240,8 @@ pub fn priv_tx_circuit<
 		accout_comm,
 	);
 
-	// Validate authorization //
-
-	// Verify SubpoolFullProof: 3 authority key proofs (depth-2) + main pool proof (depth-20)
-	// Skip subpoolProof verification if not_fake_tx = 0
+	// Step 12: Subpool full proof — verify authority key memberships.
+	// All checks gated by not_fake_tx so dummy proofs can use zero-filled paths.
 	let subpool_proof_targets = builder.assert_subpool_full_proof(
 		SubpoolIdTarget(accin.subpool_id.0),
 		approval_key,
@@ -202,6 +251,7 @@ pub fn priv_tx_circuit<
 		not_fake_tx,
 	);
 
+	// Step 13: Signature verification.
 	let not_is_rjct = builder.not(is_rjct);
 	let sig_targets = builder.assert_tx_signatures(
 		tx_hash,
@@ -214,25 +264,15 @@ pub fn priv_tx_circuit<
 		not_fake_tx,
 	);
 
-	// Declare public inputs:
-	//  - effective input note nullifiers
-	//  - effective output note commitments
-	//  - AIn Nullifier
-	//  - AOut commitment
-	//  - not_is_fake bool target
-	//  - NCT root
-	//  - ACT root
-	// PI layout (77 total, NOTE_BATCH=7):
-	//   [0-1]  = subpool_id_in/out auto-registered by add_virtual_account_target
-	//   [2]    = subpool_id_in  (explicit, same wire as [0])
-	//   [3]    = subpool_id_out (explicit, same wire as [1])
-	//   [4]    = not_fake_tx    (IS_REAL_OFFSET)
-	//   [5-8]  = AN             (TX_DATA_OFFSET)
-	//   [9-12] = AC
-	//   [13-40]= NN (7×4=28, NOTE_BATCH=7)
-	//   [41-68]= NC (7×4=28)
-	//   [69-72]= act_root
-	//   [73-76]= nct_root
+	// Step 14: Register public inputs.
+	// PI layout (77 total for NOTE_BATCH=7):
+	//   [0-1]  = subpool_id_in/out  (auto-registered by add_virtual_account_target)
+	//   [2]    = not_fake_tx
+	//   [3-6]  = AN (accin nullifier)
+	//   [7-10] = AC (accout commitment)
+	//   [11-38]= effective inote nullifiers (NOTE_BATCH×4)
+	//   [39-66]= effective onote commitments (NOTE_BATCH×4, donote_comm when inactive)
+	//   [67-70]= act_root
 	builder.register_public_input(accin.subpool_id.0);
 	builder.register_public_input(accout.subpool_id.0);
 	builder.register_public_input(not_fake_tx.target);

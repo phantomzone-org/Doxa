@@ -37,10 +37,10 @@ use crate::{
 			conditional_merkle_verify_commitment_tree_gadget,
 		},
 		priv_tx::{
-			cb::PrivTxCircuitBuilder,
+			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
-				AccountNullifierTarget, RootTarget, AssetIdTarget, MainPoolConfigRootTarget,
-				PublicIdentifierTaregt, SubpoolIdTarget,
+				AccountNullifierTarget, AssetIdTarget, MainPoolConfigRootTarget,
+				PublicIdentifierTaregt, RootTarget, SubpoolIdTarget,
 			},
 		},
 		set_hash, set_u256_zero,
@@ -60,6 +60,31 @@ use crate::{
 pub(crate) mod cb;
 pub(crate) mod targets;
 
+/// Build the Plonky2 deposit transaction circuit.
+///
+/// The circuit proves that an Ethereum user has deposited funds into a valid
+/// Tessera account, with all authorization checks satisfied.
+///
+/// # Constraints enforced
+/// 1. **ACT membership** — `accin`'s commitment exists in the Account Commitment Tree (conditional
+///    on `not_fake_tx`).
+/// 2. **Recipient match** — the deposit note's recipient address matches `accin`.
+/// 3. **Account invariants** — `private_identifier`, `subpool_id`, `spend_auth`, `consume_auth` are
+///    unchanged; nonce increments by 1.
+/// 4. **AST update** — the asset leaf is updated consistently in both `accin` and `accout`'s
+///    Account State Trees at the same leaf index.
+/// 5. **Balance invariant** — `accout_amt == accin_amt + deposit_note.amount`.
+/// 6. **Subpool membership** — authority keys are proven against `mainpool_config_root`.
+/// 7. **Signatures** — both consume and approval Schnorr signatures over the tx hash are verified.
+///
+/// # Public inputs
+/// ```text
+/// not_fake_tx[1] | act_root[4] | accin_null[4] | accout_comm[4]
+/// | deposit_note_comm[4] | eth_address[5] | amount[8] | asset_id[1]
+/// ```
+///
+/// Returns all allocated targets; pass to [`set_deposit_tx_witness`] or
+/// [`set_fake_deposit_tx_witness`] to fill a proof.
 pub fn deposit_tx_circuit<
 	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 	F: RichField + Extendable<D> + Poseidon,
@@ -115,12 +140,13 @@ pub fn deposit_tx_circuit<
 	let accout_comm = builder.derive_account_commitment(accout);
 
 	// AccIn nullifier (always position-based for deposit — account must exist in ACT)
-	let accin_null = AccountNullifierTarget(builder.derive_account_nullifier(accin_comm, nk).0);
+	let accin_null = builder.derive_account_nullifier(accin_comm, nk);
 
 	// Connect deposit_note.asset_id with the circuit-level asset_id
 	builder.connect(deposit_note.asset_id.0, asset_id.0);
 
-	// Assert ACT membership (always enforced — deposit_tx requires a live account)
+	// Step 1: Verify ACT membership.
+	// Deposit always requires a live account — not gated by tx kind.
 	let accin_act_merkle = conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
 		builder,
 		accin_comm.0,
@@ -128,17 +154,17 @@ pub fn deposit_tx_circuit<
 		not_fake_tx,
 	);
 
-	// Enforce recipient match: deposit_note must target accin
+	// Step 2: Enforce recipient match — deposit note must target accin.
 	builder.connect(deposit_note.recipient_subpool_id.0, accin.subpool_id.0);
 	builder.connect_array(
 		deposit_note.recipient_public_id.0.elements,
 		public_identifier.0.elements,
 	);
 
-	// Account invariants
+	// Step 3: Account invariants — identity fields frozen, nonce+1.
 	builder.assert_account_invariants_simple(accin, accout);
 
-	// AST update: verify asset/amt proofs and enforce same leaf position
+	// Step 4: AST update — verify asset/amt proofs, enforce same leaf position.
 	let accin_ast_merkle = builder.assert_ast_update(
 		asset_id,
 		accin_amt,
@@ -149,19 +175,20 @@ pub fn deposit_tx_circuit<
 		asset_exists_in_accout,
 	);
 
-	// Balance invariant: accout_amt = accin_amt + deposit_note.amount
+	// Step 5: Balance invariant — accout_amt == accin_amt + deposit_note.amount.
 	let range_lut = add_u8_range_check_lookup_table(builder);
 	let sum = builder.u256_addition_chain::<1>(&accin_amt, &[deposit_note.amount], range_lut);
 	builder.connect_u256(&sum, &accout_amt);
 
-	// Derive deposit note commitment:
+	// Step 6: Derive the deposit note commitment (Poseidon over note fields).
 	let deposit_note_comm = builder.derive_deposit_note_comm(deposit_note);
 
-	// Derive TxHash
+	// Step 7: Derive the transaction hash (signed by consume and approval keys).
 	let tx_hash =
 		builder.derive_deposit_tx_hash(accin_null, accout_comm, deposit_note_comm, eth_address);
 
-	// Assert subpool full proof (always enforced for deposit)
+	// Step 8: Verify subpool full proof (authority key memberships).
+	// Gated by not_fake_tx — dummy proofs skip main-pool root check.
 	let subpool_proof_targets = builder.assert_subpool_full_proof(
 		SubpoolIdTarget(accin.subpool_id.0),
 		approval_key,
@@ -171,8 +198,9 @@ pub fn deposit_tx_circuit<
 		not_fake_tx,
 	);
 
-	// Assert signatures — consume and approval both always required
-	// Consume key: accin.consume_auth.config selects between accin's own key or subpool key
+	// Step 9: Verify Schnorr signatures.
+	// Consume: accin.consume_auth.config selects between accin's own key (config=1)
+	//          or the subpool consume key (config=0, delegation mode).
 	let effective_consume_key = PubkeyTarget(LocalQuinticExtension(core::array::from_fn(|i| {
 		builder._if(
 			accin.consume_auth.config,
@@ -182,6 +210,7 @@ pub fn deposit_tx_circuit<
 	})));
 	let consume =
 		conditional_schnorr_verify_gadget(builder, tx_hash, effective_consume_key, not_fake_tx);
+	// Approval: always the subpool approval key.
 	let approval = conditional_schnorr_verify_gadget(builder, tx_hash, approval_key, not_fake_tx);
 
 	// Register public inputs
@@ -410,6 +439,16 @@ pub fn build_deposit_tx_circuit() -> DepositTxCircuit {
 	}
 }
 
+/// Fill `pw` with a dummy deposit-tx witness (`not_fake_tx=0`).
+///
+/// All secret values are deterministic placeholders.  No real Merkle proofs or
+/// signatures are required because all constraint checks are gated on
+/// `not_fake_tx`.  Used to pad empty aggregation slots.
+///
+/// # Subpool proof handling
+/// The three per-key depth-2 membership proofs **are** real (reconstructed from
+/// fixed fake keys) because those checks run unconditionally.  Only the main-pool
+/// depth-20 inclusion proof is zeroed — that check is gated by `not_fake_tx`.
 pub(crate) fn set_fake_deposit_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &DepositTxTargets,

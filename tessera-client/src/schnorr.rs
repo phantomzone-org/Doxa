@@ -146,17 +146,11 @@ impl Scalar {
 		self.montymul(Self::R2).montymul(rhs)
 	}
 
-	/// Sample a uniformly random scalar in `[0, N)` using rejection sampling.
-	// TODO: I don't know whether this is secure.
+	/// Sample a uniformly random scalar in `[0, N)`.
 	pub fn sample<R: rand::Rng>(rng: &mut R) -> Self {
-		loop {
-			let mut limbs: [u64; 5] = std::array::from_fn(|_| rng.next_u64());
-			limbs[4] &= 0x7FFFFFFFFFFFFFFF; // N < 2^319; clear bit 63
-			let candidate = Self(limbs);
-			if candidate.sub_inner(Self::N).1 == 1 {
-				return candidate;
-			}
-		}
+		let mut bytes = [0u8; 40];
+		rng.fill(&mut bytes);
+		Self::decode_reduce(&bytes)
 	}
 
 	/// Decode the provided byte slice into a scalar. The bytes are
