@@ -386,6 +386,16 @@ fn main() -> Result<()> {
 		let dst = sol_src_dir.join("VerifierDepositSuperAggregatorV2.sol");
 		fs::write(&dst, renamed)?;
 		println!("  VerifierDepositSuperAggregatorV2.sol → {}", dst.display());
+
+		let sol_root = workspace_root.join("tessera-solidity");
+		println!("  running forge build in {} ...", sol_root.display());
+		let status = std::process::Command::new("forge")
+			.arg("build")
+			.current_dir(&sol_root)
+			.status()
+			.map_err(|e| anyhow::anyhow!("failed to run forge build: {e}"))?;
+		anyhow::ensure!(status.success(), "forge build failed");
+		println!("  forge build ok");
 	} else {
 		println!("  Verifier.sol not found or Foundry src dir absent — skipping Solidity copy.");
 	}

@@ -10,7 +10,7 @@ use plonky2::{
 use plonky2_field::extension::Extendable;
 use tessera_utils::{
 	HASH_SIZE,
-	hasher::{MerkleHashCircuit, MerkleHashTarget},
+	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 };
 
 use crate::{
@@ -68,7 +68,10 @@ pub fn priv_tx_circuit<
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
-) -> TxCircuitTargets {
+) -> TxCircuitTargets
+where
+	HashOutput: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
+{
 	// not_fake_tx = 1 for real transactions; 0 for dummy/padding proofs.
 	// Gating on this flag allows all constraint checks to be bypassed for
 	// dummy proofs while keeping the same compiled circuit.

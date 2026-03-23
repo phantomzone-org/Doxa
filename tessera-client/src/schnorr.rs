@@ -161,11 +161,11 @@ impl Scalar {
 		let n = buf.len();
 		let mut r = Self::ZERO;
 		let mut extra: u8 = 0;
-		for i in 0..n {
+		for (i, b) in buf.iter().enumerate().take(n) {
 			if i < 40 {
-				r.0[i >> 3] |= (buf[i] as u64).wrapping_shl(((i as u32) & 7) << 3);
+				r.0[i >> 3] |= (*b as u64).wrapping_shl(((i as u32) & 7) << 3);
 			} else {
-				extra |= buf[i];
+				extra |= b;
 			}
 		}
 

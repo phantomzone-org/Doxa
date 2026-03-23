@@ -78,7 +78,10 @@ pub fn withdraw_tx_circuit<
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
-) -> WithdrawTxTargets {
+) -> WithdrawTxTargets
+where
+	HashOutput: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
+{
 	// ── Tx flag ───────────────────────────────────────────────────────────────
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 

@@ -70,8 +70,6 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
 		F: Field + RichField + Extendable<D>,
 	{
-		let f: BoolTarget = builder._false();
-
 		let batch_size: Target = builder.constant(F::from_canonical_u64(self.leaves.len() as u64));
 		let new_index: Target = builder.add(self.start_index, batch_size);
 
@@ -89,76 +87,24 @@ impl<const N: usize> BatchCommitmentProofTargets<N> {
 		}
 
 		// 1) Verifies against old root
-		let mut empty_batch_root = H::constant_hash(builder, &H::HEAD);
-		for _ in 0..batch_depth {
-			empty_batch_root =
-				H::hash_2_to_1_circuit(builder, empty_batch_root, empty_batch_root, f)
-			// TODO add specific circuit to avoid bool target
-		}
-
-		empty_batch_root = Self::compute_root_circuit::<H, F, D>(
+		let derived_old_root = H::empty_batch_merkle_root_circuit(
 			builder,
-			empty_batch_root,
+			batch_depth,
 			&self.upper_siblings_old,
 			&path[batch_depth..],
 			self.start_index,
 		);
-
-		H::connect_hashes(builder, &empty_batch_root, &self.root_old);
+		H::connect_hashes(builder, &self.root_old, &derived_old_root);
 
 		// 2) Verify against new root
-		let mut leaves: Vec<MerkleHashTarget<N>> = self.leaves.to_vec();
-
-		while leaves.len() > 1 {
-			let parent_len = leaves.len() >> 1;
-			for i in 0..parent_len {
-				let left: MerkleHashTarget<N> = leaves[2 * i];
-				let right: MerkleHashTarget<N> = leaves[2 * i + 1];
-				leaves[i] = H::hash_2_to_1_circuit(builder, left, right, f);
-				// TODO add specific circuit to avoid bool target
-			}
-			leaves.truncate(parent_len);
-		}
-
-		let new_batch_root = Self::compute_root_circuit::<H, F, D>(
+		let derived_new_root = H::batch_merkle_root_circuit(
 			builder,
-			leaves[0],
+			&self.leaves,
 			&self.upper_siblings_new,
 			&path[batch_depth..],
 			new_index,
 		);
-
-		H::connect_hashes(builder, &new_batch_root, &self.root_new);
-	}
-
-	fn compute_root_circuit<H, F, const D: usize>(
-		builder: &mut CircuitBuilder<F, D>,
-		leaf_hash: MerkleHashTarget<N>,
-		siblings: &[MerkleHashTarget<N>],
-		path: &[BoolTarget],
-		num_leaves: Target,
-	) -> MerkleHashTarget<N>
-	where
-		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<N>>,
-		F: Field + RichField + Extendable<D>,
-	{
-		let depth = siblings.len();
-		let mut current = leaf_hash;
-
-		assert_eq!(siblings.len(), path.len());
-
-		for (level, (sibling, &dir)) in siblings.iter().zip(path.iter()).enumerate() {
-			// At the final level, use hash_root_circuit to commit num_leaves
-			if level == depth - 1 {
-				// Select left and right based on direction
-				let left = H::select_hash(builder, dir, sibling, &current);
-				let right = H::select_hash(builder, dir, &current, sibling);
-				current = H::hash_root_circuit(builder, num_leaves, left, right);
-			} else {
-				current = H::hash_2_to_1_circuit(builder, current, *sibling, dir);
-			}
-		}
-		current
+		H::connect_hashes(builder, &self.root_new, &derived_new_root);
 	}
 
 	pub fn set<H, F, const D: usize, const DEPTH: usize>(
