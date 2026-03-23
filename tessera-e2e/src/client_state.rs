@@ -125,7 +125,7 @@ impl TesseraClientState {
 
 		// Compute tx_hash and sign.
 		let tx_hash = derive_priv_tx_hash(
-			accin.nullifier(None),
+			accin.nullifier(),
 			accout.commitment(),
 			dinote_nulls,
 			donote_comms,
@@ -242,7 +242,7 @@ impl TesseraClientState {
 			array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
 
 		let tx_hash = derive_priv_tx_hash(
-			accin.nullifier(Some(acc_pos)),
+			accin.nullifier(),
 			accout.commitment(),
 			dinote_nulls,
 			donote_comms,
