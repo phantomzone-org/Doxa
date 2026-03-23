@@ -157,9 +157,7 @@ pub(crate) struct TxSignatureTargets {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ActRootTarget(pub(crate) HashOutTarget);
-#[derive(Clone, Copy)]
-pub(crate) struct NctRootTarget(pub(crate) HashOutTarget);
+pub(crate) struct RootTarget(pub(crate) HashOutTarget);
 
 #[derive(Clone, Copy)]
 pub(crate) struct MainPoolConfigRootTarget(pub(crate) HashOutTarget);
@@ -186,8 +184,7 @@ pub struct TxCircuitTargets {
 	pub(crate) is_update_auth: BoolTarget,
 	pub(crate) is_priv_tx: BoolTarget,
 	// tree roots
-	pub(crate) act_root: ActRootTarget,
-	pub(crate) nct_root: NctRootTarget,
+	pub(crate) root: RootTarget,
 	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
 	// authority public keys
 	pub(crate) approval_key: PubkeyTarget,

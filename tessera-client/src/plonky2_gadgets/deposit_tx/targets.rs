@@ -13,7 +13,7 @@ use crate::{
 	plonky2_gadgets::{
 		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget},
 		priv_tx::targets::{
-			AccountTarget, ActRootTarget, AssetIdTarget, MainPoolConfigRootTarget,
+			AccountTarget, RootTarget, AssetIdTarget, MainPoolConfigRootTarget,
 			PublicIdentifierTaregt, SubpoolFullProofTargets, SubpoolIdTarget,
 		},
 		signature::{PubkeyTarget, SchnorrTargets},
@@ -68,7 +68,7 @@ pub(crate) struct DepositTxTargets {
 	// Tx flags
 	pub(crate) not_fake_tx: BoolTarget,
 	// tree roots
-	pub(crate) act_root: ActRootTarget,
+	pub(crate) root: RootTarget,
 	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
 	// authority public keys
 	pub(crate) approval_key: PubkeyTarget,

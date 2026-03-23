@@ -5,7 +5,7 @@ use crate::{
 	plonky2_gadgets::{
 		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget},
 		priv_tx::targets::{
-			AccountTarget, ActRootTarget, AssetIdTarget, MainPoolConfigRootTarget,
+			AccountTarget, RootTarget, AssetIdTarget, MainPoolConfigRootTarget,
 			SubpoolFullProofTargets,
 		},
 		signature::{PubkeyTarget, SchnorrTargets},
@@ -17,7 +17,7 @@ pub(crate) struct WithdrawTxTargets {
 	// Tx flag
 	pub(crate) not_fake_tx: BoolTarget,
 	// Tree roots (public inputs)
-	pub(crate) act_root: ActRootTarget,
+	pub(crate) root: RootTarget,
 	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
 	// Authority public keys
 	pub(crate) approval_key: PubkeyTarget,

@@ -31,7 +31,7 @@ use crate::{
 		priv_tx::{
 			cb::PrivTxCircuitBuilder,
 			targets::{
-				AccountNullifierTarget, ActRootTarget, AssetIdTarget, MainPoolConfigRootTarget,
+				AccountNullifierTarget, RootTarget, AssetIdTarget, MainPoolConfigRootTarget,
 				SubpoolIdTarget,
 			},
 		},
@@ -64,7 +64,7 @@ pub fn withdraw_tx_circuit<
 	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	let act_root = ActRootTarget(builder.add_virtual_hash());
+	let act_root = RootTarget(builder.add_virtual_hash());
 	let mainpool_config_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
 
 	// ── Accounts ──────────────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ pub fn withdraw_tx_circuit<
 
 	WithdrawTxTargets {
 		not_fake_tx,
-		act_root,
+		root: act_root,
 		mainpool_config_root,
 		approval_key,
 		rejection_key,
@@ -302,7 +302,7 @@ pub(crate) fn set_withdraw_tx_witness(
 	pw.set_bool_target(t.not_fake_tx, true).unwrap();
 
 	// ── Tree roots ────────────────────────────────────────────────────────
-	set_hash(pw, t.act_root.0, act_root.0);
+	set_hash(pw, t.root.0, act_root.0);
 	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
 
 	// ── Authority keys ────────────────────────────────────────────────────

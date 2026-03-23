@@ -25,10 +25,10 @@ use crate::{
 			conditional_merkle_verify_gadget,
 		},
 		priv_tx::targets::{
-			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, ActRootTarget,
+			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, RootTarget,
 			AssetIdTarget, ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment,
 			DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget, MainPoolConfigRootTarget,
-			NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
+			NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
 			NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt, RejectCondTarget,
 			SubpoolConfigRootTarget, SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget,
 			TxSignatureTargets,
@@ -75,7 +75,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
-		act_root: ActRootTarget,
+		root: RootTarget,
 		condition: BoolTarget,
 	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH>;
 
@@ -149,7 +149,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
-		nct_root: NctRootTarget,
+		root: RootTarget,
 	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
@@ -296,11 +296,11 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
-		act_root: ActRootTarget,
+		root: RootTarget,
 		condition: BoolTarget,
 	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH> {
 		conditional_merkle_verify_commitment_tree_gadget::<H, F, D, COM_TREE_DEPTH>(
-			self, acc_comm.0, act_root.0, condition,
+			self, acc_comm.0, root.0, condition,
 		)
 	}
 
@@ -539,14 +539,14 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
-		nct_root: NctRootTarget,
+		root: RootTarget,
 	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] {
 		let merkle_proofs: [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] =
 			core::array::from_fn(|i| {
 				conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
 					self,
 					inotes_comm[i].0,
-					nct_root.0,
+					root.0,
 					inote_isactive[i],
 				)
 			});

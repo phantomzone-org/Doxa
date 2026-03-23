@@ -39,7 +39,7 @@ use crate::{
 		priv_tx::{
 			cb::PrivTxCircuitBuilder,
 			targets::{
-				AccountNullifierTarget, ActRootTarget, AssetIdTarget, MainPoolConfigRootTarget,
+				AccountNullifierTarget, RootTarget, AssetIdTarget, MainPoolConfigRootTarget,
 				PublicIdentifierTaregt, SubpoolIdTarget,
 			},
 		},
@@ -73,7 +73,7 @@ pub fn deposit_tx_circuit<
 	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
 
 	// Tree roots
-	let act_root = ActRootTarget(builder.add_virtual_hash());
+	let root = RootTarget(builder.add_virtual_hash());
 	let mainpool_config_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
 
 	// Accounts
@@ -124,7 +124,7 @@ pub fn deposit_tx_circuit<
 	let accin_act_merkle = conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
 		builder,
 		accin_comm.0,
-		act_root.0,
+		root.0,
 		not_fake_tx,
 	);
 
@@ -194,7 +194,7 @@ pub fn deposit_tx_circuit<
 	//   - deposit note amount
 	//   - deposit note asset_id
 	builder.register_public_input(not_fake_tx.target);
-	builder.register_public_inputs(&act_root.0.elements);
+	builder.register_public_inputs(&root.0.elements);
 	builder.register_public_inputs(&accin_null.0.elements);
 	builder.register_public_inputs(&accout_comm.0.elements);
 	builder.register_public_inputs(&deposit_note_comm.0.elements);
@@ -204,7 +204,7 @@ pub fn deposit_tx_circuit<
 
 	DepositTxTargets {
 		not_fake_tx,
-		act_root,
+		root,
 		mainpool_config_root,
 		approval_key,
 		rejection_key,
@@ -284,7 +284,7 @@ pub(crate) fn set_deposit_tx_witness(
 	pw.set_bool_target(t.not_fake_tx, true).unwrap();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	set_hash(pw, t.act_root.0, act_root.0);
+	set_hash(pw, t.root.0, act_root.0);
 	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
 
 	// ── Authority keys ────────────────────────────────────────────────────────
@@ -430,7 +430,7 @@ pub(crate) fn set_fake_deposit_tx_witness(
 
 	// ── Tree roots ─────────────────────────────────────────────────-----------
 	set_hash(pw, t.mainpool_config_root.0, mainpool_config_root.0);
-	set_hash(pw, t.act_root.0, act_root.0);
+	set_hash(pw, t.root.0, act_root.0);
 
 	// ── Authority keys (derived from fixed scalars) ───────────────────────────
 	let (fake_approval_cpk, fake_rejection_cpk, fake_consume_cpk) = fake_authority_keys();

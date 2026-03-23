@@ -155,6 +155,10 @@ impl Scalar {
 			let candidate = Self(limbs);
 			if candidate.sub_inner(Self::N).1 == 1 {
 				return candidate;
+			}
+		}
+	}
+
 	/// Decode the provided byte slice into a scalar. The bytes are
 	/// interpreted into an integer in little-endian unsigned convention.
 	/// All slice bytes are read. Returns `Some(scalar)` if the decoded
@@ -214,13 +218,6 @@ impl Scalar {
 			acc = acc.montymul(Self::T632).add(b);
 		}
 		acc
-	}
-
-	/// Sample a uniformly random scalar in `[0, N)`.
-	pub(crate) fn sample<R: rand::Rng>(rng: &mut R) -> Self {
-		let mut bytes = [0u8; 40];
-		rng.fill(&mut bytes);
-		Self::decode_reduce(&bytes)
 	}
 
 	/// Reduce 5 Goldilocks field elements (320 bits) to scalar < N.

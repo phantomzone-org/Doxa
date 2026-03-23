@@ -131,7 +131,7 @@ impl TesseraClientState {
 			donote_comms,
 		);
 		let k = Scalar::from_raw([1u64; 5]);
-		let approval_sig = schnorr_sign(&self.approval_sk, &tx_hash, k);
+		let approval_sig = schnorr_sign(&self.approval_sk, &tx_hash.0, k);
 
 		let approval_pk: CompPubKey = self.approval_sk.public_key::<F>().into();
 		let rejection_pk: CompPubKey = self.rejection_sk.public_key::<F>().into();
@@ -248,7 +248,7 @@ impl TesseraClientState {
 			donote_comms,
 		);
 		let k = Scalar::from_raw([1u64; 5]);
-		let approval_sig = schnorr_sign(&self.approval_sk, &tx_hash, k);
+		let approval_sig = schnorr_sign(&self.approval_sk, &tx_hash.0, k);
 
 		let approval_pk: CompPubKey = self.approval_sk.public_key::<F>().into();
 		let rejection_pk: CompPubKey = self.rejection_sk.public_key::<F>().into();
