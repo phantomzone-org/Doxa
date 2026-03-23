@@ -2,6 +2,10 @@
 //! pipeline and verified on-chain by the real `VerifierDepositSuperAggregatorV2`
 //! contract.
 //!
+//! export TESSERA_ARTIFACTS_DIR=$(pwd)/tessera-e2e/artifacts
+//!
+//! cargo test -p tessera-e2e test_e2e_deposit_groth16 --release -- --nocapture
+//!
 //! # Workflow
 //!
 //! ```text

@@ -9,7 +9,7 @@ use plonky2::{
 use plonky2_field::extension::Extendable;
 use tessera_utils::{
 	HASH_SIZE,
-	hasher::{MerkleHashCircuit, MerkleHashTarget},
+	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
 	plonky2_gadgets::u32::{U32Target, add_u8_range_check_lookup_table},
 };
 
@@ -300,6 +300,8 @@ fn double_hash<F: RichField + Extendable<D>, const D: usize>(
 // TODO: rearrange this as per the trait declaration
 impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 	for CircuitBuilder<F, D>
+where
+	HashOutput: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 {
 	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget) {
 		let approval = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));

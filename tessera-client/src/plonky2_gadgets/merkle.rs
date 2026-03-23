@@ -8,8 +8,7 @@ use itertools::{Itertools, izip};
 use plonky2::{
 	hash::{
 		hash_types::{HashOutTarget, RichField},
-		hashing::PlonkyPermutation,
-		poseidon::{Poseidon, PoseidonHash, PoseidonPermutation},
+		poseidon::{Poseidon, PoseidonHash},
 	},
 	iop::{
 		target::{BoolTarget, Target},
@@ -152,7 +151,7 @@ impl<const D: usize> SetDummyMerklePathOfWitness for CommitmentTreeMerkleTarget<
 /// After all 32 levels, if `selector=1` the computed root is constrained to
 /// equal `expected_root`; if `selector=0` no equality is enforced.
 pub fn conditional_merkle_verify_gadget<
-	F: RichField + Extendable<D> + Poseidon,
+	F: RichField + Extendable<D>,
 	const D: usize,
 	const DEPTH: usize,
 >(
@@ -160,8 +159,11 @@ pub fn conditional_merkle_verify_gadget<
 	leaf: HashOutTarget,
 	expected_root: HashOutTarget,
 	selector: BoolTarget,
-) -> ConditionalMerkleTarget<DEPTH> {
-	let merkletrgt = compute_merkle_root_gagdet(builder, leaf);
+) -> ConditionalMerkleTarget<DEPTH>
+where
+	HashOutput: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
+{
+	let merkletrgt = compute_merkle_root_gagdet::<F, D, DEPTH>(builder, leaf);
 	for i in 0..HASH_SIZE {
 		builder.conditional_assert_eq(
 			selector.target,
@@ -181,44 +183,30 @@ pub fn conditional_merkle_verify_gadget<
 // independently useful. Hence, it'll suit better if it takes DEPTH to compute node until as a
 // parameter.
 pub fn compute_merkle_root_gagdet<
-	F: RichField + Extendable<D> + Poseidon,
+	F: RichField + Extendable<D>,
 	const D: usize,
 	const DEPTH: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
 	leaf: HashOutTarget,
-) -> ComputeMerkleRootTarget<DEPTH> {
+) -> ComputeMerkleRootTarget<DEPTH>
+where
+	HashOutput: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
+{
 	let siblings: [HashOutTarget; DEPTH] = core::array::from_fn(|_| builder.add_virtual_hash());
 	let bits: [BoolTarget; DEPTH] =
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 
-	let mut current: [Target; HASH_SIZE] = leaf.elements;
+	let mut current = MerkleHashTarget::<4> { elements: leaf.elements };
 	for level in 0..DEPTH {
-		// Build the 12-element Poseidon input:
-		//   [current[0..4] || sibling[0..4] || zero[0..4]]
-		// PoseidonGate SWAP will swap the first 4 with the next 4 when bit=1,
-		// so the permutation always receives [left || right || zeros].
-		let zero = builder.zero();
-		let perm_inputs = PoseidonPermutation::new(
-			current
-				.iter()
-				.chain(siblings[level].elements.iter())
-				.copied()
-				//TODO(jay): why removing zeros fails the test?
-				.chain(core::iter::repeat(zero)),
+		let sib = MerkleHashTarget::from_hash_out_target(siblings[level]);
+		current = <HashOutput as MerkleHashCircuit<F, D>>::hash_2_to_1_circuit(
+			builder, current, sib, bits[level],
 		);
-
-		let perm_output = PoseidonHash::permute_swapped(perm_inputs, bits[level], builder);
-		let output = perm_output.squeeze();
-
-		let parent: [Target; HASH_SIZE] = core::array::from_fn(|i| output[i]);
-		current = parent;
 	}
 
 	ComputeMerkleRootTarget {
-		root: HashOutTarget {
-			elements: current,
-		},
+		root: HashOutTarget { elements: current.elements },
 		siblings,
 		bits,
 	}

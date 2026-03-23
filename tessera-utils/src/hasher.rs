@@ -11,13 +11,14 @@ use plonky2::{
 	},
 	hash::{
 		hash_types::{HashOut, HashOutTarget, RichField},
-		poseidon::PoseidonHash,
+		hashing::PlonkyPermutation,
+		poseidon::{PoseidonHash, PoseidonPermutation},
 	},
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
 	},
-	plonk::{circuit_builder::CircuitBuilder, config::Hasher},
+	plonk::{circuit_builder::CircuitBuilder, config::{AlgebraicHasher, Hasher}},
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -568,20 +569,19 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 		sib: Self::HashTarget,
 		dir: BoolTarget,
 	) -> Self::HashTarget {
-		let left = Self::select_hash(builder, dir, &sib, &cur);
-		let right = Self::select_hash(builder, dir, &cur, &sib);
-		let data = vec![
-			left.elements[0],
-			left.elements[1],
-			left.elements[2],
-			left.elements[3],
-			right.elements[0],
-			right.elements[1],
-			right.elements[2],
-			right.elements[3],
-		];
-		let out = builder.hash_n_to_hash_no_pad::<PoseidonHash>(data);
-		MerkleHashTarget::from_hash_out_target(out)
+		let zero = builder.zero();
+		let perm_inputs = PoseidonPermutation::new(
+			cur.elements
+				.iter()
+				.chain(sib.elements.iter())
+				.copied()
+				.chain(core::iter::repeat(zero)),
+		);
+		let perm_output = PoseidonHash::permute_swapped(perm_inputs, dir, builder);
+		let output = perm_output.squeeze();
+		MerkleHashTarget {
+			elements: core::array::from_fn(|i| output[i]),
+		}
 	}
 
 	fn hash_root_circuit(
