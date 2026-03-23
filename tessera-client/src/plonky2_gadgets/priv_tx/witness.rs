@@ -63,13 +63,3 @@ pub(crate) fn set_common_tx_witness(
 	t.accin.set_witness(pw, accin);
 	t.accout.set_witness(pw, accout);
 }
-
-pub(crate) fn set_note_hash_overrides(
-	pw: &mut PartialWitness<F>,
-	t: &TxCircuitTargets,
-	override_nn: &[[F; 4]; crate::NOTE_BATCH],
-	override_nc: &[[F; 4]; crate::NOTE_BATCH],
-) {
-	set_hash_blocks(pw, &t.override_nn, override_nn);
-	set_hash_blocks(pw, &t.override_nc, override_nc);
-}

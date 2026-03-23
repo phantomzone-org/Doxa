@@ -44,7 +44,7 @@ pub struct NoteCommitment(pub HashOutput);
 pub struct NoteNullifier(pub HashOutput);
 
 #[derive(Clone, Copy)]
-pub struct NodeIdentifier(pub(crate) [F; 2]);
+pub struct NodeIdentifier(pub [F; 2]);
 
 impl NodeIdentifier {
 	pub(crate) const ZERO: Self = Self([F::ZERO; 2]);
@@ -70,6 +70,39 @@ pub struct StandardNote {
 }
 
 impl StandardNote {
+	/// Create a new note with a randomly sampled identifier.
+	pub fn create<R: CryptoRng + Rng>(
+		rng: &mut R,
+		recipient: AccountAddress,
+		sender: AccountAddress,
+		amt: U256,
+		asset_id: AssetId,
+	) -> Self {
+		StandardNote {
+			identifier: NodeIdentifier::from_rng(rng),
+			asset_id,
+			amt,
+			recipient,
+			sender,
+		}
+	}
+
+	/// Create a note with an explicit identifier (for use by external crates).
+	pub fn new(
+		identifier: NodeIdentifier,
+		asset_id: AssetId,
+		amt: U256,
+		recipient: AccountAddress,
+		sender: AccountAddress,
+	) -> Self {
+		StandardNote { identifier, asset_id, amt, recipient, sender }
+	}
+
+	/// Returns the note amount.
+	pub fn amt(&self) -> U256 {
+		self.amt
+	}
+
 	pub fn commitment(&self) -> NoteCommitment {
 		let mut input = [F::ZERO; 21];
 		input[..2].copy_from_slice(self.identifier.0.as_slice());

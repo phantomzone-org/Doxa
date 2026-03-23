@@ -225,6 +225,4 @@ pub struct TxCircuitTargets {
 	// each equals its derived counterpart; for fake TXs the prover supplies padding values.
 	pub(crate) accin_null: AccountNullifierTarget,
 	pub(crate) accout_comm: AccountCommitmentTarget,
-	pub(crate) override_nn: [[Target; 4]; NOTE_BATCH],
-	pub(crate) override_nc: [[Target; 4]; NOTE_BATCH],
 }

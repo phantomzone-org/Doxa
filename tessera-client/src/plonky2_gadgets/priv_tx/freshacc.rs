@@ -11,7 +11,7 @@ use tessera_utils::{F, hasher::HashOutput};
 use super::{
 	double_hash_native,
 	targets::TxCircuitTargets,
-	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
+	witness::{TxKindFlags, set_common_tx_witness, set_tx_kind_flags},
 };
 use crate::{
 	AccountAddress, AssetId, COM_TREE_DEPTH, ConsumeAuth, DEFAULT_SPEND_AUTH_PK,
@@ -166,14 +166,6 @@ pub(crate) fn set_freshacc_tx_witness(
 	// For real TXs these equal the derived values (enforced by circuit).
 	set_hash(pw, t.accin_null.0, accin.nullifier(None).0.0);
 	set_hash(pw, t.accout_comm.0, accout.commitment().0.0);
-	// All inotes are inactive for FreshAcc: effective_inotes_null[i] = double_hash(dinotes[i]).
-	// All onotes are inactive for FreshAcc: derived_onotes_comm[i] = double_hash(donotes[i]).
-	set_note_hash_overrides(
-		pw,
-		t,
-		&array::from_fn(|i| double_hash_native(dinotes[i])),
-		&array::from_fn(|i| double_hash_native(donotes[i])),
-	);
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
 	set_subpool_full_proof(
@@ -211,7 +203,7 @@ pub(crate) fn set_freshacc_tx_witness(
 		pw,
 		&t.sig_targets.approval,
 		approval_key,
-		&tx_hash,
+		&tx_hash.0,
 		approval_sig,
 	);
 }
@@ -300,7 +292,7 @@ mod tests {
 
 		// TODO: sample randomly and reduce mod n
 		let k = Scalar::from_raw(array::from_fn(|_| 1));
-		let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
+		let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 		// ── Build circuit ─────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();

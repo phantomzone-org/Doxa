@@ -15,3 +15,4 @@ tessera-utils = {workspace = true}
 primitive-types = {workspace = true}
 digest = {workspace = true}
 serde = {workspace = true}
+hex = {workspace = true}

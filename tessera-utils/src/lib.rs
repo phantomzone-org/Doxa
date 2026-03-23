@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 pub mod groth;
 pub mod hasher;
 pub mod plonky2_gadgets;

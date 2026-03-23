@@ -11,7 +11,7 @@ use tessera_utils::{
 use super::{
 	double_hash_native,
 	targets::TxCircuitTargets,
-	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
+	witness::{TxKindFlags, set_common_tx_witness, set_tx_kind_flags},
 };
 use crate::{
 	AccountAddress, AssetId, COM_TREE_DEPTH, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH,
@@ -231,14 +231,6 @@ pub fn set_spend_tx_witness(
 	set_hash_blocks(pw, &t.dinotes.map(|note| note.0), &dinotes);
 	set_hash_blocks(pw, &t.donotes.map(|note| note.0), &donotes);
 
-	// ── NN/NC override targets — must match circuit's effective nullifiers/commitments ─
-	set_note_hash_overrides(
-		pw,
-		t,
-		&tx_inote_nulls.map(|nullifier| nullifier.0.0),
-		&tx_onote_comms.map(|commitment| commitment.0.0),
-	);
-
 	// ── Subpool full proof ────────────────────────────────────────────────────
 	set_subpool_full_proof(
 		pw,
@@ -259,7 +251,7 @@ pub fn set_spend_tx_witness(
 				pw,
 				&t.sig_targets.spend,
 				accin.spend_auth.spend_pk.unwrap(),
-				&tx_hash,
+				&tx_hash.0,
 				sig,
 			);
 		} else {
@@ -288,7 +280,7 @@ pub fn set_spend_tx_witness(
 				pw,
 				&t.sig_targets.consume,
 				consume_public_key,
-				&tx_hash,
+				&tx_hash.0,
 				sig,
 			);
 		} else {
@@ -307,7 +299,7 @@ pub fn set_spend_tx_witness(
 		pw,
 		&t.sig_targets.approval,
 		*approval_key,
-		&tx_hash,
+		&tx_hash.0,
 		approval_sig,
 	);
 }
@@ -481,9 +473,6 @@ pub fn set_fake_tx_witness(
 		[21, 22, 23, 24, 25],
 		[31, 32, 33, 34, 35],
 	);
-
-	// ── NN/NC override targets (set to caller-supplied values for fake TX) ──────
-	set_note_hash_overrides(pw, t, &[[F::ZERO; 4]; NOTE_BATCH], &override_nc);
 }
 
 #[cfg(test)]
@@ -656,17 +645,17 @@ mod tests {
 		// consume_auth.config = false → circuit uses subpool consume key (consume_cpk)
 		let consume_sig = {
 			let k_c = Scalar::from_raw([7, 8, 9, 10, 11]);
-			schnorr_sign(&consume_sk, &tx_hash, k_c)
+			schnorr_sign(&consume_sk, &tx_hash.0, k_c)
 		};
 
 		// Approval (REAL): always required
 		let approval_sig = {
 			let k = Scalar::from_raw([1, 2, 3, 4, 5]);
-			schnorr_sign(&approval_sk, &tx_hash, k)
+			schnorr_sign(&approval_sk, &tx_hash.0, k)
 		};
 
 		// ── Build circuit ──────────────────────────────────────────────────────
-		let config = CircuitConfig::standard_recursion_zk_config();
+		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 		let t = priv_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let inner_data = builder.build::<C>();

@@ -55,4 +55,5 @@ pub use plonky2_gadgets::{
 		sample_dummy_notes,
 	},
 };
+pub use tessera_utils::hasher::HashOutput;
 use tessera_utils::HASH_SIZE;

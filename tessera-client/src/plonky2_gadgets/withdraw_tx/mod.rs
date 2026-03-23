@@ -93,11 +93,7 @@ pub fn withdraw_tx_circuit<
 	let accin_comm = builder.derive_account_commitment(accin);
 	let accout_comm = builder.derive_account_commitment(accout);
 	// Withdrawal always requires an existing account — position-based nullifier.
-	let accin_null = AccountNullifierTarget(
-		builder
-			.derive_account_nullifier(accin_comm, accin_pos, nk)
-			.0,
-	);
+	let accin_null = AccountNullifierTarget(builder.derive_account_nullifier(accin_comm, nk).0);
 
 	// ── ACT membership ───────────────────────────────────────────────────────
 	let accin_act_merkle = conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(

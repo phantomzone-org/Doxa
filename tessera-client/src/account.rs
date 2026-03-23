@@ -71,6 +71,16 @@ pub struct ConsumeAuth {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct AssetId(pub(crate) F);
 
+impl AssetId {
+	pub fn from_u64(v: u64) -> anyhow::Result<Self> {
+		anyhow::ensure!(
+			v < F::ORDER,
+			"AssetId value {v} is out of Goldilocks field range"
+		);
+		Ok(Self(F::from_canonical_u64(v)))
+	}
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct AccountStateTreeLeaf {
 	pub asset_id: AssetId,
@@ -235,10 +245,14 @@ impl StandardAccount {
 		}
 	}
 
-	pub(crate) fn clone_with_incremented_nonce(&self) -> Self {
+	pub fn clone_with_incremented_nonce(&self) -> Self {
 		let mut next = self.clone();
 		next.nonce = self.nonce.incremented();
 		next
+	}
+
+	pub fn address(&self) -> AccountAddress {
+		AccountAddress::from_acc(self)
 	}
 
 	pub fn public_id(&self) -> PublicIdentifier {
@@ -284,23 +298,6 @@ impl StandardAccount {
 	}
 
 	pub fn nullifier(&self, pos: Option<u64>) -> AccountNullifier {
-		if self.is_fresh() {
-			self.fresh_acc_nullifier()
-		} else {
-			assert!(pos.is_some());
-			self.old_acc_nullifier(pos.unwrap())
-		}
-	}
-
-	pub fn is_fresh(&self) -> bool {
-		self.nonce.0 == F::ZERO
-			&& self.spend_auth.spend_pk.is_none()
-			&& !self.consume_auth.config
-			&& self.consume_auth.pk.is_none()
-			&& self.ast.size() == 0
-	}
-
-	fn fresh_acc_nullifier(&self) -> AccountNullifier {
 		let mut inp = Vec::with_capacity(4 + 4);
 		inp.extend(self.commitment().0.0);
 		inp.extend(self.nk().0);
@@ -310,17 +307,12 @@ impl StandardAccount {
 		))
 	}
 
-	fn old_acc_nullifier(&self, pos: u64) -> AccountNullifier {
-		let pos = F::from_canonical_u64(pos);
-
-		let mut inp = Vec::with_capacity(4 + 1 + 4);
-		inp.extend(self.commitment().0.0);
-		inp.extend(self.nk().0);
-		inp.push(pos);
-
-		AccountNullifier(HashOutput(
-			<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements,
-		))
+	pub fn is_fresh(&self) -> bool {
+		self.nonce.0 == F::ZERO
+			&& self.spend_auth.spend_pk.is_none()
+			&& !self.consume_auth.config
+			&& self.consume_auth.pk.is_none()
+			&& self.ast.size() == 0
 	}
 }
 
@@ -344,6 +336,35 @@ impl AccountAddress {
 			public_id: PublicIdentifier::ZERO,
 		}
 	}
+
+	/// Encode as `hex(subpool_id) | hex(public_id)`.
+	/// - `subpool_id`: 8 bytes (u64 little-endian) → 16 hex chars
+	/// - `public_id`:  32 bytes (4 × u64 LE)       → 64 hex chars
+	/// Decode from the 80-hex-char encoding produced by `to_hex`.
+	pub fn from_hex(s: &str) -> anyhow::Result<Self> {
+		anyhow::ensure!(s.len() == 80, "expected 80 hex chars, got {}", s.len());
+		let bytes = hex::decode(s)?;
+		let subpool_raw = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+		let mut pub_id = [F::ZERO; 4];
+		for i in 0..4 {
+			pub_id[i] = F::from_canonical_u64(u64::from_le_bytes(
+				bytes[8 + i * 8..16 + i * 8].try_into().unwrap(),
+			));
+		}
+		Ok(Self {
+			subpool_id: SubpoolId(F::from_canonical_u64(subpool_raw)),
+			public_id: PublicIdentifier(HashOutput(pub_id)),
+		})
+	}
+
+	pub fn to_hex(&self) -> String {
+		let mut bytes = [0u8; 40];
+		bytes[..8].copy_from_slice(&self.subpool_id.0.to_canonical_u64().to_le_bytes());
+		for (i, f) in self.public_id.0.0.iter().enumerate() {
+			bytes[8 + i * 8..8 + (i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
+		}
+		bytes.iter().map(|b| format!("{b:02x}")).collect()
+	}
 }
 
 pub fn derive_priv_tx_hash(
@@ -351,7 +372,7 @@ pub fn derive_priv_tx_hash(
 	accout_comm: AccountCommitment,
 	inotes_null: [NoteNullifier; NOTE_BATCH],
 	onotes_comm: [NoteCommitment; NOTE_BATCH],
-) -> [F; 4] {
+) -> HashOutput {
 	use plonky2::plonk::config::Hasher;
 	let mut inp = Vec::with_capacity(4 + 4 + 4 * crate::NOTE_BATCH + 4 * crate::NOTE_BATCH);
 	inp.extend_from_slice(&accin_null.0.0);
@@ -362,7 +383,8 @@ pub fn derive_priv_tx_hash(
 	for c in &onotes_comm {
 		inp.extend(c.0.0);
 	}
-	<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements
+
+	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements)
 }
 
 pub fn derive_deposit_tx_hash(

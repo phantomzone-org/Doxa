@@ -115,11 +115,7 @@ pub fn deposit_tx_circuit<
 	let accout_comm = builder.derive_account_commitment(accout);
 
 	// AccIn nullifier (always position-based for deposit — account must exist in ACT)
-	let accin_null = AccountNullifierTarget(
-		builder
-			.derive_account_nullifier(accin_comm, accin_pos, nk)
-			.0,
-	);
+	let accin_null = AccountNullifierTarget(builder.derive_account_nullifier(accin_comm, nk).0);
 
 	// Connect deposit_note.asset_id with the circuit-level asset_id
 	builder.connect(deposit_note.asset_id.0, asset_id.0);

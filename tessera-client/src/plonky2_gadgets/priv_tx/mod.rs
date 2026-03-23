@@ -137,20 +137,10 @@ pub fn priv_tx_circuit<
 
 	// AccIn nullifier — free virtual target; prover supplies the real or padding value.
 	// When not_fake_tx=1, the circuit enforces accin_null == derived_null below.
-	let accin_null_regular = builder.derive_account_nullifier(accin_comm, accin_pos, nk);
-	let accin_null_fresh = builder.derive_fresh_account_nullifier(accin_comm, nk);
-	let derived_null = HashOutTarget {
-		elements: core::array::from_fn(|i| {
-			builder._if(
-				is_fresh_acc,
-				accin_null_fresh.0.elements[i],
-				accin_null_regular.0.elements[i],
-			)
-		}),
-	};
+	let derived_null = builder.derive_account_nullifier(accin_comm, nk);
 	let accin_null = AccountNullifierTarget(builder.add_virtual_hash());
 	for i in 0..4 {
-		let diff = builder.sub(accin_null.0.elements[i], derived_null.elements[i]);
+		let diff = builder.sub(accin_null.0.elements[i], derived_null.0.elements[i]);
 		let gated = builder.mul(not_fake_tx.target, diff);
 		builder.assert_zero(gated);
 	}
@@ -247,26 +237,6 @@ pub fn priv_tx_circuit<
 		})
 	});
 
-	// Free override targets for all four PI fields (AN, NN, AC, NC).
-	// When not_fake_tx=1, each is enforced equal to its derived counterpart.
-	// When not_fake_tx=0, the prover supplies fixed padding values directly.
-	let override_nn: [[Target; 4]; NOTE_BATCH] =
-		core::array::from_fn(|_| core::array::from_fn(|_| builder.add_virtual_target()));
-	let override_nc: [[Target; 4]; NOTE_BATCH] =
-		core::array::from_fn(|_| core::array::from_fn(|_| builder.add_virtual_target()));
-
-	for i in 0..NOTE_BATCH {
-		for j in 0..4 {
-			let diff_nn = builder.sub(override_nn[i][j], effective_inotes_null[i].0.elements[j]);
-			let gated_nn = builder.mul(not_fake_tx.target, diff_nn);
-			builder.assert_zero(gated_nn);
-
-			let diff_nc = builder.sub(override_nc[i][j], derived_onotes_comm[i].0.elements[j]);
-			let gated_nc = builder.mul(not_fake_tx.target, diff_nc);
-			builder.assert_zero(gated_nc);
-		}
-	}
-
 	let tx_hash = builder.derive_tx_hash(
 		effective_inotes_null,
 		derived_onotes_comm,
@@ -324,16 +294,16 @@ pub fn priv_tx_circuit<
 	builder.register_public_inputs(&accin_null.0.elements);
 	builder.register_public_inputs(&accout_comm.0.elements);
 	builder.register_public_inputs(
-		override_nn
+		effective_inotes_null
 			.iter()
-			.flat_map(|v| v.iter().copied())
+			.flat_map(|v| v.0.elements.iter().copied())
 			.collect_vec()
 			.as_slice(),
 	);
 	builder.register_public_inputs(
-		override_nc
+		donotes_comm
 			.iter()
-			.flat_map(|v| v.iter().copied())
+			.flat_map(|v| v.0.elements.iter().copied())
 			.collect_vec()
 			.as_slice(),
 	);
@@ -374,8 +344,6 @@ pub fn priv_tx_circuit<
 		inotes_nct_merkle: inotes_mrkltrgt,
 		accin_null,
 		accout_comm,
-		override_nn,
-		override_nc,
 	}
 }
 
@@ -479,7 +447,7 @@ fn prove_priv_tx(
 		donote_comms,
 	);
 	let k = Scalar::from_raw(array::from_fn(|_| 1u64));
-	let approval_sig = schnorr_sign(&approval_sk, &tx_hash, k);
+	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 	let mut pw = PartialWitness::new();
 	if not_fake_tx {
@@ -668,7 +636,6 @@ pub fn prove_real_priv_tx(
 				i.override_ac,
 				i.override_nc,
 			);
-			set_hash_blocks(&mut pw, &targets.override_nn, &i.override_nn);
 		},
 	}
 

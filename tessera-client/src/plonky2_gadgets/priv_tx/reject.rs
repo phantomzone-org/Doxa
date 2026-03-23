@@ -6,7 +6,7 @@ use tessera_utils::{F, hasher::HashOutput};
 use super::{
 	double_hash_native,
 	targets::TxCircuitTargets,
-	witness::{TxKindFlags, set_common_tx_witness, set_note_hash_overrides, set_tx_kind_flags},
+	witness::{TxKindFlags, set_common_tx_witness, set_tx_kind_flags},
 };
 use crate::{
 	AccountAddress, AssetId, COM_TREE_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier,
@@ -197,14 +197,6 @@ pub(crate) fn set_reject_tx_witness(
 	set_hash_blocks(pw, &t.dinotes.map(|note| note.0), &dinotes);
 	set_hash_blocks(pw, &t.donotes.map(|note| note.0), &donotes);
 
-	// ── NN/NC override targets — must match effective nullifiers/commitments in the circuit ─
-	set_note_hash_overrides(
-		pw,
-		t,
-		&tx_inote_nulls.map(|nullifier| nullifier.0.0),
-		&tx_onote_comms.map(|commitment| commitment.0.0),
-	);
-
 	// ── Subpool full proof ────────────────────────────────────────────────────
 	set_subpool_full_proof(
 		pw,
@@ -235,7 +227,7 @@ pub(crate) fn set_reject_tx_witness(
 		pw,
 		&t.sig_targets.consume,
 		*consume_key,
-		&tx_hash,
+		&tx_hash.0,
 		consume_sig,
 	);
 
@@ -244,7 +236,7 @@ pub(crate) fn set_reject_tx_witness(
 		pw,
 		&t.sig_targets.approval,
 		*approval_key,
-		&tx_hash,
+		&tx_hash.0,
 		approval_sig,
 	);
 }
@@ -431,8 +423,10 @@ mod tests {
 		);
 
 		// ── Signatures ────────────────────────────────────────────────────────
-		let consume_sig = schnorr_sign(&consume_sk, &tx_hash, Scalar::from_raw([7, 8, 9, 10, 11]));
-		let approval_sig = schnorr_sign(&approval_sk, &tx_hash, Scalar::from_raw([1, 2, 3, 4, 5]));
+		let consume_sig =
+			schnorr_sign(&consume_sk, &tx_hash.0, Scalar::from_raw([7, 8, 9, 10, 11]));
+		let approval_sig =
+			schnorr_sign(&approval_sk, &tx_hash.0, Scalar::from_raw([1, 2, 3, 4, 5]));
 
 		// ── Build circuit ──────────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
