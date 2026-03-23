@@ -1,6 +1,6 @@
 use plonky2::{
 	hash::{
-		hash_types::{HashOutTarget, RichField},
+		hash_types::{HashOut, HashOutTarget, RichField},
 		poseidon::PoseidonHash,
 	},
 	iop::target::{BoolTarget, Target},
@@ -25,19 +25,28 @@ use crate::{
 			conditional_merkle_verify_gadget,
 		},
 		priv_tx::targets::{
-			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, ActRootTarget,
-			AssetIdTarget, ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment,
-			DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget, MainPoolConfigRootTarget,
-			NctRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-			NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt, RejectCondTarget,
-			SubpoolConfigRootTarget, SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget,
-			TxSignatureTargets,
+			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
+			ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment, DummyAccountNullifier,
+			DummyAccountTarget, DummyNoteTarget, MainPoolConfigRootTarget, NoteCommitmentTarget,
+			NoteNullifierTarget, NoteTarget, NullifierKeyTarget, PrivateIdentifierTarget,
+			PublicIdentifierTaregt, RejectCondTarget, RootTarget, SubpoolConfigRootTarget,
+			SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
 		},
 		signature::{LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget},
 		u256::{CircuitBuilderU256, U256Target},
 	},
 };
 
+/// Extension trait on [`CircuitBuilder`] with all Tessera-specific gadgets.
+///
+/// Implemented for [`CircuitBuilder<F, D>`] so that circuit construction can be
+/// expressed with domain-appropriate method calls rather than raw gate wiring.
+///
+/// The trait is split into logical groups:
+/// - **Allocation** — `add_virtual_*` methods mirror native structs.
+/// - **Derivation** — `derive_*` methods build Poseidon hash chains in-circuit.
+/// - **Assertion** — `assert_*` methods add constraint groups (equality, Merkle, signature) and
+///   return the targets needed for witness-filling.
 pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	// ---- Add virtual methods ----
 
@@ -45,48 +54,72 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	/// that appear in every transaction circuit.
 	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget);
 
+	/// Allocate a single dummy note target (an opaque 4-element hash).
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
+	/// Allocate a single dummy account target (an opaque 4-element hash).
 	fn add_virtual_dummy_account_target(&mut self) -> DummyAccountTarget;
+	/// Allocate all targets for a full account, registering `subpool_id` as a PI.
 	fn add_virtual_account_target(&mut self) -> AccountTarget;
+	/// Allocate a note spend-condition target (recipient address).
 	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget;
+	/// Allocate a note reject-condition target (sender address).
 	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget;
+	/// Allocate all targets for a full note.
 	fn add_virtual_note_target(&mut self) -> NoteTarget;
 
 	// ---- Account related methods ----
 
+	/// Derive `H(private_id || subpool_id || ast_root || nonce || spend_pk || consume_auth)`.
 	fn derive_account_commitment(&mut self, acc: AccountTarget) -> AccountCommitmentTarget;
 
+	/// Derive `H(commitment || nk)` — the account's spend-once nullifier.
 	fn derive_account_nullifier(
 		&mut self,
 		acc: AccountCommitmentTarget,
 		nk: NullifierKeyTarget,
 	) -> AccountNullifierTarget;
 
+	/// Derive a dummy account commitment via double-Poseidon-hash of the raw target.
 	fn derive_dummy_account_commitment(
 		&mut self,
 		dacc: DummyAccountTarget,
 	) -> DummyAccountCommitment;
 
+	/// Derive a dummy account nullifier via double-Poseidon-hash of the raw target.
 	fn derive_dummy_account_nullifier(&mut self, dacc: DummyAccountTarget)
 	-> DummyAccountNullifier;
 
+	/// Add a conditional ACT membership check gated on `condition`.
+	///
+	/// When `condition=0` all path elements are accepted as-is; the root
+	/// constraint is bypassed, so dummy proofs can supply zero-filled paths.
 	fn conditionally_assert_account_commitment_exists_in_act<
 		H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
-		act_root: ActRootTarget,
+		root: RootTarget,
 		condition: BoolTarget,
-		ctx: &H::CircuitContext,
 	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH>;
 
+	fn conditionally_assert_hash_equal(
+		&mut self,
+		condition: BoolTarget,
+		h0: HashOutTarget,
+		h1: HashOutTarget,
+	);
+
+	/// Derive `nk = H(DS_NULLIFIER_KEY || private_identifier)` in-circuit.
 	fn derive_nullifier_key(&mut self, priv_id: PrivateIdentifierTarget) -> NullifierKeyTarget;
 
+	/// Derive `public_id = H(DS_PUBLIC_IDENTIFIER || private_identifier)` in-circuit.
 	fn derive_public_identifier(
 		&mut self,
 		priv_id: PrivateIdentifierTarget,
 	) -> PublicIdentifierTaregt;
 
+	/// When `condition=1`, assert that `acc` is in a fresh (pre-activation) state:
+	/// `nonce=0`, default spend/consume keys, and empty AST root.
 	fn assert_fresh_account(&mut self, acc: AccountTarget, condition: BoolTarget);
 
 	/// Unconditionally enforce the invariants that hold for **every** tx kind:
@@ -97,6 +130,12 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	/// without any conditional gating.
 	fn assert_account_invariants_simple(&mut self, accin: AccountTarget, accout: AccountTarget);
 
+	/// Enforce per-tx-kind account transition invariants for the private transaction circuit.
+	///
+	/// - `private_identifier` and `subpool_id` are always immutable.
+	/// - `nonce` always increments by 1.
+	/// - `acc_ast_root` is frozen for non-spend tx kinds.
+	/// - `spend_auth` and `consume_auth` are frozen for spend tx.
 	fn assert_account_invariants(
 		&mut self,
 		accin: AccountTarget,
@@ -107,6 +146,10 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		is_priv_tx: BoolTarget,
 	);
 
+	/// Prove that `(asset_id, amt)` is a leaf in the AST with root `acc_ast_root`.
+	///
+	/// When `selector=0`, the leaf is treated as the default (empty) leaf and
+	/// `amt` is constrained to zero — this handles assets not yet in the tree.
 	fn assert_asset_amt_or_default_in_ast(
 		&mut self,
 		asset_id: AssetIdTarget,
@@ -115,6 +158,11 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		selector: BoolTarget,
 	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH>;
 
+	/// Verify that accin's and accout's ASTs both contain the same asset leaf at
+	/// the **same position** (same siblings and path bits).
+	///
+	/// This prevents a prover from swapping the leaf position between accin and
+	/// accout, which would allow balance fabrication.
 	#[allow(clippy::too_many_arguments)]
 	fn assert_ast_update(
 		&mut self,
@@ -129,8 +177,12 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 
 	// ---- Note related methods ----
 
+	/// Derive the note commitment in-circuit.
+	///
+	/// Matches [`StandardNote::commitment`](crate::note::StandardNote::commitment) natively.
 	fn derive_note_commitment(&mut self, note: NoteTarget) -> NoteCommitmentTarget;
 
+	/// Derive the note nullifier: `H(note_commitment || pos || nk)`.
 	fn derive_note_nullifier(
 		&mut self,
 		nc: NoteCommitmentTarget,
@@ -138,10 +190,14 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		nk: NullifierKeyTarget,
 	) -> NoteNullifierTarget;
 
+	/// Derive a dummy note nullifier via double-hash of the raw dummy target.
 	fn derive_dummy_note_nullifier(&mut self, dnote: DummyNoteTarget) -> NoteNullifierTarget;
 
+	/// Derive a dummy note commitment via double-hash of the raw dummy target.
 	fn derive_dummy_note_commitment(&mut self, dnote: DummyNoteTarget) -> NoteCommitmentTarget;
 
+	/// For each active input note, verify NCT membership and that the note's
+	/// spend condition matches the spender's `(subpool_id, public_identifier)`.
 	#[allow(clippy::too_many_arguments)]
 	fn assert_inotes_valid<H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>>(
 		&mut self,
@@ -150,12 +206,13 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
-		nct_root: NctRootTarget,
-		ctx: &H::CircuitContext,
+		root: RootTarget,
 	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
 
+	/// Verify all three authority key proofs (depth-2) and the main-pool inclusion proof
+	/// (depth-20).  All checks are gated on `not_fake_tx`.
 	fn assert_subpool_full_proof(
 		&mut self,
 		subpool_id: SubpoolIdTarget,
@@ -166,6 +223,11 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		not_fake_tx: BoolTarget,
 	) -> SubpoolFullProofTargets;
 
+	/// Derive the private transaction hash:
+	/// `H(accin_null[4] || accout_comm[4] || NN[NOTE_BATCH×4] || NC[NOTE_BATCH×4])`.
+	///
+	/// Active-slot nullifiers / commitments must already be selected before calling
+	/// (i.e. replace inactive slots with dummy values).
 	fn derive_tx_hash(
 		&mut self,
 		effective_inotes_null: [NoteNullifierTarget; NOTE_BATCH],
@@ -174,6 +236,9 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accout_comm: AccountCommitmentTarget,
 	) -> TxHashTarget;
 
+	/// When `is_rjct=1`, enforce that each active output note is a mirror of the
+	/// corresponding input note with the spend/reject conditions swapped (i.e. the
+	/// note is returned to the sender).
 	fn assert_is_reject(
 		&mut self,
 		is_rjct: BoolTarget,
@@ -183,6 +248,10 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 	);
 
+	/// Enforce the asset conservation law:
+	/// `accin_amt + Σ(active inote amounts) == accout_amt + Σ(active onote amounts)`.
+	///
+	/// Inactive slots contribute zero to both sides.
 	fn assert_balance_invariant(
 		&mut self,
 		accin_amt: U256Target,
@@ -193,6 +262,14 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 	);
 
+	/// Verify the three Schnorr signatures required for a private transaction.
+	///
+	/// - **Spend** — required when any output note is active and tx is not a reject. Signed by
+	///   `accin.spend_auth`.
+	/// - **Consume** — required when any input note is active and no output note is active (pure
+	///   consume).  Key selected by `accin.consume_auth.config`.
+	/// - **Approval** — always required (gated by `not_fake_tx`).  Signed by the subpool approval
+	///   key.
 	#[allow(clippy::too_many_arguments)]
 	fn assert_tx_signatures(
 		&mut self,
@@ -207,13 +284,16 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	) -> TxSignatureTargets;
 }
 
+/// Apply Poseidon twice: `H(H(input))`.
+///
+/// Used for dummy note and account commitments / nullifiers so they are
+/// deterministic, collision-resistant values that cannot be predicted from the
+/// raw dummy seed.
 fn double_hash<F: RichField + Extendable<D>, const D: usize>(
 	builder: &mut CircuitBuilder<F, D>,
-	input: [Target; HASH_SIZE],
+	input: HashOutTarget,
 ) -> HashOutTarget {
-	let input = input.to_vec();
-	let out0 = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input);
-
+	let out0 = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input.elements.to_vec());
 	builder.hash_n_to_hash_no_pad::<PoseidonHash>(out0.elements.to_vec())
 }
 
@@ -229,11 +309,11 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 	}
 
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
-		DummyNoteTarget(self.add_virtual_target_arr())
+		DummyNoteTarget(self.add_virtual_hash())
 	}
 
 	fn add_virtual_dummy_account_target(&mut self) -> DummyAccountTarget {
-		DummyAccountTarget(self.add_virtual_target_arr())
+		DummyAccountTarget(self.add_virtual_hash())
 	}
 
 	fn add_virtual_account_target(&mut self) -> AccountTarget {
@@ -280,8 +360,9 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 	}
 
 	fn derive_account_commitment(&mut self, acc: AccountTarget) -> AccountCommitmentTarget {
-		// flat hash: public_identifier[2] || subpool_id[1] || acc_ast_root[4] || nonce[1]
-		//          || spend_auth[5] || consume_auth.config[1] || consume_auth.pk[5]
+		// Hash input (19 targets), mirroring StandardAccount::commitment():
+		// private_identifier[2] || subpool_id[1] || acc_ast_root[4] || nonce[1]
+		// || spend_auth[5] || consume_auth.config[1] || consume_auth.pk[5]
 		let mut input = Vec::with_capacity(19);
 		input.extend_from_slice(&acc.private_identifier.0);
 		input.push(acc.subpool_id.0);
@@ -298,13 +379,23 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
-		act_root: ActRootTarget,
+		root: RootTarget,
 		condition: BoolTarget,
-		ctx: &H::CircuitContext,
 	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH> {
 		conditional_merkle_verify_commitment_tree_gadget::<H, F, D, COM_TREE_DEPTH>(
-			self, acc_comm.0, act_root.0, condition, ctx,
+			self, acc_comm.0, root.0, condition,
 		)
+	}
+
+	fn conditionally_assert_hash_equal(
+		&mut self,
+		condition: BoolTarget,
+		h0: HashOutTarget,
+		h1: HashOutTarget,
+	) {
+		for i in 0..HASH_SIZE {
+			self.conditional_assert_eq(condition.target, h0.elements[i], h1.elements[i]);
+		}
 	}
 
 	fn derive_account_nullifier(
@@ -452,15 +543,16 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		mainpool_config_root: MainPoolConfigRootTarget,
 		not_fake_tx: BoolTarget,
 	) -> SubpoolFullProofTargets {
-		// Subpool config root — shared across the 3 key proofs
+		// Step A: Allocate the shared subpool config root target.
+		// All three per-key proofs verify against this same root.
 		let subpool_config_root = self.add_virtual_hash();
 
-		// Helper: verify one depth-2 key proof and connect leaf + root
+		// Step B: Verify each authority key is a leaf in the depth-2 subpool config tree.
+		// Leaf = H(key_as_5_targets).  The root is the shared subpool_config_root.
 		let mut verify_key_proof =
 			|key: PubkeyTarget| -> ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH> {
 				let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
 				// TODO: change this from conditional to compute
-
 				conditional_merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(
 					self,
 					leaf_hash,
@@ -473,7 +565,8 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		let rejection_proof = verify_key_proof(rejection_key);
 		let consume_proof = verify_key_proof(consume_key);
 
-		// Main pool proof: leaf = H(subpool_config_root[4] || subpool_id)
+		// Step C: Verify the subpool config root is a leaf in the depth-20 main pool tree.
+		// Main pool leaf = H(subpool_config_root[4] || subpool_id[1]).
 		// TODO: add a DS in the derivation of the leaf?
 		let main_pool_leaf_hash = {
 			let mut inputs = subpool_config_root.elements.to_vec();
@@ -542,17 +635,15 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
-		nct_root: NctRootTarget,
-		ctx: &H::CircuitContext,
+		root: RootTarget,
 	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] {
 		let merkle_proofs: [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] =
 			core::array::from_fn(|i| {
 				conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
 					self,
 					inotes_comm[i].0,
-					nct_root.0,
+					root.0,
 					inote_isactive[i],
-					ctx,
 				)
 			});
 
@@ -681,7 +772,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 				inotes[i].reject_cond.subpool_id.0,
 				onotes[i].spend_cond.subpool_id.0,
 			);
-			for j in 0..4 {
+			for j in 0..HASH_SIZE {
 				self.conditional_assert_eq(
 					is_rjct.target,
 					inotes[i].reject_cond.public_identifier.0.elements[j],
@@ -695,7 +786,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 				inotes[i].reject_cond.subpool_id.0,
 				onotes[i].reject_cond.subpool_id.0,
 			);
-			for j in 0..4 {
+			for j in 0..HASH_SIZE {
 				self.conditional_assert_eq(
 					is_rjct.target,
 					inotes[i].reject_cond.public_identifier.0.elements[j],
@@ -773,26 +864,26 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		not_is_rjct: BoolTarget,
 		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets {
-		// spend sig: required when any onote is active
+		// ── Spend signature ───────────────────────────────────────────────────
+		// Required when ≥1 output note is active (a spend is happening) AND the
+		// tx is not a reject.  Signed by accin.spend_auth.
 		let mut is_spend_req = onotes_isactive[0];
 		for sel in onotes_isactive.iter().skip(1) {
 			is_spend_req = self.or(*sel, is_spend_req);
 		}
-		// if tx_kind is reject then spend sig is not required: is_spend && !is_reject
+		// Reject does not need a spend signature even though onotes are active.
 		is_spend_req = self.and(is_spend_req, not_is_rjct);
 
-		// we enforce the spend auth public key to match the one set in account. This implies for
-		// fake signatures, always set Q to the account's public key. Otherwise, the proof will
-		// fail.
-		//
-		// For fresh accounts the default public key is DEFAULT_SPEND_AUTH_PK
-		//
-		// The same logic applies for consume signature and approval signature. That is, signature
-		// can be fake but Q must match the valid public key set in place.
+		// Note: the public key used in verification must match the key stored in accin —
+		// even for "fake" signatures the key must be correct or the proof will fail.
+		// For pre-FreshAcc accounts the default placeholder key is used.
 		let spend =
 			conditional_schnorr_verify_gadget(self, tx_hash.0, accin.spend_auth, is_spend_req);
 
-		// consume sig: required when any inote is active AND no onote is active
+		// ── Consume signature ─────────────────────────────────────────────────
+		// Required when ≥1 input note is active AND no output note is active
+		// (pure consume, no outgoing transfer).
+		// Key: accin.consume_auth.config selects own key (1) or subpool key (0).
 		let mut has_inotes = inotes_isactive[0];
 		for sel in inotes_isactive.iter().skip(1) {
 			has_inotes = self.or(*sel, has_inotes);
@@ -809,7 +900,8 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 		let consume =
 			conditional_schnorr_verify_gadget(self, tx_hash.0, consume_key, is_consume_req);
 
-		// approval sig: always required
+		// ── Approval signature ────────────────────────────────────────────────
+		// Always required for real transactions; bypassed for dummy proofs.
 		let approval =
 			conditional_schnorr_verify_gadget(self, tx_hash.0, approval_key, not_fake_tx);
 

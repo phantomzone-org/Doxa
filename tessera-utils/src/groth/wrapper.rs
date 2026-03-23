@@ -275,6 +275,150 @@ impl Groth16Wrapper {
 		}
 	}
 
+	// -----------------------------------------------------------------------
+	// Labeled API — supports multiple independent Groth16 instances
+	// -----------------------------------------------------------------------
+
+	/// Compute Groth16 trusted setup for a named instance.
+	pub fn trusted_setup_with_label(label: &str, input_path: &Path, output_path: &Path) -> String {
+		Self::info_log(&format!("[{label}] groth16 trusted_setup (ffi) starting"));
+		let label_c = CString::new(label).expect("label contains no null bytes");
+		let input_c = CString::new(input_path.to_str().expect("valid UTF-8")).unwrap();
+		let output_c = CString::new(output_path.to_str().expect("valid UTF-8")).unwrap();
+		unsafe {
+			let cstr = CStr::from_ptr(TrustedSetupWithLabel(
+				label_c.as_ptr() as *mut c_char,
+				input_c.as_ptr() as *mut c_char,
+				output_c.as_ptr() as *mut c_char,
+			));
+			let s = String::from_utf8_lossy(cstr.to_bytes()).to_string();
+			GoFree(cstr.as_ptr() as *mut c_uchar);
+			Self::info_log(&format!("[{label}] groth16 trusted_setup (ffi) completed"));
+			s
+		}
+	}
+
+	/// Load a named Groth16 instance from pre-computed artifacts.
+	pub fn init_with_label(label: &str, input_path: &Path, output_path: &Path) -> Result<String> {
+		Self::info_log(&format!("[{label}] groth16 init (ffi) starting"));
+		let pk_path = output_path.join(PROVING_KEY_PATH);
+		let vk_path = output_path.join(VERIFYING_KEY_PATH);
+		let r1cs_path = output_path.join(R1CS_PATH);
+		if !pk_path.exists() || !vk_path.exists() || !r1cs_path.exists() {
+			return Err(anyhow!(
+				"[{label}] not found: pk, vk, r1cs. Paths:\n  pk: {pk_path:?}\n  vk: {vk_path:?}\n  r1cs: {r1cs_path:?}"
+			));
+		}
+		let label_c = CString::new(label).expect("label contains no null bytes");
+		let input_c = CString::new(input_path.to_str().expect("valid UTF-8")).unwrap();
+		let output_c = CString::new(output_path.to_str().expect("valid UTF-8")).unwrap();
+		unsafe {
+			let cstr = CStr::from_ptr(InitWithLabel(
+				label_c.as_ptr() as *mut c_char,
+				input_c.as_ptr() as *mut c_char,
+				output_c.as_ptr() as *mut c_char,
+			));
+			let s = String::from_utf8_lossy(cstr.to_bytes()).to_string();
+			GoFree(cstr.as_ptr() as *mut c_uchar);
+			Self::info_log(&format!("[{label}] groth16 init (ffi) completed"));
+			if s.starts_with("error:") {
+				return Err(anyhow!(s));
+			}
+			Ok(s)
+		}
+	}
+
+	/// Check that a named Groth16 instance is loaded.
+	pub fn check_init_with_label(label: &str) -> String {
+		let label_c = CString::new(label).expect("label contains no null bytes");
+		unsafe {
+			let cstr = CStr::from_ptr(CheckInitWithLabel(label_c.as_ptr() as *mut c_char));
+			let s = String::from_utf8_lossy(cstr.to_bytes()).to_string();
+			GoFree(cstr.as_ptr() as *mut c_uchar);
+			s
+		}
+	}
+
+	/// Prove using a named Groth16 instance.
+	pub fn prove_with_label(label: &str, proof_with_pis: ProofBN128) -> Result<(Vec<u8>, Vec<u8>)> {
+		Self::info_log(&format!("[{label}] groth16 prove (ffi) starting"));
+		let label_c = CString::new(label).expect("label contains no null bytes");
+		let json: String = serde_json::to_string_pretty(&proof_with_pis)?;
+		let input: Vec<u8> = json.into_bytes();
+		let input_len = c_int::try_from(input.len()).map_err(|_| {
+			anyhow!(
+				"proof JSON too large for FFI ({}B > c_int::MAX)",
+				input.len()
+			)
+		})?;
+		let mut proof_out_len: c_int = 0;
+		let mut wit_out_len: c_int = 0;
+		let res = unsafe {
+			Groth16ProofWithLabel(
+				label_c.as_ptr() as *mut c_char,
+				input.as_ptr() as *mut u8,
+				input_len,
+				&mut proof_out_len as *mut c_int,
+				&mut wit_out_len as *mut c_int,
+			)
+		};
+		let (proof_out_ptr, wit_out_ptr) = (res.r0, res.r1);
+
+		let proof_bytes: Vec<u8> = if proof_out_len > 0 && !proof_out_ptr.is_null() {
+			let slice =
+				unsafe { std::slice::from_raw_parts(proof_out_ptr, proof_out_len as usize) };
+			let vec = slice.to_vec();
+			unsafe { GoFree(proof_out_ptr) };
+			vec
+		} else {
+			let go_err = unsafe { Self::go_last_error() };
+			return Err(anyhow!("[{label}] groth16_prove failed: {go_err}"));
+		};
+		let pub_inp_bytes: Vec<u8> = if wit_out_len > 0 && !wit_out_ptr.is_null() {
+			let slice = unsafe { std::slice::from_raw_parts(wit_out_ptr, wit_out_len as usize) };
+			let vec = slice.to_vec();
+			unsafe { GoFree(wit_out_ptr) };
+			vec
+		} else {
+			let go_err = unsafe { Self::go_last_error() };
+			return Err(anyhow!("[{label}] groth16_prove failed: {go_err}"));
+		};
+		Self::info_log(&format!("[{label}] groth16 prove (ffi) completed"));
+		Ok((proof_bytes, pub_inp_bytes))
+	}
+
+	/// Verify using a named Groth16 instance.
+	pub fn verify_with_label(label: &str, proof: Vec<u8>, public_inputs: Vec<u8>) -> Result<()> {
+		Self::info_log(&format!("[{label}] groth16 verify (ffi) starting"));
+		let label_c = CString::new(label).expect("label contains no null bytes");
+		let proof_len = c_int::try_from(proof.len())
+			.map_err(|_| anyhow!("proof too large for FFI ({}B > c_int::MAX)", proof.len()))?;
+		let pub_inp_len = c_int::try_from(public_inputs.len()).map_err(|_| {
+			anyhow!(
+				"public inputs too large for FFI ({}B > c_int::MAX)",
+				public_inputs.len()
+			)
+		})?;
+		let res_string = unsafe {
+			let ptr = Groth16VerifyWithLabel(
+				label_c.as_ptr() as *mut c_char,
+				proof.as_ptr() as *mut u8,
+				proof_len,
+				public_inputs.as_ptr() as *mut u8,
+				pub_inp_len,
+			);
+			let cstr = CStr::from_ptr(ptr);
+			let s = String::from_utf8_lossy(cstr.to_bytes()).to_string();
+			GoFree(cstr.as_ptr() as *mut c_uchar);
+			s
+		};
+		if res_string != "ok" {
+			return Err(anyhow!(res_string));
+		}
+		Self::info_log(&format!("[{label}] groth16 verify (ffi) ok"));
+		Ok(())
+	}
+
 	/// gets as input the public inputs vector (output from
 	/// `prepare_public_inputs`), and encodes it as a byte-array compatible with
 	/// Gnark encoding

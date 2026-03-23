@@ -1,5 +1,6 @@
 use std::{
 	collections::{BTreeMap, BTreeSet},
+	sync::Arc,
 	time::Duration,
 };
 
@@ -16,7 +17,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
 	config::SequencerConfig,
 	contract::{self, ITesseraRollupV2},
-	prover_client::HttpProverClient,
+	prover_client::{HttpProverClient, ProverClient},
 	types::{ConsumeOutcome, ProveOutcomeV2},
 };
 
@@ -89,7 +90,7 @@ pub struct Sequencer {
 	pending_batches: BTreeMap<u64, TxBatchV2>,
 	/// Monotonically increasing local batch counter.
 	next_batch_id: u64,
-	prover_client: Option<HttpProverClient>,
+	prover_client: Option<Arc<dyn ProverClient>>,
 	result_tx: Option<mpsc::Sender<ProveOutcomeV2>>,
 	result_rx: Option<mpsc::Receiver<ProveOutcomeV2>>,
 	notes_commitment_rx: mpsc::Receiver<NotesCommitmentRequest>,
@@ -192,6 +193,19 @@ impl Sequencer {
 		(sequencer, handle)
 	}
 
+	/// Create a sequencer pre-wired with an in-process prover (e.g., for E2E tests).
+	///
+	/// [`Sequencer::run`] will use the supplied `prover` instead of creating an
+	/// [`HttpProverClient`] from the config.
+	pub fn new_with_prover(
+		config: SequencerConfig,
+		prover: Arc<dyn ProverClient>,
+	) -> (Self, SequencerHandle) {
+		let (mut sequencer, handle) = Self::new(config);
+		sequencer.prover_client = Some(prover);
+		(sequencer, handle)
+	}
+
 	/// Emit a debug log showing batch builder state.
 	pub(super) fn log_pool_status(&self, reason: &str) {
 		let batch_slots = self.batch_builder.as_ref().map_or(0, |b| b.len());
@@ -208,7 +222,7 @@ impl Sequencer {
 		if self.consume_batch_builder.is_none() {
 			let dummy_root = contract::hash_to_bytes32(&self.confirmed_root).0;
 			self.consume_batch_builder = Some(batch::ConsumeBatchBuilder::new(
-				self.config.account_batch_size * batch::NOTES_PER_SLOT,
+				tessera_client::PRIV_TX_BATCH_SIZE * batch::NOTES_PER_SLOT,
 				dummy_root,
 			));
 			self.consume_batch_pending_since = Some(std::time::Instant::now());
@@ -242,10 +256,7 @@ impl Sequencer {
 	fn ensure_batch_builder(&mut self) -> &mut batch::BatchBuilder {
 		if self.batch_builder.is_none() {
 			let dummy_root = contract::hash_to_bytes32(&self.confirmed_root).0;
-			self.batch_builder = Some(batch::BatchBuilder::new_v2(
-				self.config.account_batch_size,
-				dummy_root,
-			));
+			self.batch_builder = Some(batch::BatchBuilder::new_v2(dummy_root));
 			self.batch_pending_since = Some(std::time::Instant::now());
 		}
 		self.batch_builder.as_mut().unwrap()
@@ -327,12 +338,14 @@ impl Sequencer {
 		self.consume_result_rx = Some(consume_result_rx);
 
 		let (result_tx, result_rx) = mpsc::channel::<ProveOutcomeV2>(4);
-		let prover_client = HttpProverClient::new(
-			self.config.prover_api_url.clone(),
-			Duration::from_secs(self.config.prover_api_timeout_secs),
-		)?;
-		info!(url = %self.config.prover_api_url, "remote prover client configured");
-		self.prover_client = Some(prover_client);
+		if self.prover_client.is_none() {
+			let http_client = HttpProverClient::new(
+				self.config.prover_api_url.clone(),
+				Duration::from_secs(self.config.prover_api_timeout_secs),
+			)?;
+			info!(url = %self.config.prover_api_url, "remote prover client configured");
+			self.prover_client = Some(Arc::new(http_client));
+		}
 		self.result_tx = Some(result_tx);
 		self.result_rx = Some(result_rx);
 
@@ -347,6 +360,10 @@ impl Sequencer {
 				_ = interval.tick() => {
 					if let Err(e) = self.try_flush_batch_if_ready(&provider, batch_timeout).await {
 						error!("failed to flush batch: {e}");
+						break;
+					}
+					if let Err(e) = self.try_flush_consume_batch_if_ready(&provider, batch_timeout).await {
+						error!("failed to flush consume batch: {e}");
 						break;
 					}
 				}
@@ -429,9 +446,16 @@ impl Sequencer {
 
 					let nc: [[u8; 32]; 8] = {
 						let mut arr = [[0u8; 32]; 8];
-						for (i, note) in tx_req.output_notes.iter().enumerate().take(8) {
+						// NC[0..NOTE_BATCH] = output notes; NC[NOTE_BATCH] = AC (8th SR leaf).
+						for (i, note) in tx_req
+							.output_notes
+							.iter()
+							.enumerate()
+							.take(tessera_client::NOTE_BATCH)
+						{
 							arr[i] = *note;
 						}
+						arr[tessera_client::NOTE_BATCH] = tx_req.output_account_leaf;
 						arr
 					};
 					let nn: [[u8; 32]; 8] = {

@@ -59,8 +59,7 @@ contract TesseraRollupV2 {
 
     /// @notice On-chain record for a pending private-transaction batch.
     struct TransactionBatch {
-        uint256   acRoot;              // account commitment root — must be in confirmedRoots
-        uint256   ncRoot;              // note commitment root   — must be in confirmedRoots
+        uint256   root;                // single IMT root — must be in confirmedRoots
         bytes32   mainPoolConfigRoot;
         uint256[] noteCommitments;     // output note commitments (row-major, all slots)
         uint256[] noteNullifiers;      // consumed note nullifiers
@@ -72,8 +71,7 @@ contract TesseraRollupV2 {
 
     /// @notice On-chain record for a pending deposit batch.
     struct DepositBatch {
-        uint256   acRoot;
-        uint256   ncRoot;
+        uint256   root;                // single IMT root — must be in confirmedRoots
         bytes32   mainPoolConfigRoot;
         bytes32[] depositNoteCommitments; // note commitments consumed from pending deposits
         uint256   batchPoseidonRoot;
@@ -221,13 +219,21 @@ contract TesseraRollupV2 {
     // -------------------------------------------------------------------------
 
     modifier onlyOperator() {
-        if (msg.sender != operator) revert NotOperator();
+        _onlyOperator();
         _;
     }
 
     modifier whenNotPaused() {
-        if (paused) revert PausedErr();
+        _whenNotPaused();
         _;
+    }
+
+    function _onlyOperator() internal view {
+        if (msg.sender != operator) revert NotOperator();
+    }
+
+    function _whenNotPaused() internal view {
+        if (paused) revert PausedErr();
     }
 
     // -------------------------------------------------------------------------
@@ -328,8 +334,7 @@ contract TesseraRollupV2 {
         onlyOperator
         whenNotPaused
     {
-        if (!confirmedRoots[batch.acRoot]) revert RootNotConfirmed(batch.acRoot);
-        if (!confirmedRoots[batch.ncRoot]) revert RootNotConfirmed(batch.ncRoot);
+        if (!confirmedRoots[batch.root]) revert RootNotConfirmed(batch.root);
         if (batch.mainPoolConfigRoot != poolConfigRoot) revert PoolConfigMismatch();
 
         bytes32 piCommitment = _computeTxPiCommitment(batch);
@@ -395,8 +400,7 @@ contract TesseraRollupV2 {
         onlyOperator
         whenNotPaused
     {
-        if (!confirmedRoots[batch.acRoot]) revert RootNotConfirmed(batch.acRoot);
-        if (!confirmedRoots[batch.ncRoot]) revert RootNotConfirmed(batch.ncRoot);
+        if (!confirmedRoots[batch.root]) revert RootNotConfirmed(batch.root);
         if (batch.mainPoolConfigRoot != poolConfigRoot) revert PoolConfigMismatch();
 
         // Validate each deposit note exists and is Pending.
@@ -486,17 +490,18 @@ contract TesseraRollupV2 {
     /// @dev Computes the Keccak-256 commitment over all transaction batch public inputs.
     ///      Field order must match the Rust sequencer and SuperAggregatorV2 circuit exactly.
     ///      Preimage (packed, no length prefixes):
-    ///        acRoot | ncRoot | mainPoolConfigRoot | batchPoseidonRoot |
+    ///        root | root | mainPoolConfigRoot | batchPoseidonRoot |
     ///        accountCommitment | accountNullifier |
     ///        noteCommitments[0..N] | noteNullifiers[0..N]
+    ///      root appears twice to match the circuit's acRoot/ncRoot positions.
     function _computeTxPiCommitment(TransactionBatch calldata batch)
         internal
         pure
         returns (bytes32)
     {
         return keccak256(abi.encodePacked(
-            batch.acRoot,
-            batch.ncRoot,
+            batch.root,
+            batch.root,
             batch.mainPoolConfigRoot,
             batch.batchPoseidonRoot,
             batch.accountCommitment,
@@ -506,21 +511,22 @@ contract TesseraRollupV2 {
         ));
     }
 
-    /// @dev Computes the Keccak-256 commitment over all deposit batch public inputs.
+    /// @dev Computes the Keccak-256 commitment over deposit batch public inputs.
     ///      Preimage (packed):
-    ///        acRoot | ncRoot | mainPoolConfigRoot | batchPoseidonRoot |
-    ///        depositNoteCommitments[0..N]
+    ///        root | root | mainPoolConfigRoot | batchPoseidonRoot
+    ///      root appears twice to match the circuit's acRoot/ncRoot positions.
+    ///      depositNoteCommitments are NOT included — batchPoseidonRoot already
+    ///      commits to all NC leaves via the Goldilocks Poseidon Merkle tree.
     function _computeDepositPiCommitment(DepositBatch calldata batch)
         internal
         pure
         returns (bytes32)
     {
         return keccak256(abi.encodePacked(
-            batch.acRoot,
-            batch.ncRoot,
+            batch.root,
+            batch.root,
             batch.mainPoolConfigRoot,
-            batch.batchPoseidonRoot,
-            batch.depositNoteCommitments
+            batch.batchPoseidonRoot
         ));
     }
 

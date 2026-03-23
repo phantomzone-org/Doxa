@@ -70,7 +70,6 @@ All endpoints return `{"accepted":true}` on success or `{"accepted":false,"error
 | `RPC` | `http://localhost:8545` | Anvil RPC URL |
 | `OPERATOR_KEY` | Anvil key #0 | Private key for deployer / sequencer |
 | `TESSERA_CHAIN_ID` | `31337` | EVM chain ID |
-| `TESSERA_ACCOUNT_BATCH_SIZE` | `2` | Account slots per TX batch |
 | `TESSERA_TREE_DEPTH` | `20` | Depth of on-chain Poseidon tree |
 | `TESSERA_POOL_CONFIG_ROOT` | `0x000...0` | Initial pool config root (zero for tests) |
 | `TESSERA_TESTING` | `1` | Enable test HTTP endpoints |

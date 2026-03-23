@@ -1,4 +1,4 @@
-//! Artifact path constants and manifest type for [`super::generic::GenericAggregator`].
+//! Shared artifact helpers and circuit utilities for proof aggregation.
 
 /// Current manifest format version.  Increment when the on-disk layout changes.
 pub(super) const MANIFEST_VERSION: u32 = 1;

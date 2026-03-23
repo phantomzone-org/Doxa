@@ -1,17 +1,21 @@
 //! Generate consume-circuit artifacts for `/consume-request` proof validation.
 //!
 //! Produces a trivial 4-PI Plonky2 circuit (one `bytes32` note commitment
-//! encoded as 4 Goldilocks u64 fields) and saves three files to
-//! `tessera-server/artifacts/consume/`:
+//! encoded as 4 Goldilocks u64 fields) and saves three files under
+//! `<TESSERA_ARTIFACTS_DIR>/consume/` (or `<workspace>/artifacts/consume/`):
 //!
-//! | File               | Content                     | Used by           |
-//! |--------------------|-----------------------------|-------------------|
-//! | `leaf_common.bin`  | `CommonCircuitData`         | sequencer verifier |
-//! | `leaf_verifier.bin`| `VerifierOnlyCircuitData`   | sequencer verifier |
-//! | `leaf_prover.bin`  | full `CircuitData`          | client prover      |
+//! | File               | Content                     | Used by            |
+//! |--------------------|-----------------------------|---------------------|
+//! | `leaf_common.bin`  | `CommonCircuitData`         | sequencer verifier  |
+//! | `leaf_verifier.bin`| `VerifierOnlyCircuitData`   | sequencer verifier  |
+//! | `leaf_prover.bin`  | full `CircuitData`          | client prover       |
 //!
 //! Usage:
-//!   cargo run --bin consume_artifacts --release
+//!   cargo run -p tessera-e2e --bin consume_artifacts --release
+//!
+//! Output directory (in order of precedence):
+//!   1. $TESSERA_ARTIFACTS_DIR/consume/
+//!   2. <workspace-root>/artifacts/consume/
 
 use std::{fs, path::PathBuf};
 
@@ -29,9 +33,15 @@ use tessera_utils::{ConfigNative, D, F};
 const N_PI: usize = 4;
 
 fn main() -> Result<()> {
-	let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-		.join("artifacts")
-		.join("consume");
+	let out_dir = std::env::var("TESSERA_ARTIFACTS_DIR")
+		.map(|d| PathBuf::from(d).join("consume"))
+		.unwrap_or_else(|_| {
+			PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+				.parent()
+				.expect("tessera-e2e has a workspace parent")
+				.join("artifacts")
+				.join("consume")
+		});
 
 	fs::create_dir_all(&out_dir)?;
 	println!("consume artifacts: {}", out_dir.display());

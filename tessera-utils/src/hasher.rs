@@ -274,19 +274,9 @@ pub trait MerkleHashCircuit<F: Field, const D: usize>: MerkleHash {
 	/// Poseidon: `MerkleHashTarget<4>`. Keccak: `MerkleHashTarget<8>`.
 	type HashTarget: Copy + Clone + Debug;
 
-	/// Opaque context for circuit-build-time state (e.g. lookup table indices).
-	/// Poseidon: `()`. Keccak: `KeccakCircuitContext`.
-	type CircuitContext: Copy + Clone + Debug;
-
 	/// Return the field elements of a native digest as a slice.
 	/// Used to bridge native proof values into witness-setting helpers.
 	fn digest_elements(d: &Self::Digest) -> &[F];
-
-	/// Register any lookup tables needed by circuit methods.
-	/// Must be called exactly once per `CircuitBuilder`, before hash methods.
-	fn register_luts(builder: &mut CircuitBuilder<F, D>) -> Self::CircuitContext
-	where
-		F: RichField + Extendable<D>;
 
 	/// Access the underlying `[Target]` slice of a hash target.
 	fn hash_target_elements(t: &Self::HashTarget) -> &[Target];
@@ -333,7 +323,6 @@ pub trait MerkleHashCircuit<F: Field, const D: usize>: MerkleHash {
 
 	fn hash_2_to_1_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		ctx: &Self::CircuitContext,
 		cur: Self::HashTarget,
 		sib: Self::HashTarget,
 		dir: BoolTarget,
@@ -343,7 +332,6 @@ pub trait MerkleHashCircuit<F: Field, const D: usize>: MerkleHash {
 
 	fn hash_root_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		ctx: &Self::CircuitContext,
 		num_leaves: Target,
 		left: Self::HashTarget,
 		right: Self::HashTarget,
@@ -353,7 +341,6 @@ pub trait MerkleHashCircuit<F: Field, const D: usize>: MerkleHash {
 
 	fn commit_node_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		ctx: &Self::CircuitContext,
 		value: Self::HashTarget,
 		next_index: Target,
 		next_value: Self::HashTarget,
@@ -528,14 +515,11 @@ impl MerkleHash for HashOutput {
 }
 
 impl MerkleHashCircuit<F, 2> for HashOutput {
-	type CircuitContext = ();
 	type HashTarget = MerkleHashTarget<4>;
 
 	fn digest_elements(d: &Self::Digest) -> &[F] {
 		&d.0
 	}
-
-	fn register_luts(_builder: &mut CircuitBuilder<F, 2>) -> Self::CircuitContext {}
 
 	fn hash_target_elements(t: &Self::HashTarget) -> &[Target] {
 		&t.elements
@@ -580,7 +564,6 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 
 	fn hash_2_to_1_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
-		_ctx: &Self::CircuitContext,
 		cur: Self::HashTarget,
 		sib: Self::HashTarget,
 		dir: BoolTarget,
@@ -603,7 +586,6 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 
 	fn hash_root_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
-		_ctx: &Self::CircuitContext,
 		num_leaves: Target,
 		left: Self::HashTarget,
 		right: Self::HashTarget,
@@ -624,7 +606,6 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 
 	fn commit_node_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
-		_ctx: &Self::CircuitContext,
 		value: Self::HashTarget,
 		next_index: Target,
 		next_value: Self::HashTarget,
@@ -670,18 +651,12 @@ mod test {
 		let left: HashOutput = HashOutput::new_from_u64(42);
 		let right: HashOutput = HashOutput::new_from_u64(1337);
 
-		let ctx = HashOutput::register_luts(&mut builder);
 		let dir_target = builder.add_virtual_bool_target_safe();
 		let left_target = HashOutput::add_virtual_hash(&mut builder);
 		let right_target = HashOutput::add_virtual_hash(&mut builder);
 		let out_target = HashOutput::add_virtual_hash(&mut builder);
-		let have_target = HashOutput::hash_2_to_1_circuit(
-			&mut builder,
-			&ctx,
-			left_target,
-			right_target,
-			dir_target,
-		);
+		let have_target =
+			HashOutput::hash_2_to_1_circuit(&mut builder, left_target, right_target, dir_target);
 		HashOutput::connect_hashes(&mut builder, &have_target, &out_target);
 		let data = builder.build::<ConfigNative>();
 
@@ -707,18 +682,12 @@ mod test {
 		let value: HashOutput = HashOutput::new_from_u64(1337);
 		let next_value: HashOutput = HashOutput::new_from_u64(432);
 
-		let ctx = HashOutput::register_luts(&mut builder);
 		let next_index_t: Target = builder.add_virtual_target();
 		let value_t = HashOutput::add_virtual_hash(&mut builder);
 		let next_value_t = HashOutput::add_virtual_hash(&mut builder);
 		let comm_want_t = HashOutput::add_virtual_hash(&mut builder);
-		let comm_have_t = HashOutput::commit_node_circuit(
-			&mut builder,
-			&ctx,
-			value_t,
-			next_index_t,
-			next_value_t,
-		);
+		let comm_have_t =
+			HashOutput::commit_node_circuit(&mut builder, value_t, next_index_t, next_value_t);
 		HashOutput::connect_hashes(&mut builder, &comm_have_t, &comm_want_t);
 		let data = builder.build::<ConfigNative>();
 

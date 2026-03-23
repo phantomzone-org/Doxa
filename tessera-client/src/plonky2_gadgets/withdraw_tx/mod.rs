@@ -29,9 +29,9 @@ use crate::{
 	plonky2_gadgets::{
 		merkle::{SetMerklePathOfWitness, conditional_merkle_verify_commitment_tree_gadget},
 		priv_tx::{
-			cb::PrivTxCircuitBuilder,
+			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
-				AccountNullifierTarget, ActRootTarget, AssetIdTarget, MainPoolConfigRootTarget,
+				AccountNullifierTarget, AssetIdTarget, MainPoolConfigRootTarget, RootTarget,
 				SubpoolIdTarget,
 			},
 		},
@@ -50,13 +50,34 @@ use crate::{
 pub(crate) mod cb;
 pub(crate) mod targets;
 
+/// Build the Plonky2 withdrawal transaction circuit.
+///
+/// A withdrawal moves up to `NOTE_BATCH` asset balances from a Tessera account
+/// to an Ethereum address, with each slot proved in a single Plonky2 proof.
+///
+/// # Constraints enforced
+/// 1. **ACT membership** — `accin`'s commitment exists in the ACT (gated by `not_fake_tx`).
+/// 2. **Account invariants** — `private_identifier`, `subpool_id`, `spend_auth`, `consume_auth` are
+///    unchanged; nonce increments by 1.
+/// 3. **Chained AST updates** — each withdrawal slot reduces the asset balance and proves the leaf
+///    update at the correct position.  The root of slot `i`'s output AST equals the input root of
+///    slot `i+1`.
+/// 4. **Balance invariant per slot** — `accin_amts[i] == accout_amts[i] + withdrawal_amts[i]`.
+/// 5. **Subpool membership** — authority keys proven against `mainpool_config_root`.
+/// 6. **Approval signature** — signed over the tx hash by the subpool approval key.
+///
+/// # Public inputs
+/// ```text
+/// not_fake_tx[1] | act_root[4] | mainpool_config_root[4] | accin_null[4] | accout_comm[4]
+/// | asset_ids[NOTE_BATCH] | withdrawal_amts_f[8×NOTE_BATCH] | w_acc_addr[5]
+/// ```
+/// (`subpool_id_in/out` are auto-registered by `add_virtual_account_target`.)
 pub fn withdraw_tx_circuit<
 	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 	F: RichField + Extendable<D> + Poseidon,
 	const D: usize,
 >(
 	builder: &mut CircuitBuilder<F, D>,
-	ctx: &H::CircuitContext,
 ) -> WithdrawTxTargets {
 	// ── Tx flag ───────────────────────────────────────────────────────────────
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
@@ -65,7 +86,7 @@ pub fn withdraw_tx_circuit<
 	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	let act_root = ActRootTarget(builder.add_virtual_hash());
+	let act_root = RootTarget(builder.add_virtual_hash());
 	let mainpool_config_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
 
 	// ── Accounts ──────────────────────────────────────────────────────────────
@@ -102,7 +123,6 @@ pub fn withdraw_tx_circuit<
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
-		ctx,
 	);
 
 	// ── Account invariants ───────────────────────────────────────────────────
@@ -111,17 +131,19 @@ pub fn withdraw_tx_circuit<
 	builder.assert_account_invariants_simple(accin, accout);
 
 	// ── Chained AST updates ───────────────────────────────────────────────────
-	// We process NOTE_BATCH withdrawal slots in sequence.  Each slot updates
-	// the account state tree by subtracting withdrawal_amts[i] from asset_ids[i].
+	// Process NOTE_BATCH withdrawal slots in sequence.
 	//
-	// Intermediate roots: ast_roots[0..NOTE_BATCH-1] are virtual; the final
-	// output root is connected to accout.acc_ast_root.
+	// Each slot subtracts withdrawal_amts[i] from asset_ids[i] in the AST.
+	// Intermediate roots thread through so that each slot's output is the
+	// next slot's input:
 	//
 	//   accin.acc_ast_root
-	//     → (update 0) → ast_roots[0]
-	//     → (update 1) → ast_roots[1]
+	//     → (slot 0) → intermediate_roots[0]
+	//     → (slot 1) → intermediate_roots[1]
 	//     → ...
-	//     → (update N-1) → accout.acc_ast_root
+	//     → (slot N-1) → accout.acc_ast_root
+	//
+	// This proves the full sequence of balance deductions atomically.
 	let intermediate_roots: Vec<HashOutTarget> = (0..NOTE_BATCH - 1)
 		.map(|_| builder.add_virtual_hash())
 		.collect();
@@ -140,11 +162,12 @@ pub fn withdraw_tx_circuit<
 			accout.acc_ast_root
 		};
 
-		// Enforce balance: accin_amts[i] == accout_amts[i] + withdrawal_amts[i]
+		// Per-slot balance invariant: accin_amts[i] == accout_amts[i] + withdrawal_amts[i].
 		let rhs =
 			builder.u256_addition_chain::<1>(&accout_amts[i], &[withdrawal_amts[i]], range_lut);
 		builder.connect_u256(&accin_amts[i], &rhs);
 
+		// AST update proof: same leaf position updated in prev_root → curr_root.
 		builder.assert_ast_update(
 			asset_ids[i],
 			accin_amts[i],
@@ -202,7 +225,7 @@ pub fn withdraw_tx_circuit<
 
 	WithdrawTxTargets {
 		not_fake_tx,
-		act_root,
+		root: act_root,
 		mainpool_config_root,
 		approval_key,
 		rejection_key,
@@ -270,18 +293,21 @@ pub(crate) fn set_withdraw_tx_witness(
 			slot_accin_amts[i] = old_bal;
 			slot_exists_in[i] = true;
 
-			// Capture proof BEFORE the update so siblings reflect accin state.
+			// Capture the Merkle proof BEFORE the update so siblings reflect
+			// the accin state for this slot (chained updates require this).
 			slot_proofs.push(current_ast.merkle_proof_at(ast_index));
 
 			let new_bal = old_bal - withdrawal_amt;
 			slot_accout_amts[i] = new_bal;
+			// Asset still exists in accout iff balance is non-zero after withdrawal.
 			slot_exists_out[i] = new_bal > U256::zero();
 
 			current_ast
 				.insert_or_update_asset(asset_id, new_bal)
 				.unwrap();
 		} else {
-			// Padding slot: zero amounts, default-leaf proof at next free index.
+			// Padding slot: all amounts zero; proof at the next unused leaf index
+			// (default leaf, so the AST root is unchanged).
 			slot_proofs.push(current_ast.merkle_proof_at(current_ast.next_index()));
 		}
 	}
@@ -304,7 +330,7 @@ pub(crate) fn set_withdraw_tx_witness(
 	pw.set_bool_target(t.not_fake_tx, true).unwrap();
 
 	// ── Tree roots ────────────────────────────────────────────────────────
-	set_hash(pw, t.act_root.0, act_root.0);
+	set_hash(pw, t.root.0, act_root.0);
 	set_hash(pw, t.mainpool_config_root.0, main_pool.root().0);
 
 	// ── Authority keys ────────────────────────────────────────────────────
@@ -483,8 +509,7 @@ mod tests {
 		// ── Build circuit ─────────────────────────────────────────────────
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
-		let ctx = HashOutput::register_luts(&mut builder);
-		let t = withdraw_tx_circuit::<HashOutput, _, _>(&mut builder, &ctx);
+		let t = withdraw_tx_circuit::<HashOutput, _, _>(&mut builder);
 		let data = builder.build::<C>();
 
 		// ── Fill witness ──────────────────────────────────────────────────

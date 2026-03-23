@@ -25,10 +25,6 @@ pub struct SequencerConfig {
 	pub prover_api_url: String,
 	/// Timeout in seconds for one prover request (default: 1800).
 	pub prover_api_timeout_secs: u64,
-	/// Number of account-level slots per batch (V2 sequencer).
-	/// Must equal SubtreeRootCircuit leaf count ÷ 8.
-	/// Set via `TESSERA_ACCOUNT_BATCH_SIZE` (default `16`).
-	pub account_batch_size: usize,
 	/// Enable test-only API endpoints (`/test/*`).
 	/// Set via `TESSERA_TESTING=1` (default `false`).
 	pub testing: bool,
@@ -39,8 +35,8 @@ pub struct ProverV2Config {
 	/// SubtreeRootCircuit artifact directory.
 	/// Set via `TESSERA_SR_ARTIFACTS_PATH` (required).
 	pub sr_artifacts_path: PathBuf,
-	/// Leaf count the SubtreeRoot circuit was built for (= account_batch_size × 8).
-	/// Set via `TESSERA_SR_BATCH_SIZE` (default `128`).
+	/// Leaf count the SubtreeRoot circuit was built for (= priv_tx_batch_size × 8).
+	/// Set via `TESSERA_SR_BATCH_SIZE` (default `512`).
 	pub sr_batch_size: usize,
 	/// SuperAggregatorV2 artifact directory.
 	/// Set via `TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH` (required).
@@ -54,6 +50,15 @@ pub struct ProverV2Config {
 	/// Per-request HTTP timeout for remote aggregation provers (seconds).
 	/// Set via `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default `300`).
 	pub aggregation_prover_timeout_secs: u64,
+	/// Optional deposit-TX aggregator artifact directory.
+	/// Set via `TESSERA_DEPOSIT_TX_AGGREGATOR_PATH`.
+	pub deposit_tx_aggregator_path: Option<PathBuf>,
+	/// Optional deposit SubtreeRootCircuit artifact directory.
+	/// Set via `TESSERA_DEPOSIT_SR_ARTIFACTS_PATH`.
+	pub deposit_subtree_root_path: Option<PathBuf>,
+	/// Optional DepositSuperAggregatorV2 artifact directory.
+	/// Set via `TESSERA_DEPOSIT_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH`.
+	pub deposit_super_aggregator_path: Option<PathBuf>,
 	/// HTTP bind address for the V2 prover API.
 	/// Set via `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`).
 	pub api_bind_addr: String,
@@ -67,7 +72,7 @@ impl ProverV2Config {
 	/// - `TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH`: SAV2 artifact directory.
 	///
 	/// # Optional env vars (with defaults)
-	/// - `TESSERA_SR_BATCH_SIZE` (default `128`): SubtreeRoot leaf count.
+	/// - `TESSERA_SR_BATCH_SIZE` (default `512`): SubtreeRoot leaf count.
 	/// - `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): TX aggregator path.
 	/// - `TESSERA_AGGREGATION_PROVER_URLS` (default empty): remote prover URLs.
 	/// - `TESSERA_AGGREGATION_PROVER_TIMEOUT_SECS` (default `300`): remote prover timeout.
@@ -83,7 +88,7 @@ impl ProverV2Config {
 				.into();
 
 		let sr_batch_size: usize = std::env::var("TESSERA_SR_BATCH_SIZE")
-			.unwrap_or_else(|_| "128".to_string())
+			.unwrap_or_else(|_| "512".to_string())
 			.parse()
 			.context("invalid TESSERA_SR_BATCH_SIZE")?;
 
@@ -108,6 +113,17 @@ impl ProverV2Config {
 		let api_bind_addr = std::env::var("TESSERA_PROVER_API_ADDR")
 			.unwrap_or_else(|_| "127.0.0.1:8091".to_string());
 
+		let deposit_tx_aggregator_path = std::env::var("TESSERA_DEPOSIT_TX_AGGREGATOR_PATH")
+			.ok()
+			.map(PathBuf::from);
+		let deposit_subtree_root_path = std::env::var("TESSERA_DEPOSIT_SR_ARTIFACTS_PATH")
+			.ok()
+			.map(PathBuf::from);
+		let deposit_super_aggregator_path =
+			std::env::var("TESSERA_DEPOSIT_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH")
+				.ok()
+				.map(PathBuf::from);
+
 		Ok(Self {
 			sr_artifacts_path,
 			sr_batch_size,
@@ -115,6 +131,9 @@ impl ProverV2Config {
 			aggregator_artifacts_path,
 			aggregation_prover_urls,
 			aggregation_prover_timeout_secs,
+			deposit_tx_aggregator_path,
+			deposit_subtree_root_path,
+			deposit_super_aggregator_path,
 			api_bind_addr,
 		})
 	}
@@ -219,11 +238,6 @@ impl SequencerConfig {
 			.parse()
 			.context("invalid TESSERA_PROVER_API_TIMEOUT_SECS")?;
 
-		let account_batch_size: usize = std::env::var("TESSERA_ACCOUNT_BATCH_SIZE")
-			.unwrap_or_else(|_| "16".to_string())
-			.parse()
-			.context("invalid TESSERA_ACCOUNT_BATCH_SIZE")?;
-
 		let testing = std::env::var("TESSERA_TESTING")
 			.map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 			.unwrap_or(false);
@@ -239,7 +253,6 @@ impl SequencerConfig {
 			snapshot_every_batches,
 			prover_api_url,
 			prover_api_timeout_secs,
-			account_batch_size,
 			testing,
 		})
 	}

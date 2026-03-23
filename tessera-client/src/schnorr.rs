@@ -13,7 +13,7 @@ use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 
 /// A scalar (integer modulo the prime group order n).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Scalar([u64; 5]);
+pub struct Scalar(pub [u64; 5]);
 
 // TODO: ack Thomas Pornin
 
@@ -146,6 +146,13 @@ impl Scalar {
 		self.montymul(Self::R2).montymul(rhs)
 	}
 
+	/// Sample a uniformly random scalar in `[0, N)`.
+	pub fn sample<R: rand::Rng>(rng: &mut R) -> Self {
+		let mut bytes = [0u8; 40];
+		rng.fill(&mut bytes);
+		Self::decode_reduce(&bytes)
+	}
+
 	/// Decode the provided byte slice into a scalar. The bytes are
 	/// interpreted into an integer in little-endian unsigned convention.
 	/// All slice bytes are read. Returns `Some(scalar)` if the decoded
@@ -205,13 +212,6 @@ impl Scalar {
 			acc = acc.montymul(Self::T632).add(b);
 		}
 		acc
-	}
-
-	/// Sample a uniformly random scalar in `[0, N)`.
-	pub(crate) fn sample<R: rand::Rng>(rng: &mut R) -> Self {
-		let mut bytes = [0u8; 40];
-		rng.fill(&mut bytes);
-		Self::decode_reduce(&bytes)
 	}
 
 	/// Reduce 5 Goldilocks field elements (320 bits) to scalar < N.
@@ -349,11 +349,7 @@ pub(crate) fn schnorr_challenge(
 }
 
 /// Sign: R = k*G, e = H(R || Q || m), s = k + d*-e
-pub(crate) fn schnorr_sign(
-	privkey: &PrivateKey,
-	message: &[GoldilocksField],
-	k: Scalar,
-) -> Signature {
+pub fn schnorr_sign(privkey: &PrivateKey, message: &[GoldilocksField], k: Scalar) -> Signature {
 	let g = PointEw::generator();
 	let r = g.scalar_mul(&k);
 

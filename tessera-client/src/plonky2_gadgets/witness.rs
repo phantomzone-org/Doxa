@@ -1,6 +1,9 @@
-use plonky2::iop::{
-	target::Target,
-	witness::{PartialWitness, WitnessWrite},
+use plonky2::{
+	hash::hash_types::HashOutTarget,
+	iop::{
+		target::Target,
+		witness::{PartialWitness, WitnessWrite},
+	},
 };
 use tessera_utils::F;
 
@@ -106,11 +109,11 @@ pub(crate) fn set_fake_schnorr_signature(
 
 pub(crate) fn set_hash_blocks<const N: usize>(
 	pw: &mut PartialWitness<F>,
-	targets: &[[Target; 4]; N],
+	targets: &[HashOutTarget; N],
 	values: &[[F; 4]; N],
 ) {
 	for (row_targets, row_values) in targets.iter().zip(values.iter()) {
-		for (&target, &value) in row_targets.iter().zip(row_values.iter()) {
+		for (&target, &value) in row_targets.elements.iter().zip(row_values.iter()) {
 			pw.set_target(target, value).unwrap();
 		}
 	}

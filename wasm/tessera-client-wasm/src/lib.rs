@@ -297,7 +297,8 @@ pub struct WasmSpendTx {
 	dummy_inotes: Vec<WasmDummyNote>,
 	/// Real output notes.
 	onotes: Vec<StandardNote>,
-	/// Random dummy seeds for unfilled output-note slots; converted to commitments via double_hash.
+	/// Random dummy seeds for unfilled output-note slots; converted to commitments via
+	/// double_hash.
 	dummy_onotes: Vec<WasmDummyNote>,
 }
 
@@ -313,8 +314,7 @@ impl WasmSpendTx {
 		let inotes_null: [NoteNullifier; NOTE_BATCH] = std::array::from_fn(|i| {
 			if i < self.inotes.len() {
 				let (note, pos) = &self.inotes[i];
-				PositionedStandardNode::from_note(*note, F::from_canonical_u64(*pos))
-					.nullifier(&nk)
+				PositionedStandardNode::from_note(*note, F::from_canonical_u64(*pos)).nullifier(&nk)
 			} else {
 				self.dummy_inotes[i - self.inotes.len()].to_nullifier()
 			}
@@ -428,10 +428,12 @@ impl WasmSpendTxBuilder {
 		let mut rng = rand::rng();
 
 		// Dummy seeds for unfilled output-note and input-note slots.
-		let dummy_onotes: Vec<WasmDummyNote> =
-			(0..NOTE_BATCH - self.onotes.len()).map(|_| WasmDummyNote::sample(&mut rng)).collect();
-		let dummy_inotes: Vec<WasmDummyNote> =
-			(0..NOTE_BATCH - self.inotes.len()).map(|_| WasmDummyNote::sample(&mut rng)).collect();
+		let dummy_onotes: Vec<WasmDummyNote> = (0..NOTE_BATCH - self.onotes.len())
+			.map(|_| WasmDummyNote::sample(&mut rng))
+			.collect();
+		let dummy_inotes: Vec<WasmDummyNote> = (0..NOTE_BATCH - self.inotes.len())
+			.map(|_| WasmDummyNote::sample(&mut rng))
+			.collect();
 
 		// Derive accout.
 		let delta_in: U256 = self
