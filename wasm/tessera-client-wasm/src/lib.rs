@@ -12,7 +12,7 @@ use rand::{distr::Uniform, CryptoRng, Rng, RngExt};
 use sha2::{Digest, Sha256};
 use tessera_client::{
 	derive_priv_tx_hash, double_hash_native,
-	schnorr::{CompressedPublicKey, PrivateKey},
+	schnorr::{schnorr_sign, CompressedPublicKey, PrivateKey, Scalar},
 	AccountAddress, AccountNullifier, AssetId, HashOutput, NodeIdentifier, NoteCommitment,
 	NoteNullifier, PositionedStandardNode, PrivateIdentifier, SpendAuth, StandardAccount,
 	StandardNote, SubpoolId,
@@ -78,6 +78,26 @@ impl WasmDummyNote {
 	}
 }
 
+/// Derive the spend-auth private key from a 32-byte seed using domain-separated SHA-256.
+fn derive_spend_key(seed: &[u8]) -> PrivateKey {
+	let h0: [u8; 32] = Sha256::new()
+		.chain_update(seed)
+		.chain_update(DS_WASM_SEEDED_SPEND_AUTH)
+		.chain_update([0u8])
+		.finalize()
+		.into();
+	let h1: [u8; 32] = Sha256::new()
+		.chain_update(seed)
+		.chain_update(DS_WASM_SEEDED_SPEND_AUTH)
+		.chain_update([1u8])
+		.finalize()
+		.into();
+	let mut sk_bytes = [0u8; 40];
+	sk_bytes[..32].copy_from_slice(&h0);
+	sk_bytes[32..].copy_from_slice(&h1[..8]);
+	PrivateKey::decode_reduce(&sk_bytes)
+}
+
 // ── WasmAccount ──────────────────────────────────────────────────────────────
 
 /// A Tessera account exposed to JavaScript.
@@ -105,22 +125,7 @@ impl WasmAccount {
 		let f1 = F::from_noncanonical_u64(u64::from_le_bytes(hash_pi[8..16].try_into().unwrap()));
 		let private_identifier = PrivateIdentifier([f0, f1]);
 
-		let h0: [u8; 32] = Sha256::new()
-			.chain_update(seed)
-			.chain_update(DS_WASM_SEEDED_SPEND_AUTH)
-			.chain_update([0u8])
-			.finalize()
-			.into();
-		let h1: [u8; 32] = Sha256::new()
-			.chain_update(seed)
-			.chain_update(DS_WASM_SEEDED_SPEND_AUTH)
-			.chain_update([1u8])
-			.finalize()
-			.into();
-		let mut sk_bytes = [0u8; 40];
-		sk_bytes[..32].copy_from_slice(&h0);
-		sk_bytes[32..].copy_from_slice(&h1[..8]);
-		let sk = PrivateKey::decode_reduce(&sk_bytes);
+		let sk = derive_spend_key(seed);
 		let spend_pk = CompressedPublicKey::from(sk.public_key::<F>());
 
 		let mut acc = StandardAccount::new_with(
@@ -302,12 +307,8 @@ pub struct WasmSpendTx {
 	dummy_onotes: Vec<WasmDummyNote>,
 }
 
-#[wasm_bindgen]
 impl WasmSpendTx {
-	/// Derive the 32-byte transaction hash (4 × u64 little-endian).
-	/// This is the value that must be signed with the spend-auth key.
-	#[wasm_bindgen(js_name = txHash)]
-	pub fn tx_hash(&self) -> Vec<u8> {
+	fn compute_tx_hash(&self) -> HashOutput {
 		use tessera_client::NOTE_BATCH;
 		let nk = self.accin.nk();
 
@@ -328,13 +329,26 @@ impl WasmSpendTx {
 			}
 		});
 
-		let accout_comm = self.accout.commitment();
-		hash_to_bytes(derive_priv_tx_hash(
-			self.accin_null,
-			accout_comm,
-			inotes_null,
-			onotes_comm,
-		))
+		derive_priv_tx_hash(self.accin_null, self.accout.commitment(), inotes_null, onotes_comm)
+	}
+}
+
+#[wasm_bindgen]
+impl WasmSpendTx {
+	/// Derive the 32-byte transaction hash (4 × u64 little-endian).
+	/// This is the value that must be signed with the spend-auth key.
+	#[wasm_bindgen(js_name = txHash)]
+	pub fn tx_hash(&self) -> Vec<u8> {
+		hash_to_bytes(self.compute_tx_hash())
+	}
+
+	/// Sign the transaction hash with the spend-auth key derived from `seed`.
+	/// Returns an 80-byte Schnorr signature: 40 bytes `r` + 40 bytes `s`.
+	pub fn sign(&self, seed: &[u8]) -> Vec<u8> {
+		let sk = derive_spend_key(seed);
+		let hash = self.compute_tx_hash();
+		let k = Scalar::sample(&mut rand::rng());
+		schnorr_sign(&sk, &hash.0, k).encode().to_vec()
 	}
 }
 

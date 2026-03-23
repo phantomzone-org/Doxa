@@ -143,6 +143,11 @@ export class SpendTx {
   txHash(): HashBytes {
     return this.inner.txHash();
   }
+
+  /** Sign the tx hash with the spend-auth key derived from `seed`. Returns 80 bytes (r || s). */
+  sign(seed: Uint8Array): Uint8Array {
+    return this.inner.sign(seed);
+  }
 }
 
 /** Builds a spend transaction by adding input/output notes, then calling `build()`. */
