@@ -49,8 +49,7 @@ pub(crate) fn set_common_tx_witness(
 ) {
 	set_hash(pw, t.mainpool_config_root.0, mainpool_config_root.0);
 	// V2 uses a single on-chain IMT; both circuit slots carry the same root.
-	set_hash(pw, t.act_root.0, root.0);
-	set_hash(pw, t.nct_root.0, root.0);
+	set_hash(pw, t.root.0, root.0);
 	set_authority_keys(
 		pw,
 		&t.approval_key,

@@ -1,18 +1,19 @@
-//! Generate Aggregator artifacts for the [`PrivateTx`].
+//! Generate legacy V1 aggregator artifacts for the [`PrivateTx`] circuit.
 //!
 //! Produces a native Plonky2 `GenericAggregator` (ARITY=2, DEPTH=7,
-//! pass-through) that aggregates 128 inner PrivTx proofs and exposes
-//! their 9856 raw public inputs (128×77) as the root proof's public inputs.
+//! pass-through) that aggregates 128 inner PrivTx proofs.  This is the
+//! **pre-V2** aggregator; for the current V2 proving stack use
+//! `super_aggregator_v2_artifacts` instead.
 //!
-//! The inner PrivTx circuit (from `tessera-client`) produces 75 public inputs:
-//!   PI[0..2] = subpool_ids, PI[2] = is_real, PI[3..7] = AN, PI[7..11] = AC,
-//!   PI[11..43] = NN, PI[43..75] = NC.
-//!
-//! No BN128/Groth16 wrapping is done here — the SuperAggregator wraps all 5
-//! inner proofs together.
+//! Artifact layout (under TESSERA_ARTIFACTS_DIR or <workspace>/artifacts):
+//!   associated-input-aggregator/
 //!
 //! Usage:
-//!   TESSERA_DEBUG=1 cargo run --bin aggregator_artifacts --release
+//!   cargo run -p tessera-e2e --bin aggregator_artifacts --release
+//!
+//! Output directory (in order of precedence):
+//!   1. $TESSERA_ARTIFACTS_DIR/associated-input-aggregator/
+//!   2. <workspace-root>/artifacts/associated-input-aggregator/
 
 use std::{fs, path::PathBuf, time::Instant};
 
@@ -39,9 +40,15 @@ const DEPTH: usize = 7;
 const TX_LEAF_PI: usize = 77;
 
 fn main() -> Result<()> {
-	let tmp_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-		.join("artifacts")
-		.join("associated-input-aggregator");
+	let tmp_dir = std::env::var("TESSERA_ARTIFACTS_DIR")
+		.map(|d| PathBuf::from(d).join("associated-input-aggregator"))
+		.unwrap_or_else(|_| {
+			PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+				.parent()
+				.expect("tessera-e2e has a workspace parent")
+				.join("artifacts")
+				.join("associated-input-aggregator")
+		});
 
 	fs::create_dir_all(&tmp_dir)?;
 

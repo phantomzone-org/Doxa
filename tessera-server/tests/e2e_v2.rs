@@ -276,8 +276,7 @@ async fn submit_tx_batch<P: Provider + Clone>(
 	);
 
 	let batch = ITesseraRollupV2::TransactionBatch {
-		acRoot: root,
-		ncRoot: root,
+		root,
 		mainPoolConfigRoot: B256::from(PCR),
 		noteCommitments: note_commitments,
 		noteNullifiers: note_nullifiers,
@@ -488,8 +487,7 @@ async fn test_e2e_deposit_batch() {
 
 	// Submit deposit batch (operator-only).
 	let deposit_batch = ITesseraRollupV2::DepositBatch {
-		acRoot: env.genesis_root,
-		ncRoot: env.genesis_root,
+		root: env.genesis_root,
 		mainPoolConfigRoot: B256::from(PCR),
 		depositNoteCommitments: vec![deposit_nc],
 		batchPoseidonRoot: batch_poseidon_root,
@@ -570,8 +568,7 @@ async fn test_e2e_invalid_root_rejected() {
 	let bad_root = U256::from(0xBAAD_F00Du64);
 
 	let batch = ITesseraRollupV2::TransactionBatch {
-		acRoot: bad_root,
-		ncRoot: env.genesis_root,
+		root: bad_root,
 		mainPoolConfigRoot: B256::from(PCR),
 		noteCommitments: note_commitments,
 		noteNullifiers: vec![],

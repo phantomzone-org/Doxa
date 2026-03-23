@@ -26,12 +26,7 @@ pub struct CommitmentTreeMerkleProof<const DEPTH: usize> {
 }
 
 impl<const DEPTH: usize> CommitmentTreeMerkleProof<DEPTH> {
-	pub(crate) fn new(
-		leaf: HashOutput,
-		path: Vec<HashOutput>,
-		pos: usize,
-		num_leaves: usize,
-	) -> Self {
+	pub fn new(leaf: HashOutput, path: Vec<HashOutput>, pos: usize, num_leaves: usize) -> Self {
 		assert!(path.len() == DEPTH);
 		Self {
 			leaf,

@@ -13,12 +13,33 @@ use crate::plonky2_gadgets::{
 	priv_tx::targets::{AccountCommitmentTarget, AccountNullifierTarget},
 };
 
+/// Circuit-builder extension for deposit-transaction-specific hash derivations.
+///
+/// Implemented for [`CircuitBuilder`] so that deposit-tx logic can be expressed
+/// as method calls on the builder, keeping the main circuit function readable.
 pub(crate) trait DepositTxCircuitBuilder {
+	/// Derive the deposit note commitment in-circuit.
+	///
+	/// Mirrors [`crate::DepositNote::commitment`] natively.
+	///
+	/// Hash input (16 targets):
+	/// ```text
+	/// identifier[2] recipient_subpool_id[1] || recipient_public_id[4]
+	/// || amount[8 u32 targets] || asset_id[1]
+	/// ```
 	fn derive_deposit_note_comm(
 		&mut self,
 		deposit_note: DepositNoteTarget,
 	) -> DepositNoteCommitmentTarget;
 
+	/// Derive the deposit transaction hash in-circuit.
+	///
+	/// Mirrors [`derive_deposit_tx_hash`](crate::derive_deposit_tx_hash) natively.
+	///
+	/// Hash input (17 targets):
+	/// ```text
+	/// accin_null[4] || accout_comm[4] || deposit_note_comm[4] || eth_address[5]
+	/// ```
 	fn derive_deposit_tx_hash(
 		&mut self,
 		accin_null: AccountNullifierTarget,

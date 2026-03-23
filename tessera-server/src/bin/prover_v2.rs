@@ -8,7 +8,7 @@ use axum::{
 };
 use tessera_server::{
 	config::ProverV2Config,
-	prover_v2::ProverRuntimeV2,
+	prover_v2::{DepositPipelineConfig, ProverRuntimeV2},
 	types::{ConsumeOutcome, ConsumeProveRequest, ProveOutcomeV2, ProveRequestV2},
 };
 use tracing::{error, info};
@@ -60,6 +60,20 @@ async fn main() -> Result<()> {
 		.init();
 
 	let config = ProverV2Config::from_env()?;
+
+	let deposit = match (
+		config.deposit_tx_aggregator_path,
+		config.deposit_subtree_root_path,
+		config.deposit_super_aggregator_path,
+	) {
+		(Some(agg), Some(sr), Some(sav2)) => Some(DepositPipelineConfig {
+			deposit_tx_aggregator_path: agg,
+			deposit_subtree_root_path: sr,
+			deposit_super_aggregator_path: sav2,
+		}),
+		_ => None,
+	};
+
 	let runtime = ProverRuntimeV2::init(
 		config.sr_artifacts_path,
 		config.sr_batch_size,
@@ -67,6 +81,7 @@ async fn main() -> Result<()> {
 		config.aggregator_artifacts_path,
 		config.aggregation_prover_urls,
 		config.aggregation_prover_timeout_secs,
+		deposit,
 	)?;
 
 	let app_state = AppState {

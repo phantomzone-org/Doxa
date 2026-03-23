@@ -13,7 +13,7 @@ use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 
 /// A scalar (integer modulo the prime group order n).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Scalar([u64; 5]);
+pub struct Scalar(pub [u64; 5]);
 
 // TODO: ack Thomas Pornin
 
@@ -146,6 +146,13 @@ impl Scalar {
 		self.montymul(Self::R2).montymul(rhs)
 	}
 
+	/// Sample a uniformly random scalar in `[0, N)`.
+	pub fn sample<R: rand::Rng>(rng: &mut R) -> Self {
+		let mut bytes = [0u8; 40];
+		rng.fill(&mut bytes);
+		Self::decode_reduce(&bytes)
+	}
+
 	/// Decode the provided byte slice into a scalar. The bytes are
 	/// interpreted into an integer in little-endian unsigned convention.
 	/// All slice bytes are read. Returns `Some(scalar)` if the decoded
@@ -154,11 +161,11 @@ impl Scalar {
 		let n = buf.len();
 		let mut r = Self::ZERO;
 		let mut extra: u8 = 0;
-		for i in 0..n {
+		for (i, b) in buf.iter().enumerate().take(n) {
 			if i < 40 {
-				r.0[i >> 3] |= (buf[i] as u64).wrapping_shl(((i as u32) & 7) << 3);
+				r.0[i >> 3] |= (*b as u64).wrapping_shl(((i as u32) & 7) << 3);
 			} else {
-				extra |= buf[i];
+				extra |= b;
 			}
 		}
 
@@ -205,18 +212,6 @@ impl Scalar {
 			acc = acc.montymul(Self::T632).add(b);
 		}
 		acc
-	}
-
-	/// Returns the raw 5-limb representation (little-endian u64s).
-	pub fn to_limbs(&self) -> [u64; 5] {
-		self.0
-	}
-
-	/// Sample a uniformly random scalar in `[0, N)`.
-	pub fn sample<R: rand::Rng>(rng: &mut R) -> Self {
-		let mut bytes = [0u8; 40];
-		rng.fill(&mut bytes);
-		Self::decode_reduce(&bytes)
 	}
 
 	/// Reduce 5 Goldilocks field elements (320 bits) to scalar < N.

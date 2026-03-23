@@ -106,7 +106,7 @@ impl SubtreeRootCircuit {
 			for i in 0..parent_len {
 				let left = nodes[2 * i];
 				let right = nodes[2 * i + 1];
-				nodes[i] = HashOutput::hash_2_to_1_circuit(&mut builder, &(), left, right, f);
+				nodes[i] = HashOutput::hash_leaf_circuit(&mut builder, left, right, f);
 			}
 			nodes.truncate(parent_len);
 		}

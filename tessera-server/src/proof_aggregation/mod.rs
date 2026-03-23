@@ -4,12 +4,18 @@
 //! examples.
 
 mod artifacts;
+pub mod deposit_super_aggregator_v2;
 pub mod generic;
 pub mod node_prover;
 pub mod plonky2_gadgets;
 pub mod subtree_root;
 pub mod super_aggregator_v2;
 
+pub use deposit_super_aggregator_v2::{
+	validate_deposit_subtree_nc_offcircuit, DepositSuperAggregatorV2,
+	DepositSuperAggregatorV2CircuitData, DEPOSIT_IS_REAL_OFFSET, DEPOSIT_LEAF_PI_SIZE,
+	DEPOSIT_NOTE_COMM_OFFSET,
+};
 pub use generic::{
 	AggregatedProof, GenericAggregator, GenericAggregatorConfig, LevelCircuit,
 	MAX_AGGREGATION_LEAVES,

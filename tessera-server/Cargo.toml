@@ -50,8 +50,4 @@ path = "src/bin/sequencer.rs"
 name = "aggregation_prover"
 path = "src/bin/aggregation_prover.rs"
 
-[[bin]]
-name = "consume_artifacts"
-path = "src/bin/consume_artifacts.rs"
-
 

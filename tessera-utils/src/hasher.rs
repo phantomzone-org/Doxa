@@ -11,13 +11,17 @@ use plonky2::{
 	},
 	hash::{
 		hash_types::{HashOut, HashOutTarget, RichField},
-		poseidon::PoseidonHash,
+		hashing::PlonkyPermutation,
+		poseidon::{PoseidonHash, PoseidonPermutation},
 	},
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
 	},
-	plonk::{circuit_builder::CircuitBuilder, config::Hasher},
+	plonk::{
+		circuit_builder::CircuitBuilder,
+		config::{AlgebraicHasher, Hasher},
+	},
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -269,50 +273,35 @@ impl<F: RichField + Extendable<D>, const D: usize> DataCommitment<F, D> for Pose
 	}
 }
 
-pub trait MerkleHashCircuit<F: Field, const D: usize>: MerkleHash {
+pub trait MerkleHashCircuit<F: Field + RichField + Extendable<D>, const D: usize>:
+	MerkleHash
+{
 	/// Circuit-level hash target type.
 	/// Poseidon: `MerkleHashTarget<4>`. Keccak: `MerkleHashTarget<8>`.
 	type HashTarget: Copy + Clone + Debug;
-
-	/// Opaque context for circuit-build-time state (e.g. lookup table indices).
-	/// Poseidon: `()`. Keccak: `KeccakCircuitContext`.
-	type CircuitContext: Copy + Clone + Debug;
 
 	/// Return the field elements of a native digest as a slice.
 	/// Used to bridge native proof values into witness-setting helpers.
 	fn digest_elements(d: &Self::Digest) -> &[F];
 
-	/// Register any lookup tables needed by circuit methods.
-	/// Must be called exactly once per `CircuitBuilder`, before hash methods.
-	fn register_luts(builder: &mut CircuitBuilder<F, D>) -> Self::CircuitContext
-	where
-		F: RichField + Extendable<D>;
-
 	/// Access the underlying `[Target]` slice of a hash target.
 	fn hash_target_elements(t: &Self::HashTarget) -> &[Target];
 
 	/// Allocate virtual targets for one hash.
-	fn add_virtual_hash(builder: &mut CircuitBuilder<F, D>) -> Self::HashTarget
-	where
-		F: RichField + Extendable<D>;
+	fn add_virtual_hash(builder: &mut CircuitBuilder<F, D>) -> Self::HashTarget;
 
 	/// Allocate virtual targets for one hash and register them as public inputs.
-	fn add_virtual_hash_public_input(builder: &mut CircuitBuilder<F, D>) -> Self::HashTarget
-	where
-		F: RichField + Extendable<D>;
+	fn add_virtual_hash_public_input(builder: &mut CircuitBuilder<F, D>) -> Self::HashTarget;
 
 	/// Create a constant hash target from a native digest value.
-	fn constant_hash(builder: &mut CircuitBuilder<F, D>, value: &Self::Digest) -> Self::HashTarget
-	where
-		F: RichField + Extendable<D>;
+	fn constant_hash(builder: &mut CircuitBuilder<F, D>, value: &Self::Digest) -> Self::HashTarget;
 
 	/// Connect two hash targets element-wise (equality constraint).
 	fn connect_hashes(
 		builder: &mut CircuitBuilder<F, D>,
 		a: &Self::HashTarget,
 		b: &Self::HashTarget,
-	) where
-		F: RichField + Extendable<D>;
+	);
 
 	/// Per-element select: if `dir == 1` pick `a`, else pick `b`.
 	fn select_hash(
@@ -320,9 +309,7 @@ pub trait MerkleHashCircuit<F: Field, const D: usize>: MerkleHash {
 		dir: BoolTarget,
 		a: &Self::HashTarget,
 		b: &Self::HashTarget,
-	) -> Self::HashTarget
-	where
-		F: RichField + Extendable<D>;
+	) -> Self::HashTarget;
 
 	/// Set witness values for a hash target from a native digest.
 	fn set_hash_witness(
@@ -333,33 +320,96 @@ pub trait MerkleHashCircuit<F: Field, const D: usize>: MerkleHash {
 
 	fn hash_2_to_1_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		ctx: &Self::CircuitContext,
-		cur: Self::HashTarget,
-		sib: Self::HashTarget,
+		left: Self::HashTarget,
+		right: Self::HashTarget,
+	) -> Self::HashTarget;
+
+	fn hash_leaf_circuit(
+		builder: &mut CircuitBuilder<F, D>,
+		left: Self::HashTarget,
+		right: Self::HashTarget,
 		dir: BoolTarget,
-	) -> Self::HashTarget
-	where
-		F: RichField + Extendable<D>;
+	) -> Self::HashTarget;
 
 	fn hash_root_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		ctx: &Self::CircuitContext,
 		num_leaves: Target,
 		left: Self::HashTarget,
 		right: Self::HashTarget,
-	) -> Self::HashTarget
-	where
-		F: RichField + Extendable<D>;
+		dir: BoolTarget,
+	) -> Self::HashTarget;
 
 	fn commit_node_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		ctx: &Self::CircuitContext,
 		value: Self::HashTarget,
 		next_index: Target,
 		next_value: Self::HashTarget,
-	) -> Self::HashTarget
-	where
-		F: RichField + Extendable<D>;
+	) -> Self::HashTarget;
+
+	fn merkle_root_circuit(
+		builder: &mut CircuitBuilder<F, D>,
+		leaf_hash: Self::HashTarget,
+		siblings: &[Self::HashTarget],
+		path: &[BoolTarget],
+		num_leaves: Target,
+	) -> Self::HashTarget {
+		let depth = siblings.len();
+		let mut current = leaf_hash;
+
+		assert_eq!(siblings.len(), path.len());
+
+		for (level, (sibling, &dir)) in siblings.iter().zip(path.iter()).enumerate() {
+			// At the final level, use hash_root_circuit to commit num_leaves
+			if level == depth - 1 {
+				current = Self::hash_root_circuit(builder, num_leaves, current, *sibling, dir);
+			} else {
+				current = Self::hash_leaf_circuit(builder, current, *sibling, dir);
+			}
+		}
+		current
+	}
+
+	fn empty_batch_merkle_root_circuit(
+		builder: &mut CircuitBuilder<F, D>,
+		batch_depth: usize,
+		upper_siblings: &[Self::HashTarget],
+		path: &[BoolTarget],
+		index: Target,
+	) -> Self::HashTarget {
+		let mut leaf_hash = Self::constant_hash(builder, &Self::HEAD);
+		for _ in 0..batch_depth {
+			leaf_hash = Self::hash_2_to_1_circuit(builder, leaf_hash, leaf_hash)
+		}
+
+		Self::merkle_root_circuit(builder, leaf_hash, upper_siblings, path, index)
+	}
+
+	fn batch_merkle_root_circuit(
+		builder: &mut CircuitBuilder<F, D>,
+		leaves: &[Self::HashTarget],
+		upper_siblings: &[Self::HashTarget],
+		path: &[BoolTarget],
+		index: Target,
+	) -> Self::HashTarget {
+		assert!(leaves.len().is_power_of_two());
+		assert_eq!(upper_siblings.len(), path.len());
+
+		let mut leaves = leaves.to_vec();
+
+		while leaves.len() > 1 {
+			let parent_len = leaves.len() >> 1;
+			for i in 0..parent_len {
+				leaves[i] = Self::hash_2_to_1_circuit(builder, leaves[2 * i], leaves[2 * i + 1]);
+			}
+			leaves.truncate(parent_len);
+		}
+
+		if upper_siblings.is_empty() {
+			leaves[0]
+		} else {
+			Self::merkle_root_circuit(builder, leaves[0], upper_siblings, path, index)
+		}
+	}
 }
 
 pub trait ToHashOut<F: Field> {
@@ -492,18 +542,13 @@ impl MerkleHash for HashOutput {
 
 	fn hash_root(num_leaves: usize, left: &Self::Digest, right: &Self::Digest) -> Self::Digest {
 		assert!((num_leaves as u64) < F::ORDER);
-		let out: HashOut<F> = PoseidonHash::hash_no_pad(&[
-			F::from_canonical_u64(num_leaves as u64),
-			left.0[0],
-			left.0[1],
-			left.0[2],
-			left.0[3],
-			right.0[0],
-			right.0[1],
-			right.0[2],
-			right.0[3],
-		]);
-		Self::Digest::new(out.elements)
+		let mut state = PoseidonPermutation::new(core::iter::repeat(F::ZERO));
+		state.set_from_slice(&left.0, 0);
+		state.set_from_slice(&right.0, 4);
+		state.set_from_slice(&[F::from_canonical_u64(num_leaves as u64)], 8);
+		state.permute();
+		let out = state.squeeze();
+		Self::Digest::new(core::array::from_fn(|i| out[i]))
 	}
 
 	fn commit_node(
@@ -528,14 +573,11 @@ impl MerkleHash for HashOutput {
 }
 
 impl MerkleHashCircuit<F, 2> for HashOutput {
-	type CircuitContext = ();
 	type HashTarget = MerkleHashTarget<4>;
 
 	fn digest_elements(d: &Self::Digest) -> &[F] {
 		&d.0
 	}
-
-	fn register_luts(_builder: &mut CircuitBuilder<F, 2>) -> Self::CircuitContext {}
 
 	fn hash_target_elements(t: &Self::HashTarget) -> &[Target] {
 		&t.elements
@@ -580,36 +622,10 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 
 	fn hash_2_to_1_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
-		_ctx: &Self::CircuitContext,
-		cur: Self::HashTarget,
-		sib: Self::HashTarget,
-		dir: BoolTarget,
-	) -> Self::HashTarget {
-		let left = Self::select_hash(builder, dir, &sib, &cur);
-		let right = Self::select_hash(builder, dir, &cur, &sib);
-		let data = vec![
-			left.elements[0],
-			left.elements[1],
-			left.elements[2],
-			left.elements[3],
-			right.elements[0],
-			right.elements[1],
-			right.elements[2],
-			right.elements[3],
-		];
-		let out = builder.hash_n_to_hash_no_pad::<PoseidonHash>(data);
-		MerkleHashTarget::from_hash_out_target(out)
-	}
-
-	fn hash_root_circuit(
-		builder: &mut CircuitBuilder<F, 2>,
-		_ctx: &Self::CircuitContext,
-		num_leaves: Target,
 		left: Self::HashTarget,
 		right: Self::HashTarget,
 	) -> Self::HashTarget {
 		let out = builder.hash_n_to_hash_no_pad::<PoseidonHash>(vec![
-			num_leaves,
 			left.elements[0],
 			left.elements[1],
 			left.elements[2],
@@ -622,9 +638,52 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 		MerkleHashTarget::from_hash_out_target(out)
 	}
 
+	fn hash_leaf_circuit(
+		builder: &mut CircuitBuilder<F, 2>,
+		cur: Self::HashTarget,
+		sib: Self::HashTarget,
+		dir: BoolTarget,
+	) -> Self::HashTarget {
+		let zero = builder.zero();
+		let perm_inputs = PoseidonPermutation::new(
+			cur.elements
+				.iter()
+				.chain(sib.elements.iter())
+				.copied()
+				.chain(core::iter::repeat(zero)),
+		);
+		let perm_output = PoseidonHash::permute_swapped(perm_inputs, dir, builder);
+		let output = perm_output.squeeze();
+		MerkleHashTarget {
+			elements: core::array::from_fn(|i| output[i]),
+		}
+	}
+
+	fn hash_root_circuit(
+		builder: &mut CircuitBuilder<F, 2>,
+		num_leaves: Target,
+		left: Self::HashTarget,
+		right: Self::HashTarget,
+		dir: BoolTarget,
+	) -> Self::HashTarget {
+		let zero = builder.zero();
+		let perm_inputs = PoseidonPermutation::new(
+			left.elements
+				.iter()
+				.chain(right.elements.iter())
+				.copied()
+				.chain(core::iter::once(num_leaves))
+				.chain(core::iter::repeat(zero)),
+		);
+		let perm_output = PoseidonHash::permute_swapped(perm_inputs, dir, builder);
+		let output = perm_output.squeeze();
+		MerkleHashTarget {
+			elements: core::array::from_fn(|i| output[i]),
+		}
+	}
+
 	fn commit_node_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
-		_ctx: &Self::CircuitContext,
 		value: Self::HashTarget,
 		next_index: Target,
 		next_value: Self::HashTarget,
@@ -670,18 +729,12 @@ mod test {
 		let left: HashOutput = HashOutput::new_from_u64(42);
 		let right: HashOutput = HashOutput::new_from_u64(1337);
 
-		let ctx = HashOutput::register_luts(&mut builder);
 		let dir_target = builder.add_virtual_bool_target_safe();
 		let left_target = HashOutput::add_virtual_hash(&mut builder);
 		let right_target = HashOutput::add_virtual_hash(&mut builder);
 		let out_target = HashOutput::add_virtual_hash(&mut builder);
-		let have_target = HashOutput::hash_2_to_1_circuit(
-			&mut builder,
-			&ctx,
-			left_target,
-			right_target,
-			dir_target,
-		);
+		let have_target =
+			HashOutput::hash_leaf_circuit(&mut builder, left_target, right_target, dir_target);
 		HashOutput::connect_hashes(&mut builder, &have_target, &out_target);
 		let data = builder.build::<ConfigNative>();
 
@@ -707,18 +760,12 @@ mod test {
 		let value: HashOutput = HashOutput::new_from_u64(1337);
 		let next_value: HashOutput = HashOutput::new_from_u64(432);
 
-		let ctx = HashOutput::register_luts(&mut builder);
 		let next_index_t: Target = builder.add_virtual_target();
 		let value_t = HashOutput::add_virtual_hash(&mut builder);
 		let next_value_t = HashOutput::add_virtual_hash(&mut builder);
 		let comm_want_t = HashOutput::add_virtual_hash(&mut builder);
-		let comm_have_t = HashOutput::commit_node_circuit(
-			&mut builder,
-			&ctx,
-			value_t,
-			next_index_t,
-			next_value_t,
-		);
+		let comm_have_t =
+			HashOutput::commit_node_circuit(&mut builder, value_t, next_index_t, next_value_t);
 		HashOutput::connect_hashes(&mut builder, &comm_have_t, &comm_want_t);
 		let data = builder.build::<ConfigNative>();
 

@@ -81,6 +81,27 @@ contract TesseraRollupV2IntegrationTest is Test {
         return string.concat(field, "[", vm.toString(i), "]");
     }
 
+    /// Load the batch parameters written by `super_aggregator_v2_artifacts`:
+    ///   root              — genesis root used as the single IMT root in the dummy proof
+    ///   batchPoseidonRoot — Goldilocks Poseidon Merkle root of all NC leaves (all zero)
+    ///   noteCommitmentsCount / noteNullifiersCount — array sizes (512 / 448)
+    function _loadBatchParams()
+        internal
+        view
+        returns (
+            uint256 root,
+            uint256 batchPoseidonRoot,
+            uint256 noteCommitmentsCount,
+            uint256 noteNullifiersCount
+        )
+    {
+        string memory json = vm.readFile(FIXTURE);
+        root                 = vm.parseJsonUint(json, ".root");
+        batchPoseidonRoot    = vm.parseJsonUint(json, ".batchPoseidonRoot");
+        noteCommitmentsCount = vm.parseJsonUint(json, ".noteCommitmentsCount");
+        noteNullifiersCount  = vm.parseJsonUint(json, ".noteNullifiersCount");
+    }
+
     // -----------------------------------------------------------------------
     // Tests
     // -----------------------------------------------------------------------
@@ -127,10 +148,15 @@ contract TesseraRollupV2IntegrationTest is Test {
 
     /// End-to-end: submit + prove a TX batch using the real Groth16 verifier.
     ///
-    /// The dummy SAV2 proof was produced with all-zero private inputs, so its
-    /// piCommitment is the Keccak-256 of the all-zero preimage.  We construct
-    /// a matching TransactionBatch on-chain so that _computeTxPiCommitment
-    /// returns exactly the same bytes32.
+    /// The dummy SAV2 proof is generated with:
+    ///   root               = genesis root (zeros[SOLIDITY_TREE_DEPTH])
+    ///   mainPoolConfigRoot = 0
+    ///   batchPoseidonRoot  = Goldilocks Poseidon Merkle root of 512 all-zero NC leaves
+    ///   noteCommitments    = 512 × uint256(0)
+    ///   noteNullifiers     = 448 × uint256(0)  (64 slots × 7 NNs/slot)
+    ///
+    /// These values are stored alongside the proof in the fixture JSON so this
+    /// test can reconstruct the exact TransactionBatch.
     function test_groth16_prove_transaction_batch() public {
         if (!vm.isFile(FIXTURE)) { vm.skip(true); }
 
@@ -141,6 +167,13 @@ contract TesseraRollupV2IntegrationTest is Test {
             uint256[8] memory publicInputs
         ) = _loadProof();
 
+        (
+            uint256 root,
+            uint256 batchPoseidonRoot,
+            uint256 ncCount,
+            uint256 nnCount
+        ) = _loadBatchParams();
+
         // Reconstruct piCommitment from publicInputs.
         bytes32 piCommitment = bytes32(
             (publicInputs[0] << 224) | (publicInputs[1] << 192) |
@@ -149,29 +182,24 @@ contract TesseraRollupV2IntegrationTest is Test {
             (publicInputs[6] << 32)  |  publicInputs[7]
         );
 
-        // The dummy SAV2 proof uses zero roots and zero pool config root.
-        // The genesis tree root is confirmedRoots[0] = zeros(treeDepth).
-        uint256 genesisRoot = rollup.zeros(rollup.treeDepth());
-
-        // Build a matching TransactionBatch so that _computeTxPiCommitment
-        // returns piCommitment.  All dynamic arrays empty; AC and AN are zero;
-        // batchPoseidonRoot is also zero (dummy SR output for all-zero NC leaves).
-        uint256[] memory empty = new uint256[](0);
+        // Build the matching TransactionBatch.
+        // noteCommitments and noteNullifiers are all-zero (default uint256[] values).
+        uint256[] memory noteCommitments = new uint256[](ncCount);
+        uint256[] memory noteNullifiers  = new uint256[](nnCount);
         TesseraRollupV2.TransactionBatch memory batch = TesseraRollupV2.TransactionBatch({
-            acRoot:            genesisRoot,
-            ncRoot:            genesisRoot,
+            root:               root,
             mainPoolConfigRoot: PCR,
-            noteCommitments:   empty,
-            noteNullifiers:    empty,
-            accountCommitment: 0,
-            accountNullifier:  0,
-            batchPoseidonRoot: 0,
-            confirmed:         false
+            noteCommitments:    noteCommitments,
+            noteNullifiers:     noteNullifiers,
+            accountCommitment:  0,
+            accountNullifier:   0,
+            batchPoseidonRoot:  batchPoseidonRoot,
+            confirmed:          false
         });
 
         // Verify our local piCommitment matches what the contract will compute.
         bytes32 computed = keccak256(abi.encodePacked(
-            batch.acRoot, batch.ncRoot, batch.mainPoolConfigRoot, batch.batchPoseidonRoot,
+            batch.root, batch.root, batch.mainPoolConfigRoot, batch.batchPoseidonRoot,
             batch.accountCommitment, batch.accountNullifier,
             batch.noteCommitments, batch.noteNullifiers
         ));

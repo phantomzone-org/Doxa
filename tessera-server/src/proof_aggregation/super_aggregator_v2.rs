@@ -392,29 +392,40 @@ fn pack_hash_le_to_u32s(
 	[h3.0, l3.0, h2.0, l2.0, h1.0, l1.0, h0.0, l0.0]
 }
 
-/// Cross-check SubtreeRoot leaves against TX note commitments.
+/// Cross-check SubtreeRoot leaves against TX note commitments + account commitment.
 ///
-/// For each real TX slot (`is_real=1`), asserts `sr_leaf[s*nps + j] == tx_nc[s][j]`
-/// for all `j ∈ 0..notes_per_slot`. Gated by `is_real` so dummy slots are free.
+/// SR leaf layout per slot: `[NC[0], NC[1], ..., NC[nc_per_slot-1], AC]`
+/// where `nc_per_slot = leaves_per_slot - 1 = NOTE_BATCH = 7`.
+///
+/// For each real TX slot (`is_real=1`):
+/// - SR leaf `s*leaves_per_slot + j` (j < nc_per_slot) == TX NC[j]
+/// - SR leaf `s*leaves_per_slot + nc_per_slot` == TX AC
+///
+/// Gated by `is_real` so dummy slots are free.
 fn wire_sr_to_tx(
 	builder: &mut CircuitBuilder<F, D>,
 	sr_pis: &[Target],
 	tx_pis: &[Target],
 	n_tx_slots: usize,
-	notes_per_slot: usize,
+	leaves_per_slot: usize,
 ) {
-	let mut constraints = Vec::with_capacity(n_tx_slots * notes_per_slot * 4);
+	let nc_per_slot = leaves_per_slot - 1; // NOTE_BATCH = 7; last leaf is AC
+	let mut constraints = Vec::with_capacity(n_tx_slots * leaves_per_slot * 4);
 	for s in 0..n_tx_slots {
 		let tx_base = s * TX_LEAF_PI_SIZE;
 		let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
-		for j in 0..notes_per_slot {
+		for j in 0..leaves_per_slot {
 			for k in 0..4 {
-				// NC field: after LUT meta + subpool_in + subpool_out + is_real + AN[4] + AC[4] +
-				// NN[nps×4]
-				let tx_nc = tx_pis[tx_base + TX_DATA_OFFSET + 8 + notes_per_slot * 4 + j * 4 + k];
-				// SR leaf: PI[4 + leaf_idx*4 + k], where leaf_idx = s*nps + j.
-				let sr_leaf = sr_pis[4 + (s * notes_per_slot + j) * 4 + k];
-				let diff = builder.sub(tx_nc, sr_leaf);
+				let tx_leaf = if j < nc_per_slot {
+					// NC[j]: after is_real/subpool[5] + AN[4] + AC[4] + NN[nc_per_slot×4]
+					tx_pis[tx_base + TX_DATA_OFFSET + 8 + nc_per_slot * 4 + j * 4 + k]
+				} else {
+					// AC: at TX_DATA_OFFSET + 4 (after AN[4])
+					tx_pis[tx_base + TX_DATA_OFFSET + 4 + k]
+				};
+				// SR leaf: PI[4 + leaf_idx*4 + k], where leaf_idx = s*leaves_per_slot + j.
+				let sr_leaf = sr_pis[4 + (s * leaves_per_slot + j) * 4 + k];
+				let diff = builder.sub(tx_leaf, sr_leaf);
 				let gated = builder.mul(is_real, diff);
 				constraints.push(gated);
 			}
@@ -487,7 +498,8 @@ fn setup_builder(
 		0,
 		"SR batch_size ({sr_batch_size}) must be divisible by n_tx_slots ({n_tx_slots})"
 	);
-	let notes_per_slot = sr_batch_size / n_tx_slots;
+	let notes_per_slot = sr_batch_size / n_tx_slots; // = NOTE_BATCH + 1 = 8 (leaves per slot)
+	let nc_per_slot = notes_per_slot - 1; // = NOTE_BATCH = 7 (NC only, no AC)
 
 	// --- Verify both proofs in-circuit ---
 	builder.verify_proof::<ConfigNative>(&tx_proof, &tx_vd, &inner.tx_common);
@@ -555,11 +567,12 @@ fn setup_builder(
 		u32_targets.extend_from_slice(&leaf_words);
 	}
 
-	// 8. noteNullifiers[0..N] — TX NN values (all slots, all notes) NN[s][j]: PI[s*77 +
-	//    TX_DATA_OFFSET + 8 + j*4 .. +4]
+	// 8. noteNullifiers[0..N] — TX NN values: NOTE_BATCH=nc_per_slot NN per slot. NN[s][j]:
+	//    PI[s*TX_LEAF_PI_SIZE + TX_DATA_OFFSET + 8 + j*4 .. +4] Uses nc_per_slot (= NOTE_BATCH =
+	//    7), not leaves_per_slot, since NN has no AC counterpart in the NN array.
 	for s in 0..n_tx_slots {
 		let tx_base = s * TX_LEAF_PI_SIZE;
-		for j in 0..notes_per_slot {
+		for j in 0..nc_per_slot {
 			let nn: [Target; 4] = core::array::from_fn(|k| {
 				tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 8 + j * 4 + k]
 			});
@@ -642,34 +655,45 @@ fn read_verifier(
 // Off-circuit PI validation
 // ---------------------------------------------------------------------------
 
-/// Validate SubtreeRoot leaf ↔ TX NC mapping off-circuit.
+/// Validate SubtreeRoot leaf ↔ TX (NC + AC) mapping off-circuit.
 ///
-/// For each real TX slot, asserts `sr_pis[4 + (s*nps+j)*4 + k] == tx_nc[s][j][k]`.
+/// SR leaf layout per slot: `[NC[0], ..., NC[nc_per_slot-1], AC]`
+/// where `nc_per_slot = leaves_per_slot - 1 = NOTE_BATCH = 7`.
+///
+/// For each real TX slot (`is_real=1`):
+/// - `sr_pis[4 + (s*lps+j)*4 + k] == tx_nc[s][j][k]`  for j < nc_per_slot
+/// - `sr_pis[4 + (s*lps+nc_per_slot)*4 + k] == tx_ac[s][k]`
 ///
 /// `sr_pis`: SubtreeRoot proof public inputs (`(1+batch_size)*4` elements).
-/// `tx_pis`: TX aggregation proof public inputs (`n_tx_slots * 77` elements).
+/// `tx_pis`: TX aggregation proof public inputs (`n_tx_slots * TX_LEAF_PI_SIZE` elements).
+/// `leaves_per_slot`: SR leaves per TX slot (= NOTE_BATCH + 1 = 8).
 pub fn validate_subtree_nc_offcircuit(
 	sr_pis: &[F],
 	tx_pis: &[F],
 	n_tx_slots: usize,
-	notes_per_slot: usize,
+	leaves_per_slot: usize,
 ) -> Result<()> {
 	use plonky2::field::types::{Field, PrimeField64};
+	let nc_per_slot = leaves_per_slot - 1;
 	for s in 0..n_tx_slots {
 		let tx_base = s * TX_LEAF_PI_SIZE;
 		let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
 		if is_real == F::ONE {
-			for j in 0..notes_per_slot {
+			for j in 0..leaves_per_slot {
 				for k in 0..4 {
-					let tx_nc =
-						tx_pis[tx_base + TX_DATA_OFFSET + 8 + notes_per_slot * 4 + j * 4 + k];
-					let leaf_idx = s * notes_per_slot + j;
+					let tx_leaf = if j < nc_per_slot {
+						tx_pis[tx_base + TX_DATA_OFFSET + 8 + nc_per_slot * 4 + j * 4 + k]
+					} else {
+						tx_pis[tx_base + TX_DATA_OFFSET + 4 + k] // AC
+					};
+					let leaf_idx = s * leaves_per_slot + j;
 					let sr_leaf = sr_pis[4 + leaf_idx * 4 + k];
-					if tx_nc != sr_leaf {
+					if tx_leaf != sr_leaf {
+						let kind = if j < nc_per_slot { "NC" } else { "AC" };
 						return Err(anyhow!(
-							"SR/TX NC mismatch: slot {s} note {j} field {k}: \
+							"SR/TX {kind} mismatch: slot {s} leaf {j} field {k}: \
 							 tx={} sr={}",
-							tx_nc.to_canonical_u64(),
+							tx_leaf.to_canonical_u64(),
 							sr_leaf.to_canonical_u64()
 						));
 					}
@@ -686,6 +710,8 @@ pub fn validate_subtree_nc_offcircuit(
 
 #[cfg(test)]
 mod tests {
+	use std::{path::PathBuf, sync::OnceLock};
+
 	use plonky2::{
 		field::types::Field,
 		iop::{target::Target, witness::PartialWitness},
@@ -696,6 +722,84 @@ mod tests {
 
 	use super::*;
 	use crate::proof_aggregation::{SubtreeRootCircuit, TX_LEAF_PI_SIZE};
+
+	// -----------------------------------------------------------------
+	// Serialized test-circuit cache
+	//
+	// The SuperAggregatorV2 circuit takes ~30s to build.  We cache it
+	// within a test-binary run via OnceLock, and load from the
+	// artifact directory (generated by `super_aggregator_v2_artifacts`)
+	// when available to skip the build entirely.
+	//
+	// Artifact layout (under $TESSERA_ARTIFACTS_DIR/sav2-unit-test/):
+	//   circuit_data.bin, tx_common.bin, tx_verifier.bin,
+	//   sr_common.bin, sr_verifier.bin  — SuperAggregatorV2 (2 slots)
+	//   subtree-root/circuit_data.bin   — SubtreeRootCircuit (16 leaves)
+	// -----------------------------------------------------------------
+
+	struct TestCircuits {
+		tx_cd: CircuitDataNative,
+		tx_targets: Vec<Target>,
+		sr: SubtreeRootCircuit,
+		sav2: SuperAggregatorV2,
+	}
+
+	static TEST_CIRCUITS: OnceLock<TestCircuits> = OnceLock::new();
+
+	fn unit_test_artifact_dir() -> Option<PathBuf> {
+		let base = std::env::var("TESSERA_ARTIFACTS_DIR")
+			.map(PathBuf::from)
+			.unwrap_or_else(|_| {
+				PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+					.parent()
+					.expect("workspace parent")
+					.join("artifacts")
+			});
+		Some(base.join("sav2-unit-test"))
+	}
+
+	fn get_test_circuits() -> &'static TestCircuits {
+		TEST_CIRCUITS.get_or_init(|| {
+			// Always rebuild the tiny synthetic TX-agg circuit (fast, targets needed for proving).
+			let (tx_cd, tx_targets) = build_tx_agg(2);
+
+			// Try loading SAV2 + SR from pre-built artifacts.
+			if let Some(dir) = unit_test_artifact_dir() {
+				let sr_dir = dir.join("subtree-root");
+				if SuperAggregatorV2::has_artifacts(&dir)
+					&& SubtreeRootCircuit::has_artifacts(&sr_dir)
+				{
+					if let (Ok(sr), Ok(sav2)) = (
+						SubtreeRootCircuit::from_artifacts(&sr_dir, 16),
+						SuperAggregatorV2::from_artifacts(&dir),
+					) {
+						return TestCircuits {
+							tx_cd,
+							tx_targets,
+							sr,
+							sav2,
+						};
+					}
+				}
+			}
+
+			// Fallback: build from scratch (slow).
+			let sr = SubtreeRootCircuit::build(16).expect("SubtreeRootCircuit::build");
+			let inner = SuperAggregatorV2CircuitData {
+				tx_common: tx_cd.common.clone(),
+				tx_verifier: tx_cd.verifier_only.clone(),
+				sr_common: sr.circuit_data.common.clone(),
+				sr_verifier: sr.circuit_data.verifier_only.clone(),
+			};
+			let sav2 = SuperAggregatorV2::build(inner).expect("SuperAggregatorV2::build");
+			TestCircuits {
+				tx_cd,
+				tx_targets,
+				sr,
+				sav2,
+			}
+		})
+	}
 
 	// -----------------------------------------------------------------
 	// Helpers for synthetic TX aggregation proofs
@@ -735,11 +839,20 @@ mod tests {
 
 	/// Build slot values for one TX slot.
 	///
-	/// `is_real`: 0 or 1.
-	/// `an`: 4-element account nullifier.
-	/// `ac`: 4-element account commitment.
-	/// `nn`: `notes_per_slot × 4` note nullifiers (flat).
-	/// `nc`: `notes_per_slot × 4` note commitments (flat).
+	/// TX PI layout with NOTE_BATCH=7 (TX_LEAF_PI_SIZE=77):
+	/// ```text
+	/// [0]    = subpool_id_in  (auto, zero for test)
+	/// [1]    = subpool_id_out (auto, zero for test)
+	/// [2]    = subpool_id_in  (explicit, zero for test)
+	/// [3]    = subpool_id_out (explicit, zero for test)
+	/// [4]    = is_real        (IS_REAL_OFFSET)
+	/// [5-8]  = AN             (TX_DATA_OFFSET)
+	/// [9-12] = AC
+	/// [13-40]= NN (7×4=28)
+	/// [41-68]= NC (7×4=28)
+	/// [69-72]= act_root
+	/// [73-76]= nct_root
+	/// ```
 	fn make_slot(
 		is_real: u64,
 		an: [u64; 4],
@@ -748,10 +861,6 @@ mod tests {
 		nc_flat: &[u64],
 	) -> Vec<u64> {
 		let mut v = vec![0u64; TX_LEAF_PI_SIZE];
-		// PI[0] = subpool_id_in  (auto-registered by add_virtual_account_target, zero for test)
-		// PI[1] = subpool_id_out (auto-registered by add_virtual_account_target, zero for test)
-		// PI[2] = subpool_id_in  (explicit, same wire as PI[0], zero for test)
-		// PI[3] = subpool_id_out (explicit, same wire as PI[1], zero for test)
 		v[4] = is_real; // IS_REAL_OFFSET = 4
 		v[5] = an[0];
 		v[6] = an[1];
@@ -761,28 +870,29 @@ mod tests {
 		v[10] = ac[1];
 		v[11] = ac[2];
 		v[12] = ac[3]; // AC
-				 // NN at [13..45] (8×4=32 fields)
-		assert_eq!(nn_flat.len(), v[13..45].len());
-		v[13..45].copy_from_slice(nn_flat);
-		// NC at [45..77] (8×4=32 fields)
-		assert_eq!(nc_flat.len(), v[45..77].len());
-		v[45..77].copy_from_slice(nc_flat);
+				 // NN at [13..41] (7×4=28 fields, NOTE_BATCH=7)
+		assert_eq!(nn_flat.len(), v[13..41].len());
+		v[13..41].copy_from_slice(nn_flat);
+		// NC at [41..69] (7×4=28 fields)
+		assert_eq!(nc_flat.len(), v[41..69].len());
+		v[41..69].copy_from_slice(nc_flat);
+		// [69..77] = act_root + nct_root (left as zero for test)
 		v
 	}
 
-	/// Build 8 note commitments where NC[j] = HashOutput(base+j, 0, 0, 0).
-	fn make_nc_flat(base: u64) -> [u64; 32] {
-		let mut out = [0u64; 32];
-		for j in 0..8usize {
+	/// Build 7 note commitments where NC[j] = HashOutput(base+j, 0, 0, 0).
+	fn make_nc_flat(base: u64) -> [u64; 28] {
+		let mut out = [0u64; 28];
+		for j in 0..7usize {
 			out[j * 4] = base + j as u64;
 		}
 		out
 	}
 
-	/// Build 8 note nullifiers where NN[j] = HashOutput(base+j, 0, 0, 0).
-	fn make_nn_flat(base: u64) -> [u64; 32] {
-		let mut out = [0u64; 32];
-		for j in 0..8usize {
+	/// Build 7 note nullifiers where NN[j] = HashOutput(base+j, 0, 0, 0).
+	fn make_nn_flat(base: u64) -> [u64; 28] {
+		let mut out = [0u64; 28];
+		for j in 0..7usize {
 			out[j * 4] = base + j as u64;
 		}
 		out
@@ -794,17 +904,8 @@ mod tests {
 
 	#[test]
 	fn test_build_pi_count() -> Result<()> {
-		let (tx_cd, _) = build_tx_agg(2);
-		let sr_circuit = SubtreeRootCircuit::build(16)?; // 2 slots × 8 notes
-
-		let inner = SuperAggregatorV2CircuitData {
-			tx_common: tx_cd.common.clone(),
-			tx_verifier: tx_cd.verifier_only.clone(),
-			sr_common: sr_circuit.circuit_data.common.clone(),
-			sr_verifier: sr_circuit.circuit_data.verifier_only.clone(),
-		};
-		let agg = SuperAggregatorV2::build(inner)?;
-		assert_eq!(agg.circuit_data.common.num_public_inputs, 8);
+		let tc = get_test_circuits();
+		assert_eq!(tc.sav2.circuit_data.common.num_public_inputs, 8);
 		Ok(())
 	}
 
@@ -814,9 +915,7 @@ mod tests {
 
 	#[test]
 	fn test_prove_and_pi_commitment_matches_native() -> Result<()> {
-		// Build inner circuits.
-		let (tx_cd, tx_targets) = build_tx_agg(2);
-		let sr_circuit = SubtreeRootCircuit::build(16)?; // 2 slots × 8 notes
+		let tc = get_test_circuits();
 
 		// NC values for slot 0 (real) and slot 1 (dummy, is_real=0).
 		let nc0 = make_nc_flat(0x4000);
@@ -831,47 +930,46 @@ mod tests {
 		let slot1 = make_slot(0, [0; 4], [0; 4], &nn1, &nc1);
 
 		// Build TX agg proof.
-		let tx_proof = prove_tx_agg(&tx_cd, &tx_targets, &[slot0, slot1]);
+		let tx_proof = prove_tx_agg(&tc.tx_cd, &tc.tx_targets, &[slot0, slot1]);
 
-		// SR leaves: slot0 NC[j] for j=0..8, then zeros for slot1.
+		// SR leaves: 8 per slot = [NC[0..7], AC].
+		// Slot 0 (real): NC[j] = (0x4000+j, 0, 0, 0) for j=0..6, AC = (0x2000, 0, 0, 0).
+		// Slot 1 (dummy): all zeros.
 		let sr_leaves: Vec<HashOutput> = (0..16)
 			.map(|i| {
-				if i < 8 {
+				if i < 7 {
+					// NC[i] for slot 0
 					HashOutput::new([
 						F::from_canonical_u64(0x4000 + i as u64),
 						F::ZERO,
 						F::ZERO,
 						F::ZERO,
 					])
+				} else if i == 7 {
+					// AC for slot 0
+					HashOutput::new([F::from_canonical_u64(0x2000), F::ZERO, F::ZERO, F::ZERO])
 				} else {
 					HashOutput::new([F::ZERO; 4])
 				}
 			})
 			.collect();
-		let sr_proof = sr_circuit.prove(&sr_leaves)?;
-
-		// Build SuperAggregatorV2.
-		let inner = SuperAggregatorV2CircuitData {
-			tx_common: tx_cd.common.clone(),
-			tx_verifier: tx_cd.verifier_only.clone(),
-			sr_common: sr_circuit.circuit_data.common.clone(),
-			sr_verifier: sr_circuit.circuit_data.verifier_only.clone(),
-		};
-		let agg = SuperAggregatorV2::build(inner)?;
+		let sr_proof = tc.sr.prove(&sr_leaves)?;
 
 		// Private witnesses.
 		let root = HashOutput::new([F::from_canonical_u64(0xAC00), F::ZERO, F::ZERO, F::ZERO]);
 		let main_pool_cfg_root = [0x01u8; 32];
 
-		let proof = agg.prove(tx_proof.clone(), sr_proof.clone(), root, main_pool_cfg_root)?;
-		agg.circuit_data.verify(proof.clone())?;
+		let proof = tc
+			.sav2
+			.prove(tx_proof.clone(), sr_proof.clone(), root, main_pool_cfg_root)?;
+		tc.sav2.circuit_data.verify(proof.clone())?;
 
 		// Compare circuit output against native computation.
 		let batch_poseidon_root = SubtreeRootCircuit::root_from_proof(&sr_proof);
 		let account_commitment = SuperAggregatorV2::ac_from_tx_proof(&tx_proof);
 		let account_nullifier = SuperAggregatorV2::an_from_tx_proof(&tx_proof);
 		let note_commitments = SubtreeRootCircuit::leaves_from_proof(&sr_proof, 16);
-		let note_nullifiers = SuperAggregatorV2::nn_from_tx_proof(&tx_proof, 2, 8);
+		let note_nullifiers = SuperAggregatorV2::nn_from_tx_proof(&tx_proof, 2, 7);
 
 		let expected = SuperAggregatorV2::compute_pi_commitment_native(
 			root,
@@ -902,30 +1000,23 @@ mod tests {
 
 	#[test]
 	fn test_cross_check_rejects_nc_mismatch() -> Result<()> {
-		let (tx_cd, tx_targets) = build_tx_agg(2);
-		let sr_circuit = SubtreeRootCircuit::build(16)?;
+		let tc = get_test_circuits();
 
 		let nc0 = make_nc_flat(0x4000);
 		let nn0 = make_nn_flat(0x3000);
 		let slot0 = make_slot(1, [0x1000, 0, 0, 0], [0x2000, 0, 0, 0], &nn0, &nc0);
 		let slot1 = make_slot(0, [0; 4], [0; 4], &make_nn_flat(0), &make_nc_flat(0));
-		let tx_proof = prove_tx_agg(&tx_cd, &tx_targets, &[slot0, slot1]);
+		let tx_proof = prove_tx_agg(&tc.tx_cd, &tc.tx_targets, &[slot0, slot1]);
 
 		// SR leaves intentionally WRONG for slot 0 (different values).
 		let mut rng = StdRng::from_seed([99u8; 32]);
 		let wrong_leaves: Vec<HashOutput> =
 			(0..16).map(|_| HashOutput::new_random(&mut rng)).collect();
-		let sr_proof = sr_circuit.prove(&wrong_leaves)?;
+		let sr_proof = tc.sr.prove(&wrong_leaves)?;
 
-		let inner = SuperAggregatorV2CircuitData {
-			tx_common: tx_cd.common.clone(),
-			tx_verifier: tx_cd.verifier_only.clone(),
-			sr_common: sr_circuit.circuit_data.common.clone(),
-			sr_verifier: sr_circuit.circuit_data.verifier_only.clone(),
-		};
-		let agg = SuperAggregatorV2::build(inner)?;
-
-		let result = agg.prove(tx_proof, sr_proof, HashOutput::new([F::ZERO; 4]), [0u8; 32]);
+		let result = tc
+			.sav2
+			.prove(tx_proof, sr_proof, HashOutput::new([F::ZERO; 4]), [0u8; 32]);
 		assert!(result.is_err(), "prove should fail when SR leaves != TX NC");
 		Ok(())
 	}
@@ -937,18 +1028,20 @@ mod tests {
 	#[test]
 	fn test_validate_subtree_nc_offcircuit_ok() -> Result<()> {
 		// Build a TX agg proof and SR proof with matching NC/leaves.
-		let (tx_cd, tx_targets) = build_tx_agg(2);
-		let sr_circuit = SubtreeRootCircuit::build(16)?;
+		let tc = get_test_circuits();
 
 		let nc0 = make_nc_flat(0x5000);
 		let nn0 = make_nn_flat(0x6000);
 		let slot0 = make_slot(1, [0, 0, 0, 0], [0, 0, 0, 0], &nn0, &nc0);
 		let slot1 = make_slot(0, [0; 4], [0; 4], &make_nn_flat(0), &make_nc_flat(0));
-		let tx_proof = prove_tx_agg(&tx_cd, &tx_targets, &[slot0, slot1]);
+		let tx_proof = prove_tx_agg(&tc.tx_cd, &tc.tx_targets, &[slot0, slot1]);
 
+		// SR leaves: 8 per slot = [NC[0..7], AC].
+		// Slot 0 (real): NC[j]=(0x5000+j,..) for j=0..6, AC=(0,0,0,0) (matches slot0 AC=[0;4]).
+		// Slot 1 (dummy): all zeros (is_real=0, no cross-check).
 		let sr_leaves: Vec<HashOutput> = (0..16)
 			.map(|i| {
-				if i < 8 {
+				if i < 7 {
 					HashOutput::new([
 						F::from_canonical_u64(0x5000 + i as u64),
 						F::ZERO,
@@ -956,31 +1049,30 @@ mod tests {
 						F::ZERO,
 					])
 				} else {
-					HashOutput::new([F::ZERO; 4])
+					HashOutput::new([F::ZERO; 4]) // AC (i=7) and slot1 (i=8..15) are zeros
 				}
 			})
 			.collect();
-		let sr_proof = sr_circuit.prove(&sr_leaves)?;
+		let sr_proof = tc.sr.prove(&sr_leaves)?;
 
 		validate_subtree_nc_offcircuit(&sr_proof.public_inputs, &tx_proof.public_inputs, 2, 8)
 	}
 
 	#[test]
 	fn test_validate_subtree_nc_offcircuit_mismatch() {
-		let (tx_cd, tx_targets) = build_tx_agg(2);
+		let tc = get_test_circuits();
 
 		let nc0 = make_nc_flat(0x5000);
 		let nn0 = make_nn_flat(0x6000);
 		let slot0 = make_slot(1, [0; 4], [0; 4], &nn0, &nc0);
 		let slot1 = make_slot(0, [0; 4], [0; 4], &make_nn_flat(0), &make_nc_flat(0));
-		let tx_proof = prove_tx_agg(&tx_cd, &tx_targets, &[slot0, slot1]);
+		let tx_proof = prove_tx_agg(&tc.tx_cd, &tc.tx_targets, &[slot0, slot1]);
 
 		// SR PIs with wrong leaf 0.
-		let sr_circuit = SubtreeRootCircuit::build(16).unwrap();
 		let mut rng = StdRng::from_seed([7u8; 32]);
 		let wrong_leaves: Vec<HashOutput> =
 			(0..16).map(|_| HashOutput::new_random(&mut rng)).collect();
-		let sr_proof = sr_circuit.prove(&wrong_leaves).unwrap();
+		let sr_proof = tc.sr.prove(&wrong_leaves).unwrap();
 
 		let result =
 			validate_subtree_nc_offcircuit(&sr_proof.public_inputs, &tx_proof.public_inputs, 2, 8);
