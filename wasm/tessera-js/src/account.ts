@@ -2,6 +2,7 @@ import {
   WasmAccount,
   WasmAccountAddress,
   WasmInputNote,
+  WasmSpendTx,
   WasmSpendTxBuilder,
   decodeHash,
 } from "../wasm/tessera_client_wasm.js";
@@ -95,7 +96,9 @@ export class Account {
   }
 
   /** The raw WASM handle — needed to pass this account to `SpendTxBuilder`. */
-  get wasmInner(): WasmAccount { return this.inner; }
+  get wasmInner(): WasmAccount {
+    return this.inner;
+  }
 
   /** Decode a 32-byte hash into 4 × u64 limbs (little-endian). Useful for debugging. */
   static decodeHash(bytes: HashBytes): BigInt64Array {
@@ -109,7 +112,7 @@ export class InputNote {
   readonly inner: WasmInputNote;
 
   constructor(
-    identifier: Uint8Array,  // 16 bytes
+    identifier: Uint8Array, // 16 bytes
     assetId: bigint,
     amount: bigint,
     recipient: Account,
@@ -124,6 +127,21 @@ export class InputNote {
       sender.wasmInner,
       position,
     );
+  }
+}
+
+/** A built spend transaction. Call `txHash()` to get the hash to sign. */
+export class SpendTx {
+  private inner: WasmSpendTx;
+
+  /** @internal */
+  constructor(inner: WasmSpendTx) {
+    this.inner = inner;
+  }
+
+  /** 32-byte transaction hash (4 × u64 little-endian). Sign this with the spend-auth key. */
+  txHash(): HashBytes {
+    return this.inner.txHash();
   }
 }
 
@@ -147,13 +165,8 @@ export class SpendTxBuilder {
     return this;
   }
 
-  /**
-   * Compute the spend tx hash.
-   *
-   * - `actPosition`: position of the sender's account in the ACT.
-   *   Pass `undefined` only for fresh accounts (nonce = 0).
-   */
-  build(actPosition?: bigint): HashBytes {
-    return this.builder.build(actPosition).txHash();
+  /** Build the spend transaction. */
+  build(): SpendTx {
+    return new SpendTx(this.builder.build());
   }
 }

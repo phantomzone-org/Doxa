@@ -164,8 +164,8 @@ impl WasmAccount {
 
 	/// Returns the account nullifier.
 	/// Pass `undefined` for fresh accounts (nonce = 0).
-	pub fn nullifier(&self, position: Option<u64>) -> Vec<u8> {
-		let null: AccountNullifier = self.0.borrow().nullifier(position);
+	pub fn nullifier(&self) -> Vec<u8> {
+		let null: AccountNullifier = self.0.borrow().nullifier();
 		hash_to_bytes(null.0)
 	}
 }
@@ -297,7 +297,8 @@ pub struct WasmSpendTx {
 	dummy_inotes: Vec<WasmDummyNote>,
 	/// Real output notes.
 	onotes: Vec<StandardNote>,
-	/// Random dummy seeds for unfilled output-note slots; converted to commitments via double_hash.
+	/// Random dummy seeds for unfilled output-note slots; converted to commitments via
+	/// double_hash.
 	dummy_onotes: Vec<WasmDummyNote>,
 }
 
@@ -313,8 +314,7 @@ impl WasmSpendTx {
 		let inotes_null: [NoteNullifier; NOTE_BATCH] = std::array::from_fn(|i| {
 			if i < self.inotes.len() {
 				let (note, pos) = &self.inotes[i];
-				PositionedStandardNode::from_note(*note, F::from_canonical_u64(*pos))
-					.nullifier(&nk)
+				PositionedStandardNode::from_note(*note, F::from_canonical_u64(*pos)).nullifier(&nk)
 			} else {
 				self.dummy_inotes[i - self.inotes.len()].to_nullifier()
 			}
@@ -343,7 +343,7 @@ impl WasmSpendTx {
 /// Builder for a spend transaction.
 ///
 /// ```js
-/// const builder = new WasmSpendTxBuilder(accin, 1n /* asset_id */);
+/// const builder = new WasmSpendTxBuilder(accin, 1n); // asset_id
 /// builder.addOutputNote(recipient, 100n);
 /// const tx = builder.build(undefined);  // undefined = fresh account
 /// ```
@@ -413,10 +413,7 @@ impl WasmSpendTxBuilder {
 	}
 
 	/// Compute the spend tx hash.
-	///
-	/// `accin_act_position`: ACT position of the input account.
-	/// Pass `undefined` for fresh accounts (nonce = 0).
-	pub fn build(&self, accin_act_position: Option<u64>) -> Result<WasmSpendTx, JsError> {
+	pub fn build(&self) -> Result<WasmSpendTx, JsError> {
 		use tessera_client::NOTE_BATCH;
 
 		if self.onotes.is_empty() {
@@ -428,10 +425,12 @@ impl WasmSpendTxBuilder {
 		let mut rng = rand::rng();
 
 		// Dummy seeds for unfilled output-note and input-note slots.
-		let dummy_onotes: Vec<WasmDummyNote> =
-			(0..NOTE_BATCH - self.onotes.len()).map(|_| WasmDummyNote::sample(&mut rng)).collect();
-		let dummy_inotes: Vec<WasmDummyNote> =
-			(0..NOTE_BATCH - self.inotes.len()).map(|_| WasmDummyNote::sample(&mut rng)).collect();
+		let dummy_onotes: Vec<WasmDummyNote> = (0..NOTE_BATCH - self.onotes.len())
+			.map(|_| WasmDummyNote::sample(&mut rng))
+			.collect();
+		let dummy_inotes: Vec<WasmDummyNote> = (0..NOTE_BATCH - self.inotes.len())
+			.map(|_| WasmDummyNote::sample(&mut rng))
+			.collect();
 
 		// Derive accout.
 		let delta_in: U256 = self
@@ -454,7 +453,7 @@ impl WasmSpendTxBuilder {
 		let mut accout = accin_ref.clone_with_incremented_nonce();
 		accout.ast.insert_or_update_asset(asset, new_bal);
 
-		let accin_null = accin_ref.nullifier(accin_act_position);
+		let accin_null = accin_ref.nullifier();
 		let accin = accin_ref.clone();
 
 		Ok(WasmSpendTx {

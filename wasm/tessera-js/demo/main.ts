@@ -61,7 +61,7 @@ btnRegister.addEventListener("click", async () => {
     if (!prfEnabled) {
       log("⚠ Your authenticator does not support PRF. Derive will fail.");
     }
-    btnDerive.disabled = false;
+    // btnDerive.disabled = false;
   } catch (err) {
     log(`✗ Registration failed: ${err}`);
   }
@@ -102,6 +102,7 @@ btnDerive.addEventListener("click", async () => {
     log(`  commitment:   ${toHex(account.commitment())}`);
     log(`  publicId:     ${toHex(account.publicId())}`);
     log(`  nullifierKey: ${toHex(account.nullifierKey())}`);
+    log(`  address:      ${account.address().toHex()}`);
     log(`  isFresh:      ${account.isFresh()}`);
     console.log("account object:", account);
   } catch (err) {
