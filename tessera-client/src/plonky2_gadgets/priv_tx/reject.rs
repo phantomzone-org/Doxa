@@ -58,7 +58,7 @@ pub(crate) fn set_reject_tx_witness(
 
 	// ── Tx hash ───────────────────────────────────────────────────────────────
 	let nk = accin.nk();
-	let accin_null = accin.nullifier(Some(accin_act_merkle_proof.pos as u64));
+	let accin_null = accin.nullifier();
 
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = core::array::from_fn(|i| {
 		if i < inotes.len() {
@@ -393,7 +393,7 @@ mod tests {
 
 		// ── Compute tx_hash natively ──────────────────────────────────────────
 		let nk = acc.nk();
-		let accin_null = acc.nullifier(Some(acc_pos as u64));
+		let accin_null = acc.nullifier();
 		let mut accout = acc.clone();
 		accout.nonce = Nonce(F::from_canonical_u64(2));
 

@@ -297,7 +297,7 @@ impl StandardAccount {
 		))
 	}
 
-	pub fn nullifier(&self, pos: Option<u64>) -> AccountNullifier {
+	pub fn nullifier(&self) -> AccountNullifier {
 		let mut inp = Vec::with_capacity(4 + 4);
 		inp.extend(self.commitment().0.0);
 		inp.extend(self.nk().0);

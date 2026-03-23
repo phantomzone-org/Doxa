@@ -291,7 +291,7 @@ pub(crate) fn set_withdraw_tx_witness(
 	accout.ast = current_ast.clone();
 
 	// ── Native TxHash ─────────────────────────────────────────────────────
-	let accin_null = accin.nullifier(Some(accin_act_merkle_proof.pos as u64));
+	let accin_null = accin.nullifier();
 	let tx_hash = derive_withdraw_tx_hash(
 		accin_null,
 		accout.commitment(),
@@ -468,7 +468,7 @@ mod tests {
 		accout.nonce = Nonce(F::from_canonical_u64(2));
 		accout.ast = current_ast;
 
-		let accin_null = accin.nullifier(Some(accin_act_proof.pos as u64));
+		let accin_null = accin.nullifier();
 		let tx_hash = crate::derive_withdraw_tx_hash(
 			accin_null,
 			accout.commitment(),

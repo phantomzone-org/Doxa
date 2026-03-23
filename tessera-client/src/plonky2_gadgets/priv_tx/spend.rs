@@ -125,7 +125,7 @@ pub fn set_spend_tx_witness(
 			NoteCommitment(HashOutput(double_hash_native(donotes[i])))
 		}
 	});
-	let accin_null = accin.nullifier(Some(accin_merkle_proof.pos as u64));
+	let accin_null = accin.nullifier();
 	let tx_hash = derive_priv_tx_hash(
 		accin_null,
 		accout.commitment(),
@@ -631,7 +631,7 @@ mod tests {
 		let tx_onote_comms: [NoteCommitment; NOTE_BATCH] =
 			array::from_fn(|i| NoteCommitment(HashOutput(double_hash_native(donotes[i]))));
 
-		let accin_null = acc0.nullifier(Some(acc0_pos as u64));
+		let accin_null = acc0.nullifier();
 		let tx_hash = derive_priv_tx_hash(
 			accin_null,
 			accout.commitment(),

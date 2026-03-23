@@ -78,7 +78,7 @@ pub(crate) fn set_freshacc_tx_witness(
 
 	// ── Tx hash ───────────────────────────────────────────────────────────────
 	let tx_hash = derive_priv_tx_hash(
-		accin.nullifier(None),
+		accin.nullifier(),
 		accout.commitment(),
 		dinote_nulls,
 		donote_comms,
@@ -164,7 +164,7 @@ pub(crate) fn set_freshacc_tx_witness(
 
 	// ── AN/AC/NN/NC override targets ─────────────────────────────────────────
 	// For real TXs these equal the derived values (enforced by circuit).
-	set_hash(pw, t.accin_null.0, accin.nullifier(None).0.0);
+	set_hash(pw, t.accin_null.0, accin.nullifier().0.0);
 	set_hash(pw, t.accout_comm.0, accout.commitment().0.0);
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
@@ -284,7 +284,7 @@ mod tests {
 		let donote_comms =
 			array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
 		let tx_hash = derive_priv_tx_hash(
-			accin.nullifier(None),
+			accin.nullifier(),
 			accout.commitment(),
 			dinote_nulls,
 			donote_comms,

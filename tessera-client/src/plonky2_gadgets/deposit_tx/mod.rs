@@ -273,7 +273,7 @@ pub(crate) fn set_deposit_tx_witness(
 
 	// ── Native TxHash ─────────────────────────────────────────────────────────
 	// H(accin_null[4] || accout_comm[4] || deposit_note_comm[4] || eth_address[5])
-	let accin_null = accin.nullifier(Some(accin_act_merkle_proof.pos as u64));
+	let accin_null = accin.nullifier();
 	let deposit_note_comm_native = deposit_note.commitment();
 	let tx_hash = derive_deposit_tx_hash(
 		accin_null,
@@ -562,7 +562,7 @@ mod tests {
 			.ast
 			.insert_or_update_asset(asset_id, deposit_note.amount);
 
-		let accin_null = accin.nullifier(Some(accin_merkle_proof.pos as u64));
+		let accin_null = accin.nullifier();
 		let deposit_note_comm = deposit_note.commitment();
 		let tx_hash = derive_deposit_tx_hash(
 			accin_null,
