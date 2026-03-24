@@ -9,6 +9,11 @@ import {
 
 export type HashBytes = Uint8Array;
 
+/** Encode a Uint8Array as a lowercase hex string. */
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** A Tessera account address (subpool_id + public_id). */
 export class AccountAddress {
   readonly inner: WasmAccountAddress;
@@ -86,8 +91,8 @@ export class Account {
    * - Fresh accounts: call with no argument (or `undefined`).
    * - Existing accounts: pass the account's position in the ACT.
    */
-  nullifier(position?: bigint): HashBytes {
-    return this.inner.nullifier(position);
+  nullifier(): HashBytes {
+    return this.inner.nullifier();
   }
 
   /** Returns the account address. */
@@ -98,6 +103,22 @@ export class Account {
   /** The raw WASM handle — needed to pass this account to `SpendTxBuilder`. */
   get wasmInner(): WasmAccount {
     return this.inner;
+  }
+
+  /**
+   * The private identifier as a 32-hex-char string (16 bytes, 2 × u64 LE).
+   * Used as `private_identifier` in the backend register request.
+   */
+  privateIdentifierHex(): string {
+    return bytesToHex(this.inner.privateIdentifierBytes());
+  }
+
+  /**
+   * The spend-auth public key as an 80-hex-char string (40 bytes, 5 × u64 LE).
+   * Used as `spend_auth_pk` in the backend register request.
+   */
+  spendAuthPkHex(): string {
+    return bytesToHex(this.inner.spendAuthPkBytes());
   }
 
   /** Decode a 32-byte hash into 4 × u64 limbs (little-endian). Useful for debugging. */

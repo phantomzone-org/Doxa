@@ -78,6 +78,19 @@ impl WasmDummyNote {
 	}
 }
 
+/// Derive `PrivateIdentifier([F; 2])` from a seed using domain-separated SHA-256.
+/// Returns the canonical 16-byte LE encoding (2 × u64 LE).
+fn derive_private_identifier(seed: &[u8]) -> PrivateIdentifier {
+	let hash: [u8; 32] = Sha256::new()
+		.chain_update(seed)
+		.chain_update(DS_WASM_SEEDED_PRIVATE_IDENTIFIER)
+		.finalize()
+		.into();
+	let f0 = F::from_noncanonical_u64(u64::from_le_bytes(hash[0..8].try_into().unwrap()));
+	let f1 = F::from_noncanonical_u64(u64::from_le_bytes(hash[8..16].try_into().unwrap()));
+	PrivateIdentifier([f0, f1])
+}
+
 /// Derive the spend-auth private key from a 32-byte seed using domain-separated SHA-256.
 fn derive_spend_key(seed: &[u8]) -> PrivateKey {
 	let h0: [u8; 32] = Sha256::new()
@@ -116,15 +129,7 @@ impl WasmAccount {
 	pub fn new_with_seed(seed: &[u8], subpool_id: u64) -> WasmAccount {
 		utils::set_panic_hook();
 
-		let hash_pi: [u8; 32] = Sha256::new()
-			.chain_update(seed)
-			.chain_update(DS_WASM_SEEDED_PRIVATE_IDENTIFIER)
-			.finalize()
-			.into();
-		let f0 = F::from_noncanonical_u64(u64::from_le_bytes(hash_pi[0..8].try_into().unwrap()));
-		let f1 = F::from_noncanonical_u64(u64::from_le_bytes(hash_pi[8..16].try_into().unwrap()));
-		let private_identifier = PrivateIdentifier([f0, f1]);
-
+		let private_identifier = derive_private_identifier(seed);
 		let sk = derive_spend_key(seed);
 		let spend_pk = CompressedPublicKey::from(sk.public_key::<F>());
 
@@ -172,6 +177,30 @@ impl WasmAccount {
 	pub fn nullifier(&self) -> Vec<u8> {
 		let null: AccountNullifier = self.0.borrow().nullifier();
 		hash_to_bytes(null.0)
+	}
+
+	/// Returns the 16-byte little-endian encoding of PrivateIdentifier([F; 2]).
+	/// Used as `private_identifier` in the backend register request.
+	#[wasm_bindgen(js_name = privateIdentifierBytes)]
+	pub fn private_identifier_bytes(&self) -> Vec<u8> {
+		let acc = self.0.borrow();
+		let [f0, f1] = acc.private_identifier.0;
+		let mut out = [0u8; 16];
+		out[0..8].copy_from_slice(&f0.to_canonical_u64().to_le_bytes());
+		out[8..16].copy_from_slice(&f1.to_canonical_u64().to_le_bytes());
+		out.to_vec()
+	}
+
+	/// Returns the 40-byte little-endian encoding of the spend-auth CompressedPublicKey.
+	/// Used as `spend_auth_pk` in the backend register request.
+	/// Returns all-zeros if no spend key is set.
+	#[wasm_bindgen(js_name = spendAuthPkBytes)]
+	pub fn spend_auth_pk_bytes(&self) -> Vec<u8> {
+		let acc = self.0.borrow();
+		match &acc.spend_auth.spend_pk {
+			Some(pk) => pk.encode().to_vec(),
+			None => vec![0u8; 40],
+		}
 	}
 }
 
@@ -483,6 +512,29 @@ impl WasmSpendTxBuilder {
 }
 
 // ── free functions ────────────────────────────────────────────────────────────
+
+/// Derive the private identifier bytes from a seed.
+/// Returns 16 bytes (2 × u64 LE canonical encoding of PrivateIdentifier([F; 2])).
+/// This is the value used as `private_identifier` in the backend register request.
+#[wasm_bindgen(js_name = derivePrivateIdentifier)]
+pub fn wasm_derive_private_identifier(seed: &[u8]) -> Vec<u8> {
+	let pi = derive_private_identifier(seed);
+	let [f0, f1] = pi.0;
+	let mut out = [0u8; 16];
+	out[0..8].copy_from_slice(&f0.to_canonical_u64().to_le_bytes());
+	out[8..16].copy_from_slice(&f1.to_canonical_u64().to_le_bytes());
+	out.to_vec()
+}
+
+/// Derive the spend-auth public key bytes from a seed.
+/// Returns 40 bytes (5 × u64 LE encoding of CompressedPublicKey via `encode()`).
+/// This is the value used as `spend_auth_pk` in the backend register request.
+#[wasm_bindgen(js_name = deriveSpendAuthPk)]
+pub fn wasm_derive_spend_auth_pk(seed: &[u8]) -> Vec<u8> {
+	let sk = derive_spend_key(seed);
+	let pk = CompressedPublicKey::from(sk.public_key::<F>());
+	pk.encode().to_vec()
+}
 
 /// Decode 32 bytes into a `WasmHashOutput` (validates each limb is in Goldilocks range).
 #[wasm_bindgen(js_name = decodeHash)]
