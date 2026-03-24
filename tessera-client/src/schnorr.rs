@@ -302,6 +302,27 @@ impl<F: PrimeField64 + Legendre + Extendable<5>> From<PublicKey<F>> for Compress
 	}
 }
 
+impl<F: PrimeField64 + Extendable<5>> CompressedPublicKey<F> {
+	/// Serialize to 40 bytes: 5 × u64 little-endian.
+	/// Mirrors the r-half encoding in `Signature::encode`.
+	pub fn encode(&self) -> [u8; 40] {
+		let mut out = [0u8; 40];
+		for (i, f) in self.0.w.0.iter().enumerate() {
+			out[i * 8..i * 8 + 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
+		}
+		out
+	}
+
+	/// Deserialize from 40 bytes (inverse of `encode`).
+	pub fn decode(bytes: &[u8; 40]) -> Self {
+		let mut v = [0u64; 5];
+		for i in 0..5 {
+			v[i] = u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap());
+		}
+		CompressedPublicKey(CompressedPoint::from(v))
+	}
+}
+
 /// A public key for Schnorr signatures.
 ///
 /// This is a point on the curve that corresponds to a private key.
