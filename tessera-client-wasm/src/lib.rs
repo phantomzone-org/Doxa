@@ -14,8 +14,8 @@ use tessera_client::{
 	derive_priv_tx_hash, double_hash_native,
 	schnorr::{schnorr_sign, CompressedPublicKey, PrivateKey, Scalar},
 	AccountAddress, AccountNullifier, AssetId, HashOutput, NodeIdentifier, NoteCommitment,
-	NoteNullifier, PositionedStandardNode, PrivateIdentifier, SpendAuth, StandardAccount,
-	StandardNote, SubpoolId,
+	NoteNullifier, PositionedStandardNode, PrivateIdentifier, PublicIdentifier, SpendAuth,
+	StandardAccount, StandardNote, SubpoolId,
 };
 use wasm_bindgen::prelude::*;
 
@@ -179,16 +179,10 @@ impl WasmAccount {
 		hash_to_bytes(null.0)
 	}
 
-	/// Returns the 16-byte little-endian encoding of PrivateIdentifier([F; 2]).
-	/// Used as `private_identifier` in the backend register request.
-	#[wasm_bindgen(js_name = privateIdentifierBytes)]
-	pub fn private_identifier_bytes(&self) -> Vec<u8> {
-		let acc = self.0.borrow();
-		let [f0, f1] = acc.private_identifier.0;
-		let mut out = [0u8; 16];
-		out[0..8].copy_from_slice(&f0.to_canonical_u64().to_le_bytes());
-		out[8..16].copy_from_slice(&f1.to_canonical_u64().to_le_bytes());
-		out.to_vec()
+	/// Returns the private identifier as a `WasmPrivateIdentifier`.
+	#[wasm_bindgen(js_name = privateIdentifier)]
+	pub fn private_identifier(&self) -> WasmPrivateIdentifier {
+		WasmPrivateIdentifier(self.0.borrow().private_identifier)
 	}
 
 	/// Returns the 40-byte little-endian encoding of the spend-auth CompressedPublicKey.
@@ -201,6 +195,126 @@ impl WasmAccount {
 			Some(pk) => pk.encode().to_vec(),
 			None => vec![0u8; 40],
 		}
+	}
+}
+
+// ── WasmSubpoolId ────────────────────────────────────────────────────────────
+
+/// A subpool identifier (1 Goldilocks field element, 8 bytes / 16 hex chars).
+#[wasm_bindgen]
+pub struct WasmSubpoolId(SubpoolId);
+
+#[wasm_bindgen]
+impl WasmSubpoolId {
+	/// 16 hex chars — 1 × u64 LE (8 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		hex::encode(self.0 .0.to_canonical_u64().to_le_bytes())
+	}
+
+	/// Parse from a 16-char hex string (u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmSubpoolId, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from an 8-byte Uint8Array (u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmSubpoolId, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmSubpoolId, JsError> {
+		if bytes.len() != 8 {
+			return Err(JsError::new("subpool_id must be 8 bytes (16 hex chars)"));
+		}
+		let v = u64::from_le_bytes(bytes.try_into().unwrap());
+		Ok(WasmSubpoolId(SubpoolId(F::from_canonical_u64(v))))
+	}
+}
+
+// ── WasmPrivateIdentifier ─────────────────────────────────────────────────────
+
+/// A private account identifier (2 Goldilocks field elements, 16 bytes / 32 hex chars).
+#[wasm_bindgen]
+pub struct WasmPrivateIdentifier(PrivateIdentifier);
+
+#[wasm_bindgen]
+impl WasmPrivateIdentifier {
+	/// 32 hex chars — 2 × u64 LE (16 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		let [f0, f1] = self.0 .0;
+		let mut out = [0u8; 16];
+		out[..8].copy_from_slice(&f0.to_canonical_u64().to_le_bytes());
+		out[8..].copy_from_slice(&f1.to_canonical_u64().to_le_bytes());
+		hex::encode(out)
+	}
+
+	/// Parse from a 32-char hex string (2 × u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmPrivateIdentifier, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from a 16-byte Uint8Array (2 × u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmPrivateIdentifier, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmPrivateIdentifier, JsError> {
+		if bytes.len() != 16 {
+			return Err(JsError::new("private_identifier must be 16 bytes (32 hex chars)"));
+		}
+		let f0 = F::from_noncanonical_u64(u64::from_le_bytes(bytes[..8].try_into().unwrap()));
+		let f1 = F::from_noncanonical_u64(u64::from_le_bytes(bytes[8..].try_into().unwrap()));
+		Ok(WasmPrivateIdentifier(PrivateIdentifier([f0, f1])))
+	}
+}
+
+// ── WasmPublicIdentifier ──────────────────────────────────────────────────────
+
+/// A public account identifier (4 Goldilocks field elements, 32 bytes / 64 hex chars).
+#[wasm_bindgen]
+pub struct WasmPublicIdentifier(PublicIdentifier);
+
+#[wasm_bindgen]
+impl WasmPublicIdentifier {
+	/// 64 hex chars — 4 × u64 LE (32 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		let mut out = [0u8; 32];
+		for (i, f) in self.0 .0 .0.iter().enumerate() {
+			out[i * 8..i * 8 + 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
+		}
+		hex::encode(out)
+	}
+
+	/// Parse from a 64-char hex string (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmPublicIdentifier, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from a 32-byte Uint8Array (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmPublicIdentifier, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmPublicIdentifier, JsError> {
+		if bytes.len() != 32 {
+			return Err(JsError::new("public_identifier must be 32 bytes (64 hex chars)"));
+		}
+		let mut elems = [F::ZERO; 4];
+		for (i, chunk) in bytes.chunks_exact(8).enumerate() {
+			elems[i] = F::from_canonical_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
+		}
+		Ok(WasmPublicIdentifier(PublicIdentifier(HashOutput(elems))))
 	}
 }
 
@@ -223,6 +337,12 @@ impl WasmAccountAddress {
 		AccountAddress::from_hex(hex)
 			.map(WasmAccountAddress)
 			.map_err(|e| JsError::new(&e.to_string()))
+	}
+
+	/// Construct an address from a `WasmSubpoolId` and a `WasmPublicIdentifier`.
+	#[wasm_bindgen(js_name = fromParts)]
+	pub fn from_parts(subpool_id: &WasmSubpoolId, public_id: &WasmPublicIdentifier) -> WasmAccountAddress {
+		WasmAccountAddress(AccountAddress::new(subpool_id.0, public_id.0))
 	}
 }
 
@@ -513,17 +633,21 @@ impl WasmSpendTxBuilder {
 
 // ── free functions ────────────────────────────────────────────────────────────
 
-/// Derive the private identifier bytes from a seed.
-/// Returns 16 bytes (2 × u64 LE canonical encoding of PrivateIdentifier([F; 2])).
-/// This is the value used as `private_identifier` in the backend register request.
+/// Derive a `WasmPrivateIdentifier` from a seed (domain-separated SHA-256).
 #[wasm_bindgen(js_name = derivePrivateIdentifier)]
-pub fn wasm_derive_private_identifier(seed: &[u8]) -> Vec<u8> {
-	let pi = derive_private_identifier(seed);
-	let [f0, f1] = pi.0;
-	let mut out = [0u8; 16];
-	out[0..8].copy_from_slice(&f0.to_canonical_u64().to_le_bytes());
-	out[8..16].copy_from_slice(&f1.to_canonical_u64().to_le_bytes());
-	out.to_vec()
+pub fn wasm_derive_private_identifier(seed: &[u8]) -> WasmPrivateIdentifier {
+	WasmPrivateIdentifier(derive_private_identifier(seed))
+}
+
+/// Derive a `WasmPublicIdentifier` from a `WasmPrivateIdentifier`.
+///
+/// Implements `Poseidon(DS_PUBLIC_IDENTIFIER || private_identifier)`,
+/// matching `StandardAccount::public_id()` in tessera-client.
+#[wasm_bindgen(js_name = derivePublicIdentifier)]
+pub fn wasm_derive_public_identifier(private_id: &WasmPrivateIdentifier) -> WasmPublicIdentifier {
+	// SubpoolId value does not affect the public_id computation.
+	let acc = StandardAccount::new_with(private_id.0, SubpoolId(F::from_canonical_u64(1)));
+	WasmPublicIdentifier(acc.public_id())
 }
 
 /// Derive the spend-auth public key bytes from a seed.

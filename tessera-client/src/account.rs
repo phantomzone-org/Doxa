@@ -455,6 +455,11 @@ pub struct AccountAddress {
 }
 
 impl AccountAddress {
+	/// Construct an address from its components.
+	pub fn new(subpool_id: SubpoolId, public_id: PublicIdentifier) -> Self {
+		Self { subpool_id, public_id }
+	}
+
 	/// Derive the address from an account.
 	pub fn from_acc(acc: &StandardAccount) -> Self {
 		Self {

@@ -1,4 +1,4 @@
-import type { Account } from "../account.js";
+import type { PrivateIdentifier } from "../account.js";
 import type { ApiError, RegisterRequest, RegisterResponse } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
@@ -58,26 +58,27 @@ export class SubpoolClient {
   }
 
   /**
-   * Convenience wrapper around `register` that derives `privateIdentifier`
-   * and `spendAuthPk` directly from an `Account` object.
+   * Convenience wrapper around `register`.
    *
    * ```ts
-   * const response = await client.registerAccount(account, "0xAbc...", {
-   *   name: "Alice",
-   *   physicalAddress: "123 Main St",
-   *   dob: "1990-01-15",
-   * });
+   * const response = await client.registerAccount(
+   *   account.privateIdentifier(),
+   *   account.spendAuthPkHex(),
+   *   "0xAbc...",
+   *   { name: "Alice", physicalAddress: "123 Main St", dob: "1990-01-15" },
+   * );
    * console.log(response.privateAccAddress);
    * ```
    */
   async registerAccount(
-    account: Account,
+    privateIdentifier: PrivateIdentifier,
+    spendAuthPk: string,
     ethAddress: string,
     kyc: { name: string; physicalAddress: string; dob: string },
   ): Promise<RegisterResponse> {
     return this.register({
-      privateIdentifier: account.privateIdentifierHex(),
-      spendAuthPk: account.spendAuthPkHex(),
+      privateIdentifier: privateIdentifier.toHex(),
+      spendAuthPk,
       ethAddress,
       ...kyc,
     });

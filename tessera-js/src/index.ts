@@ -1,4 +1,12 @@
-export { Account } from "./account.js";
+export {
+  Account,
+  AccountAddress,
+  SubpoolId,
+  PrivateIdentifier,
+  PublicIdentifier,
+  derivePublicIdentifier,
+  deriveAccountFromPasskey,
+} from "./account.js";
 export type { HashBytes } from "./account.js";
 
 export { SubpoolClient, SubpoolApiError } from "./api/index.js";

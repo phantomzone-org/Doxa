@@ -2,17 +2,108 @@ import {
   WasmAccount,
   WasmAccountAddress,
   WasmInputNote,
+  WasmPrivateIdentifier,
+  WasmPublicIdentifier,
   WasmSpendTx,
   WasmSpendTxBuilder,
+  WasmSubpoolId,
   decodeHash,
+  derivePublicIdentifier as wasmDerivePublicIdentifier,
 } from "../wasm/tessera_client_wasm.js";
 
 export type HashBytes = Uint8Array;
 
-/** Encode a Uint8Array as a lowercase hex string. */
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+// ── SubpoolId ─────────────────────────────────────────────────────────────────
+
+/** A subpool identifier (1 Goldilocks field element, 8 bytes / 16 hex chars). */
+export class SubpoolId {
+  readonly inner: WasmSubpoolId;
+
+  private constructor(inner: WasmSubpoolId) {
+    this.inner = inner;
+  }
+
+  static fromWasm(inner: WasmSubpoolId): SubpoolId {
+    return new SubpoolId(inner);
+  }
+
+  /** Parse from a 16-char hex string (u64 LE). */
+  static fromHex(hex: string): SubpoolId {
+    return new SubpoolId(WasmSubpoolId.fromHex(hex));
+  }
+
+  /** Parse from an 8-byte Uint8Array (u64 LE). */
+  static fromBytes(bytes: Uint8Array): SubpoolId {
+    return new SubpoolId(WasmSubpoolId.fromBytes(bytes));
+  }
+
+  /** 16 hex chars. */
+  toHex(): string {
+    return this.inner.toHex();
+  }
 }
+
+// ── PrivateIdentifier ─────────────────────────────────────────────────────────
+
+/** A private account identifier (2 Goldilocks field elements, 16 bytes / 32 hex chars). */
+export class PrivateIdentifier {
+  readonly inner: WasmPrivateIdentifier;
+
+  private constructor(inner: WasmPrivateIdentifier) {
+    this.inner = inner;
+  }
+
+  static fromWasm(inner: WasmPrivateIdentifier): PrivateIdentifier {
+    return new PrivateIdentifier(inner);
+  }
+
+  /** Parse from a 32-char hex string (2 × u64 LE). */
+  static fromHex(hex: string): PrivateIdentifier {
+    return new PrivateIdentifier(WasmPrivateIdentifier.fromHex(hex));
+  }
+
+  /** Parse from a 16-byte Uint8Array (2 × u64 LE). */
+  static fromBytes(bytes: Uint8Array): PrivateIdentifier {
+    return new PrivateIdentifier(WasmPrivateIdentifier.fromBytes(bytes));
+  }
+
+  /** 32 hex chars. */
+  toHex(): string {
+    return this.inner.toHex();
+  }
+}
+
+// ── PublicIdentifier ──────────────────────────────────────────────────────────
+
+/** A public account identifier (4 Goldilocks field elements, 32 bytes / 64 hex chars). */
+export class PublicIdentifier {
+  readonly inner: WasmPublicIdentifier;
+
+  private constructor(inner: WasmPublicIdentifier) {
+    this.inner = inner;
+  }
+
+  static fromWasm(inner: WasmPublicIdentifier): PublicIdentifier {
+    return new PublicIdentifier(inner);
+  }
+
+  /** Parse from a 64-char hex string (4 × u64 LE). */
+  static fromHex(hex: string): PublicIdentifier {
+    return new PublicIdentifier(WasmPublicIdentifier.fromHex(hex));
+  }
+
+  /** Parse from a 32-byte Uint8Array (4 × u64 LE). */
+  static fromBytes(bytes: Uint8Array): PublicIdentifier {
+    return new PublicIdentifier(WasmPublicIdentifier.fromBytes(bytes));
+  }
+
+  /** 64 hex chars. */
+  toHex(): string {
+    return this.inner.toHex();
+  }
+}
+
+// ── AccountAddress ────────────────────────────────────────────────────────────
 
 /** A Tessera account address (subpool_id + public_id). */
 export class AccountAddress {
@@ -27,6 +118,16 @@ export class AccountAddress {
     return new AccountAddress(WasmAccountAddress.fromHex(hex));
   }
 
+  /** Construct an address from a `SubpoolId` and a `PublicIdentifier`. */
+  static fromParts(
+    subpoolId: SubpoolId,
+    publicId: PublicIdentifier,
+  ): AccountAddress {
+    return new AccountAddress(
+      WasmAccountAddress.fromParts(subpoolId.inner, publicId.inner),
+    );
+  }
+
   /** @internal Wrap a `WasmAccountAddress` returned by the WASM layer. */
   static fromWasm(inner: WasmAccountAddress): AccountAddress {
     return new AccountAddress(inner);
@@ -38,10 +139,12 @@ export class AccountAddress {
   }
 }
 
+// ── Account ───────────────────────────────────────────────────────────────────
+
 /**
  * A Tessera account. Wraps the WASM `WasmAccount` with a more ergonomic API.
  *
- * All hash outputs (commitment, public_id, nullifier) are 32-byte Uint8Arrays
+ * All hash outputs (commitment, nullifier) are 32-byte Uint8Arrays
  * representing 4 × u64 Goldilocks field elements in little-endian byte order.
  */
 export class Account {
@@ -85,12 +188,7 @@ export class Account {
     return this.inner.isFresh();
   }
 
-  /**
-   * The account nullifier.
-   *
-   * - Fresh accounts: call with no argument (or `undefined`).
-   * - Existing accounts: pass the account's position in the ACT.
-   */
+  /** The account nullifier. */
   nullifier(): HashBytes {
     return this.inner.nullifier();
   }
@@ -100,17 +198,9 @@ export class Account {
     return AccountAddress.fromWasm(this.inner.address());
   }
 
-  /** The raw WASM handle — needed to pass this account to `SpendTxBuilder`. */
-  get wasmInner(): WasmAccount {
-    return this.inner;
-  }
-
-  /**
-   * The private identifier as a 32-hex-char string (16 bytes, 2 × u64 LE).
-   * Used as `private_identifier` in the backend register request.
-   */
-  privateIdentifierHex(): string {
-    return bytesToHex(this.inner.privateIdentifierBytes());
+  /** Returns the private identifier as a typed `PrivateIdentifier`. */
+  privateIdentifier(): PrivateIdentifier {
+    return PrivateIdentifier.fromWasm(this.inner.privateIdentifier());
   }
 
   /**
@@ -118,7 +208,13 @@ export class Account {
    * Used as `spend_auth_pk` in the backend register request.
    */
   spendAuthPkHex(): string {
-    return bytesToHex(this.inner.spendAuthPkBytes());
+    const bytes = this.inner.spendAuthPkBytes();
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  /** The raw WASM handle — needed to pass this account to `SpendTxBuilder`. */
+  get wasmInner(): WasmAccount {
+    return this.inner;
   }
 
   /** Decode a 32-byte hash into 4 × u64 limbs (little-endian). Useful for debugging. */
@@ -127,6 +223,63 @@ export class Account {
     return BigInt64Array.from(h.limbs().map(BigInt));
   }
 }
+
+// ── deriveAccountFromPasskey ──────────────────────────────────────────────────
+
+/**
+ * Derive an `Account` from a WebAuthn passkey PRF output.
+ *
+ * Requests a WebAuthn assertion with the PRF extension, using the 32-byte PRF
+ * result as the seed for `Account.createWithSeed`.
+ *
+ * Throws `"PRF extension unavailable"` if the authenticator does not return a
+ * PRF result.
+ *
+ * TODO: why is this needed?
+ */
+export async function deriveAccountFromPasskey(
+  credentialId: Uint8Array,
+  challenge: Uint8Array,
+  subpoolId: bigint,
+): Promise<Account> {
+  const credential = (await navigator.credentials.get({
+    publicKey: {
+      challenge,
+      allowCredentials: [{ id: credentialId, type: "public-key" }],
+      extensions: {
+        prf: { eval: { first: challenge } },
+      } as AuthenticationExtensionsClientInputs,
+    },
+  } as CredentialRequestOptions)) as PublicKeyCredential;
+
+  const ext = credential.getClientExtensionResults() as {
+    prf?: { results?: { first?: ArrayBuffer } };
+  };
+  const prfFirst = ext?.prf?.results?.first;
+
+  if (!prfFirst) {
+    throw new Error("PRF extension unavailable");
+  }
+
+  const seed = new Uint8Array(prfFirst).slice(0, 32);
+  return Account.createWithSeed(seed, subpoolId);
+}
+
+// ── derivePublicIdentifier ────────────────────────────────────────────────────
+
+/**
+ * Derive the `PublicIdentifier` from a `PrivateIdentifier`.
+ *
+ * Implements `Poseidon(DS_PUBLIC_IDENTIFIER || private_identifier)`,
+ * matching `StandardAccount::public_id()` in tessera-client.
+ */
+export function derivePublicIdentifier(
+  privateId: PrivateIdentifier,
+): PublicIdentifier {
+  return PublicIdentifier.fromWasm(wasmDerivePublicIdentifier(privateId.inner));
+}
+
+// ── InputNote ─────────────────────────────────────────────────────────────────
 
 /** A note positioned in the Note Commitment Tree — used as input to `SpendTxBuilder`. */
 export class InputNote {
@@ -151,6 +304,8 @@ export class InputNote {
   }
 }
 
+// ── SpendTx ───────────────────────────────────────────────────────────────────
+
 /** A built spend transaction. Call `txHash()` to get the hash to sign. */
 export class SpendTx {
   private inner: WasmSpendTx;
@@ -170,6 +325,8 @@ export class SpendTx {
     return this.inner.sign(seed);
   }
 }
+
+// ── SpendTxBuilder ────────────────────────────────────────────────────────────
 
 /** Builds a spend transaction by adding input/output notes, then calling `build()`. */
 export class SpendTxBuilder {
