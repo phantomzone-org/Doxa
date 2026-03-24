@@ -10,25 +10,29 @@ use alloy::{
 	signers::{local::PrivateKeySigner, Signer},
 };
 use anyhow::Context;
+use tessera_client::NOTE_BATCH;
 use tessera_utils::{hasher::HashOutput, F};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::{
 	config::SequencerConfig,
 	contract::{self, ITesseraRollupV2},
 	prover_client::{HttpProverClient, ProverClient},
-	types::{ConsumeOutcome, ProveOutcomeV2},
+	types::ProveOutcome,
 };
 
-pub mod batch;
+mod bn128_wrapper_service;
+mod deposits;
 mod handle;
 mod pipeline;
 mod recovery;
 mod revert;
-mod testing;
+mod transactions;
 
+pub use bn128_wrapper_service::*;
 pub use handle::SequencerHandle;
+pub use transactions::*;
 
 /// Receipt polling timeout for on-chain transactions.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -37,23 +41,9 @@ const RECEIPT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_PENDING_BATCHES: usize = 128;
 
 /// A batch submitted on-chain and awaiting a Groth16 proof via `proveTransactionBatch`.
-struct TxBatchV2 {
+struct SolidityTransactionBatchCommitment {
 	/// On-chain piCommitment (keccak256 of batch public inputs).
 	pi_commitment: [u8; 32],
-}
-
-/// A deposit batch submitted on-chain and awaiting a Groth16 proof via `proveDepositBatch`.
-struct ConsumeBatchV2 {
-	/// On-chain piCommitment (keccak256 of deposit batch public inputs).
-	pi_commitment: [u8; 32],
-}
-
-/// Test-mode transaction: raw leaf values, no proof required.
-pub(super) struct TestTxRequest {
-	pub an: [u8; 32],
-	pub ac: [u8; 32],
-	pub nn: [[u8; 32]; 8],
-	pub nc: [[u8; 32]; 8],
 }
 
 /// A private transaction submitted via [`SequencerHandle::submit_private_tx`].
@@ -71,14 +61,7 @@ pub(super) struct PrivateTxRequest {
 	pub tx_proof: Vec<u8>,
 }
 
-/// A deposit note commitment submitted via [`SequencerHandle::submit_deposit`].
-pub(super) struct NotesCommitmentRequest {
-	pub note: [u8; 32],
-	/// Consume proof bytes (may be absent).
-	pub consume_proof: Option<Vec<u8>>,
-}
-
-/// The V2 sequencer: accumulates TX slots, submits batches to `TesseraRollupV2`,
+/// The V2 sequencer: accumulates TX slots, submits batches to `TesseraContract`,
 /// and forwards prove requests to the remote prover.
 pub struct Sequencer {
 	config: SequencerConfig,
@@ -87,31 +70,15 @@ pub struct Sequencer {
 	/// All roots ever in `confirmedRoots` on-chain (genesis + every proven batch root).
 	confirmed_root_history: BTreeSet<HashOutput>,
 	/// Pending batches (submitted but not yet proven), keyed by local `batch_id`.
-	pending_batches: BTreeMap<u64, TxBatchV2>,
+	pending_batches: BTreeMap<u64, SolidityTransactionBatchCommitment>,
 	/// Monotonically increasing local batch counter.
 	next_batch_id: u64,
 	prover_client: Option<Arc<dyn ProverClient>>,
-	result_tx: Option<mpsc::Sender<ProveOutcomeV2>>,
-	result_rx: Option<mpsc::Receiver<ProveOutcomeV2>>,
-	notes_commitment_rx: mpsc::Receiver<NotesCommitmentRequest>,
+	result_tx: Option<mpsc::Sender<ProveOutcome>>,
+	result_rx: Option<mpsc::Receiver<ProveOutcome>>,
 	private_tx_rx: mpsc::Receiver<PrivateTxRequest>,
-	batch_builder: Option<batch::BatchBuilder>,
+	batch_builder: Option<transactions::BatchBuilder>,
 	batch_pending_since: Option<std::time::Instant>,
-	/// Consume (deposit) pipeline.
-	consume_result_tx: Option<mpsc::Sender<ConsumeOutcome>>,
-	consume_result_rx: Option<mpsc::Receiver<ConsumeOutcome>>,
-	consume_batch_builder: Option<batch::ConsumeBatchBuilder>,
-	consume_batch_pending_since: Option<std::time::Instant>,
-	pending_consume_batches: BTreeMap<u64, ConsumeBatchV2>,
-	next_consume_batch_id: u64,
-	/// Test-only: inject deposits without on-chain Pending check.
-	test_deposit_rx: Option<mpsc::Receiver<[u8; 32]>>,
-	/// Test-only: inject transactions without proof verification.
-	test_tx_rx: Option<mpsc::Receiver<TestTxRequest>>,
-	/// Test-only: flush consume batch + confirm with zero proof.
-	test_consume_validate_rx: Option<mpsc::Receiver<oneshot::Sender<anyhow::Result<()>>>>,
-	/// Test-only: flush TX batch + confirm with zero proof.
-	test_tx_validate_rx: Option<mpsc::Receiver<oneshot::Sender<anyhow::Result<()>>>>,
 }
 
 impl Sequencer {
@@ -123,46 +90,10 @@ impl Sequencer {
 	pub fn new(config: SequencerConfig) -> (Self, SequencerHandle) {
 		use plonky2::field::types::Field;
 
-		let (notes_commitment_tx, notes_commitment_rx) =
-			mpsc::channel::<NotesCommitmentRequest>(1024);
 		let (private_tx_tx, private_tx_rx) = mpsc::channel::<PrivateTxRequest>(MAX_PENDING_BATCHES);
 
-		// Initialise test-mode channels only when TESSERA_TESTING=1.
-		let (
-			test_deposit_rx,
-			test_tx_rx,
-			test_consume_validate_rx,
-			test_tx_validate_rx,
-			test_deposit_tx,
-			test_tx_tx,
-			test_consume_validate_tx,
-			test_tx_validate_tx,
-		) = if config.testing {
-			let (dep_tx, dep_rx) = mpsc::channel::<[u8; 32]>(1024);
-			let (tx_tx, tx_rx) = mpsc::channel::<TestTxRequest>(1024);
-			let (cv_tx, cv_rx) = mpsc::channel::<oneshot::Sender<anyhow::Result<()>>>(8);
-			let (tv_tx, tv_rx) = mpsc::channel::<oneshot::Sender<anyhow::Result<()>>>(8);
-			(
-				Some(dep_rx),
-				Some(tx_rx),
-				Some(cv_rx),
-				Some(tv_rx),
-				Some(dep_tx),
-				Some(tx_tx),
-				Some(cv_tx),
-				Some(tv_tx),
-			)
-		} else {
-			(None, None, None, None, None, None, None, None)
-		};
-
 		let handle = SequencerHandle {
-			notes_commitment_tx,
 			private_tx_tx,
-			test_deposit_tx,
-			test_tx_tx,
-			test_consume_validate_tx,
-			test_tx_validate_tx,
 		};
 
 		let sequencer = Self {
@@ -174,20 +105,9 @@ impl Sequencer {
 			prover_client: None,
 			result_tx: None,
 			result_rx: None,
-			notes_commitment_rx,
 			private_tx_rx,
 			batch_builder: None,
 			batch_pending_since: None,
-			consume_result_tx: None,
-			consume_result_rx: None,
-			consume_batch_builder: None,
-			consume_batch_pending_since: None,
-			pending_consume_batches: BTreeMap::new(),
-			next_consume_batch_id: 0,
-			test_deposit_rx,
-			test_tx_rx,
-			test_consume_validate_rx,
-			test_tx_validate_rx,
 		};
 
 		(sequencer, handle)
@@ -217,46 +137,10 @@ impl Sequencer {
 		);
 	}
 
-	/// Lazily create a `ConsumeBatchBuilder` if one doesn't exist.
-	fn ensure_consume_batch_builder(&mut self) -> &mut batch::ConsumeBatchBuilder {
-		if self.consume_batch_builder.is_none() {
-			let dummy_root = contract::hash_to_bytes32(&self.confirmed_root).0;
-			self.consume_batch_builder = Some(batch::ConsumeBatchBuilder::new(
-				tessera_client::PRIV_TX_BATCH_SIZE * batch::NOTES_PER_SLOT,
-				dummy_root,
-			));
-			self.consume_batch_pending_since = Some(std::time::Instant::now());
-		}
-		self.consume_batch_builder.as_mut().unwrap()
-	}
-
-	/// Evaluate the consume batch builder and flush when full or timed out.
-	async fn try_flush_consume_batch_if_ready<P: Provider + Clone>(
-		&mut self,
-		provider: &P,
-		batch_timeout: Duration,
-	) -> anyhow::Result<()> {
-		if self.pending_consume_batches.len() >= MAX_PENDING_BATCHES {
-			return Ok(());
-		}
-		let Some(cb) = &self.consume_batch_builder else {
-			return Ok(());
-		};
-		let should_flush = cb.is_full()
-			|| self
-				.consume_batch_pending_since
-				.is_some_and(|since| since.elapsed() >= batch_timeout);
-		if should_flush {
-			self.flush_consume_batch(provider).await?;
-		}
-		Ok(())
-	}
-
 	/// Lazily create a `BatchBuilder` if one doesn't exist.
-	fn ensure_batch_builder(&mut self) -> &mut batch::BatchBuilder {
+	fn ensure_batch_builder(&mut self) -> &mut transactions::BatchBuilder {
 		if self.batch_builder.is_none() {
-			let dummy_root = contract::hash_to_bytes32(&self.confirmed_root).0;
-			self.batch_builder = Some(batch::BatchBuilder::new_v2(dummy_root));
+			self.batch_builder = Some(transactions::BatchBuilder::new());
 			self.batch_pending_since = Some(std::time::Instant::now());
 		}
 		self.batch_builder.as_mut().unwrap()
@@ -332,12 +216,7 @@ impl Sequencer {
 			"loaded confirmed root history"
 		);
 
-		// Initialise prover client and result channels (TX + consume).
-		let (consume_result_tx, consume_result_rx) = mpsc::channel::<ConsumeOutcome>(4);
-		self.consume_result_tx = Some(consume_result_tx);
-		self.consume_result_rx = Some(consume_result_rx);
-
-		let (result_tx, result_rx) = mpsc::channel::<ProveOutcomeV2>(4);
+		let (result_tx, result_rx) = mpsc::channel::<ProveOutcome>(4);
 		if self.prover_client.is_none() {
 			let http_client = HttpProverClient::new(
 				self.config.prover_api_url.clone(),
@@ -360,47 +239,6 @@ impl Sequencer {
 				_ = interval.tick() => {
 					if let Err(e) = self.try_flush_batch_if_ready(&provider, batch_timeout).await {
 						error!("failed to flush batch: {e}");
-						break;
-					}
-					if let Err(e) = self.try_flush_consume_batch_if_ready(&provider, batch_timeout).await {
-						error!("failed to flush consume batch: {e}");
-						break;
-					}
-				}
-
-				// Deposit: add NC note to the consume batch builder.
-				req = self.notes_commitment_rx.recv() => {
-					let Some(req) = req else { break; };
-					let note = req.note;
-					if !self.is_note_available(&provider, &note).await {
-						warn!(note = ?note, "deposit rejected: note not Pending on contract");
-						continue;
-					}
-					let cb = self.ensure_consume_batch_builder();
-					if let Err(e) = cb.add_note(note, req.consume_proof) {
-						warn!(error = %e, "deposit rejected: consume batch builder error");
-						continue;
-					}
-					debug!(
-						consume_notes = self.consume_batch_builder.as_ref().map_or(0, |b| b.len()),
-						"accepted deposit note into consume batch"
-					);
-					if let Err(e) = self.try_flush_consume_batch_if_ready(&provider, batch_timeout).await {
-						error!("failed to flush consume batch: {e}");
-						break;
-					}
-				}
-
-				// Consume outcome from remote prover.
-				Some(outcome) = async {
-					if let Some(rx) = &mut self.consume_result_rx { rx.recv().await } else { None }
-				} => {
-					if let Err(e) = self.handle_consume_outcome(&provider, outcome).await {
-						error!("fatal sequencer error while finalizing consume batch: {e}");
-						break;
-					}
-					if let Err(e) = self.try_flush_consume_batch_if_ready(&provider, batch_timeout).await {
-						error!("failed to flush consume batch: {e}");
 						break;
 					}
 				}
@@ -444,8 +282,8 @@ impl Sequencer {
 						continue;
 					}
 
-					let nc: [[u8; 32]; 8] = {
-						let mut arr = [[0u8; 32]; 8];
+					let nc: [[u8; 32]; NOTE_BATCH] = {
+						let mut arr = [[0u8; 32]; NOTE_BATCH];
 						// NC[0..NOTE_BATCH] = output notes; NC[NOTE_BATCH] = AC (8th SR leaf).
 						for (i, note) in tx_req
 							.output_notes
@@ -458,8 +296,8 @@ impl Sequencer {
 						arr[tessera_client::NOTE_BATCH] = tx_req.output_account_leaf;
 						arr
 					};
-					let nn: [[u8; 32]; 8] = {
-						let mut arr = [[0u8; 32]; 8];
+					let nn: [[u8; 32]; NOTE_BATCH] = {
+						let mut arr = [[0u8; 32]; NOTE_BATCH];
 						for (i, note) in tx_req.input_notes.iter().enumerate().take(8) {
 							arr[i] = *note;
 						}
@@ -487,40 +325,6 @@ impl Sequencer {
 						error!("failed to flush batch: {e}");
 						break;
 					}
-				}
-
-				// Test-only: inject deposit without on-chain Pending check.
-				Some(note) = async {
-					if let Some(rx) = &mut self.test_deposit_rx { rx.recv().await } else { None }
-				} => {
-					if let Err(e) = self.handle_test_deposit(note) {
-						warn!(error = %e, "test deposit rejected");
-					}
-				}
-
-				// Test-only: inject transaction without proof verification.
-				Some(req) = async {
-					if let Some(rx) = &mut self.test_tx_rx { rx.recv().await } else { None }
-				} => {
-					if let Err(e) = self.handle_test_tx(req) {
-						warn!(error = %e, "test tx rejected");
-					}
-				}
-
-				// Test-only: flush consume batch + confirm with zero proof.
-				Some(resp_tx) = async {
-					if let Some(rx) = &mut self.test_consume_validate_rx { rx.recv().await } else { None }
-				} => {
-					let result = self.flush_consume_batch_testing(&provider).await;
-					let _ = resp_tx.send(result);
-				}
-
-				// Test-only: flush TX batch + confirm with zero proof.
-				Some(resp_tx) = async {
-					if let Some(rx) = &mut self.test_tx_validate_rx { rx.recv().await } else { None }
-				} => {
-					let result = self.flush_batch_testing(&provider).await;
-					let _ = resp_tx.send(result);
 				}
 
 				_ = tokio::signal::ctrl_c() => {

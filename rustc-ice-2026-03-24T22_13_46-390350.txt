@@ -1,0 +1,45 @@
+thread 'rustc' panicked at /rustc-dev/20f19f4615200b16e3631816e7824e832ff394db/compiler/rustc_resolve/src/late/diagnostics.rs:3384:36:
+index out of bounds: the len is 0 but the index is 0
+stack backtrace:
+   0:     0x770c3b5906ab - <std[6be7b9c9e62b267e]::backtrace::Backtrace>::create
+   1:     0x770c3b5905f5 - <std[6be7b9c9e62b267e]::backtrace::Backtrace>::force_capture
+   2:     0x770c3a59a6fb - std[6be7b9c9e62b267e]::panicking::update_hook::<alloc[5ace279b6dd5471b]::boxed::Box<rustc_driver_impl[1e93a328f0ffcd34]::install_ice_hook::{closure#1}>>::{closure#0}
+   3:     0x770c3b5a2c32 - std[6be7b9c9e62b267e]::panicking::panic_with_hook
+   4:     0x770c3b585618 - std[6be7b9c9e62b267e]::panicking::panic_handler::{closure#0}
+   5:     0x770c3b57c349 - std[6be7b9c9e62b267e]::sys::backtrace::__rust_end_short_backtrace::<std[6be7b9c9e62b267e]::panicking::panic_handler::{closure#0}, !>
+   6:     0x770c3b58707d - __rustc[99f0cd6cc508fa62]::rust_begin_unwind
+   7:     0x770c37d0d80c - core[9c1c5d34ae8b3de6]::panicking::panic_fmt
+   8:     0x770c3858fab2 - core[9c1c5d34ae8b3de6]::panicking::panic_bounds_check
+   9:     0x770c3b12407f - <rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>::detect_and_suggest_const_parameter_error
+  10:     0x770c3800abd7 - <rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>::smart_resolve_path_fragment::{closure#0}
+  11:     0x770c3c8ceafb - <rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>::smart_resolve_path_fragment
+  12:     0x770c3c8ccaa9 - <rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor as rustc_ast[f5f3390d6b7c2ae1]::visit::Visitor>::visit_ty
+  13:     0x770c3c8ccdf2 - <rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor as rustc_ast[f5f3390d6b7c2ae1]::visit::Visitor>::visit_ty
+  14:     0x770c3c8e4cb2 - <rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>::resolve_item
+  15:     0x770c3c8e39c3 - rustc_ast[f5f3390d6b7c2ae1]::visit::visit_items::<rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>
+  16:     0x770c3c8e92b8 - <rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>::resolve_item
+  17:     0x770c3c8e39c3 - rustc_ast[f5f3390d6b7c2ae1]::visit::visit_items::<rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>
+  18:     0x770c3c8e92b8 - <rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>::resolve_item
+  19:     0x770c3c8e39c3 - rustc_ast[f5f3390d6b7c2ae1]::visit::visit_items::<rustc_resolve[f3037e180b304be8]::late::LateResolutionVisitor>
+  20:     0x770c3c05d45e - <rustc_resolve[f3037e180b304be8]::Resolver>::resolve_crate::{closure#0}
+  21:     0x770c3c05af3f - <rustc_resolve[f3037e180b304be8]::Resolver>::resolve_crate
+  22:     0x770c3c36d089 - rustc_interface[dbd43765a67ece38]::passes::configure_and_expand
+  23:     0x770c3ce62378 - rustc_interface[dbd43765a67ece38]::passes::resolver_for_lowering_raw
+  24:     0x770c3ce620f3 - rustc_query_impl[ff9c83ade533030f]::query_impl::resolver_for_lowering_raw::invoke_provider_fn::__rust_begin_short_backtrace
+  25:     0x770c3d0c27c9 - rustc_query_impl[ff9c83ade533030f]::execution::try_execute_query::<rustc_middle[dc03b2c5cfb92cd3]::query::caches::SingleCache<rustc_middle[dc03b2c5cfb92cd3]::query::erase::ErasedData<[u8; 16usize]>>, true>
+  26:     0x770c3d0c20bb - rustc_query_impl[ff9c83ade533030f]::query_impl::resolver_for_lowering_raw::execute_query_incr::__rust_end_short_backtrace
+  27:     0x770c3ce13d7e - rustc_interface[dbd43765a67ece38]::interface::run_compiler::<(), rustc_driver_impl[1e93a328f0ffcd34]::run_compiler::{closure#0}>::{closure#1}
+  28:     0x770c3cdfeafe - std[6be7b9c9e62b267e]::sys::backtrace::__rust_begin_short_backtrace::<rustc_interface[dbd43765a67ece38]::util::run_in_thread_with_globals<rustc_interface[dbd43765a67ece38]::util::run_in_thread_pool_with_globals<rustc_interface[dbd43765a67ece38]::interface::run_compiler<(), rustc_driver_impl[1e93a328f0ffcd34]::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>
+  29:     0x770c3cdff3a0 - <std[6be7b9c9e62b267e]::thread::lifecycle::spawn_unchecked<rustc_interface[dbd43765a67ece38]::util::run_in_thread_with_globals<rustc_interface[dbd43765a67ece38]::util::run_in_thread_pool_with_globals<rustc_interface[dbd43765a67ece38]::interface::run_compiler<(), rustc_driver_impl[1e93a328f0ffcd34]::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>::{closure#1} as core[9c1c5d34ae8b3de6]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  30:     0x770c3ce0022c - <std[6be7b9c9e62b267e]::sys::thread::unix::Thread>::new::thread_start
+  31:     0x770c3669caa4 - <unknown>
+  32:     0x770c36729c6c - <unknown>
+  33:                0x0 - <unknown>
+
+
+rustc version: 1.96.0-nightly (20f19f461 2026-03-21)
+platform: x86_64-unknown-linux-gnu
+
+query stack during panic:
+#0 [resolver_for_lowering_raw] getting the resolver for lowering
+end of query stack

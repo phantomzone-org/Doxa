@@ -1,0 +1,1125 @@
+//! SuperAggregator circuit: merges a TX aggregation proof and a
+//! SubtreeRoot proof into a single Keccak-256 piCommitment, compatible
+//! with the `TesseraContract` on-chain contract.
+//!
+//! # V2 design vs V1
+//!
+//! V1 verified 5 inner proofs (4 off-chain Merkle trees + TX aggregator).
+//! V2 removes the 4 off-chain trees (the contract holds the Poseidon IMT)
+//! and replaces them with a single `SubtreeRootCircuit` proof that proves
+//! `batch_poseidon_root = PoseidonMerkle(note_commitments[0..N])`.
+//!
+//! # Circuit structure
+//!
+//! 1. Verify TX aggregation proof (`n_tx_slots × TX_LEAF_PI_SIZE` PIs).
+//! 2. Verify SubtreeRoot proof (`(1 + batch_size) × 4` PIs).
+//! 3. Cross-check: for each real TX slot `s` and note index `j`, assert `sr_leaf[s * notes_per_slot
+//!    + j] == tx_nc[s][j]`.
+//! 4. Allocate private witnesses: `root[4]` (Goldilocks, used for both acRoot and ncRoot),
+//!    `main_pool_cfg_root_u32s[8]` (raw bytes32).
+//! 5. Collect all piCommitment fields, encode as EVM `abi.encodePacked` bytes, and hash with
+//!    Keccak-256.
+//! 6. Register 8 `u32` output words as the circuit's public inputs.
+//!
+//! # Keccak preimage field order
+//!
+//! Matches `TesseraContract._computeTxPiCommitment` exactly:
+//! ```text
+//! acRoot(uint256) | ncRoot(uint256) | mainPoolConfigRoot(bytes32) |
+//! batchPoseidonRoot(uint256) | accountCommitment(uint256) | accountNullifier(uint256) |
+//! noteCommitments[0..N](uint256[]) | noteNullifiers[0..N](uint256[])
+//! ```
+//!
+//! Each `uint256` HashOutput uses **LE packing**:
+//! `uint256 = e0 | (e1<<64) | (e2<<128) | (e3<<192)`
+//! which in big-endian EVM bytes maps to `[e3_be8, e2_be8, e1_be8, e0_be8]`.
+//!
+//! # Account fields
+//!
+//! `accountCommitment` and `accountNullifier` are extracted from TX slot 0's
+//! AC and AN public inputs. The design assumes one canonical account per batch.
+//!
+//! # Serializer
+//!
+//! Uses `TesseraGeneratorSerializer` (contains Keccak-256 generators).
+
+use std::{fs, path::Path};
+
+use anyhow::{anyhow, Result};
+use plonky2::{
+	field::types::PrimeField64,
+	hash::poseidon::PoseidonHash,
+	iop::{
+		target::{BoolTarget, Target},
+		witness::{PartialWitness, WitnessWrite},
+	},
+	plonk::{
+		circuit_builder::CircuitBuilder,
+		circuit_data::{
+			CircuitConfig, CommonCircuitData, VerifierCircuitTarget, VerifierOnlyCircuitData,
+		},
+		proof::ProofWithPublicInputsTarget,
+	},
+	util::serialization::DefaultGateSerializer,
+};
+
+/// Number of public inputs per TX leaf in the aggregated TX proof.
+/// Layout (NOTE_BATCH=7): [0-1] subpool_id auto, [2-3] subpool_id explicit,
+/// [4] is_real, [5-8] AN, [9-12] AC, [13-40] NN (7×4), [41-68] NC (7×4),
+/// [69-72] root (merged ACT+NCT root).
+pub const TX_LEAF_PI_SIZE: usize = 73;
+/// Offset of the `is_real` flag within a TX leaf's public inputs.
+pub const IS_REAL_OFFSET: usize = 4;
+/// Offset of the first TX data field (account nullifier) within a TX leaf's public inputs.
+pub const TX_DATA_OFFSET: usize = 5;
+use tessera_utils::{
+	groth::TesseraGeneratorSerializer,
+	hasher::HashOutput,
+	plonky2_gadgets::{
+		keccak256::{
+			builder::BuilderKeccak256, field_decompose::decompose_field_to_u32_pair,
+			utils::solidity_keccak256,
+		},
+		u32::gadgets::add_u8_range_check_lookup_table,
+	},
+	CircuitDataNative, ConfigNative, ProofNative, D, F,
+};
+
+// ---------------------------------------------------------------------------
+// Artifact path constants
+// ---------------------------------------------------------------------------
+
+const CIRCUIT_DATA_PATH: &str = "circuit_data.bin";
+const TX_COMMON_PATH: &str = "tx_common.bin";
+const TX_VERIFIER_PATH: &str = "tx_verifier.bin";
+const SR_COMMON_PATH: &str = "sr_common.bin";
+const SR_VERIFIER_PATH: &str = "sr_verifier.bin";
+
+const ALL_ARTIFACT_FILES: &[&str] = &[
+	CIRCUIT_DATA_PATH,
+	TX_COMMON_PATH,
+	TX_VERIFIER_PATH,
+	SR_COMMON_PATH,
+	SR_VERIFIER_PATH,
+];
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+/// Inner circuit data for the 2 proofs verified by [`SuperAggregator`].
+pub struct SuperAggregatorV2CircuitData {
+	pub tx_common: CommonCircuitData<F, D>,
+	pub tx_verifier: VerifierOnlyCircuitData<ConfigNative, D>,
+	pub sr_common: CommonCircuitData<F, D>,
+	pub sr_verifier: VerifierOnlyCircuitData<ConfigNative, D>,
+}
+
+// ---------------------------------------------------------------------------
+// Internal targets
+// ---------------------------------------------------------------------------
+
+struct SuperAggregatorV2Targets {
+	tx_proof: ProofWithPublicInputsTarget<D>,
+	tx_vd: VerifierCircuitTarget,
+	sr_proof: ProofWithPublicInputsTarget<D>,
+	sr_vd: VerifierCircuitTarget,
+	/// Single confirmed root as 4 Goldilocks field-element targets (private witness).
+	root: [Target; 4],
+	/// `mainPoolConfigRoot` as 8 u32 targets (raw bytes32 big-endian, private witness).
+	main_pool_cfg_root_u32s: [Target; 8],
+}
+
+// ---------------------------------------------------------------------------
+// SuperAggregator
+// ---------------------------------------------------------------------------
+
+/// Recursion circuit that verifies a TX aggregation proof and a SubtreeRoot
+/// proof, cross-checks note commitments in-circuit, and commits to all batch
+/// public inputs via Keccak-256.
+///
+/// # Artifact lifecycle
+///
+/// ```ignore
+/// let agg = SuperAggregator::build(inner)?;
+/// agg.store_artifacts(Path::new("artifacts/super-aggregator-v2"))?;
+///
+/// let agg = SuperAggregator::from_artifacts(Path::new("artifacts/super-aggregator-v2"))?;
+/// let proof = agg.prove(tx, sr, root, main_pool_cfg_root)?;
+/// ```
+pub struct SuperAggregator {
+	/// Compiled circuit data (needed by `BN128Wrapper::new`).
+	pub circuit_data: CircuitDataNative,
+	targets: SuperAggregatorV2Targets,
+	inner: SuperAggregatorV2CircuitData,
+}
+
+impl SuperAggregator {
+	/// Build the circuit from the two inner `CircuitData` objects.
+	pub fn build(inner: SuperAggregatorV2CircuitData) -> Result<Self> {
+		let (builder, targets) = setup_builder(&inner);
+		let circuit_data = builder.build::<ConfigNative>();
+		Ok(Self {
+			circuit_data,
+			targets,
+			inner,
+		})
+	}
+
+	/// Prove: verifies both inner proofs in-circuit and returns the root proof.
+	///
+	/// Public inputs of the root proof: 8 Goldilocks field elements holding
+	/// the big-endian u32 words of `Keccak256(V2 piCommitment preimage)`.
+	///
+	/// `root` is the on-chain Poseidon IMT root before this batch (used for both
+	/// acRoot and ncRoot). `main_pool_cfg_root` is the bytes32 pool config root.
+	///
+	/// `accountCommitment` / `accountNullifier` are derived from TX slot 0.
+	pub fn prove(
+		&self,
+		tx: ProofNative,
+		sr: ProofNative,
+		root: HashOutput,
+		main_pool_cfg_root: [u8; 32],
+	) -> Result<ProofNative> {
+		use plonky2::field::types::Field;
+
+		let mut pw = PartialWitness::new();
+
+		pw.set_verifier_data_target(&self.targets.tx_vd, &self.inner.tx_verifier)
+			.map_err(|e| anyhow!("set tx_vd: {e}"))?;
+		pw.set_proof_with_pis_target(&self.targets.tx_proof, &tx)
+			.map_err(|e| anyhow!("set tx_proof: {e}"))?;
+		pw.set_verifier_data_target(&self.targets.sr_vd, &self.inner.sr_verifier)
+			.map_err(|e| anyhow!("set sr_vd: {e}"))?;
+		pw.set_proof_with_pis_target(&self.targets.sr_proof, &sr)
+			.map_err(|e| anyhow!("set sr_proof: {e}"))?;
+
+		// Private witness — single root as Goldilocks fields.
+		for (k, &t) in self.targets.root.iter().enumerate() {
+			pw.set_target(t, root.0[k])
+				.map_err(|e| anyhow!("set root[{k}]: {e}"))?;
+		}
+
+		// mainPoolConfigRoot as 8 big-endian u32 words.
+		for (i, &t) in self.targets.main_pool_cfg_root_u32s.iter().enumerate() {
+			let word = u32::from_be_bytes(main_pool_cfg_root[i * 4..i * 4 + 4].try_into().unwrap());
+			pw.set_target(t, F::from_canonical_u32(word))
+				.map_err(|e| anyhow!("set main_pool_cfg_root_u32s[{i}]: {e}"))?;
+		}
+
+		self.circuit_data
+			.prove(pw)
+			.map_err(|e| anyhow!("SuperAggregator::prove: {e}"))
+	}
+
+	/// Compute the V2 piCommitment natively, matching `_computeTxPiCommitment`
+	/// in Solidity.
+	///
+	/// Returns 8 big-endian `u32` words — identical to `keccakToPublicInputs`
+	/// applied to the keccak256 of `abi.encodePacked(all batch fields)`.
+	///
+	/// All `HashOutput` values are encoded as LE-packed `uint256`:
+	/// `e0 | (e1<<64) | (e2<<128) | (e3<<192)` → big-endian bytes =
+	/// `[e3_be8, e2_be8, e1_be8, e0_be8]`.
+	#[allow(clippy::too_many_arguments)]
+	pub fn compute_pi_commitment_native(
+		root: HashOutput,
+		main_pool_cfg_root: [u8; 32],
+		batch_poseidon_root: HashOutput,
+		account_commitments: &[HashOutput],
+		account_nullifiers: &[HashOutput],
+		note_commitments: &[HashOutput],
+		note_nullifiers: &[HashOutput],
+	) -> [u32; 8] {
+		let mut words: Vec<u32> = Vec::new();
+
+		// Push a HashOutput as 8 u32 words in LE-packed uint256 big-endian order.
+		let push_hash = |w: &mut Vec<u32>, h: &HashOutput| {
+			for &field in &[h.0[3], h.0[2], h.0[1], h.0[0]] {
+				let v = field.to_canonical_u64();
+				w.push((v >> 32) as u32);
+				w.push(v as u32);
+			}
+		};
+
+		// Single root (common across all slots).
+		push_hash(&mut words, &root);
+
+		// mainPoolConfigRoot: raw bytes32 big-endian.
+		for i in 0..8 {
+			words.push(u32::from_be_bytes(
+				main_pool_cfg_root[i * 4..i * 4 + 4].try_into().unwrap(),
+			));
+		}
+
+		push_hash(&mut words, &batch_poseidon_root);
+
+		for ac in account_commitments {
+			push_hash(&mut words, ac);
+		}
+		for an in account_nullifiers {
+			push_hash(&mut words, an);
+		}
+		for nc in note_commitments {
+			push_hash(&mut words, nc);
+		}
+		for nn in note_nullifiers {
+			push_hash(&mut words, nn);
+		}
+
+		solidity_keccak256(&words)
+	}
+
+	/// Extract all account commitments (AC) from a TX aggregation proof.
+	///
+	/// Returns a `Vec` of length `n_tx_slots` in slot order.
+	pub fn acs_from_tx_proof(tx: &ProofNative, n_tx_slots: usize) -> Vec<HashOutput> {
+		(0..n_tx_slots)
+			.map(|s| {
+				let base = s * TX_LEAF_PI_SIZE;
+				HashOutput::new(core::array::from_fn(|k| {
+					tx.public_inputs[base + TX_DATA_OFFSET + 4 + k]
+				}))
+			})
+			.collect()
+	}
+
+	/// Extract all account nullifiers (AN) from a TX aggregation proof.
+	///
+	/// Returns a `Vec` of length `n_tx_slots` in slot order.
+	pub fn ans_from_tx_proof(tx: &ProofNative, n_tx_slots: usize) -> Vec<HashOutput> {
+		(0..n_tx_slots)
+			.map(|s| {
+				let base = s * TX_LEAF_PI_SIZE;
+				HashOutput::new(core::array::from_fn(|k| {
+					tx.public_inputs[base + TX_DATA_OFFSET + k]
+				}))
+			})
+			.collect()
+	}
+
+	/// Extract all note nullifiers (NN) from a TX aggregation proof.
+	///
+	/// Returns a flat `Vec` of length `n_tx_slots × notes_per_slot` ordered
+	/// `(slot, note)`.
+	pub fn nn_from_tx_proof(
+		tx: &ProofNative,
+		n_tx_slots: usize,
+		notes_per_slot: usize,
+	) -> Vec<HashOutput> {
+		let mut out = Vec::with_capacity(n_tx_slots * notes_per_slot);
+		for s in 0..n_tx_slots {
+			let base = s * TX_LEAF_PI_SIZE;
+			for j in 0..notes_per_slot {
+				out.push(HashOutput::new(core::array::from_fn(|k| {
+					tx.public_inputs[base + TX_DATA_OFFSET + 8 + j * 4 + k]
+				})));
+			}
+		}
+		out
+	}
+
+	/// Extract 7 note commitments per slot from an SR proof, skipping the AC leaf.
+	///
+	/// SR leaf layout per slot: `[nc0, nc1, ..., nc6, ac]`. Returns the first
+	/// `nc_per_slot` leaves of each slot, yielding `n_tx_slots × nc_per_slot` total.
+	pub fn ncs_from_sr_proof(
+		sr: &ProofNative,
+		n_tx_slots: usize,
+		notes_per_slot: usize,
+		nc_per_slot: usize,
+	) -> Vec<HashOutput> {
+		let mut out = Vec::with_capacity(n_tx_slots * nc_per_slot);
+		for s in 0..n_tx_slots {
+			for j in 0..nc_per_slot {
+				let idx = s * notes_per_slot + j;
+				out.push(HashOutput::new(core::array::from_fn(|k| {
+					sr.public_inputs[4 + idx * 4 + k]
+				})));
+			}
+		}
+		out
+	}
+
+	/// Persist all artifacts to `path`.
+	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
+		fs::create_dir_all(path)?;
+		let gate_ser = DefaultGateSerializer;
+		let gen_ser = TesseraGeneratorSerializer;
+
+		let cd_bytes = self
+			.circuit_data
+			.to_bytes(&gate_ser, &gen_ser)
+			.map_err(|_| anyhow!("serialize circuit_data failed"))?;
+		fs::write(path.join(CIRCUIT_DATA_PATH), cd_bytes)?;
+
+		write_common(path.join(TX_COMMON_PATH), &self.inner.tx_common, &gate_ser)?;
+		write_verifier(path.join(TX_VERIFIER_PATH), &self.inner.tx_verifier)?;
+		write_common(path.join(SR_COMMON_PATH), &self.inner.sr_common, &gate_ser)?;
+		write_verifier(path.join(SR_VERIFIER_PATH), &self.inner.sr_verifier)?;
+		Ok(())
+	}
+
+	/// Reconstruct the circuit from pre-generated artifacts without recompiling.
+	pub fn from_artifacts(path: &Path) -> Result<Self> {
+		let gate_ser = DefaultGateSerializer;
+		let gen_ser = TesseraGeneratorSerializer;
+
+		let tx_common = read_common(path.join(TX_COMMON_PATH), &gate_ser, "tx_common")?;
+		let tx_verifier = read_verifier(path.join(TX_VERIFIER_PATH), "tx_verifier")?;
+		let sr_common = read_common(path.join(SR_COMMON_PATH), &gate_ser, "sr_common")?;
+		let sr_verifier = read_verifier(path.join(SR_VERIFIER_PATH), "sr_verifier")?;
+
+		let inner = SuperAggregatorV2CircuitData {
+			tx_common,
+			tx_verifier,
+			sr_common,
+			sr_verifier,
+		};
+		let (_, targets) = setup_builder(&inner);
+
+		let cd_bytes = fs::read(path.join(CIRCUIT_DATA_PATH))
+			.map_err(|e| anyhow!("failed to read circuit_data.bin: {e}"))?;
+		let circuit_data =
+			CircuitDataNative::from_bytes(&cd_bytes, &gate_ser, &gen_ser).map_err(|_| {
+				anyhow!(
+					"deserialize SuperAggregator circuit_data failed. \
+					 Delete the artifacts directory and rebuild."
+				)
+			})?;
+
+		Ok(Self {
+			circuit_data,
+			targets,
+			inner,
+		})
+	}
+
+	/// Returns `true` if all artifact files are present under `path`.
+	pub fn has_artifacts(path: &Path) -> bool {
+		ALL_ARTIFACT_FILES.iter().all(|f| path.join(f).is_file())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Internal circuit helpers
+// ---------------------------------------------------------------------------
+
+/// Encode a 4-element Goldilocks hash as 8 u32 circuit targets using the
+/// LE-packed `uint256` representation:
+///   `uint256 = e0|(e1<<64)|(e2<<128)|(e3<<192)`
+///   big-endian bytes → `[e3_be8, e2_be8, e1_be8, e0_be8]`
+///   u32 words → `[e3_hi, e3_lo, e2_hi, e2_lo, e1_hi, e1_lo, e0_hi, e0_lo]`
+///
+/// This is the **reverse** of the V1 natural-order encoding.
+fn pack_hash_le_to_u32s(
+	builder: &mut CircuitBuilder<F, D>,
+	elements: [Target; 4],
+	byte_range_lut: usize,
+) -> [Target; 8] {
+	let [e0, e1, e2, e3] = elements;
+	let [h3, l3] = decompose_field_to_u32_pair(builder, e3, byte_range_lut);
+	let [h2, l2] = decompose_field_to_u32_pair(builder, e2, byte_range_lut);
+	let [h1, l1] = decompose_field_to_u32_pair(builder, e1, byte_range_lut);
+	let [h0, l0] = decompose_field_to_u32_pair(builder, e0, byte_range_lut);
+	[h3.0, l3.0, h2.0, l2.0, h1.0, l1.0, h0.0, l0.0]
+}
+
+/// Cross-check SubtreeRoot leaves against TX note commitments + account commitment.
+///
+/// SR leaf layout per slot: `[NC[0], NC[1], ..., NC[nc_per_slot-1], AC]`
+/// where `nc_per_slot = leaves_per_slot - 1 = NOTE_BATCH = 7`.
+///
+/// For each real TX slot (`is_real=1`):
+/// - SR leaf `s*leaves_per_slot + j` (j < nc_per_slot) == TX NC[j]
+/// - SR leaf `s*leaves_per_slot + nc_per_slot` == TX AC
+///
+/// Gated by `is_real` so dummy slots are free.
+fn wire_sr_to_tx(
+	builder: &mut CircuitBuilder<F, D>,
+	sr_pis: &[Target],
+	tx_pis: &[Target],
+	n_tx_slots: usize,
+	leaves_per_slot: usize,
+) {
+	let nc_per_slot = leaves_per_slot - 1; // NOTE_BATCH = 7; last leaf is AC
+	let mut constraints = Vec::with_capacity(n_tx_slots * leaves_per_slot * 4);
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
+		for j in 0..leaves_per_slot {
+			for k in 0..4 {
+				let tx_leaf = if j < nc_per_slot {
+					// NC[j]: after is_real/subpool[5] + AN[4] + AC[4] + NN[nc_per_slot×4]
+					tx_pis[tx_base + TX_DATA_OFFSET + 8 + nc_per_slot * 4 + j * 4 + k]
+				} else {
+					// AC: at TX_DATA_OFFSET + 4 (after AN[4])
+					tx_pis[tx_base + TX_DATA_OFFSET + 4 + k]
+				};
+				// SR leaf: PI[4 + leaf_idx*4 + k], where leaf_idx = s*leaves_per_slot + j.
+				let sr_leaf = sr_pis[4 + (s * leaves_per_slot + j) * 4 + k];
+				let diff = builder.sub(tx_leaf, sr_leaf);
+				let gated = builder.mul(is_real, diff);
+				constraints.push(gated);
+			}
+		}
+	}
+	// Fiat-Shamir seed: SR root (first 4 PIs).
+	batch_assert_zero(builder, &constraints, &sr_pis[..4]);
+}
+
+/// Random-linear-combination zero check (same as V1 `batch_assert_zero`).
+fn batch_assert_zero(
+	builder: &mut CircuitBuilder<F, D>,
+	constraints: &[Target],
+	fiat_shamir_seed: &[Target],
+) {
+	if constraints.is_empty() {
+		return;
+	}
+	let zero = builder.zero();
+	if constraints.len() == 1 {
+		builder.connect(constraints[0], zero);
+		return;
+	}
+	let hash = builder.hash_n_to_hash_no_pad::<PoseidonHash>(fiat_shamir_seed.to_vec());
+	let r = hash.elements[0];
+	let mut acc = constraints[0];
+	let mut r_pow = r;
+	for &c in &constraints[1..] {
+		let term = builder.mul(r_pow, c);
+		acc = builder.add(acc, term);
+		r_pow = builder.mul(r_pow, r);
+	}
+	builder.connect(acc, zero);
+}
+
+// ---------------------------------------------------------------------------
+// Internal circuit builder
+// ---------------------------------------------------------------------------
+
+fn setup_builder(
+	inner: &SuperAggregatorV2CircuitData,
+) -> (CircuitBuilder<F, D>, SuperAggregatorV2Targets) {
+	let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+
+	// --- Proof targets ---
+	let tx_proof = builder.add_virtual_proof_with_pis(&inner.tx_common);
+	let tx_vd = builder.constant_verifier_data(&inner.tx_verifier);
+	let sr_proof = builder.add_virtual_proof_with_pis(&inner.sr_common);
+	let sr_vd = builder.constant_verifier_data(&inner.sr_verifier);
+
+	// --- Derive batch sizes ---
+	let tx_total_pi = inner.tx_common.num_public_inputs;
+	assert_eq!(
+		tx_total_pi % TX_LEAF_PI_SIZE,
+		0,
+		"TX root PI count ({tx_total_pi}) must be a multiple of TX_LEAF_PI_SIZE ({TX_LEAF_PI_SIZE})"
+	);
+	let n_tx_slots = tx_total_pi / TX_LEAF_PI_SIZE;
+
+	// SR PI layout: root[4] | leaves[N×4] → total = (1+N)*4
+	let sr_total_pi = inner.sr_common.num_public_inputs;
+	assert_eq!(
+		sr_total_pi % 4,
+		0,
+		"SR PI count ({sr_total_pi}) must be a multiple of 4"
+	);
+	let sr_batch_size = sr_total_pi / 4 - 1;
+	assert_eq!(
+		sr_batch_size % n_tx_slots,
+		0,
+		"SR batch_size ({sr_batch_size}) must be divisible by n_tx_slots ({n_tx_slots})"
+	);
+	let notes_per_slot = sr_batch_size / n_tx_slots; // = NOTE_BATCH + 1 = 8 (leaves per slot)
+	let nc_per_slot = notes_per_slot - 1; // = NOTE_BATCH = 7 (NC only, no AC)
+
+	// --- Verify both proofs in-circuit ---
+	builder.verify_proof::<ConfigNative>(&tx_proof, &tx_vd, &inner.tx_common);
+	builder.verify_proof::<ConfigNative>(&sr_proof, &sr_vd, &inner.sr_common);
+
+	// --- Assert is_real is boolean for each TX slot ---
+	for s in 0..n_tx_slots {
+		let is_real =
+			BoolTarget::new_unsafe(tx_proof.public_inputs[s * TX_LEAF_PI_SIZE + IS_REAL_OFFSET]);
+		builder.assert_bool(is_real);
+	}
+
+	// --- Cross-check: SR leaves == TX NC values (gated by is_real) ---
+	wire_sr_to_tx(
+		&mut builder,
+		&sr_proof.public_inputs,
+		&tx_proof.public_inputs,
+		n_tx_slots,
+		notes_per_slot,
+	);
+
+	// --- Allocate private witness targets ---
+	let root: [Target; 4] = core::array::from_fn(|_| builder.add_virtual_target());
+	// mainPoolConfigRoot: 8 u32 targets (raw bytes32 big-endian words, no decompose needed).
+	let main_pool_cfg_root_u32s: [Target; 8] =
+		core::array::from_fn(|_| builder.add_virtual_target());
+
+	// --- Build Keccak preimage ---
+	// Layout: root | mainPoolCfgRoot | batchPoseidonRoot |
+	//         accountCommitments[S] | accountNullifiers[S] |
+	//         noteCommitments[7*S] | noteNullifiers[7*S]
+	let byte_range_lut = add_u8_range_check_lookup_table(&mut builder);
+
+	let mut u32_targets: Vec<Target> = Vec::new();
+
+	// 1. root (single, uint256 LE-packed HashOutput)
+	let root_words = pack_hash_le_to_u32s(&mut builder, root, byte_range_lut);
+	u32_targets.extend_from_slice(&root_words);
+
+	// 2. mainPoolConfigRoot (bytes32 — 8 raw u32 words passed directly)
+	u32_targets.extend_from_slice(&main_pool_cfg_root_u32s);
+
+	// 3. batchPoseidonRoot (uint256 LE-packed) — SR proof PI[0..4]
+	let sr_root: [Target; 4] = core::array::from_fn(|k| sr_proof.public_inputs[k]);
+	let sr_root_words = pack_hash_le_to_u32s(&mut builder, sr_root, byte_range_lut);
+	u32_targets.extend_from_slice(&sr_root_words);
+
+	// 4. accountCommitments[0..S] — all slots' AC: PI[s*TX_LEAF_PI_SIZE + TX_DATA_OFFSET+4..+8]
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		let ac: [Target; 4] =
+			core::array::from_fn(|k| tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 4 + k]);
+		let ac_words = pack_hash_le_to_u32s(&mut builder, ac, byte_range_lut);
+		u32_targets.extend_from_slice(&ac_words);
+	}
+
+	// 5. accountNullifiers[0..S] — all slots' AN: PI[s*TX_LEAF_PI_SIZE + TX_DATA_OFFSET..+4]
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		let an: [Target; 4] =
+			core::array::from_fn(|k| tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + k]);
+		let an_words = pack_hash_le_to_u32s(&mut builder, an, byte_range_lut);
+		u32_targets.extend_from_slice(&an_words);
+	}
+
+	// 6. noteCommitments[0..7*S] — 7 NC per slot from SR proof leaves. SR leaf layout per slot:
+	//    [nc0..nc6, ac]. Skip the last leaf (AC) in each slot.
+	for s in 0..n_tx_slots {
+		for j in 0..nc_per_slot {
+			let sr_idx = s * notes_per_slot + j;
+			let leaf: [Target; 4] =
+				core::array::from_fn(|k| sr_proof.public_inputs[4 + sr_idx * 4 + k]);
+			let leaf_words = pack_hash_le_to_u32s(&mut builder, leaf, byte_range_lut);
+			u32_targets.extend_from_slice(&leaf_words);
+		}
+	}
+
+	// 7. noteNullifiers[0..7*S] — 7 NN per slot from TX proof PIs.
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		for j in 0..nc_per_slot {
+			let nn: [Target; 4] = core::array::from_fn(|k| {
+				tx_proof.public_inputs[tx_base + TX_DATA_OFFSET + 8 + j * 4 + k]
+			});
+			let nn_words = pack_hash_le_to_u32s(&mut builder, nn, byte_range_lut);
+			u32_targets.extend_from_slice(&nn_words);
+		}
+	}
+
+	// --- Keccak-256 → 8 output words → public inputs ---
+	let hash = builder.keccak256::<ConfigNative>(&u32_targets);
+	for &word in &hash {
+		builder.register_public_input(word);
+	}
+
+	let targets = SuperAggregatorV2Targets {
+		tx_proof,
+		tx_vd,
+		sr_proof,
+		sr_vd,
+		root,
+		main_pool_cfg_root_u32s,
+	};
+
+	(builder, targets)
+}
+
+// ---------------------------------------------------------------------------
+// Artifact I/O helpers
+// ---------------------------------------------------------------------------
+
+fn write_common(
+	path: impl AsRef<Path>,
+	data: &CommonCircuitData<F, D>,
+	gate_ser: &DefaultGateSerializer,
+) -> Result<()> {
+	let bytes = data.to_bytes(gate_ser).map_err(|_| {
+		anyhow!(
+			"serialize CommonCircuitData to '{}' failed",
+			path.as_ref().display()
+		)
+	})?;
+	fs::write(path, bytes)?;
+	Ok(())
+}
+
+fn write_verifier(
+	path: impl AsRef<Path>,
+	data: &VerifierOnlyCircuitData<ConfigNative, D>,
+) -> Result<()> {
+	let bytes = data.to_bytes().map_err(|_| {
+		anyhow!(
+			"serialize VerifierOnlyCircuitData to '{}' failed",
+			path.as_ref().display()
+		)
+	})?;
+	fs::write(path, bytes)?;
+	Ok(())
+}
+
+fn read_common(
+	path: impl AsRef<Path>,
+	gate_ser: &DefaultGateSerializer,
+	label: &str,
+) -> Result<CommonCircuitData<F, D>> {
+	let bytes = fs::read(path).map_err(|e| anyhow!("failed to read {label}: {e}"))?;
+	CommonCircuitData::from_bytes(&bytes, gate_ser)
+		.map_err(|_| anyhow!("deserialize {label} failed"))
+}
+
+fn read_verifier(
+	path: impl AsRef<Path>,
+	label: &str,
+) -> Result<VerifierOnlyCircuitData<ConfigNative, D>> {
+	let bytes = fs::read(path).map_err(|e| anyhow!("failed to read {label}: {e}"))?;
+	VerifierOnlyCircuitData::from_bytes(&bytes).map_err(|_| anyhow!("deserialize {label} failed"))
+}
+
+// ---------------------------------------------------------------------------
+// Off-circuit PI validation
+// ---------------------------------------------------------------------------
+
+/// Validate SubtreeRoot leaf ↔ TX (NC + AC) mapping off-circuit.
+///
+/// SR leaf layout per slot: `[NC[0], ..., NC[nc_per_slot-1], AC]`
+/// where `nc_per_slot = leaves_per_slot - 1 = NOTE_BATCH = 7`.
+///
+/// For each real TX slot (`is_real=1`):
+/// - `sr_pis[4 + (s*lps+j)*4 + k] == tx_nc[s][j][k]`  for j < nc_per_slot
+/// - `sr_pis[4 + (s*lps+nc_per_slot)*4 + k] == tx_ac[s][k]`
+///
+/// `sr_pis`: SubtreeRoot proof public inputs (`(1+batch_size)*4` elements).
+/// `tx_pis`: TX aggregation proof public inputs (`n_tx_slots * TX_LEAF_PI_SIZE` elements).
+/// `leaves_per_slot`: SR leaves per TX slot (= NOTE_BATCH + 1 = 8).
+pub fn validate_subtree_nc_offcircuit(
+	sr_pis: &[F],
+	tx_pis: &[F],
+	n_tx_slots: usize,
+	leaves_per_slot: usize,
+) -> Result<()> {
+	use plonky2::field::types::{Field, PrimeField64};
+	let nc_per_slot = leaves_per_slot - 1;
+	for s in 0..n_tx_slots {
+		let tx_base = s * TX_LEAF_PI_SIZE;
+		let is_real = tx_pis[tx_base + IS_REAL_OFFSET];
+		if is_real == F::ONE {
+			for j in 0..leaves_per_slot {
+				for k in 0..4 {
+					let tx_leaf = if j < nc_per_slot {
+						tx_pis[tx_base + TX_DATA_OFFSET + 8 + nc_per_slot * 4 + j * 4 + k]
+					} else {
+						tx_pis[tx_base + TX_DATA_OFFSET + 4 + k] // AC
+					};
+					let leaf_idx = s * leaves_per_slot + j;
+					let sr_leaf = sr_pis[4 + leaf_idx * 4 + k];
+					if tx_leaf != sr_leaf {
+						let kind = if j < nc_per_slot { "NC" } else { "AC" };
+						return Err(anyhow!(
+							"SR/TX {kind} mismatch: slot {s} leaf {j} field {k}: \
+							 tx={} sr={}",
+							tx_leaf.to_canonical_u64(),
+							sr_leaf.to_canonical_u64()
+						));
+					}
+				}
+			}
+		}
+	}
+	Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests (Phase D1 — step 20)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+	use std::{path::PathBuf, sync::OnceLock};
+
+	use plonky2::{
+		field::types::Field,
+		iop::{target::Target, witness::PartialWitness},
+		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
+	};
+	use rand::{rngs::StdRng, SeedableRng};
+	use tessera_utils::hasher::NewRandom;
+
+	use super::*;
+	use crate::proof_aggregation::{SubtreeRootCircuit, TX_LEAF_PI_SIZE};
+
+	// -----------------------------------------------------------------
+	// Serialized test-circuit cache
+	//
+	// The SuperAggregator circuit takes ~30s to build.  We cache it
+	// within a test-binary run via OnceLock, and load from the
+	// artifact directory (generated by `super_aggregator_v2_artifacts`)
+	// when available to skip the build entirely.
+	//
+	// Artifact layout (under $TESSERA_ARTIFACTS_DIR/sav2-unit-test/):
+	//   circuit_data.bin, tx_common.bin, tx_verifier.bin,
+	//   sr_common.bin, sr_verifier.bin  — SuperAggregator (2 slots)
+	//   subtree-root/circuit_data.bin   — SubtreeRootCircuit (16 leaves)
+	// -----------------------------------------------------------------
+
+	struct TestCircuits {
+		tx_cd: CircuitDataNative,
+		tx_targets: Vec<Target>,
+		sr: SubtreeRootCircuit,
+		sav2: SuperAggregator,
+	}
+
+	static TEST_CIRCUITS: OnceLock<TestCircuits> = OnceLock::new();
+
+	fn unit_test_artifact_dir() -> Option<PathBuf> {
+		let base = std::env::var("TESSERA_ARTIFACTS_DIR")
+			.map(PathBuf::from)
+			.unwrap_or_else(|_| {
+				PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+					.parent()
+					.expect("workspace parent")
+					.join("artifacts")
+			});
+		Some(base.join("transactions").join("unit-test"))
+	}
+
+	fn get_test_circuits() -> &'static TestCircuits {
+		TEST_CIRCUITS.get_or_init(|| {
+			// Always rebuild the tiny synthetic TX-agg circuit (fast, targets needed for proving).
+			let (tx_cd, tx_targets) = build_tx_agg(2);
+
+			// Try loading Final Plonky2 Proof + SR from pre-built artifacts.
+			if let Some(dir) = unit_test_artifact_dir() {
+				let sr_dir = dir.join("subtree-root");
+				if SuperAggregator::has_artifacts(&dir)
+					&& SubtreeRootCircuit::has_artifacts(&sr_dir)
+				{
+					if let (Ok(sr), Ok(sav2)) = (
+						SubtreeRootCircuit::from_artifacts(&sr_dir, 16),
+						SuperAggregator::from_artifacts(&dir),
+					) {
+						return TestCircuits {
+							tx_cd,
+							tx_targets,
+							sr,
+							sav2,
+						};
+					}
+				}
+			}
+
+			// Fallback: build from scratch (slow).
+			let sr = SubtreeRootCircuit::build(16).expect("SubtreeRootCircuit::build");
+			let inner = SuperAggregatorV2CircuitData {
+				tx_common: tx_cd.common.clone(),
+				tx_verifier: tx_cd.verifier_only.clone(),
+				sr_common: sr.circuit_data.common.clone(),
+				sr_verifier: sr.circuit_data.verifier_only.clone(),
+			};
+			let sav2 = SuperAggregator::build(inner).expect("SuperAggregator::build");
+			TestCircuits {
+				tx_cd,
+				tx_targets,
+				sr,
+				sav2,
+			}
+		})
+	}
+
+	// -----------------------------------------------------------------
+	// Helpers for synthetic TX aggregation proofs
+	// -----------------------------------------------------------------
+
+	/// Build a minimal "TX aggregation" leaf circuit with exactly
+	/// `n_tx_slots * TX_LEAF_PI_SIZE` public inputs.
+	fn build_tx_agg(n_tx_slots: usize) -> (CircuitDataNative, Vec<Target>) {
+		let n_pi = n_tx_slots * TX_LEAF_PI_SIZE;
+		let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+		let targets: Vec<Target> = (0..n_pi).map(|_| builder.add_virtual_target()).collect();
+		for &t in &targets {
+			builder.register_public_input(t);
+		}
+		(builder.build::<crate::ConfigNative>(), targets)
+	}
+
+	/// Set all PI values for a TX agg proof.
+	/// `slot_values[s]` is a `Vec<u64>` of exactly `TX_LEAF_PI_SIZE` elements.
+	fn prove_tx_agg(
+		cd: &CircuitDataNative,
+		targets: &[Target],
+		slot_values: &[Vec<u64>],
+	) -> ProofNative {
+		let mut flat = Vec::new();
+		for sv in slot_values {
+			assert_eq!(sv.len(), TX_LEAF_PI_SIZE);
+			flat.extend_from_slice(sv);
+		}
+		assert_eq!(flat.len(), targets.len());
+		let mut pw = PartialWitness::new();
+		for (&t, &v) in targets.iter().zip(flat.iter()) {
+			pw.set_target(t, F::from_canonical_u64(v)).unwrap();
+		}
+		cd.prove(pw).unwrap()
+	}
+
+	/// Build slot values for one TX slot.
+	///
+	/// TX PI layout with NOTE_BATCH=7 (TX_LEAF_PI_SIZE=73):
+	/// ```text
+	/// [0]    = subpool_id_in  (auto, zero for test)
+	/// [1]    = subpool_id_out (auto, zero for test)
+	/// [2]    = subpool_id_in  (explicit, zero for test)
+	/// [3]    = subpool_id_out (explicit, zero for test)
+	/// [4]    = is_real        (IS_REAL_OFFSET)
+	/// [5-8]  = AN             (TX_DATA_OFFSET)
+	/// [9-12] = AC
+	/// [13-40]= NN (7×4=28)
+	/// [41-68]= NC (7×4=28)
+	/// [69-72]= root (merged ACT+NCT root)
+	/// ```
+	fn make_slot(
+		is_real: u64,
+		an: [u64; 4],
+		ac: [u64; 4],
+		nn_flat: &[u64],
+		nc_flat: &[u64],
+	) -> Vec<u64> {
+		let mut v = vec![0u64; TX_LEAF_PI_SIZE];
+		v[4] = is_real; // IS_REAL_OFFSET = 4
+		v[5] = an[0];
+		v[6] = an[1];
+		v[7] = an[2];
+		v[8] = an[3]; // AN
+		v[9] = ac[0];
+		v[10] = ac[1];
+		v[11] = ac[2];
+		v[12] = ac[3]; // AC
+				 // NN at [13..41] (7×4=28 fields, NOTE_BATCH=7)
+		assert_eq!(nn_flat.len(), v[13..41].len());
+		v[13..41].copy_from_slice(nn_flat);
+		// NC at [41..69] (7×4=28 fields)
+		assert_eq!(nc_flat.len(), v[41..69].len());
+		v[41..69].copy_from_slice(nc_flat);
+		// [69..73] = root (merged ACT+NCT root, left as zero for test)
+		v
+	}
+
+	/// Build 7 note commitments where NC[j] = HashOutput(base+j, 0, 0, 0).
+	fn make_nc_flat(base: u64) -> [u64; 28] {
+		let mut out = [0u64; 28];
+		for j in 0..7usize {
+			out[j * 4] = base + j as u64;
+		}
+		out
+	}
+
+	/// Build 7 note nullifiers where NN[j] = HashOutput(base+j, 0, 0, 0).
+	fn make_nn_flat(base: u64) -> [u64; 28] {
+		let mut out = [0u64; 28];
+		for j in 0..7usize {
+			out[j * 4] = base + j as u64;
+		}
+		out
+	}
+
+	// -----------------------------------------------------------------
+	// Test: circuit compiles and produces 8 PIs
+	// -----------------------------------------------------------------
+
+	#[test]
+	fn test_build_pi_count() -> Result<()> {
+		let tc = get_test_circuits();
+		assert_eq!(tc.sav2.circuit_data.common.num_public_inputs, 8);
+		Ok(())
+	}
+
+	// -----------------------------------------------------------------
+	// Test: prove + verify + native piCommitment match
+	// -----------------------------------------------------------------
+
+	#[test]
+	fn test_prove_and_pi_commitment_matches_native() -> Result<()> {
+		let tc = get_test_circuits();
+
+		// NC values for slot 0 (real) and slot 1 (dummy, is_real=0).
+		let nc0 = make_nc_flat(0x4000);
+		let nc1 = make_nc_flat(0); // dummy
+		let nn0 = make_nn_flat(0x3000);
+		let nn1 = make_nn_flat(0);
+
+		let an0 = [0x1000u64, 0, 0, 0];
+		let ac0 = [0x2000u64, 0, 0, 0];
+
+		let slot0 = make_slot(1, an0, ac0, &nn0, &nc0);
+		let slot1 = make_slot(0, [0; 4], [0; 4], &nn1, &nc1);
+
+		// Build TX agg proof.
+		let tx_proof = prove_tx_agg(&tc.tx_cd, &tc.tx_targets, &[slot0, slot1]);
+
+		// SR leaves: 8 per slot = [NC[0..7], AC].
+		// Slot 0 (real): NC[j] = (0x4000+j, 0, 0, 0) for j=0..6, AC = (0x2000, 0, 0, 0).
+		// Slot 1 (dummy): all zeros.
+		let sr_leaves: Vec<HashOutput> = (0..16)
+			.map(|i| {
+				if i < 7 {
+					// NC[i] for slot 0
+					HashOutput::new([
+						F::from_canonical_u64(0x4000 + i as u64),
+						F::ZERO,
+						F::ZERO,
+						F::ZERO,
+					])
+				} else if i == 7 {
+					// AC for slot 0
+					HashOutput::new([F::from_canonical_u64(0x2000), F::ZERO, F::ZERO, F::ZERO])
+				} else {
+					HashOutput::new([F::ZERO; 4])
+				}
+			})
+			.collect();
+		let sr_proof = tc.sr.prove(&sr_leaves)?;
+
+		// Private witnesses.
+		let root = HashOutput::new([F::from_canonical_u64(0xAC00), F::ZERO, F::ZERO, F::ZERO]);
+		let main_pool_cfg_root = [0x01u8; 32];
+
+		let proof = tc
+			.sav2
+			.prove(tx_proof.clone(), sr_proof.clone(), root, main_pool_cfg_root)?;
+		tc.sav2.circuit_data.verify(proof.clone())?;
+
+		// Compare circuit output against native computation.
+		let n_tx_slots = 2;
+		let notes_per_slot = 8;
+		let nc_per_slot = 7;
+		let batch_poseidon_root = SubtreeRootCircuit::root_from_proof(&sr_proof);
+		let account_commitments = SuperAggregator::acs_from_tx_proof(&tx_proof, n_tx_slots);
+		let account_nullifiers = SuperAggregator::ans_from_tx_proof(&tx_proof, n_tx_slots);
+		let note_commitments =
+			SuperAggregator::ncs_from_sr_proof(&sr_proof, n_tx_slots, notes_per_slot, nc_per_slot);
+		let note_nullifiers = SuperAggregator::nn_from_tx_proof(&tx_proof, n_tx_slots, nc_per_slot);
+
+		let expected = SuperAggregator::compute_pi_commitment_native(
+			root,
+			main_pool_cfg_root,
+			batch_poseidon_root,
+			&account_commitments,
+			&account_nullifiers,
+			&note_commitments,
+			&note_nullifiers,
+		);
+
+		let actual: Vec<u64> = proof
+			.public_inputs
+			.iter()
+			.map(|f| f.to_canonical_u64())
+			.collect();
+		let expected_u64: Vec<u64> = expected.iter().map(|&w| w as u64).collect();
+		assert_eq!(
+			actual, expected_u64,
+			"circuit PIs do not match native piCommitment"
+		);
+		Ok(())
+	}
+
+	// -----------------------------------------------------------------
+	// Test: cross-check detects SR/TX NC mismatch
+	// -----------------------------------------------------------------
+
+	#[test]
+	fn test_cross_check_rejects_nc_mismatch() -> Result<()> {
+		let tc = get_test_circuits();
+
+		let nc0 = make_nc_flat(0x4000);
+		let nn0 = make_nn_flat(0x3000);
+		let slot0 = make_slot(1, [0x1000, 0, 0, 0], [0x2000, 0, 0, 0], &nn0, &nc0);
+		let slot1 = make_slot(0, [0; 4], [0; 4], &make_nn_flat(0), &make_nc_flat(0));
+		let tx_proof = prove_tx_agg(&tc.tx_cd, &tc.tx_targets, &[slot0, slot1]);
+
+		// SR leaves intentionally WRONG for slot 0 (different values).
+		let mut rng = StdRng::from_seed([99u8; 32]);
+		let wrong_leaves: Vec<HashOutput> =
+			(0..16).map(|_| HashOutput::new_random(&mut rng)).collect();
+		let sr_proof = tc.sr.prove(&wrong_leaves)?;
+
+		let result = tc
+			.sav2
+			.prove(tx_proof, sr_proof, HashOutput::new([F::ZERO; 4]), [0u8; 32]);
+		assert!(result.is_err(), "prove should fail when SR leaves != TX NC");
+		Ok(())
+	}
+
+	// -----------------------------------------------------------------
+	// Test: validate_subtree_nc_offcircuit
+	// -----------------------------------------------------------------
+
+	#[test]
+	fn test_validate_subtree_nc_offcircuit_ok() -> Result<()> {
+		// Build a TX agg proof and SR proof with matching NC/leaves.
+		let tc = get_test_circuits();
+
+		let nc0 = make_nc_flat(0x5000);
+		let nn0 = make_nn_flat(0x6000);
+		let slot0 = make_slot(1, [0, 0, 0, 0], [0, 0, 0, 0], &nn0, &nc0);
+		let slot1 = make_slot(0, [0; 4], [0; 4], &make_nn_flat(0), &make_nc_flat(0));
+		let tx_proof = prove_tx_agg(&tc.tx_cd, &tc.tx_targets, &[slot0, slot1]);
+
+		// SR leaves: 8 per slot = [NC[0..7], AC].
+		// Slot 0 (real): NC[j]=(0x5000+j,..) for j=0..6, AC=(0,0,0,0) (matches slot0 AC=[0;4]).
+		// Slot 1 (dummy): all zeros (is_real=0, no cross-check).
+		let sr_leaves: Vec<HashOutput> = (0..16)
+			.map(|i| {
+				if i < 7 {
+					HashOutput::new([
+						F::from_canonical_u64(0x5000 + i as u64),
+						F::ZERO,
+						F::ZERO,
+						F::ZERO,
+					])
+				} else {
+					HashOutput::new([F::ZERO; 4]) // AC (i=7) and slot1 (i=8..15) are zeros
+				}
+			})
+			.collect();
+		let sr_proof = tc.sr.prove(&sr_leaves)?;
+
+		validate_subtree_nc_offcircuit(&sr_proof.public_inputs, &tx_proof.public_inputs, 2, 8)
+	}
+
+	#[test]
+	fn test_validate_subtree_nc_offcircuit_mismatch() {
+		let tc = get_test_circuits();
+
+		let nc0 = make_nc_flat(0x5000);
+		let nn0 = make_nn_flat(0x6000);
+		let slot0 = make_slot(1, [0; 4], [0; 4], &nn0, &nc0);
+		let slot1 = make_slot(0, [0; 4], [0; 4], &make_nn_flat(0), &make_nc_flat(0));
+		let tx_proof = prove_tx_agg(&tc.tx_cd, &tc.tx_targets, &[slot0, slot1]);
+
+		// SR PIs with wrong leaf 0.
+		let mut rng = StdRng::from_seed([7u8; 32]);
+		let wrong_leaves: Vec<HashOutput> =
+			(0..16).map(|_| HashOutput::new_random(&mut rng)).collect();
+		let sr_proof = tc.sr.prove(&wrong_leaves).unwrap();
+
+		let result =
+			validate_subtree_nc_offcircuit(&sr_proof.public_inputs, &tx_proof.public_inputs, 2, 8);
+		assert!(result.is_err(), "should detect mismatch for real slot");
+	}
+}

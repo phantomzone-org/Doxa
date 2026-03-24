@@ -1,9 +1,9 @@
 use plonky2::iop::target::{BoolTarget, Target};
 
 use crate::{
-	ACC_AST_DEPTH, COM_TREE_DEPTH, NOTE_BATCH,
+	COM_TREE_DEPTH, NOTE_BATCH,
 	plonky2_gadgets::{
-		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget},
+		merkle::MerkleRootTarget,
 		priv_tx::targets::{
 			AccountTarget, AssetIdTarget, MainPoolConfigRootTarget, RootTarget,
 			SubpoolFullProofTargets,
@@ -53,10 +53,10 @@ pub(crate) struct WithdrawTxTargets {
 	/// Ethereum destination address as 5 u32 field elements (public input).
 	pub(crate) w_acc_addr: [Target; 5],
 	/// ACT membership proof for AccIn.
-	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<COM_TREE_DEPTH>,
+	pub(crate) accin_act_merkle: MerkleRootTarget,
 	/// Per-slot AST update proofs (chained: slot `i` output root feeds slot `i+1` input root).
 	/// `ast_merkles[i]` proves the leaf update from intermediate AST[i] → AST[i+1].
-	pub(crate) ast_merkles: [ComputeMerkleRootTarget<ACC_AST_DEPTH>; NOTE_BATCH],
+	pub(crate) ast_merkles: [MerkleRootTarget; NOTE_BATCH],
 	/// Authority key membership proofs for the subpool.
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	/// Approval Schnorr signature over the withdrawal tx hash.

@@ -65,7 +65,7 @@ pub fn bytes_slice_to_hashes(raw: &[[u8; 32]]) -> anyhow::Result<Vec<HashOutput>
 /// Pack a `HashOutput` into an EVM `uint256` using little-endian Goldilocks limb order.
 ///
 /// Layout: `e0 | (e1 << 64) | (e2 << 128) | (e3 << 192)` — little-endian limbs.
-/// Matches `PoseidonGoldilocks.compress` input/output convention in `TesseraRollupV2`.
+/// Matches `PoseidonGoldilocks.compress` input/output convention in `TesseraContract`.
 pub fn hash_to_u256_le(h: &HashOutput) -> alloy::primitives::U256 {
 	alloy::primitives::U256::from_limbs([h.0[0].0, h.0[1].0, h.0[2].0, h.0[3].0])
 }
@@ -101,7 +101,7 @@ pub fn u256_le_to_hash(v: alloy::primitives::U256) -> anyhow::Result<HashOutput>
 }
 
 // ---------------------------------------------------------------------------
-// V2 Alloy bindings — TesseraRollupV2
+// V2 Alloy bindings — TesseraContract
 // ---------------------------------------------------------------------------
 
 sol! {
@@ -120,8 +120,8 @@ sol! {
 			bytes32   mainPoolConfigRoot;
 			uint256[] noteCommitments;
 			uint256[] noteNullifiers;
-			uint256   accountCommitment;
-			uint256   accountNullifier;
+			uint256[] accountCommitments;
+			uint256[] accountNullifiers;
 			uint256   batchPoseidonRoot;
 			bool      confirmed;
 		}
@@ -157,5 +157,7 @@ sol! {
 		event TransactionBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
 		event DepositBatchSubmitted(bytes32 indexed piCommitment, uint256 batchPoseidonRoot);
 		event DepositBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
+		event DebugDepositPreimage(bytes preimage, bytes32 result);
+		event DebugTxPreimage(bytes preimage, bytes32 result);
 	}
 }

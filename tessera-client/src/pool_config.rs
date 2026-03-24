@@ -1,59 +1,36 @@
-use std::hash::Hash;
+use std::{
+	collections::{BTreeMap, HashMap},
+	hash::Hash,
+};
 
-use plonky2::{hash::poseidon::PoseidonHash, plonk::config::Hasher};
+use plonky2::{
+	hash::{hash_types::HashOut, poseidon::PoseidonHash},
+	plonk::config::Hasher,
+};
 use plonky2_field::types::{Field, PrimeField64};
-use tessera_utils::{F, HASH_SIZE, hasher::HashOutput};
+use tessera_trees::{MerkleProof, MerkleTree, error::MerkleTreeResult};
+use tessera_utils::{
+	F, HASH_SIZE,
+	hasher::{HashOutput, MerkleHash},
+};
 
 use crate::{
-	MAIN_POOL_CONFIG_DEPTH, SubpoolId,
-	schnorr::CompressedPublicKey,
-	tree::{GenericNode, Leaf, MerkleProof, MerkleTree},
+	MAIN_POOL_CONFIG_DEPTH, SUBPOOL_CONFIG_DEPTH, SubpoolId, schnorr::CompressedPublicKey,
 };
 
 // ── CompressedPublicKey ───────────────────────────────────────────────────────
 
 pub type CompPubKey = CompressedPublicKey<F>;
 
-// ── SubpoolConfigTree ─────────────────────────────────────────────────────────
-
-/// A leaf in the SubpoolConfigTree: a compressed public key, or empty (the 4th slot).
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct SubpoolConfigLeaf(pub Option<CompPubKey>);
-
-impl Hash for SubpoolConfigLeaf {
-	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		match &self.0 {
-			Some(cpk) => {
-				1u8.hash(state);
-				for f in &cpk.0.w.0 {
-					f.to_canonical_u64().hash(state);
-				}
-			},
-			None => 0u8.hash(state),
-		}
+impl CompPubKey {
+	pub fn commit<H>(&self) -> H::Digest
+	where
+		H: MerkleHash<Digest = HashOutput>,
+	{
+		let hash = <PoseidonHash as Hasher<F>>::hash_no_pad(&self.0.w.0).elements;
+		HashOutput(hash)
 	}
 }
-
-impl Leaf for SubpoolConfigLeaf {
-	type Node = GenericNode<SubpoolConfigLeaf>;
-
-	fn empty() -> Self::Node {
-		SubpoolConfigLeaf(None).into()
-	}
-}
-
-impl From<SubpoolConfigLeaf> for GenericNode<SubpoolConfigLeaf> {
-	fn from(leaf: SubpoolConfigLeaf) -> Self {
-		let inputs: [F; 5] = match leaf.0 {
-			Some(cpk) => cpk.0.w.0,
-			None => [F::ZERO; 5],
-		};
-		let hash = <PoseidonHash as Hasher<F>>::hash_no_pad(&inputs).elements;
-		Self::from(HashOutput(hash))
-	}
-}
-
-pub type SubpoolConfigNode = GenericNode<SubpoolConfigLeaf>;
 
 const APPROVAL_KEY_INDEX: usize = 0;
 const REJECTION_KEY_INDEX: usize = 1;
@@ -67,22 +44,25 @@ const CONSUME_KEY_INDEX: usize = 2;
 ///       node0                           node1
 /// H(approval)  H(rejection)     H(consume)  H(zero×5)
 /// ```
-pub struct SubpoolConfigTree {
+pub struct SubpoolConfigTree<H: MerkleHash> {
 	pub approval_key: CompPubKey,
 	pub rejection_key: CompPubKey,
 	pub consume_key: CompPubKey,
-	inner: MerkleTree<2, SubpoolConfigNode>,
+	inner: MerkleTree<H>,
 }
 
-impl SubpoolConfigTree {
+impl<H> SubpoolConfigTree<H>
+where
+	H: MerkleHash<Digest = HashOutput>,
+{
 	/// Build the tree from the three authority keys.
 	/// Keys are inserted at fixed positions 0, 1, 2 via `insert` (in order).
 	/// Position 3 remains the default empty leaf.
 	pub fn new(approval: CompPubKey, rejection: CompPubKey, consume: CompPubKey) -> Self {
-		let mut inner = MerkleTree::new();
-		inner.insert(SubpoolConfigLeaf(Some(approval)));
-		inner.insert(SubpoolConfigLeaf(Some(rejection)));
-		inner.insert(SubpoolConfigLeaf(Some(consume)));
+		let mut inner = MerkleTree::new(SUBPOOL_CONFIG_DEPTH);
+		inner.insert(approval.commit::<H>()).unwrap();
+		inner.insert(rejection.commit::<H>()).unwrap();
+		inner.insert(consume.commit::<H>()).unwrap();
 		Self {
 			approval_key: approval,
 			rejection_key: rejection,
@@ -91,26 +71,20 @@ impl SubpoolConfigTree {
 		}
 	}
 
-	pub fn root(&self) -> HashOutput {
+	pub fn root(&self) -> H::Digest {
 		self.inner.root()
 	}
 
-	pub fn approval_key_proof(&self) -> MerkleProof<SubpoolConfigNode, 2> {
-		self.inner
-			.merkle_proof(SubpoolConfigLeaf(Some(self.approval_key)))
-			.expect("approval key must be in tree")
+	pub fn approval_key_proof(&self) -> MerkleTreeResult<MerkleProof<H>> {
+		self.inner.merkle_proof(APPROVAL_KEY_INDEX)
 	}
 
-	pub fn rejection_key_proof(&self) -> MerkleProof<SubpoolConfigNode, 2> {
-		self.inner
-			.merkle_proof(SubpoolConfigLeaf(Some(self.rejection_key)))
-			.expect("rejection key must be in tree")
+	pub fn rejection_key_proof(&self) -> MerkleTreeResult<MerkleProof<H>> {
+		self.inner.merkle_proof(REJECTION_KEY_INDEX)
 	}
 
-	pub fn consume_key_proof(&self) -> MerkleProof<SubpoolConfigNode, 2> {
-		self.inner
-			.merkle_proof(SubpoolConfigLeaf(Some(self.consume_key)))
-			.expect("consume key must be in tree")
+	pub fn consume_key_proof(&self) -> MerkleTreeResult<MerkleProof<H>> {
+		self.inner.merkle_proof(CONSUME_KEY_INDEX)
 	}
 }
 
@@ -122,22 +96,13 @@ impl SubpoolConfigTree {
 /// no Poseidon involved. Poseidon is only used in `From<MainPoolConfigLeaf> for Node`
 /// to compute the on-tree node value `H(subpool_root || subpool_id)`.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct MainPoolConfigLeaf {
-	pub subpool_root: HashOutput,
+pub struct MainPoolConfigLeaf<H: MerkleHash> {
+	pub subpool_root: H::Digest,
 	pub subpool_id: SubpoolId,
 }
 
-impl std::hash::Hash for MainPoolConfigLeaf {
-	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		for f in &self.subpool_root.0 {
-			f.to_canonical_u64().hash(state);
-		}
-		self.subpool_id.0.to_canonical_u64().hash(state);
-	}
-}
-
-impl MainPoolConfigLeaf {
-	pub fn new(subpool_root: HashOutput, subpool_id: SubpoolId) -> Self {
+impl<H: MerkleHash> MainPoolConfigLeaf<H> {
+	pub fn new(subpool_root: H::Digest, subpool_id: SubpoolId) -> Self where {
 		Self {
 			subpool_root,
 			subpool_id,
@@ -145,84 +110,86 @@ impl MainPoolConfigLeaf {
 	}
 }
 
-impl Leaf for MainPoolConfigLeaf {
-	type Node = GenericNode<MainPoolConfigLeaf>;
-
-	fn empty() -> Self::Node {
-		// TODO: any reason to change from [0;4] to default inon-zero value?
-		MainPoolConfigLeaf {
-			subpool_root: HashOutput([F::ZERO; HASH_SIZE]),
-			subpool_id: SubpoolId(F::ZERO),
-		}
-		.into()
-	}
-}
-
-impl From<MainPoolConfigLeaf> for GenericNode<MainPoolConfigLeaf> {
-	fn from(leaf: MainPoolConfigLeaf) -> Self {
+impl<H> MainPoolConfigLeaf<H>
+where
+	H: MerkleHash<Digest = HashOutput>,
+{
+	pub fn commit(&self) -> H::Digest {
 		let mut input = [F::ZERO; HASH_SIZE + 1];
-		input[..HASH_SIZE].copy_from_slice(&leaf.subpool_root.0);
-		input[HASH_SIZE] = leaf.subpool_id.0;
+		input[..HASH_SIZE].copy_from_slice(&self.subpool_root.0);
+		input[HASH_SIZE] = self.subpool_id.0;
 		let hash = <PoseidonHash as Hasher<F>>::hash_no_pad(&input).elements;
-		Self::from(HashOutput(hash))
+		HashOutput(hash)
 	}
 }
-
-pub type MainPoolConfigNode = GenericNode<MainPoolConfigLeaf>;
 
 /// A depth-20 Merkle tree where position `subpool_id` holds
 /// TODO: swap the order below
 /// `H(SubpoolConfigRoot || subpool_id)`.
 #[derive(Clone)]
-pub struct MainPoolConfigTree {
-	inner: MerkleTree<MAIN_POOL_CONFIG_DEPTH, MainPoolConfigNode>,
+pub struct MainPoolConfigTree<H: MerkleHash> {
+	inner: MerkleTree<H>,
+	leaf_index_map: BTreeMap<H::Digest, usize>,
 }
 
-impl Default for MainPoolConfigTree {
-	fn default() -> Self {
-		Self::new()
-	}
-}
-
-impl MainPoolConfigTree {
+impl<H> MainPoolConfigTree<H>
+where
+	H: MerkleHash<Digest = HashOutput>,
+{
 	pub fn new() -> Self {
 		Self {
-			inner: MerkleTree::new(),
+			inner: MerkleTree::new(MAIN_POOL_CONFIG_DEPTH),
+			leaf_index_map: BTreeMap::new(),
 		}
 	}
 
-	pub fn root(&self) -> HashOutput {
+	pub fn root(&self) -> H::Digest {
 		self.inner.root()
 	}
 
 	/// Insert or update the entry for `subpool_id` at the given `index` in the tree.
-	pub fn set_subpool(&mut self, index: usize, subpool_id: SubpoolId, subpool_root: HashOutput) {
-		let leaf = MainPoolConfigLeaf::new(subpool_root, subpool_id);
-		self.inner.set_leaf(index, leaf);
+	pub fn insert_subpool(
+		&mut self,
+		subpool_id: SubpoolId,
+		subpool_root: HashOutput,
+	) -> MerkleTreeResult<()> {
+		let leaf = MainPoolConfigLeaf::<H>::new(subpool_root, subpool_id);
+		let digest = leaf.commit();
+		let index = self.inner.insert(digest)?;
+		self.leaf_index_map.insert(digest, index);
+		Ok(())
 	}
 
 	/// Return the Merkle proof for a subpool inside this tree.
 	pub fn subpool_proof(
 		&self,
 		subpool_id: SubpoolId,
-		subpool_root: HashOutput,
-	) -> Option<MerkleProof<MainPoolConfigNode, MAIN_POOL_CONFIG_DEPTH>> {
-		let leaf = MainPoolConfigLeaf::new(subpool_root, subpool_id);
-		self.inner.merkle_proof(leaf)
+		subpool_root: H::Digest,
+	) -> MerkleTreeResult<MerkleProof<H>> {
+		let leaf = MainPoolConfigLeaf::<H>::new(subpool_root, subpool_id);
+		let digest = leaf.commit();
+		let index = *self
+			.leaf_index_map
+			.get(&digest)
+			.ok_or_else(|| anyhow::anyhow!("subpool leaf not found in index map"))?;
+		self.inner.merkle_proof(index)
 	}
 
 	/// Return proofs for all three authority keys in `subpool` plus the subpool's
 	/// own proof inside this main pool tree.
 	pub fn full_subpool_proof(
 		&self,
-		subpool: &SubpoolConfigTree,
+		subpool: &SubpoolConfigTree<H>,
 		subpool_id: SubpoolId,
-	) -> Option<SubpoolFullProof> {
+	) -> MerkleTreeResult<SubpoolFullProof<H>> {
 		let main_pool_proof = self.subpool_proof(subpool_id, subpool.root())?;
-		Some(SubpoolFullProof {
-			approval_proof: subpool.approval_key_proof(),
-			rejection_proof: subpool.rejection_key_proof(),
-			consume_proof: subpool.consume_key_proof(),
+		let approval_proof = subpool.approval_key_proof()?;
+		let rejection_proof = subpool.rejection_key_proof()?;
+		let consume_proof = subpool.consume_key_proof()?;
+		Ok(SubpoolFullProof {
+			approval_proof,
+			rejection_proof,
+			consume_proof,
 			main_pool_proof,
 		})
 	}
@@ -232,11 +199,11 @@ impl MainPoolConfigTree {
 
 /// All three subpool authority-key proofs (relative to the SubpoolConfigRoot)
 /// together with the subpool's proof inside the MainPoolConfigTree.
-pub struct SubpoolFullProof {
-	pub approval_proof: MerkleProof<SubpoolConfigNode, 2>,
-	pub rejection_proof: MerkleProof<SubpoolConfigNode, 2>,
-	pub consume_proof: MerkleProof<SubpoolConfigNode, 2>,
-	pub main_pool_proof: MerkleProof<MainPoolConfigNode, MAIN_POOL_CONFIG_DEPTH>,
+pub struct SubpoolFullProof<H: MerkleHash> {
+	pub approval_proof: MerkleProof<H>,
+	pub rejection_proof: MerkleProof<H>,
+	pub consume_proof: MerkleProof<H>,
+	pub main_pool_proof: MerkleProof<H>,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -259,12 +226,13 @@ mod tests {
 		let rejection = dummy_key(2);
 		let consume = dummy_key(3);
 
-		let subpool = SubpoolConfigTree::new(approval, rejection, consume);
+		let subpool = SubpoolConfigTree::<HashOutput>::new(approval, rejection, consume);
 
 		let mut main_tree = MainPoolConfigTree::new();
-		let index = 7_usize;
 		let subpool_id = SubpoolId(F::from_canonical_u64(5));
-		main_tree.set_subpool(index, subpool_id, subpool.root());
+		main_tree
+			.insert_subpool(subpool_id, subpool.root())
+			.unwrap();
 
 		let proof = main_tree
 			.full_subpool_proof(&subpool, subpool_id)

@@ -5,10 +5,7 @@ use std::{
 
 use anyhow::Result;
 use plonky2::{
-	field::{
-		extension::Extendable,
-		types::{Field, Field64},
-	},
+	field::{extension::Extendable, types::Field},
 	hash::{
 		hash_types::{HashOut, HashOutTarget, RichField},
 		hashing::PlonkyPermutation,
@@ -31,40 +28,10 @@ use crate::F;
 pub trait MerkleHash: Copy + Clone + Debug {
 	type Digest: Clone + Copy + Eq + Ord + Display + Debug;
 
-	/// This constant represents the smallest possible value of a [MerkleHash::Digest].
-	///
-	/// The value `HEAD` is used in the following ways:
-	/// - As the starting point or initial value in the Merkle tree.
-	/// - As a placeholder for empty or null nodes.
-	const HEAD: Self::Digest;
-
-	/// This constant represents the largest possible of a [MerkleHash::Digest].
-	///
-	/// In the context of a Merkle tree, this value is used to designates the last element.
-	///
-	/// The value `TAIL` is used in the following ways:
-	/// - As the next pointer from the largest label in the current Merkle tree.
-	/// - As the next pointer from inactive leaf nodes, effectively "pointing" to it.
-	///
-	/// This ensures that no value in the Merkle tree exceeds the modulus, maintaining proper order
-	/// and integrity.
-	const TAIL: Self::Digest;
+	const ZERO: Self::Digest;
 
 	/// Hash a two [MerkleHash::Digest to one [MerkleHash::Digest].
-	/// Output MUST fall uniformly between [MerkleHash::HEAD] and [MerkleHash::TAIL].
-	fn hash_2_to_1(left: &Self::Digest, right: &Self::Digest, dir: bool) -> Self::Digest;
-
-	/// Hash the root of a Merkle tree, committing to the number of leaves.
-	/// root = H(num_leaves | left | right)
-	fn hash_root(num_leaves: usize, left: &Self::Digest, right: &Self::Digest) -> Self::Digest;
-
-	/// Hash a n [MerkleHash::Digest] to one [MerkleHash::Digest].
-	/// Output MUST fall uniformly between [MerkleHash::HEAD] and [MerkleHash::TAIL].
-	fn commit_node(
-		value: &Self::Digest,
-		next_index: usize,
-		next_value: &Self::Digest,
-	) -> Self::Digest;
+	fn hash_2_to_1_swapped(left: &Self::Digest, right: &Self::Digest, dir: bool) -> Self::Digest;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,16 +291,8 @@ pub trait MerkleHashCircuit<F: Field + RichField + Extendable<D>, const D: usize
 		right: Self::HashTarget,
 	) -> Self::HashTarget;
 
-	fn hash_leaf_circuit(
+	fn hash_2_to_1_swapped_circuit(
 		builder: &mut CircuitBuilder<F, D>,
-		left: Self::HashTarget,
-		right: Self::HashTarget,
-		dir: BoolTarget,
-	) -> Self::HashTarget;
-
-	fn hash_root_circuit(
-		builder: &mut CircuitBuilder<F, D>,
-		num_leaves: Target,
 		left: Self::HashTarget,
 		right: Self::HashTarget,
 		dir: BoolTarget,
@@ -351,20 +310,12 @@ pub trait MerkleHashCircuit<F: Field + RichField + Extendable<D>, const D: usize
 		leaf_hash: Self::HashTarget,
 		siblings: &[Self::HashTarget],
 		path: &[BoolTarget],
-		num_leaves: Target,
 	) -> Self::HashTarget {
-		let depth = siblings.len();
 		let mut current = leaf_hash;
-
 		assert_eq!(siblings.len(), path.len());
 
-		for (level, (sibling, &dir)) in siblings.iter().zip(path.iter()).enumerate() {
-			// At the final level, use hash_root_circuit to commit num_leaves
-			if level == depth - 1 {
-				current = Self::hash_root_circuit(builder, num_leaves, current, *sibling, dir);
-			} else {
-				current = Self::hash_leaf_circuit(builder, current, *sibling, dir);
-			}
+		for (sibling, &dir) in siblings.iter().zip(path.iter()) {
+			current = Self::hash_2_to_1_swapped_circuit(builder, current, *sibling, dir);
 		}
 		current
 	}
@@ -374,14 +325,13 @@ pub trait MerkleHashCircuit<F: Field + RichField + Extendable<D>, const D: usize
 		batch_depth: usize,
 		upper_siblings: &[Self::HashTarget],
 		path: &[BoolTarget],
-		index: Target,
 	) -> Self::HashTarget {
-		let mut leaf_hash = Self::constant_hash(builder, &Self::HEAD);
+		let mut leaf_hash = Self::constant_hash(builder, &Self::ZERO);
 		for _ in 0..batch_depth {
 			leaf_hash = Self::hash_2_to_1_circuit(builder, leaf_hash, leaf_hash)
 		}
 
-		Self::merkle_root_circuit(builder, leaf_hash, upper_siblings, path, index)
+		Self::merkle_root_circuit(builder, leaf_hash, upper_siblings, path)
 	}
 
 	fn batch_merkle_root_circuit(
@@ -389,7 +339,6 @@ pub trait MerkleHashCircuit<F: Field + RichField + Extendable<D>, const D: usize
 		leaves: &[Self::HashTarget],
 		upper_siblings: &[Self::HashTarget],
 		path: &[BoolTarget],
-		index: Target,
 	) -> Self::HashTarget {
 		assert!(leaves.len().is_power_of_two());
 		assert_eq!(upper_siblings.len(), path.len());
@@ -407,7 +356,7 @@ pub trait MerkleHashCircuit<F: Field + RichField + Extendable<D>, const D: usize
 		if upper_siblings.is_empty() {
 			leaves[0]
 		} else {
-			Self::merkle_root_circuit(builder, leaves[0], upper_siblings, path, index)
+			Self::merkle_root_circuit(builder, leaves[0], upper_siblings, path)
 		}
 	}
 }
@@ -521,10 +470,9 @@ impl ToHashOut<F> for HashOutput {
 impl MerkleHash for HashOutput {
 	type Digest = HashOutput;
 
-	const HEAD: Self::Digest = Self::Digest::new([F::ZERO; HASH_SIZE]);
-	const TAIL: Self::Digest = Self::Digest::new([F::NEG_ONE; HASH_SIZE]);
+	const ZERO: Self::Digest = Self::Digest::new([F::ZERO; HASH_SIZE]);
 
-	fn hash_2_to_1(left: &Self::Digest, right: &Self::Digest, dir: bool) -> Self::Digest {
+	fn hash_2_to_1_swapped(left: &Self::Digest, right: &Self::Digest, dir: bool) -> Self::Digest {
 		let data = if dir {
 			[
 				right.0[0], right.0[1], right.0[2], right.0[3], left.0[0], left.0[1], left.0[2],
@@ -537,37 +485,6 @@ impl MerkleHash for HashOutput {
 			]
 		};
 		let out: HashOut<F> = PoseidonHash::hash_no_pad(&data);
-		Self::Digest::new(out.elements)
-	}
-
-	fn hash_root(num_leaves: usize, left: &Self::Digest, right: &Self::Digest) -> Self::Digest {
-		assert!((num_leaves as u64) < F::ORDER);
-		let mut state = PoseidonPermutation::new(core::iter::repeat(F::ZERO));
-		state.set_from_slice(&left.0, 0);
-		state.set_from_slice(&right.0, 4);
-		state.set_from_slice(&[F::from_canonical_u64(num_leaves as u64)], 8);
-		state.permute();
-		let out = state.squeeze();
-		Self::Digest::new(core::array::from_fn(|i| out[i]))
-	}
-
-	fn commit_node(
-		value: &Self::Digest,
-		next_index: usize,
-		next_value: &Self::Digest,
-	) -> Self::Digest {
-		assert!((next_index as u64) < F::ORDER);
-		let out: HashOut<F> = PoseidonHash::hash_no_pad(&[
-			F::from_canonical_u64(next_index as u64),
-			value.0[0],
-			value.0[1],
-			value.0[2],
-			value.0[3],
-			next_value.0[0],
-			next_value.0[1],
-			next_value.0[2],
-			next_value.0[3],
-		]);
 		Self::Digest::new(out.elements)
 	}
 }
@@ -638,7 +555,7 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 		MerkleHashTarget::from_hash_out_target(out)
 	}
 
-	fn hash_leaf_circuit(
+	fn hash_2_to_1_swapped_circuit(
 		builder: &mut CircuitBuilder<F, 2>,
 		cur: Self::HashTarget,
 		sib: Self::HashTarget,
@@ -650,29 +567,6 @@ impl MerkleHashCircuit<F, 2> for HashOutput {
 				.iter()
 				.chain(sib.elements.iter())
 				.copied()
-				.chain(core::iter::repeat(zero)),
-		);
-		let perm_output = PoseidonHash::permute_swapped(perm_inputs, dir, builder);
-		let output = perm_output.squeeze();
-		MerkleHashTarget {
-			elements: core::array::from_fn(|i| output[i]),
-		}
-	}
-
-	fn hash_root_circuit(
-		builder: &mut CircuitBuilder<F, 2>,
-		num_leaves: Target,
-		left: Self::HashTarget,
-		right: Self::HashTarget,
-		dir: BoolTarget,
-	) -> Self::HashTarget {
-		let zero = builder.zero();
-		let perm_inputs = PoseidonPermutation::new(
-			left.elements
-				.iter()
-				.chain(right.elements.iter())
-				.copied()
-				.chain(core::iter::once(num_leaves))
 				.chain(core::iter::repeat(zero)),
 		);
 		let perm_output = PoseidonHash::permute_swapped(perm_inputs, dir, builder);
@@ -708,16 +602,12 @@ mod test {
 
 	use anyhow::Result;
 	use plonky2::{
-		field::types::Field,
-		iop::{
-			target::Target,
-			witness::{PartialWitness, WitnessWrite},
-		},
+		iop::witness::{PartialWitness, WitnessWrite},
 		plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 	};
 
 	use crate::{
-		ConfigNative, D, F, ProofNative,
+		ConfigNative, D, F,
 		hasher::{HashOutput, MerkleHash, MerkleHashCircuit, NewFromU64},
 	};
 
@@ -733,13 +623,17 @@ mod test {
 		let left_target = HashOutput::add_virtual_hash(&mut builder);
 		let right_target = HashOutput::add_virtual_hash(&mut builder);
 		let out_target = HashOutput::add_virtual_hash(&mut builder);
-		let have_target =
-			HashOutput::hash_leaf_circuit(&mut builder, left_target, right_target, dir_target);
+		let have_target = HashOutput::hash_2_to_1_swapped_circuit(
+			&mut builder,
+			left_target,
+			right_target,
+			dir_target,
+		);
 		HashOutput::connect_hashes(&mut builder, &have_target, &out_target);
 		let data = builder.build::<ConfigNative>();
 
 		for dir in [false, true] {
-			let out: HashOutput = HashOutput::hash_2_to_1(&left, &right, dir);
+			let out: HashOutput = HashOutput::hash_2_to_1_swapped(&left, &right, dir);
 			let mut pw: PartialWitness<F> = PartialWitness::new();
 			HashOutput::set_hash_witness(&mut pw, &left_target, &left)?;
 			HashOutput::set_hash_witness(&mut pw, &right_target, &right)?;
@@ -748,36 +642,6 @@ mod test {
 			let proof = data.prove(pw)?;
 			data.verify(proof)?;
 		}
-		Ok(())
-	}
-
-	#[test]
-	fn hash_3_to_1_circuit() -> Result<()> {
-		let config: CircuitConfig = CircuitConfig::standard_recursion_config();
-		let mut builder: CircuitBuilder<F, D> = CircuitBuilder::<F, D>::new(config);
-
-		let next_index: usize = 42;
-		let value: HashOutput = HashOutput::new_from_u64(1337);
-		let next_value: HashOutput = HashOutput::new_from_u64(432);
-
-		let next_index_t: Target = builder.add_virtual_target();
-		let value_t = HashOutput::add_virtual_hash(&mut builder);
-		let next_value_t = HashOutput::add_virtual_hash(&mut builder);
-		let comm_want_t = HashOutput::add_virtual_hash(&mut builder);
-		let comm_have_t =
-			HashOutput::commit_node_circuit(&mut builder, value_t, next_index_t, next_value_t);
-		HashOutput::connect_hashes(&mut builder, &comm_have_t, &comm_want_t);
-		let data = builder.build::<ConfigNative>();
-
-		let out: HashOutput = HashOutput::commit_node(&value, next_index, &next_value);
-		let mut pw: PartialWitness<F> = PartialWitness::new();
-
-		pw.set_target(next_index_t, F::from_canonical_u64(next_index as u64))?;
-		HashOutput::set_hash_witness(&mut pw, &value_t, &value)?;
-		HashOutput::set_hash_witness(&mut pw, &next_value_t, &next_value)?;
-		HashOutput::set_hash_witness(&mut pw, &comm_want_t, &out)?;
-		let proof: ProofNative = data.prove(pw)?;
-		data.verify(proof)?;
 		Ok(())
 	}
 }

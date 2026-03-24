@@ -22,7 +22,6 @@ use crate::{
 	ecgfp5::CompressedPoint,
 	note::{NodeIdentifier, StandardNote},
 	plonky2_gadgets::{
-		merkle::{SetDummyMerklePathOfWitness, SetMerklePathOfWitness},
 		set_hash, set_u256_zero,
 		witness::{
 			set_fake_schnorr_signature, set_hash_blocks, set_real_schnorr_signature,
@@ -62,7 +61,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	rejection_key: CompPubKey,
 	consume_key: CompPubKey,
 	subpool_id: SubpoolId,
-	main_pool: &MainPoolConfigTree,
+	main_pool: &MainPoolConfigTree<HashOutput>,
 	approval_sig: Signature,
 	dinotes: [[F; 4]; NOTE_BATCH],
 	donotes: [[F; 4]; NOTE_BATCH],
@@ -121,7 +120,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	// ── Merkle proofs ─────────────────────────────────────────────────────────
 
 	// ACT: not enforced for FreshAcc
-	t.accin_act_merkle.set_dummy_witness(pw, COM_TREE_DEPTH);
+	t.accin_act_merkle.set_dummy_witness(pw);
 
 	// accin AST at index 0 (asset not in tree → Empty leaf)
 	t.accin_ast_merkle
@@ -142,7 +141,7 @@ pub(crate) fn set_freshacc_tx_witness(
 		pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 		pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
 		// NCT: not enforced (selector = false)
-		t.inotes_nct_merkle[i].set_dummy_witness(pw, COM_TREE_DEPTH);
+		t.inotes_nct_merkle[i].set_dummy_witness(pw);
 	}
 
 	// ── Output notes (all inactive) ───────────────────────────────────────────
@@ -256,11 +255,14 @@ mod tests {
 		let consume_sk = sample_sk(&mut rng);
 		let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
-		let subpool = SubpoolConfigTree::new(approval_cpk, rejection_cpk, consume_cpk);
+		let subpool =
+			SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
 		let subpool_id = SubpoolId(F::ONE);
 
 		let mut main_pool = MainPoolConfigTree::new();
-		main_pool.set_subpool(0, subpool_id, subpool.root());
+		main_pool
+			.insert_subpool(subpool_id, subpool.root())
+			.unwrap();
 
 		// ── Accounts ─────────────────────────────────────────────────────────
 		let accin = StandardAccount::sample(&mut rng, subpool_id);

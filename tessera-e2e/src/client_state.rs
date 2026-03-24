@@ -8,19 +8,19 @@
 use std::array;
 
 use plonky2::field::types::{Field, PrimeField64};
+use primitive_types::H160;
 use rand::{Rng, RngExt};
 pub use tessera_client::PrivTxTargets;
 use tessera_client::{
-	build_priv_tx_circuit, derive_priv_tx_hash, double_hash_native,
+	build_priv_tx_circuit, derive_deposit_tx_hash, derive_priv_tx_hash, double_hash_native,
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 	prove_real_priv_tx, sample_dummy_notes,
 	schnorr::{schnorr_sign, PrivateKey, Scalar},
-	tree::CommitmentTreeMerkleProof,
-	ConsumeAuth, FreshAccInputs, Nonce, NoteCommitment, NoteNullifier, PrivTxInputs,
-	PrivateIdentifier, SpendAuth, SpendTxInputs, StandardAccount, SubpoolId, COM_TREE_DEPTH,
-	NOTE_BATCH,
+	AccountAddress, AssetId, ConsumeAuth, DepositNote, DepositTxCircuit, FreshAccInputs, Nonce,
+	NoteCommitment, NoteNullifier, PrivTxInputs, PrivateIdentifier, SpendAuth, SpendTxInputs,
+	StandardAccount, SubpoolId, COM_TREE_DEPTH, NOTE_BATCH,
 };
-use tessera_trees::CommitmentTree;
+use tessera_trees::MerkleTree;
 use tessera_utils::{hasher::HashOutput, CircuitDataNative, D, F};
 
 /// Client-side state mirroring what is committed on-chain.
@@ -41,7 +41,7 @@ pub struct TesseraClientState {
 	/// Position of the current account commitment in `local_tree`.
 	pub account_pos: Option<u64>,
 	/// Local flat commitment tree (accounts + notes interleaved).
-	pub local_tree: CommitmentTree<HashOutput>,
+	pub local_tree: MerkleTree<HashOutput>,
 	/// Subpool ID this client operates in.
 	pub subpool_id: SubpoolId,
 	/// Subpool keys.
@@ -49,7 +49,7 @@ pub struct TesseraClientState {
 	pub rejection_sk: PrivateKey,
 	pub consume_sk: PrivateKey,
 	/// Pool config tree.
-	pub pool_config: MainPoolConfigTree,
+	pub pool_config: MainPoolConfigTree<HashOutput>,
 }
 
 impl TesseraClientState {
@@ -65,18 +65,21 @@ impl TesseraClientState {
 		let rejection_pk: CompPubKey = rejection_sk.public_key::<F>().into();
 		let consume_pk: CompPubKey = consume_sk.public_key::<F>().into();
 
-		let subpool_config = SubpoolConfigTree::new(approval_pk, rejection_pk, consume_pk);
+		let subpool_config =
+			SubpoolConfigTree::<HashOutput>::new(approval_pk, rejection_pk, consume_pk);
 		let subpool_id = SubpoolId(F::from_canonical_u64(subpool_idx as u64));
 
-		let mut pool_config = MainPoolConfigTree::new();
-		pool_config.set_subpool(subpool_idx, subpool_id, subpool_config.root());
+		let mut pool_config = MainPoolConfigTree::<HashOutput>::new();
+		pool_config
+			.insert_subpool(subpool_id, subpool_config.root())
+			.expect("insert_subpool");
 
 		Self {
 			circuit,
 			targets,
 			account: None,
 			account_pos: None,
-			local_tree: CommitmentTree::new(COM_TREE_DEPTH),
+			local_tree: MerkleTree::new(COM_TREE_DEPTH),
 			subpool_id,
 			approval_sk,
 			rejection_sk,
@@ -125,7 +128,7 @@ impl TesseraClientState {
 
 		// Compute tx_hash and sign.
 		let tx_hash = derive_priv_tx_hash(
-			accin.nullifier(None),
+			accin.nullifier(),
 			accout.commitment(),
 			dinote_nulls,
 			donote_comms,
@@ -172,13 +175,12 @@ impl TesseraClientState {
 			.as_ref()
 			.ok_or_else(|| anyhow::anyhow!("no account — call prove_freshacc first"))?;
 		let commitment_hash: HashOutput = acc.commitment().0;
-		let proof = self
+		let pos = self
 			.local_tree
 			.insert(commitment_hash)
 			.map_err(|e| anyhow::anyhow!("ACT insert: {e:?}"))?;
-		let pos = proof.path as u64;
-		self.account_pos = Some(pos);
-		Ok(pos)
+		self.account_pos = Some(pos as u64);
+		Ok(pos as u64)
 	}
 
 	/// Insert output note commitments (from a previous TX's `nc` array) into
@@ -190,11 +192,11 @@ impl TesseraClientState {
 		let mut positions = Vec::with_capacity(NOTE_BATCH);
 		for nc_bytes in nc {
 			let hash = bytes32_to_hash_output(*nc_bytes);
-			let proof = self
+			let pos = self
 				.local_tree
 				.insert(hash)
 				.map_err(|e| anyhow::anyhow!("NCT insert: {e:?}"))?;
-			positions.push(proof.path as u64);
+			positions.push(pos as u64);
 		}
 		Ok(positions)
 	}
@@ -216,19 +218,13 @@ impl TesseraClientState {
 			anyhow::anyhow!("no account position — call insert_account_commitment first")
 		})?;
 
-		let root = self.local_tree.get_root();
+		let root = self.local_tree.root();
 
 		// Merkle proof for the account commitment in the local ACT.
-		let acc_path = self
+		let accin_merkle_proof = self
 			.local_tree
-			.merkle_path(acc_pos as usize, 0, COM_TREE_DEPTH)
-			.map_err(|e| anyhow::anyhow!("ACT merkle_path: {e:?}"))?;
-		let accin_merkle_proof = CommitmentTreeMerkleProof::<COM_TREE_DEPTH>::new(
-			accin.commitment().0,
-			acc_path,
-			acc_pos as usize,
-			self.local_tree.num_leaves(),
-		);
+			.merkle_proof(acc_pos as usize)
+			.map_err(|e| anyhow::anyhow!("ACT merkle_proof: {e:?}"))?;
 
 		// Derive output account: nonce+1.
 		let mut accout = accin.clone();
@@ -242,7 +238,7 @@ impl TesseraClientState {
 			array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
 
 		let tx_hash = derive_priv_tx_hash(
-			accin.nullifier(Some(acc_pos)),
+			accin.nullifier(),
 			accout.commitment(),
 			dinote_nulls,
 			donote_comms,
@@ -279,6 +275,119 @@ impl TesseraClientState {
 
 		Ok(extract_proven_tx(proof))
 	}
+
+	/// Prove a real deposit transaction and return the serialized proof + note commitment.
+	///
+	/// The caller must have already activated the account via [`prove_freshacc`] +
+	/// [`insert_account_commitment`] so that a valid ACT Merkle proof exists.
+	///
+	/// Returns `(proof_bytes, note_commitment)` where `note_commitment` is the
+	/// 32-byte BE encoding of `DepositNote::commitment()` — this is the value
+	/// that must be passed to `depositAndRegister` on-chain and `submit_deposit`.
+	#[allow(clippy::too_many_arguments)]
+	pub fn prove_deposit<R: Rng + rand::CryptoRng>(
+		&mut self,
+		rng: &mut R,
+		deposit_circuit: &DepositTxCircuit,
+		eth_address: &H160,
+		amount: primitive_types::U256,
+		asset_id: AssetId,
+	) -> anyhow::Result<ProvenDeposit> {
+		let accin = self
+			.account
+			.clone()
+			.ok_or_else(|| anyhow::anyhow!("no account — call prove_freshacc first"))?;
+		let acc_pos = self.account_pos.ok_or_else(|| {
+			anyhow::anyhow!("no account position — call insert_account_commitment first")
+		})?;
+
+		let act_root = self.local_tree.root();
+
+		// ACT Merkle proof for accin
+		let accin_act_merkle_proof = self
+			.local_tree
+			.merkle_proof(acc_pos as usize)
+			.map_err(|e| anyhow::anyhow!("ACT merkle_proof: {e:?}"))?;
+
+		// Build deposit note targeting this account
+		let identifier = [
+			F::from_canonical_u64(rng.random::<u64>() >> 1),
+			F::from_canonical_u64(rng.random::<u64>() >> 1),
+		];
+		let deposit_note = DepositNote {
+			identifier,
+			recipient: AccountAddress::from_acc(&accin),
+			amount,
+			asset_id,
+		};
+		let deposit_note_comm = deposit_note.commitment();
+		let note_commitment = hash_output_to_bytes32(&deposit_note_comm.0 .0);
+
+		// Derive accout (nonce + 1, AST updated with deposit amount)
+		let mut accout = accin.clone_with_incremented_nonce();
+		let (_, old_bal) = accin
+			.ast
+			.amount_for(asset_id)
+			.unwrap_or_else(|| (accin.ast.next_index(), primitive_types::U256::zero()));
+		accout
+			.ast
+			.insert_or_update_asset(asset_id, old_bal + amount);
+
+		// Compute tx_hash and sign
+		let tx_hash = derive_deposit_tx_hash(
+			accin.nullifier(),
+			accout.commitment(),
+			deposit_note_comm,
+			*eth_address,
+		);
+		let k = Scalar::from_raw([1u64; 5]);
+
+		let approval_pk: CompPubKey = self.approval_sk.public_key::<F>().into();
+		let rejection_pk: CompPubKey = self.rejection_sk.public_key::<F>().into();
+		let consume_pk: CompPubKey = self.consume_sk.public_key::<F>().into();
+
+		// consume_auth.config=false → subpool consume key signs
+		let consume_sig = schnorr_sign(&self.consume_sk, &tx_hash.0, k);
+		let approval_sig = schnorr_sign(&self.approval_sk, &tx_hash.0, k);
+
+		let proof = deposit_circuit.prove_real(
+			act_root,
+			self.pool_config.clone(),
+			&accin,
+			accin_act_merkle_proof,
+			&deposit_note,
+			eth_address,
+			&approval_pk,
+			&rejection_pk,
+			&consume_pk,
+			self.subpool_id,
+			consume_sig,
+			approval_sig,
+		);
+
+		let proof_bytes = proof.to_bytes();
+
+		// Update client state
+		self.account = Some(accout);
+
+		Ok(ProvenDeposit {
+			proof_bytes,
+			note_commitment,
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Output structs
+// ---------------------------------------------------------------------------
+
+/// Result of proving a deposit transaction.
+pub struct ProvenDeposit {
+	/// Serialized Plonky2 proof bytes to pass as `consume_proof` to `submit_deposit`.
+	pub proof_bytes: Vec<u8>,
+	/// The deposit note commitment (32-byte BE) — must match the value passed to
+	/// `depositAndRegister` on-chain and `submit_deposit`.
+	pub note_commitment: [u8; 32],
 }
 
 // ---------------------------------------------------------------------------

@@ -22,7 +22,6 @@ pub(crate) mod plonky2_gadgets;
 pub use plonky2_gadgets::serialization::TesseraGateSerializer;
 pub mod pool_config;
 pub mod schnorr;
-pub mod tree;
 pub(crate) mod utils;
 
 // ── Domain-separation tags ────────────────────────────────────────────────────

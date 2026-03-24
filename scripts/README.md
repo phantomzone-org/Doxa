@@ -10,7 +10,7 @@ which confirms batches on-chain with zero proofs.
 |---|---|
 | `local_env.sh` | Shared env defaults — **source this before anything else** |
 | `local_e2e_toy_a_anvil.sh` | Start a local Anvil chain |
-| `local_e2e_toy_b_deploy.sh` | Deploy the V2 contract stack (PoseidonGoldilocks, Verifier, TesseraRollupV2, ToyUSDT, ToyUser) |
+| `local_e2e_toy_b_deploy.sh` | Deploy the V2 contract stack (PoseidonGoldilocks, Verifier, TesseraContract, ToyUSDT, ToyUser) |
 | `local_run_sequencer.sh` | Build and start the sequencer in test mode |
 | `local_test_flow.sh` | Drive the full test pipeline via HTTP |
 

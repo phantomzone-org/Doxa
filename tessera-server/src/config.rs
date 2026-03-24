@@ -38,7 +38,7 @@ pub struct ProverV2Config {
 	/// Leaf count the SubtreeRoot circuit was built for (= priv_tx_batch_size × 8).
 	/// Set via `TESSERA_SR_BATCH_SIZE` (default `512`).
 	pub sr_batch_size: usize,
-	/// SuperAggregatorV2 artifact directory.
+	/// SuperAggregator artifact directory.
 	/// Set via `TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH` (required).
 	pub super_aggregator_v2_artifacts_path: PathBuf,
 	/// Optional path to V2 TX aggregator artifacts.
@@ -69,7 +69,7 @@ impl ProverV2Config {
 	///
 	/// # Required env vars
 	/// - `TESSERA_SR_ARTIFACTS_PATH`: SubtreeRootCircuit artifact directory.
-	/// - `TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH`: SAV2 artifact directory.
+	/// - `TESSERA_SUPER_AGGREGATOR_V2_ARTIFACTS_PATH`: Final Plonky2 Proof artifact directory.
 	///
 	/// # Optional env vars (with defaults)
 	/// - `TESSERA_SR_BATCH_SIZE` (default `512`): SubtreeRoot leaf count.

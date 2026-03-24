@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin, time::Duration};
 use anyhow::Context;
 use reqwest::StatusCode;
 
-use crate::types::{ConsumeOutcome, ConsumeProveRequest, ProveOutcomeV2, ProveRequestV2};
+use crate::types::{ProveOutcome, ProveRequest};
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -14,15 +14,10 @@ use crate::types::{ConsumeOutcome, ConsumeProveRequest, ProveOutcomeV2, ProveReq
 /// Both [`HttpProverClient`] (remote prover over HTTP) and
 /// `InProcessProver` (from `tessera-e2e`) implement this trait.
 pub trait ProverClient: Send + Sync {
-	fn prove_v2(
+	fn prove_tx(
 		&self,
-		req: ProveRequestV2,
-	) -> Pin<Box<dyn Future<Output = anyhow::Result<ProveOutcomeV2>> + Send + 'static>>;
-
-	fn prove_consume(
-		&self,
-		req: ConsumeProveRequest,
-	) -> Pin<Box<dyn Future<Output = anyhow::Result<ConsumeOutcome>> + Send + 'static>>;
+		req: ProveRequest,
+	) -> Pin<Box<dyn Future<Output = anyhow::Result<ProveOutcome>> + Send + 'static>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,10 +44,10 @@ impl HttpProverClient {
 }
 
 impl ProverClient for HttpProverClient {
-	fn prove_v2(
+	fn prove_tx(
 		&self,
-		req: ProveRequestV2,
-	) -> Pin<Box<dyn Future<Output = anyhow::Result<ProveOutcomeV2>> + Send + 'static>> {
+		req: ProveRequest,
+	) -> Pin<Box<dyn Future<Output = anyhow::Result<ProveOutcome>> + Send + 'static>> {
 		let client = self.client.clone();
 		let base_url = self.base_url.clone();
 		Box::pin(async move {
@@ -69,35 +64,9 @@ impl ProverClient for HttpProverClient {
 				return Err(anyhow::anyhow!("prover service returned {status}: {body}"));
 			}
 			response
-				.json::<ProveOutcomeV2>()
+				.json::<ProveOutcome>()
 				.await
 				.context("decode prove-v2 response from prover service")
-		})
-	}
-
-	fn prove_consume(
-		&self,
-		req: ConsumeProveRequest,
-	) -> Pin<Box<dyn Future<Output = anyhow::Result<ConsumeOutcome>> + Send + 'static>> {
-		let client = self.client.clone();
-		let base_url = self.base_url.clone();
-		Box::pin(async move {
-			let url = format!("{base_url}/prove-consume");
-			let response = client
-				.post(url)
-				.json(&req)
-				.send()
-				.await
-				.context("send prove-consume request to prover service")?;
-			let status = response.status();
-			if status != StatusCode::OK {
-				let body = response.text().await.unwrap_or_default();
-				return Err(anyhow::anyhow!("prover service returned {status}: {body}"));
-			}
-			response
-				.json::<ConsumeOutcome>()
-				.await
-				.context("decode prove-consume response from prover service")
 		})
 	}
 }

@@ -4,12 +4,11 @@
 #![allow(dead_code)]
 
 extern crate alloc;
-mod commitment_tree;
+mod merkle_proof;
 #[allow(clippy::module_inception)]
 mod tree;
 pub(crate) mod verification;
 
 pub mod error;
-
-pub use commitment_tree::*;
+pub use merkle_proof::*;
 pub use tree::*;

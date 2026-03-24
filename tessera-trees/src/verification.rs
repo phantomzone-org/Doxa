@@ -19,27 +19,16 @@ impl<H: MerkleHash> MerkleTree<H> {
 		for (level, layer) in self.layers.iter().enumerate() {
 			let mut expected_layer = Vec::with_capacity(layer.len());
 
-			if level != self.depth() - 1 {
-				let mut i = 0;
-				while i < prev_hashes.len() {
-					let left = &prev_hashes[i];
-					let right = if i + 1 < prev_hashes.len() {
-						&prev_hashes[i + 1]
-					} else {
-						&self.default_siblings[level]
-					};
-					expected_layer.push(H::hash_2_to_1(left, right, false));
-					i += 2;
-				}
-			} else {
-				let left = &prev_hashes[0];
-				let right = if 1 < prev_hashes.len() {
-					&prev_hashes[1]
+			let mut i = 0;
+			while i < prev_hashes.len() {
+				let left = &prev_hashes[i];
+				let right = if i + 1 < prev_hashes.len() {
+					&prev_hashes[i + 1]
 				} else {
 					&self.default_siblings[level]
 				};
-
-				expected_layer.push(H::hash_root(self.leaves.len(), left, right));
+				expected_layer.push(H::hash_2_to_1_swapped(left, right, false));
+				i += 2;
 			}
 
 			if &expected_layer != layer {
@@ -54,7 +43,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 
 	fn verify_root(&self) -> MerkleTreeResult<()> {
 		let recomputed_root = self.recompute_root();
-		let stored_root = self.compute_root();
+		let stored_root = self.root();
 
 		if recomputed_root != stored_root {
 			return Err(anyhow!(MerkleTreeError::RootMismatch));
@@ -69,28 +58,17 @@ impl<H: MerkleHash> MerkleTree<H> {
 		for level in 0..self.depth() {
 			let mut next = Vec::with_capacity(current.len().div_ceil(2));
 
-			if level != self.depth() - 1 {
-				let mut i = 0;
-				while i < current.len() {
-					let left = &current[i];
-					let right = if i + 1 < current.len() {
-						&current[i + 1]
-					} else {
-						&self.default_siblings[level]
-					};
-
-					next.push(H::hash_2_to_1(left, right, false));
-					i += 2;
-				}
-			} else {
-				let left = &current[0];
-				let right = if 1 < current.len() {
-					&current[1]
+			let mut i = 0;
+			while i < current.len() {
+				let left = &current[i];
+				let right = if i + 1 < current.len() {
+					&current[i + 1]
 				} else {
 					&self.default_siblings[level]
 				};
 
-				next.push(H::hash_root(self.leaves.len(), left, right));
+				next.push(H::hash_2_to_1_swapped(left, right, false));
+				i += 2;
 			}
 
 			current = next;

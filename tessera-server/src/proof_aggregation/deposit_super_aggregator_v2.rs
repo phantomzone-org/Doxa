@@ -1,6 +1,6 @@
 //! DepositSuperAggregatorV2 circuit: merges a deposit-TX aggregation proof and
 //! a SubtreeRoot proof into a single Keccak-256 piCommitment, compatible with
-//! the `TesseraRollupV2.proveDepositBatch()` on-chain function.
+//! the `TesseraContract.proveDepositBatch()` on-chain function.
 //!
 //! # Circuit structure
 //!
@@ -17,13 +17,14 @@
 //! # Keccak preimage field order
 //!
 //! ```text
-//! acRoot(uint256) | ncRoot(uint256) | mainPoolConfigRoot(bytes32) |
-//! batchPoseidonRoot(uint256) | depositNoteCommitments[0..N](uint256[])
+//! root(uint256) | mainPoolConfigRoot(bytes32) |
+//! batchPoseidonRoot(uint256) | ethAddresses[0..N](5×u32 LE-packed each)
 //! ```
 //!
-//! `acRoot` and `ncRoot` are both set to `act_root` (same IMT root).
+//! `root` is the on-chain IMT root (private witness `act_root`).
 //! `batchPoseidonRoot` is the SubtreeRootCircuit output (SR proof PI[0..4]).
-//! `depositNoteCommitments[i]` is SR proof leaf `i` (PI[4 + i*4 .. 4 + i*4 + 4]).
+//! `ethAddresses[i]` is `deposit_proof.PI[i*DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET .. +5]`,
+//! encoding the depositor's ETH address as 5 × u32 little-endian limbs (via `map_h160_to_f`).
 //!
 //! # Deposit TX public inputs layout (33 total)
 //!
@@ -92,6 +93,10 @@ pub const DEPOSIT_LEAF_PI_SIZE: usize = 33;
 pub const DEPOSIT_IS_REAL_OFFSET: usize = 2;
 /// Offset of `deposit_note_comm[4]` within a deposit leaf's public inputs.
 pub const DEPOSIT_NOTE_COMM_OFFSET: usize = 15;
+/// Offset of `eth_address[5]` within a deposit leaf's public inputs.
+pub const ETH_ADDR_OFFSET: usize = 19;
+/// Number of Goldilocks field elements encoding the ETH address (5 × u32 LE limbs).
+pub const ETH_ADDR_LEN: usize = 5;
 
 // ---------------------------------------------------------------------------
 // Artifact path constants
@@ -133,7 +138,6 @@ struct DepositSuperAggregatorV2Targets {
 	sr_proof: ProofWithPublicInputsTarget<D>,
 	sr_vd: VerifierCircuitTarget,
 	/// On-chain IMT root as 4 Goldilocks field targets (private witness).
-	/// Used for both `acRoot` and `ncRoot` in the Keccak preimage.
 	act_root: [Target; 4],
 	/// `mainPoolConfigRoot` as 8 u32 targets (bytes32 big-endian, private witness).
 	main_pool_cfg_root_u32s: [Target; 8],
@@ -210,11 +214,16 @@ impl DepositSuperAggregatorV2 {
 	/// Compute the deposit piCommitment natively, matching `_computeDepositPiCommitment`
 	/// in Solidity.
 	///
+	/// `deposit_pis` is the flat public-input slice from the aggregated deposit proof
+	/// (`deposit_agg_proof.public_inputs`). `n_deposit_slots` is the number of slots.
+	///
 	/// Returns 8 big-endian `u32` words.
 	pub fn compute_deposit_pi_commitment_native(
 		act_root: HashOutput,
 		main_pool_cfg_root: [u8; 32],
 		batch_poseidon_root: HashOutput,
+		deposit_pis: &[F],
+		n_deposit_slots: usize,
 	) -> [u32; 8] {
 		use plonky2::field::types::PrimeField64;
 
@@ -228,21 +237,77 @@ impl DepositSuperAggregatorV2 {
 			}
 		};
 
-		// root — appears twice to match the circuit's acRoot/ncRoot positions.
 		push_hash(&mut words, &act_root);
-		push_hash(&mut words, &act_root);
+		eprintln!(
+			"[NATIVE] root              bytes: {}",
+			words
+				.iter()
+				.map(|w| format!("{:08x}", w))
+				.collect::<Vec<_>>()
+				.join("")
+		);
 
 		// mainPoolConfigRoot: raw bytes32 big-endian.
+		let pcr_start = words.len();
 		for i in 0..8 {
 			words.push(u32::from_be_bytes(
 				main_pool_cfg_root[i * 4..i * 4 + 4].try_into().unwrap(),
 			));
 		}
+		eprintln!(
+			"[NATIVE] mainPoolCfgRoot   bytes: {}",
+			words[pcr_start..]
+				.iter()
+				.map(|w| format!("{:08x}", w))
+				.collect::<Vec<_>>()
+				.join("")
+		);
 
-		// batchPoseidonRoot already commits to all NC leaves via Poseidon.
+		// batchPoseidonRoot commits to all NC leaves via Poseidon.
+		let bpr_start = words.len();
 		push_hash(&mut words, &batch_poseidon_root);
+		eprintln!(
+			"[NATIVE] batchPoseidonRoot bytes: {}",
+			words[bpr_start..]
+				.iter()
+				.map(|w| format!("{:08x}", w))
+				.collect::<Vec<_>>()
+				.join("")
+		);
 
-		solidity_keccak256(&words)
+		// ethAddresses[0..N]: 5 u32 LE limbs per slot, mirroring the circuit.
+		for s in 0..n_deposit_slots {
+			let base = s * DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET;
+			let addr_start = words.len();
+			for k in 0..ETH_ADDR_LEN {
+				words.push(deposit_pis[base + k].to_canonical_u64() as u32);
+			}
+			if s < 3 || s == n_deposit_slots - 1 {
+				eprintln!(
+					"[NATIVE] ethAddr[{:>3}]      bytes: {}",
+					s,
+					words[addr_start..]
+						.iter()
+						.map(|w| format!("{:08x}", w))
+						.collect::<Vec<_>>()
+						.join("")
+				);
+			}
+		}
+
+		eprintln!(
+			"[NATIVE] total u32 words: {}, total bytes: {}",
+			words.len(),
+			words.len() * 4
+		);
+		let result = solidity_keccak256(&words);
+		let hash_hex: String = result
+			.iter()
+			.map(|w| format!("{:08x}", w))
+			.collect::<Vec<_>>()
+			.join("");
+		eprintln!("[NATIVE] keccak result: {}", hash_hex);
+		result
 	}
 
 	/// Persist all artifacts to `path`.
@@ -379,23 +444,27 @@ fn setup_builder(
 	let byte_range_lut = add_u8_range_check_lookup_table(&mut builder);
 	let mut u32_targets: Vec<Target> = Vec::new();
 
-	// 1. acRoot (uint256 LE-packed) — private witness act_root
-	let ac_words = pack_hash_le_to_u32s(&mut builder, act_root, byte_range_lut);
-	u32_targets.extend_from_slice(&ac_words);
+	// 1. root (uint256 LE-packed) — private witness act_root
+	let root_words = pack_hash_le_to_u32s(&mut builder, act_root, byte_range_lut);
+	u32_targets.extend_from_slice(&root_words);
 
-	// 2. ncRoot (uint256 LE-packed) — same private witness (acRoot == ncRoot in V2)
-	let nc_words = pack_hash_le_to_u32s(&mut builder, act_root, byte_range_lut);
-	u32_targets.extend_from_slice(&nc_words);
-
-	// 3. mainPoolConfigRoot (bytes32 — 8 raw u32 words)
+	// 2. mainPoolConfigRoot (bytes32 — 8 raw u32 words)
 	u32_targets.extend_from_slice(&main_pool_cfg_root_u32s);
 
 	// 4. batchPoseidonRoot (uint256 LE-packed) — SR proof PI[0..4]
-	// batchPoseidonRoot already commits to all NC leaves via Poseidon; no need
-	// to repeat individual leaves in the Keccak preimage.
+	// batchPoseidonRoot commits to all NC leaves via Poseidon.
 	let sr_root: [Target; 4] = core::array::from_fn(|k| sr_proof.public_inputs[k]);
 	let sr_root_words = pack_hash_le_to_u32s(&mut builder, sr_root, byte_range_lut);
 	u32_targets.extend_from_slice(&sr_root_words);
+
+	// 5. ethAddresses[0..N] — 5 u32 targets per slot, taken directly from deposit PIs.
+	// Each field element fits in u32 (produced by map_h160_to_f with 32-bit limbs).
+	for s in 0..n_deposit_slots {
+		let base = s * DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET;
+		for k in 0..ETH_ADDR_LEN {
+			u32_targets.push(deposit_proof.public_inputs[base + k]);
+		}
+	}
 
 	// --- Keccak-256 → 8 output words → public inputs ---
 	let hash = builder.keccak256::<ConfigNative>(&u32_targets);
@@ -683,6 +752,8 @@ mod tests {
 			act_root,
 			main_pool_cfg_root,
 			batch_poseidon_root,
+			&deposit_proof.public_inputs,
+			2,
 		);
 
 		let actual: Vec<u64> = proof
@@ -760,5 +831,257 @@ mod tests {
 			&deposit_proof.public_inputs,
 			2,
 		)
+	}
+
+	/// Reproduce the piCommitment mismatch between `compute_deposit_pi_commitment_native`
+	/// (Rust, u32 words → solidity_keccak256) and the Solidity-style encoding
+	/// (raw byte preimage → standard keccak256), without running the full circuit.
+	///
+	/// Prints a labeled byte-by-byte breakdown of both preimages so we can
+	/// visually inspect ordering and padding.
+	#[test]
+	fn test_deposit_pi_commitment_native_vs_solidity_encoding() {
+		use alloy::primitives::Address;
+		use plonky2::field::types::PrimeField64;
+		use sha3::{Digest, Keccak256};
+
+		// --- Inputs ---
+		let act_root = HashOutput::new([
+			F::from_canonical_u64(0x1111_2222_3333_4444),
+			F::from_canonical_u64(0x5555_6666_7777_8888),
+			F::from_canonical_u64(0xAAAA_BBBB_CCCC_DDDD),
+			F::from_canonical_u64(0x0001_0002_0003_0004),
+		]);
+		let main_pool_cfg_root = [0xABu8; 32];
+		let batch_poseidon_root = HashOutput::new([
+			F::from_canonical_u64(0xDEAD),
+			F::from_canonical_u64(0xBEEF),
+			F::ZERO,
+			F::ZERO,
+		]);
+
+		// Two deposit slots: one real with a known ETH address, one dummy.
+		let n_slots = 2;
+		let eth_addr = Address::from([
+			0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+			0x0F, 0x10, 0x11, 0x12, 0x13, 0x14,
+		]);
+		let zero_addr = Address::ZERO;
+
+		// Build fake deposit PIs with ETH address fields set.
+		let mut deposit_pis = vec![F::ZERO; n_slots * DEPOSIT_LEAF_PI_SIZE];
+		// Slot 0: real deposit with eth_addr
+		deposit_pis[DEPOSIT_IS_REAL_OFFSET] = F::ONE;
+		{
+			let addr_bytes = eth_addr.as_slice();
+			for k in 0..ETH_ADDR_LEN {
+				let chunk = &addr_bytes[4 * k..4 * k + 4];
+				let limb = u32::from_le_bytes(chunk.try_into().unwrap());
+				deposit_pis[ETH_ADDR_OFFSET + k] = F::from_canonical_u32(limb);
+			}
+		}
+		// Slot 1: dummy (all zeros, including eth_address)
+
+		// =====================================================================
+		// PATH A: Rust native (u32 words → solidity_keccak256)
+		// Mirrors the circuit's keccak gadget preimage.
+		// =====================================================================
+		eprintln!("\n========== PATH A: NATIVE (solidity_keccak256) ==========");
+
+		// Reconstruct the u32 words vector the same way compute_deposit_pi_commitment_native does,
+		// but print each section.
+		let mut native_words: Vec<u32> = Vec::new();
+
+		// Helper: push_hash and return the words
+		let push_hash = |w: &mut Vec<u32>, label: &str, h: &HashOutput| {
+			let start = w.len();
+			for &field in &[h.0[3], h.0[2], h.0[1], h.0[0]] {
+				let v = field.to_canonical_u64();
+				w.push((v >> 32) as u32);
+				w.push(v as u32);
+			}
+			// Print the u32 words and their effective BE bytes
+			eprint!("  {:<24} u32s: [", label);
+			for i in start..w.len() {
+				if i > start {
+					eprint!(", ");
+				}
+				eprint!("0x{:08x}", w[i]);
+			}
+			eprintln!("]");
+			// Effective byte stream (each u32 → BE bytes, as solidity_keccak256 emits)
+			let mut bytes = Vec::new();
+			for i in start..w.len() {
+				bytes.extend_from_slice(&w[i].to_be_bytes());
+			}
+			eprintln!("  {:<24} bytes: {}", "", hex::encode(&bytes));
+		};
+
+		push_hash(&mut native_words, "root", &act_root);
+
+		// mainPoolConfigRoot
+		let start = native_words.len();
+		for i in 0..8 {
+			native_words.push(u32::from_be_bytes(
+				main_pool_cfg_root[i * 4..i * 4 + 4].try_into().unwrap(),
+			));
+		}
+		eprint!("  {:<24} u32s: [", "mainPoolConfigRoot");
+		for i in start..native_words.len() {
+			if i > start {
+				eprint!(", ");
+			}
+			eprint!("0x{:08x}", native_words[i]);
+		}
+		eprintln!("]");
+		{
+			let mut bytes = Vec::new();
+			for i in start..native_words.len() {
+				bytes.extend_from_slice(&native_words[i].to_be_bytes());
+			}
+			eprintln!("  {:<24} bytes: {}", "", hex::encode(&bytes));
+		}
+
+		push_hash(&mut native_words, "batchPoseidonRoot", &batch_poseidon_root);
+
+		// eth addresses
+		for s in 0..n_slots {
+			let base = s * DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET;
+			let start = native_words.len();
+			for k in 0..ETH_ADDR_LEN {
+				native_words.push(deposit_pis[base + k].to_canonical_u64() as u32);
+			}
+			let label = format!("ethAddr[{}]", s);
+			eprint!("  {:<24} u32s: [", label);
+			for i in start..native_words.len() {
+				if i > start {
+					eprint!(", ");
+				}
+				eprint!("0x{:08x}", native_words[i]);
+			}
+			eprintln!("]");
+			let mut bytes = Vec::new();
+			for i in start..native_words.len() {
+				bytes.extend_from_slice(&native_words[i].to_be_bytes());
+			}
+			eprintln!("  {:<24} bytes: {}", "", hex::encode(&bytes));
+		}
+
+		let native_u32s = solidity_keccak256(&native_words);
+		let mut native_bytes = [0u8; 32];
+		for (i, &w) in native_u32s.iter().enumerate() {
+			native_bytes[i * 4..(i + 1) * 4].copy_from_slice(&w.to_be_bytes());
+		}
+
+		eprintln!("  total u32 words: {}", native_words.len());
+		eprintln!("  total bytes:     {}", native_words.len() * 4);
+		eprintln!("  hash:            {}", hex::encode(native_bytes));
+
+		// Also run the actual function and confirm our reconstruction matches
+		let native_check = DepositSuperAggregatorV2::compute_deposit_pi_commitment_native(
+			act_root,
+			main_pool_cfg_root,
+			batch_poseidon_root,
+			&deposit_pis,
+			n_slots,
+		);
+		assert_eq!(native_u32s, native_check, "reconstruction mismatch");
+
+		// =====================================================================
+		// PATH B: Solidity-style (raw bytes → standard keccak256)
+		// Mirrors _computeDepositPiCommitment in TesseraContract.sol.
+		// =====================================================================
+		eprintln!("\n========== PATH B: SOLIDITY (standard keccak256) ==========");
+
+		let root_u256 = crate::contract::hash_to_u256_le(&act_root);
+		let bpr_u256 = crate::contract::hash_to_u256_le(&batch_poseidon_root);
+
+		let mut preimage: Vec<u8> = Vec::new();
+
+		let root_bytes = root_u256.to_be_bytes::<32>();
+		preimage.extend_from_slice(&root_bytes);
+		eprintln!(
+			"  {:<24} bytes: {}",
+			"root (U256 BE)",
+			hex::encode(&root_bytes)
+		);
+
+		preimage.extend_from_slice(&main_pool_cfg_root);
+		eprintln!(
+			"  {:<24} bytes: {}",
+			"mainPoolConfigRoot",
+			hex::encode(&main_pool_cfg_root)
+		);
+
+		let bpr_bytes = bpr_u256.to_be_bytes::<32>();
+		preimage.extend_from_slice(&bpr_bytes);
+		eprintln!(
+			"  {:<24} bytes: {}",
+			"batchPoseidonRoot (U256 BE)",
+			hex::encode(&bpr_bytes)
+		);
+
+		// ETH addresses: Solidity's _addressToLE20 byte-reverses each 4-byte chunk.
+		for (s, addr) in [eth_addr, zero_addr].iter().enumerate() {
+			let be = addr.as_slice();
+			let mut addr_bytes = Vec::new();
+			for c in 0..5 {
+				addr_bytes.push(be[4 * c + 3]);
+				addr_bytes.push(be[4 * c + 2]);
+				addr_bytes.push(be[4 * c + 1]);
+				addr_bytes.push(be[4 * c]);
+			}
+			preimage.extend_from_slice(&addr_bytes);
+			let label = format!("ethAddr[{}] (LE20)", s);
+			eprintln!("  {:<24} bytes: {}", label, hex::encode(&addr_bytes));
+		}
+
+		let solidity_bytes: [u8; 32] = Keccak256::digest(&preimage).into();
+
+		eprintln!("  total bytes:     {}", preimage.len());
+		eprintln!("  hash:            {}", hex::encode(solidity_bytes));
+
+		// =====================================================================
+		// COMPARE
+		// =====================================================================
+		eprintln!("\n========== COMPARISON ==========");
+		eprintln!("  native  hash: {}", hex::encode(native_bytes));
+		eprintln!("  solidity hash: {}", hex::encode(solidity_bytes));
+
+		// Reconstruct effective native byte preimage for diff
+		let mut native_eff: Vec<u8> = Vec::new();
+		for &w in &native_words {
+			native_eff.extend_from_slice(&w.to_be_bytes());
+		}
+		if native_eff != preimage {
+			eprintln!("\n  !!! PREIMAGE DIFFERS !!!");
+			eprintln!("  native  preimage len: {}", native_eff.len());
+			eprintln!("  solidity preimage len: {}", preimage.len());
+			let min_len = native_eff.len().min(preimage.len());
+			for i in 0..min_len {
+				if native_eff[i] != preimage[i] {
+					eprintln!(
+						"    byte {:4}: native=0x{:02x}  solidity=0x{:02x}",
+						i, native_eff[i], preimage[i]
+					);
+				}
+			}
+			if native_eff.len() != preimage.len() {
+				eprintln!(
+					"    LENGTH DIFF: native={} solidity={}",
+					native_eff.len(),
+					preimage.len()
+				);
+			}
+		} else {
+			eprintln!("  preimages match byte-for-byte");
+		}
+		eprintln!();
+
+		assert_eq!(
+			hex::encode(native_bytes),
+			hex::encode(solidity_bytes),
+			"native (solidity_keccak256) and Solidity-style (standard keccak256) commitments differ"
+		);
 	}
 }

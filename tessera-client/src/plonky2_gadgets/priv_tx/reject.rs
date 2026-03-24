@@ -1,6 +1,7 @@
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
+use tessera_trees::MerkleProof;
 use tessera_utils::{F, hasher::HashOutput};
 
 use super::{
@@ -15,13 +16,11 @@ use crate::{
 	derive_priv_tx_hash,
 	note::{NodeIdentifier, PositionedStandardNode, StandardNote},
 	plonky2_gadgets::{
-		merkle::{SetDummyMerklePathOfWitness, SetMerklePathOfWitness},
 		set_hash,
 		witness::{set_hash_blocks, set_real_schnorr_signature, set_subpool_full_proof},
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree},
 	schnorr::Signature,
-	tree::CommitmentTreeMerkleProof,
 };
 
 /// Fill `pw` with a complete reject transaction witness.
@@ -34,10 +33,10 @@ pub(crate) fn set_reject_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
 	accin: &StandardAccount,
-	accin_act_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
+	accin_act_merkle_proof: MerkleProof<HashOutput>,
 	root: HashOutput,
 	inotes: &[StandardNote],
-	inotes_nct_proofs: &[CommitmentTreeMerkleProof<COM_TREE_DEPTH>],
+	inotes_nct_proofs: &[MerkleProof<HashOutput>],
 	onotes: &[StandardNote],
 	dinotes: [[F; 4]; NOTE_BATCH],
 	donotes: [[F; 4]; NOTE_BATCH],
@@ -45,7 +44,7 @@ pub(crate) fn set_reject_tx_witness(
 	rejection_key: &CompPubKey,
 	consume_key: &CompPubKey,
 	subpool_id: SubpoolId,
-	main_pool: &MainPoolConfigTree,
+	main_pool: &MainPoolConfigTree<HashOutput>,
 	consume_sig: Signature,
 	approval_sig: Signature,
 ) {
@@ -171,7 +170,7 @@ pub(crate) fn set_reject_tx_witness(
 			t.inotes[i].set_witness(pw, &inactive_inote);
 			pw.set_target(t.inotes_pos[i], F::ZERO).unwrap();
 			pw.set_bool_target(t.inotes_isactive[i], false).unwrap();
-			t.inotes_nct_merkle[i].set_dummy_witness(pw, COM_TREE_DEPTH);
+			t.inotes_nct_merkle[i].set_dummy_witness(pw);
 		}
 	}
 
@@ -256,7 +255,7 @@ mod tests {
 	use primitive_types::U256;
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::CommitmentTree;
+	use tessera_trees::{MerkleProof, MerkleTree};
 	use tessera_utils::hasher::{HashOutput, MerkleHashCircuit};
 
 	use super::*;
@@ -268,7 +267,6 @@ mod tests {
 		plonky2_gadgets::priv_tx::{priv_tx_circuit, sample_dummy_notes},
 		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{CompressedPublicKey, PrivateKey, Scalar, schnorr_sign},
-		tree::CommitmentTreeMerkleProof,
 	};
 
 	const D: usize = 2;
@@ -292,11 +290,14 @@ mod tests {
 		let consume_sk = PrivateKey::from_raw([9, 10, 11, 12, 0]);
 		let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
-		let subpool = SubpoolConfigTree::new(approval_cpk, rejection_cpk, consume_cpk);
+		let subpool =
+			SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
 		let subpool_id = SubpoolId(F::ONE);
 
 		let mut main_pool = MainPoolConfigTree::new();
-		main_pool.set_subpool(0, subpool_id, subpool.root());
+		main_pool
+			.insert_subpool(subpool_id, subpool.root())
+			.unwrap();
 
 		// ── Account (simulate post-FreshAcc) ──────────────────────────────────
 		let mut rng = ChaCha8Rng::seed_from_u64(99);
@@ -310,8 +311,8 @@ mod tests {
 
 		// ── Single unified IMT (V2: accounts and notes share one on-chain tree) ─
 		// Insert all commitments first, then generate all proofs against the final root.
-		let mut tree = CommitmentTree::<HashOutput>::new(COM_TREE_DEPTH);
-		let acc_pos = tree.insert(acc.commitment().0).unwrap().path;
+		let mut tree = MerkleTree::<HashOutput>::new(COM_TREE_DEPTH);
+		let acc_pos = tree.insert(acc.commitment().0).unwrap();
 
 		// ── Sender address ────────────────────────────────────────────────────
 		let sender_priv = [F::from_canonical_u64(77), F::from_canonical_u64(88)];
@@ -346,30 +347,15 @@ mod tests {
 		};
 
 		// Insert notes into the same unified tree, then generate all proofs against final root
-		let n0_pos = tree.insert(note0.commitment().0).unwrap().path;
-		let n1_pos = tree.insert(note1.commitment().0).unwrap().path;
+		let n0_pos = tree.insert(note0.commitment().0).unwrap();
+		let n1_pos = tree.insert(note1.commitment().0).unwrap();
 
-		let acc_act_proof = CommitmentTreeMerkleProof::new(
-			acc.commitment().0,
-			tree.merkle_path(acc_pos, 0, COM_TREE_DEPTH).unwrap(),
-			acc_pos,
-			tree.num_leaves(),
-		);
-		assert!(acc_act_proof.verify(tree.get_root()));
+		let acc_act_proof = tree.merkle_proof(acc_pos).unwrap();
+		assert!(acc_act_proof.verify());
 
 		let inotes_nct_proofs = [
-			CommitmentTreeMerkleProof::new(
-				note0.commitment().0,
-				tree.merkle_path(n0_pos, 0, COM_TREE_DEPTH).unwrap(),
-				n0_pos,
-				tree.num_leaves(),
-			),
-			CommitmentTreeMerkleProof::new(
-				note1.commitment().0,
-				tree.merkle_path(n1_pos, 0, COM_TREE_DEPTH).unwrap(),
-				n1_pos,
-				tree.num_leaves(),
-			),
+			tree.merkle_proof(n0_pos).unwrap(),
+			tree.merkle_proof(n1_pos).unwrap(),
 		];
 
 		// ── Output notes (reject — send back to sender) ───────────────────────
@@ -441,7 +427,7 @@ mod tests {
 			&t,
 			&acc,
 			acc_act_proof,
-			tree.get_root(),
+			tree.root(),
 			&[note0, note1],
 			&inotes_nct_proofs,
 			&[onote0, onote1],

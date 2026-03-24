@@ -5,14 +5,16 @@ use plonky2_field::types::{Field, Field64, PrimeField64};
 use primitive_types::{H160, U256};
 use rand::{CryptoRng, Rng, RngExt};
 use serde::{Deserialize, Serialize};
-use tessera_utils::{F, HASH_SIZE, hasher::HashOutput};
+use tessera_trees::{MerkleProof, MerkleTree};
+use tessera_utils::{
+	F, HASH_SIZE,
+	hasher::{HashOutput, MerkleHash},
+};
 
 use crate::{
 	ACC_AST_DEPTH, AST_DEFAULT_LEAF, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
 	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER,
-	DepositNoteCommitment, NOTE_BATCH, NoteCommitment, NoteNullifier,
-	schnorr::CompressedPublicKey,
-	tree::{GenericNode, Leaf, MerkleProof, MerkleTree},
+	DepositNoteCommitment, NOTE_BATCH, NoteCommitment, NoteNullifier, schnorr::CompressedPublicKey,
 	utils::map_h160_to_f,
 };
 
@@ -139,18 +141,7 @@ pub struct AccountStateTreeLeaf {
 	pub amount: U256,
 }
 
-impl Leaf for AccountStateTreeLeaf {
-	type Node = GenericNode<Self>;
-
-	fn empty() -> Self::Node {
-		GenericNode {
-			inner: HashOutput(AST_DEFAULT_LEAF.map(F::from_canonical_u64)),
-			_phantom: PhantomData,
-		}
-	}
-}
-
-impl From<AccountStateTreeLeaf> for GenericNode<AccountStateTreeLeaf> {
+impl AccountStateTreeLeaf {
 	/// Hash the leaf into a Merkle tree node.
 	///
 	/// Input layout (10 field elements):
@@ -159,20 +150,21 @@ impl From<AccountStateTreeLeaf> for GenericNode<AccountStateTreeLeaf> {
 	/// ```
 	/// where each `U256` word is split into its low and high u32 halves
 	/// (little-endian word order, matching `U256.0: [u64; 4]`).
-	fn from(value: AccountStateTreeLeaf) -> Self {
+	pub fn commitment<H>(&self) -> H::Digest
+	where
+		H: MerkleHash<Digest = HashOutput>,
+	{
 		// input = [DS_ACC_AST, asset_id, limb0, limb1, ..., limb7]
 		// limb_i is the i-th 32-bit limb of `amount`, least-significant first.
 		// U256.0 is [u64; 4] in little-endian word order.
 		let mut input = [F::ZERO; 1 + 1 + 8];
 		input[0] = F::from_canonical_u64(DS_ACC_AST_LEAF);
-		input[1] = value.asset_id.0;
-		for (i, word) in value.amount.0.iter().enumerate() {
+		input[1] = self.asset_id.0;
+		for (i, word) in self.amount.0.iter().enumerate() {
 			input[2 + i * 2] = F::from_canonical_u32(*word as u32);
 			input[2 + i * 2 + 1] = F::from_canonical_u32((*word >> 32) as u32);
 		}
-		Self::from(HashOutput(
-			<PoseidonHash as Hasher<F>>::hash_no_pad(&input).elements,
-		))
+		HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&input).elements)
 	}
 }
 
@@ -186,35 +178,41 @@ impl From<AccountStateTreeLeaf> for GenericNode<AccountStateTreeLeaf> {
 /// appended at the next free position; existing assets are updated in-place.
 // TODO: handle the case when asset limit is reached
 #[derive(Clone, Debug)]
-pub struct AccountStateTree {
-	pub(crate) tree: MerkleTree<ACC_AST_DEPTH, GenericNode<AccountStateTreeLeaf>>,
+pub struct AccountStateTree<H: MerkleHash> {
+	pub(crate) tree: MerkleTree<H>,
 	/// AssetId → (leaf_index, current_amount)
 	assets: HashMap<AssetId, (usize, U256)>,
 }
 
-impl Default for AccountStateTree {
+impl<H> Default for AccountStateTree<H>
+where
+	H: MerkleHash<Digest = HashOutput>,
+{
 	fn default() -> Self {
 		Self::new()
 	}
 }
 
-impl AccountStateTree {
+impl<H> AccountStateTree<H>
+where
+	H: MerkleHash<Digest = HashOutput>,
+{
 	/// Create an empty AST.  All leaves are initialised to [`AST_DEFAULT_LEAF`].
 	pub fn new() -> Self {
 		Self {
-			tree: MerkleTree::new(),
+			tree: MerkleTree::new(ACC_AST_DEPTH),
 			assets: HashMap::new(),
 		}
 	}
 
 	/// Current Merkle root of the AST.
-	pub fn root(&self) -> HashOutput {
+	pub fn root(&self) -> H::Digest {
 		self.tree.root()
 	}
 
 	/// Number of occupied (non-default) leaves.
 	pub fn size(&self) -> usize {
-		self.tree.size()
+		self.tree.num_leaves()
 	}
 
 	/// Insert a new asset. Returns `Err` if `asset_id` is already tracked.
@@ -222,11 +220,14 @@ impl AccountStateTree {
 		if self.assets.contains_key(&asset_id) {
 			return Err(format!("asset {:?} already exists", asset_id));
 		}
-		let index = self.tree.next_index();
-		self.tree.insert(AccountStateTreeLeaf {
+		let index = self.tree.num_leaves();
+		let leaf = AccountStateTreeLeaf {
 			asset_id,
 			amount,
-		});
+		};
+		self.tree
+			.insert(leaf.commitment::<H>())
+			.map_err(|e| e.to_string())?;
 		self.assets.insert(asset_id, (index, amount));
 		Ok(())
 	}
@@ -237,13 +238,13 @@ impl AccountStateTree {
 			.assets
 			.get(&asset_id)
 			.ok_or_else(|| format!("asset {:?} not found", asset_id))?;
-		self.tree.set_leaf(
-			index,
-			AccountStateTreeLeaf {
-				asset_id,
-				amount,
-			},
-		);
+		let leaf = AccountStateTreeLeaf {
+			asset_id,
+			amount,
+		};
+		self.tree
+			.update_leaf(index, leaf.commitment::<H>())
+			.map_err(|e| e.to_string())?;
 		self.assets.insert(asset_id, (index, amount));
 		Ok(prev_amount)
 	}
@@ -262,11 +263,10 @@ impl AccountStateTree {
 	/// Generate a Merkle proof for the leaf at `index`.
 	///
 	/// Used to supply the witness for AST membership / update checks in circuits.
-	pub fn merkle_proof_at(
-		&self,
-		index: usize,
-	) -> MerkleProof<GenericNode<AccountStateTreeLeaf>, ACC_AST_DEPTH> {
-		self.tree.merkle_proof_at(index)
+	pub fn merkle_proof_at(&self, index: usize) -> MerkleProof<H> {
+		self.tree
+			.merkle_proof(index)
+			.expect("merkle proof generation failed")
 	}
 
 	/// Returns `(leaf_index, amount)` for the given asset, or `None` if never set.
@@ -276,7 +276,7 @@ impl AccountStateTree {
 
 	/// Index at which the next new asset would be inserted.
 	pub fn next_index(&self) -> usize {
-		self.tree.next_index()
+		self.tree.num_leaves()
 	}
 }
 
@@ -303,7 +303,7 @@ pub struct StandardAccount {
 	pub spend_auth: SpendAuth,
 	pub consume_auth: ConsumeAuth,
 	/// Per-asset balance Merkle tree.
-	pub ast: AccountStateTree,
+	pub ast: AccountStateTree<HashOutput>,
 }
 
 impl StandardAccount {

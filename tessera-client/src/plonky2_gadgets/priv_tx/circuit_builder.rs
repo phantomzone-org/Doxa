@@ -19,11 +19,7 @@ use crate::{
 	DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH,
 	SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
-		merkle::{
-			CommitmentTreeMerkleTarget, ComputeMerkleRootTarget, ConditionalMerkleTarget,
-			compute_merkle_root_gagdet, conditional_merkle_verify_commitment_tree_gadget,
-			conditional_merkle_verify_gadget,
-		},
+		merkle::{MerkleRootTarget, compute_merkle_root_gadget, conditional_merkle_verify_gadget},
 		priv_tx::targets::{
 			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
 			ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment, DummyAccountNullifier,
@@ -100,7 +96,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		acc_comm: AccountCommitmentTarget,
 		root: RootTarget,
 		condition: BoolTarget,
-	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH>;
+	) -> MerkleRootTarget;
 
 	fn conditionally_assert_hash_equal(
 		&mut self,
@@ -156,7 +152,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		amt: U256Target,
 		acc_ast_root: HashOutTarget,
 		selector: BoolTarget,
-	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH>;
+	) -> MerkleRootTarget;
 
 	/// Verify that accin's and accout's ASTs both contain the same asset leaf at
 	/// the **same position** (same siblings and path bits).
@@ -173,7 +169,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accout_ast_root: HashOutTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
-	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH>;
+	) -> MerkleRootTarget;
 
 	// ---- Note related methods ----
 
@@ -207,7 +203,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		root: RootTarget,
-	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH];
+	) -> [MerkleRootTarget; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
 
@@ -383,9 +379,13 @@ where
 		acc_comm: AccountCommitmentTarget,
 		root: RootTarget,
 		condition: BoolTarget,
-	) -> CommitmentTreeMerkleTarget<COM_TREE_DEPTH> {
-		conditional_merkle_verify_commitment_tree_gadget::<H, F, D, COM_TREE_DEPTH>(
-			self, acc_comm.0, root.0, condition,
+	) -> MerkleRootTarget {
+		conditional_merkle_verify_gadget::<F, D>(
+			self,
+			acc_comm.0,
+			root.0,
+			condition,
+			COM_TREE_DEPTH,
 		)
 	}
 
@@ -502,7 +502,7 @@ where
 		amt: U256Target,
 		acc_ast_root: HashOutTarget,
 		selector: BoolTarget,
-	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH> {
+	) -> MerkleRootTarget {
 		let tr = self._true();
 		// derive asset leaf
 		let leaf = {
@@ -517,11 +517,12 @@ where
 		let exists_or_default: [Target; HASH_SIZE] =
 			core::array::from_fn(|i| self._if(selector, leaf.elements[i], default_leaf[i]));
 
-		let merkletargets = compute_merkle_root_gagdet::<F, D, ACC_AST_DEPTH>(
+		let merkletargets = compute_merkle_root_gadget::<F, D>(
 			self,
 			HashOutTarget {
 				elements: exists_or_default,
 			},
+			ACC_AST_DEPTH,
 		);
 		// computed ast root must equal acc_ast_root
 		self.connect_hashes(merkletargets.root, acc_ast_root);
@@ -551,17 +552,17 @@ where
 
 		// Step B: Verify each authority key is a leaf in the depth-2 subpool config tree.
 		// Leaf = H(key_as_5_targets).  The root is the shared subpool_config_root.
-		let mut verify_key_proof =
-			|key: PubkeyTarget| -> ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH> {
-				let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
-				// TODO: change this from conditional to compute
-				conditional_merkle_verify_gadget::<F, D, SUBPOOL_CONFIG_DEPTH>(
-					self,
-					leaf_hash,
-					subpool_config_root,
-					not_fake_tx,
-				)
-			};
+		let mut verify_key_proof = |key: PubkeyTarget| -> MerkleRootTarget {
+			let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
+			// TODO: change this from conditional to compute
+			conditional_merkle_verify_gadget::<F, D>(
+				self,
+				leaf_hash,
+				subpool_config_root,
+				not_fake_tx,
+				SUBPOOL_CONFIG_DEPTH,
+			)
+		};
 
 		let approval_proof = verify_key_proof(approval_key);
 		let rejection_proof = verify_key_proof(rejection_key);
@@ -575,11 +576,12 @@ where
 			inputs.push(subpool_id.0);
 			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs)
 		};
-		let main_pool_proof = conditional_merkle_verify_gadget::<F, D, MAIN_POOL_CONFIG_DEPTH>(
+		let main_pool_proof = conditional_merkle_verify_gadget::<F, D>(
 			self,
 			main_pool_leaf_hash,
 			mainpool_config_root.0,
 			not_fake_tx,
+			MAIN_POOL_CONFIG_DEPTH,
 		);
 
 		SubpoolFullProofTargets {
@@ -600,7 +602,7 @@ where
 		accout_ast_root: HashOutTarget,
 		asset_exists_in_accin: BoolTarget,
 		asset_exists_in_accout: BoolTarget,
-	) -> ComputeMerkleRootTarget<ACC_AST_DEPTH> {
+	) -> MerkleRootTarget {
 		let accin_merkletrgts = self.assert_asset_amt_or_default_in_ast(
 			asset_id,
 			accin_amt,
@@ -638,16 +640,16 @@ where
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
 		root: RootTarget,
-	) -> [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] {
-		let merkle_proofs: [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH] =
-			core::array::from_fn(|i| {
-				conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
-					self,
-					inotes_comm[i].0,
-					root.0,
-					inote_isactive[i],
-				)
-			});
+	) -> [MerkleRootTarget; NOTE_BATCH] {
+		let merkle_proofs: [MerkleRootTarget; NOTE_BATCH] = core::array::from_fn(|i| {
+			conditional_merkle_verify_gadget::<F, D>(
+				self,
+				inotes_comm[i].0,
+				root.0,
+				inote_isactive[i],
+				COM_TREE_DEPTH,
+			)
+		});
 
 		// each note must be spendable by the account
 		for note in inotes.iter() {
