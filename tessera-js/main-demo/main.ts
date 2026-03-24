@@ -13,8 +13,8 @@ await init();
 
 const status = document.getElementById("status") as HTMLPreElement;
 function log(msg: string) {
-  status.textContent += "\n" + msg;
-  console.log(msg);
+  // status.textContent += "\n" + msg;
+  // console.log(msg);
 }
 
 // ── constants ─────────────────────────────────────────────────────────────────
