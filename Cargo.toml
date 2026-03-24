@@ -1,5 +1,5 @@
 [workspace]
-members = ["tessera-client","tessera-server", "tessera-trees", "tessera-e2e", "wasm/tessera-client-wasm", "tessera-subpool-database"]
+members = ["tessera-client","tessera-server", "tessera-trees", "tessera-e2e", "tessera-client-wasm", "tessera-subpool-database"]
 resolver = "2"
 
 [workspace.dependencies]
