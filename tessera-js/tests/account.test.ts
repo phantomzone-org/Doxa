@@ -20,13 +20,13 @@ describe("Account", () => {
   it("commitment is 32 bytes", () => {
     const account = Account.createWithSeed(SEED_A, 1n);
     const commitment = account.commitment();
-    expect(commitment).toBeInstanceOf(Uint8Array);
-    expect(commitment.byteLength).toBe(32);
+    expect(commitment.toHex()).toMatch(/^[0-9a-f]{64}$/);
+    expect(commitment.toBytes().byteLength).toBe(32);
   });
 
   it("publicId is 32 bytes", () => {
     const account = Account.createWithSeed(SEED_A, 1n);
-    expect(account.publicId().byteLength).toBe(32);
+    expect(account.publicId().toHex()).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("nullifierKey is 32 bytes", () => {
@@ -34,25 +34,23 @@ describe("Account", () => {
     expect(account.nullifierKey().byteLength).toBe(32);
   });
 
-  it("nullifier with position is 32 bytes", () => {
+  it("nullifier is 32 bytes", () => {
     const account = Account.createWithSeed(SEED_A, 1n);
-    const nullifier = account.nullifier(0n);
-    expect(nullifier).toBeInstanceOf(Uint8Array);
-    expect(nullifier.byteLength).toBe(32);
+    const nullifier = account.nullifier();
+    expect(nullifier.toHex()).toMatch(/^[0-9a-f]{64}$/);
+    expect(nullifier.toBytes().byteLength).toBe(32);
   });
 
   it("two accounts with different seeds have different commitments", () => {
     const a = Account.createWithSeed(SEED_A, 1n);
     const b = Account.createWithSeed(SEED_B, 1n);
-    expect(Buffer.from(a.commitment()).toString("hex")).not.toBe(
-      Buffer.from(b.commitment()).toString("hex")
-    );
+    expect(a.commitment().toHex()).not.toBe(b.commitment().toHex());
   });
 
   it("commitment is deterministic for the same seed", () => {
     const c1 = Account.createWithSeed(SEED_A, 1n).commitment();
     const c2 = Account.createWithSeed(SEED_A, 1n).commitment();
-    expect(c1).toEqual(c2);
+    expect(c1.toHex()).toBe(c2.toHex());
   });
 
   it("decodeHash returns 4 limbs", () => {
@@ -63,8 +61,8 @@ describe("Account", () => {
 
   it("nullifier is non-zero", () => {
     const account = Account.createWithSeed(SEED_B, 2n);
-    const nullifier = account.nullifier(0n);
-    expect(nullifier.some((b) => b !== 0)).toBe(true);
+    const nullifier = account.nullifier();
+    expect(nullifier.toBytes().some((b) => b !== 0)).toBe(true);
   });
 });
 

@@ -144,15 +144,15 @@ impl WasmAccount {
 		WasmAccount(Rc::new(RefCell::new(acc)))
 	}
 
-	/// Returns the 32-byte account commitment.
-	pub fn commitment(&self) -> Vec<u8> {
-		hash_to_bytes(self.0.borrow().commitment().0)
+	/// Returns the account commitment.
+	pub fn commitment(&self) -> WasmAccountCommitment {
+		WasmAccountCommitment(self.0.borrow().commitment().0)
 	}
 
-	/// Returns the 32-byte public identifier.
+	/// Returns the public identifier.
 	#[wasm_bindgen(js_name = publicId)]
-	pub fn public_id(&self) -> Vec<u8> {
-		hash_to_bytes(self.0.borrow().public_id().0)
+	pub fn public_id(&self) -> WasmPublicIdentifier {
+		WasmPublicIdentifier(self.0.borrow().public_id())
 	}
 
 	/// Returns the 32-byte nullifier key.
@@ -173,10 +173,9 @@ impl WasmAccount {
 	}
 
 	/// Returns the account nullifier.
-	/// Pass `undefined` for fresh accounts (nonce = 0).
-	pub fn nullifier(&self) -> Vec<u8> {
+	pub fn nullifier(&self) -> WasmAccountNullifier {
 		let null: AccountNullifier = self.0.borrow().nullifier();
-		hash_to_bytes(null.0)
+		WasmAccountNullifier(null.0)
 	}
 
 	/// Returns the private identifier as a `WasmPrivateIdentifier`.
@@ -185,15 +184,14 @@ impl WasmAccount {
 		WasmPrivateIdentifier(self.0.borrow().private_identifier)
 	}
 
-	/// Returns the 40-byte little-endian encoding of the spend-auth CompressedPublicKey.
-	/// Used as `spend_auth_pk` in the backend register request.
-	/// Returns all-zeros if no spend key is set.
-	#[wasm_bindgen(js_name = spendAuthPkBytes)]
-	pub fn spend_auth_pk_bytes(&self) -> Vec<u8> {
+	/// Returns the spend-auth compressed public key.
+	/// Returns an all-zeros key if no spend key is set.
+	#[wasm_bindgen(js_name = spendAuthPk)]
+	pub fn spend_auth_pk(&self) -> WasmSpendAuthPk {
 		let acc = self.0.borrow();
 		match &acc.spend_auth.spend_pk {
-			Some(pk) => pk.encode().to_vec(),
-			None => vec![0u8; 40],
+			Some(pk) => WasmSpendAuthPk(*pk),
+			None => WasmSpendAuthPk(CompressedPublicKey::<F>::decode(&[0u8; 40])),
 		}
 	}
 }
@@ -315,6 +313,131 @@ impl WasmPublicIdentifier {
 			elems[i] = F::from_canonical_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
 		}
 		Ok(WasmPublicIdentifier(PublicIdentifier(HashOutput(elems))))
+	}
+}
+
+// ── WasmSpendAuthPk ──────────────────────────────────────────────────────────
+
+/// A spend-auth compressed public key (5 × u64 LE, 40 bytes / 80 hex chars).
+#[wasm_bindgen]
+pub struct WasmSpendAuthPk(CompressedPublicKey<F>);
+
+#[wasm_bindgen]
+impl WasmSpendAuthPk {
+	/// 80 hex chars — 5 × u64 LE (40 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		hex::encode(self.0.encode())
+	}
+
+	/// Parse from an 80-char hex string (5 × u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmSpendAuthPk, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from a 40-byte Uint8Array (5 × u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmSpendAuthPk, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmSpendAuthPk, JsError> {
+		let arr: &[u8; 40] = bytes
+			.try_into()
+			.map_err(|_| JsError::new("spend_auth_pk must be 40 bytes (80 hex chars)"))?;
+		Ok(WasmSpendAuthPk(CompressedPublicKey::<F>::decode(arr)))
+	}
+}
+
+// ── WasmAccountCommitment ────────────────────────────────────────────────────
+
+/// An account commitment (4 Goldilocks field elements, 32 bytes / 64 hex chars).
+#[wasm_bindgen]
+pub struct WasmAccountCommitment(HashOutput);
+
+#[wasm_bindgen]
+impl WasmAccountCommitment {
+	/// 64 hex chars — 4 × u64 LE (32 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		hex::encode(hash_to_bytes(self.0))
+	}
+
+	/// 32 bytes (4 × u64 little-endian).
+	#[wasm_bindgen(js_name = toBytes)]
+	pub fn to_bytes(&self) -> Vec<u8> {
+		hash_to_bytes(self.0)
+	}
+
+	/// Parse from a 64-char hex string (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmAccountCommitment, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from a 32-byte Uint8Array (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmAccountCommitment, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmAccountCommitment, JsError> {
+		if bytes.len() != 32 {
+			return Err(JsError::new("commitment must be 32 bytes (64 hex chars)"));
+		}
+		let mut elems = [F::ZERO; 4];
+		for (i, chunk) in bytes.chunks_exact(8).enumerate() {
+			elems[i] = F::from_canonical_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
+		}
+		Ok(WasmAccountCommitment(HashOutput(elems)))
+	}
+}
+
+// ── WasmAccountNullifier ─────────────────────────────────────────────────────
+
+/// An account nullifier (4 Goldilocks field elements, 32 bytes / 64 hex chars).
+#[wasm_bindgen]
+pub struct WasmAccountNullifier(HashOutput);
+
+#[wasm_bindgen]
+impl WasmAccountNullifier {
+	/// 64 hex chars — 4 × u64 LE (32 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		hex::encode(hash_to_bytes(self.0))
+	}
+
+	/// 32 bytes (4 × u64 little-endian).
+	#[wasm_bindgen(js_name = toBytes)]
+	pub fn to_bytes(&self) -> Vec<u8> {
+		hash_to_bytes(self.0)
+	}
+
+	/// Parse from a 64-char hex string (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmAccountNullifier, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from a 32-byte Uint8Array (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmAccountNullifier, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmAccountNullifier, JsError> {
+		if bytes.len() != 32 {
+			return Err(JsError::new("nullifier must be 32 bytes (64 hex chars)"));
+		}
+		let mut elems = [F::ZERO; 4];
+		for (i, chunk) in bytes.chunks_exact(8).enumerate() {
+			elems[i] = F::from_canonical_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
+		}
+		Ok(WasmAccountNullifier(HashOutput(elems)))
 	}
 }
 
@@ -650,14 +773,11 @@ pub fn wasm_derive_public_identifier(private_id: &WasmPrivateIdentifier) -> Wasm
 	WasmPublicIdentifier(acc.public_id())
 }
 
-/// Derive the spend-auth public key bytes from a seed.
-/// Returns 40 bytes (5 × u64 LE encoding of CompressedPublicKey via `encode()`).
-/// This is the value used as `spend_auth_pk` in the backend register request.
+/// Derive the spend-auth public key from a seed.
 #[wasm_bindgen(js_name = deriveSpendAuthPk)]
-pub fn wasm_derive_spend_auth_pk(seed: &[u8]) -> Vec<u8> {
+pub fn wasm_derive_spend_auth_pk(seed: &[u8]) -> WasmSpendAuthPk {
 	let sk = derive_spend_key(seed);
-	let pk = CompressedPublicKey::from(sk.public_key::<F>());
-	pk.encode().to_vec()
+	WasmSpendAuthPk(CompressedPublicKey::from(sk.public_key::<F>()))
 }
 
 /// Decode 32 bytes into a `WasmHashOutput` (validates each limb is in Goldilocks range).

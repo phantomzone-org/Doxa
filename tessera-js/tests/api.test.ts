@@ -107,7 +107,7 @@ describe("SubpoolClient.registerAccount", () => {
 
     const account = Account.createWithSeed(SEED, SUBPOOL_ID);
     const client = new SubpoolClient("http://localhost:8080");
-    const res = await client.registerAccount(account.privateIdentifier(), account.spendAuthPkHex(), ETH_ADDRESS, KYC);
+    const res = await client.registerAccount(account.privateIdentifier(), account.spendAuthPk(), ETH_ADDRESS, KYC);
 
     expect(res.privateAccAddress).toBe(FAKE_ADDRESS);
 
@@ -121,7 +121,7 @@ describe("SubpoolClient.registerAccount", () => {
 
     // Values must match what the Account methods return directly
     expect(sent.private_identifier).toBe(account.privateIdentifier().toHex());
-    expect(sent.spend_auth_pk).toBe(account.spendAuthPkHex());
+    expect(sent.spend_auth_pk).toBe(account.spendAuthPk().toHex());
   });
 
   it("privateIdentifier().toHex() is 32 hex chars", () => {
@@ -129,15 +129,15 @@ describe("SubpoolClient.registerAccount", () => {
     expect(account.privateIdentifier().toHex()).toMatch(/^[0-9a-f]{32}$/);
   });
 
-  it("spendAuthPkHex is 80 hex chars", () => {
+  it("spendAuthPk is 80 hex chars", () => {
     const account = Account.createWithSeed(SEED, SUBPOOL_ID);
-    expect(account.spendAuthPkHex()).toMatch(/^[0-9a-f]{80}$/);
+    expect(account.spendAuthPk().toHex()).toMatch(/^[0-9a-f]{80}$/);
   });
 
   it("different seeds produce different identifiers", () => {
     const a = Account.createWithSeed(new Uint8Array(32).fill(1), SUBPOOL_ID);
     const b = Account.createWithSeed(new Uint8Array(32).fill(2), SUBPOOL_ID);
     expect(a.privateIdentifier().toHex()).not.toBe(b.privateIdentifier().toHex());
-    expect(a.spendAuthPkHex()).not.toBe(b.spendAuthPkHex());
+    expect(a.spendAuthPk().toHex()).not.toBe(b.spendAuthPk().toHex());
   });
 });

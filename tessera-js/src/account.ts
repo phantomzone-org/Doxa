@@ -1,9 +1,12 @@
 import {
   WasmAccount,
   WasmAccountAddress,
+  WasmAccountCommitment,
+  WasmAccountNullifier,
   WasmInputNote,
   WasmPrivateIdentifier,
   WasmPublicIdentifier,
+  WasmSpendAuthPk,
   WasmSpendTx,
   WasmSpendTxBuilder,
   WasmSubpoolId,
@@ -103,6 +106,106 @@ export class PublicIdentifier {
   }
 }
 
+// ── AccountCommitment ─────────────────────────────────────────────────────────
+
+/** An account commitment (4 Goldilocks field elements, 32 bytes / 64 hex chars). */
+export class AccountCommitment {
+  readonly inner: WasmAccountCommitment;
+
+  private constructor(inner: WasmAccountCommitment) {
+    this.inner = inner;
+  }
+
+  static fromWasm(inner: WasmAccountCommitment): AccountCommitment {
+    return new AccountCommitment(inner);
+  }
+
+  /** Parse from a 64-char hex string (4 × u64 LE). */
+  static fromHex(hex: string): AccountCommitment {
+    return new AccountCommitment(WasmAccountCommitment.fromHex(hex));
+  }
+
+  /** Parse from a 32-byte Uint8Array (4 × u64 LE). */
+  static fromBytes(bytes: Uint8Array): AccountCommitment {
+    return new AccountCommitment(WasmAccountCommitment.fromBytes(bytes));
+  }
+
+  /** 64 hex chars. */
+  toHex(): string {
+    return this.inner.toHex();
+  }
+
+  /** 32 bytes (4 × u64 little-endian). */
+  toBytes(): Uint8Array {
+    return this.inner.toBytes();
+  }
+}
+
+// ── AccountNullifier ──────────────────────────────────────────────────────────
+
+/** An account nullifier (4 Goldilocks field elements, 32 bytes / 64 hex chars). */
+export class AccountNullifier {
+  readonly inner: WasmAccountNullifier;
+
+  private constructor(inner: WasmAccountNullifier) {
+    this.inner = inner;
+  }
+
+  static fromWasm(inner: WasmAccountNullifier): AccountNullifier {
+    return new AccountNullifier(inner);
+  }
+
+  /** Parse from a 64-char hex string (4 × u64 LE). */
+  static fromHex(hex: string): AccountNullifier {
+    return new AccountNullifier(WasmAccountNullifier.fromHex(hex));
+  }
+
+  /** Parse from a 32-byte Uint8Array (4 × u64 LE). */
+  static fromBytes(bytes: Uint8Array): AccountNullifier {
+    return new AccountNullifier(WasmAccountNullifier.fromBytes(bytes));
+  }
+
+  /** 64 hex chars. */
+  toHex(): string {
+    return this.inner.toHex();
+  }
+
+  /** 32 bytes (4 × u64 little-endian). */
+  toBytes(): Uint8Array {
+    return this.inner.toBytes();
+  }
+}
+
+// ── SpendAuthPk ───────────────────────────────────────────────────────────────
+
+/** A spend-auth compressed public key (5 × u64 LE, 40 bytes / 80 hex chars). */
+export class SpendAuthPk {
+  readonly inner: WasmSpendAuthPk;
+
+  private constructor(inner: WasmSpendAuthPk) {
+    this.inner = inner;
+  }
+
+  static fromWasm(inner: WasmSpendAuthPk): SpendAuthPk {
+    return new SpendAuthPk(inner);
+  }
+
+  /** Parse from an 80-char hex string (5 × u64 LE). */
+  static fromHex(hex: string): SpendAuthPk {
+    return new SpendAuthPk(WasmSpendAuthPk.fromHex(hex));
+  }
+
+  /** Parse from a 40-byte Uint8Array (5 × u64 LE). */
+  static fromBytes(bytes: Uint8Array): SpendAuthPk {
+    return new SpendAuthPk(WasmSpendAuthPk.fromBytes(bytes));
+  }
+
+  /** 80 hex chars. */
+  toHex(): string {
+    return this.inner.toHex();
+  }
+}
+
 // ── AccountAddress ────────────────────────────────────────────────────────────
 
 /** A Tessera account address (subpool_id + public_id). */
@@ -163,16 +266,16 @@ export class Account {
    * The Poseidon commitment of the full account state.
    * This is what gets inserted into the Account Commitment Tree.
    */
-  commitment(): HashBytes {
-    return this.inner.commitment();
+  commitment(): AccountCommitment {
+    return AccountCommitment.fromWasm(this.inner.commitment());
   }
 
   /**
    * The public identifier — safe to share. Derived from the private identifier
    * via a one-way Poseidon hash.
    */
-  publicId(): HashBytes {
-    return this.inner.publicId();
+  publicId(): PublicIdentifier {
+    return PublicIdentifier.fromWasm(this.inner.publicId());
   }
 
   /** The nullifier key used to derive note and account nullifiers. */
@@ -189,8 +292,8 @@ export class Account {
   }
 
   /** The account nullifier. */
-  nullifier(): HashBytes {
-    return this.inner.nullifier();
+  nullifier(): AccountNullifier {
+    return AccountNullifier.fromWasm(this.inner.nullifier());
   }
 
   /** Returns the account address. */
@@ -203,13 +306,9 @@ export class Account {
     return PrivateIdentifier.fromWasm(this.inner.privateIdentifier());
   }
 
-  /**
-   * The spend-auth public key as an 80-hex-char string (40 bytes, 5 × u64 LE).
-   * Used as `spend_auth_pk` in the backend register request.
-   */
-  spendAuthPkHex(): string {
-    const bytes = this.inner.spendAuthPkBytes();
-    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  /** The spend-auth compressed public key. Used as `spend_auth_pk` in the backend register request. */
+  spendAuthPk(): SpendAuthPk {
+    return SpendAuthPk.fromWasm(this.inner.spendAuthPk());
   }
 
   /** The raw WASM handle — needed to pass this account to `SpendTxBuilder`. */
@@ -217,9 +316,9 @@ export class Account {
     return this.inner;
   }
 
-  /** Decode a 32-byte hash into 4 × u64 limbs (little-endian). Useful for debugging. */
-  static decodeHash(bytes: HashBytes): BigInt64Array {
-    const h = decodeHash(bytes);
+  /** Decode an account commitment into 4 × u64 limbs (little-endian). Useful for debugging. */
+  static decodeHash(commitment: AccountCommitment): BigInt64Array {
+    const h = decodeHash(commitment.toBytes());
     return BigInt64Array.from(h.limbs().map(BigInt));
   }
 }

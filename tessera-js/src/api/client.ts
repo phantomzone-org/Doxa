@@ -1,4 +1,4 @@
-import type { PrivateIdentifier } from "../account.js";
+import type { PrivateIdentifier, SpendAuthPk } from "../account.js";
 import type { ApiError, RegisterRequest, RegisterResponse } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
@@ -72,13 +72,13 @@ export class SubpoolClient {
    */
   async registerAccount(
     privateIdentifier: PrivateIdentifier,
-    spendAuthPk: string,
+    spendAuthPk: SpendAuthPk,
     ethAddress: string,
     kyc: { name: string; physicalAddress: string; dob: string },
   ): Promise<RegisterResponse> {
     return this.register({
       privateIdentifier: privateIdentifier.toHex(),
-      spendAuthPk,
+      spendAuthPk: spendAuthPk.toHex(),
       ethAddress,
       ...kyc,
     });

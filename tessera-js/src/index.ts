@@ -1,9 +1,12 @@
 export {
   Account,
   AccountAddress,
+  AccountCommitment,
+  AccountNullifier,
   SubpoolId,
   PrivateIdentifier,
   PublicIdentifier,
+  SpendAuthPk,
   derivePublicIdentifier,
   deriveAccountFromPasskey,
 } from "./account.js";
