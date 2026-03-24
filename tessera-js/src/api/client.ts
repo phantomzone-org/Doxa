@@ -1,5 +1,5 @@
 import type { PrivateIdentifier, SpendAuthPk } from "../account.js";
-import type { ApiError, RegisterRequest, RegisterResponse } from "./types.js";
+import type { AccountResponse, ApiError, FreshAccStatusResponse, RegisterRequest, RegisterResponse } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
 export class SubpoolApiError extends Error {
@@ -70,6 +70,36 @@ export class SubpoolClient {
    * console.log(response.privateAccAddress);
    * ```
    */
+  /**
+   * GET /account/:privateAccAddress
+   *
+   * Returns `null` when the account does not exist (HTTP 404).
+   * Throws `SubpoolApiError` on any other non-2xx response.
+   */
+  async getAccount(privateAccAddress: string): Promise<AccountResponse | null> {
+    const res = await fetch(`${this.baseUrl}/account/${privateAccAddress}`);
+    if (res.status === 404) return null;
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as AccountResponse;
+  }
+
+  /**
+   * GET /freshacc/:privateAccAddress/status
+   * Returns null on 404. Throws SubpoolApiError on other non-2xx responses.
+   */
+  async getFreshAccStatus(
+    privateAccAddress: string,
+  ): Promise<FreshAccStatusResponse | null> {
+    const res = await fetch(
+      `${this.baseUrl}/freshacc/${privateAccAddress}/status`,
+    );
+    if (res.status === 404) return null;
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as FreshAccStatusResponse;
+  }
+
   async registerAccount(
     privateIdentifier: PrivateIdentifier,
     spendAuthPk: SpendAuthPk,

@@ -1,6 +1,13 @@
 import init from "../wasm/tessera_client_wasm.js";
-import { Account } from "../src/index";
-import { AccountAddress } from "../src/account.js";
+import {
+  Account,
+  AccountAddress,
+  SubpoolId,
+  SubpoolClient,
+  derivePrivateIdentifier,
+  derivePublicIdentifier,
+} from "../src/index";
+import type { AccountResponse } from "../src/index";
 
 await init();
 
@@ -16,10 +23,16 @@ const TESSERA_CONTRACT = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e";
 const USDX_TOKEN = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const PRF_INPUT = new TextEncoder().encode("tessera::account::seed");
 
+// ── API client ────────────────────────────────────────────────────────────────
+
+const API_BASE_URL = "http://localhost:8080";
+const subpoolClient = new SubpoolClient(API_BASE_URL);
+
 // ── shared state ──────────────────────────────────────────────────────────────
 
 let credentialId: Uint8Array | null = null;
 let ethAddressFull: string | null = null;
+let currentSeed: Uint8Array | null = null;
 let privateBalance = 0;
 
 // ── localStorage ─────────────────────────────────────────────────────────────
@@ -214,17 +227,33 @@ function renderPublicBalance() {
     " USDX";
 }
 
-async function showWallet(seed: Uint8Array) {
+async function showPublicWallet(seed: Uint8Array) {
   ethAddressFull = await deriveEthAddress(seed);
   ethAddressEl.textContent =
     ethAddressFull.slice(0, 10) + "…" + ethAddressFull.slice(-8);
   ethAddressEl.title = ethAddressFull;
   publicBalance = 0;
   renderPublicBalance();
+}
+
+function renderVisiblePostSignIn() {
   walletInfo.classList.add("visible");
   depositSection.classList.add("visible");
   enableP2pBtn();
-  onSignedIn();
+}
+
+async function loadPrivateAccount(seed: Uint8Array) {
+  const privateId = derivePrivateIdentifier(seed);
+  const publicId = derivePublicIdentifier(privateId);
+  const subpoolId = SubpoolId.fromHex("0100000000000000"); // subpool_id = 1
+  const privateAccAddress = AccountAddress.fromParts(
+    subpoolId,
+    publicId,
+  ).toHex();
+  const accountData = await subpoolClient
+    .getAccount(privateAccAddress)
+    .catch(() => null);
+  renderPrivateSection(privateAccAddress, accountData);
 }
 
 createWalletBtn.addEventListener("click", async () => {
@@ -233,7 +262,11 @@ createWalletBtn.addEventListener("click", async () => {
   walletError.textContent = "";
   createWalletBtn.textContent = "⏳ Creating…";
   try {
-    await showWallet(await registerAndGetSeed());
+    const seed = await registerAndGetSeed();
+    currentSeed = seed;
+    await showPublicWallet(seed);
+    renderVisiblePostSignIn();
+    await loadPrivateAccount(seed);
     createWalletBtn.textContent = "✓ Wallet created";
   } catch (err) {
     walletError.textContent = `Error: ${err}`;
@@ -249,7 +282,12 @@ signInBtn.addEventListener("click", async () => {
   walletError.textContent = "";
   signInBtn.textContent = "⏳ Signing in…";
   try {
-    await showWallet(await evalPrf());
+    const seed = await evalPrf();
+
+    currentSeed = seed;
+    await showPublicWallet(seed);
+    renderVisiblePostSignIn();
+    await loadPrivateAccount(seed);
     signInBtn.textContent = "✓ Signed in";
   } catch (err) {
     walletError.textContent = `Error: ${err}`;
@@ -325,19 +363,23 @@ function renderPrivateBalance() {
   privBalanceRow.style.display = privateBalance > 0 ? "" : "none";
 }
 
-function onSignedIn() {
-  const kyc = loadKyc();
-  if (kyc) {
+function renderPrivateSection(
+  privateAccAddress: string,
+  accountData: AccountResponse | null,
+) {
+  if (accountData) {
     kycForm.style.display = "none";
-    dispName.textContent = kyc.name;
-    dispStreet.textContent = kyc.street;
-    dispDob.textContent = kyc.dob;
     kycDisplay.style.display = "block";
-    tesseraAddrVal.textContent = kyc.tesseraAddress;
+    tesseraAddrVal.textContent = privateAccAddress;
     tesseraAddrBox.classList.add("visible");
+    const balanceBigInt = BigInt(
+      "0x" + (accountData.balance || "0".repeat(64)),
+    );
+    privateBalance = Number(balanceBigInt) / 1e6;
     renderPrivateBalance();
-    registerError.style.color = "#5af0a0";
-    registerError.textContent = `Registered on ${new Date(kyc.registeredAt).toLocaleDateString()}`;
+  } else {
+    kycForm.style.display = "block";
+    kycDisplay.style.display = "none";
   }
 }
 
@@ -346,12 +388,23 @@ for (const input of [nameInput, streetInput, dobInput]) {
     registerBtn.disabled = !formFilled();
   });
 }
+
 function formFilled() {
   return (
     nameInput.value.trim() !== "" &&
     streetInput.value.trim() !== "" &&
     dobInput.value !== ""
   );
+}
+
+async function pollFreshAccApproval(privateAccAddress: string): Promise<void> {
+  while (true) {
+    await delay(1000);
+    const res = await subpoolClient
+      .getFreshAccStatus(privateAccAddress)
+      .catch(() => null);
+    if (res?.status === "APPROVED") return;
+  }
 }
 
 function appendProgressLine(text: string, cls: "active" | "done"): HTMLElement {
@@ -369,34 +422,37 @@ registerBtn.addEventListener("click", async () => {
   progressDiv.classList.add("visible");
   tesseraAddrBox.classList.remove("visible");
   try {
-    const seed = credentialId ? await evalPrf() : await registerAndGetSeed();
+    const seed =
+      currentSeed ??
+      (credentialId ? await evalPrf() : await registerAndGetSeed());
     const account = Account.createWithSeed(seed, 1n);
+    const privateAccAddress = account.address().toHex();
 
-    const s1 = appendProgressLine(
+    const s1 = appendProgressLine("⏳ Registering account…", "active");
+    await subpoolClient.registerAccount(
+      account.privateIdentifier(),
+      account.spendAuthPk(),
+      ethAddressFull!,
+      {
+        name: nameInput.value.trim(),
+        physicalAddress: streetInput.value.trim(),
+        dob: dobInput.value,
+      },
+    );
+    s1.className = "progress-line done";
+    s1.textContent = "✓ Account submitted";
+
+    const s2 = appendProgressLine(
       "⏳ Waiting for approval from subpool owner…",
       "active",
     );
-    await delay(1800);
-    s1.className = "progress-line done";
-    s1.textContent = "✓ Approval received";
-
-    const s2 = appendProgressLine("⚙️ Generating proof…", "active");
-    await delay(2200);
+    await pollFreshAccApproval(privateAccAddress);
     s2.className = "progress-line done";
-    s2.textContent = "✓ Proof generated";
+    s2.textContent = "✓ Approval received";
 
     appendProgressLine("✓ Account registered", "done");
-
-    const tesseraAddress = account.address().toHex();
-    tesseraAddrVal.textContent = tesseraAddress;
+    tesseraAddrVal.textContent = privateAccAddress;
     tesseraAddrBox.classList.add("visible");
-    saveKyc({
-      name: nameInput.value.trim(),
-      street: streetInput.value.trim(),
-      dob: dobInput.value,
-      tesseraAddress,
-      registeredAt: new Date().toISOString(),
-    });
   } catch (err) {
     registerError.textContent = `Error: ${err}`;
     registerBtn.disabled = false;

@@ -6,6 +6,7 @@ use axum::{
 use crate::state::AppState;
 
 pub mod account;
+pub mod freshacc;
 pub mod register;
 
 pub fn router(state: AppState) -> Router {
@@ -14,6 +15,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/account/:private_acc_address",
             get(account::get_account_handler),
+        )
+        .route(
+            "/freshacc/:private_acc_address/status",
+            get(freshacc::get_freshacc_status_handler),
         )
         .with_state(state)
 }

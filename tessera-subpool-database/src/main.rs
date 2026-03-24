@@ -1,5 +1,6 @@
 use anyhow::Result;
 use tokio::net::TcpListener;
+use tower_http::cors::CorsLayer;
 use tracing_subscriber::EnvFilter;
 
 use tessera_subpool_database::{
@@ -25,7 +26,7 @@ async fn main() -> Result<()> {
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     let state = AppState { pool };
-    let app = routes::router(state);
+    let app = routes::router(state).layer(CorsLayer::permissive());
 
     let listener = TcpListener::bind(&config.api_bind_addr).await?;
     tracing::info!("listening on {}", config.api_bind_addr);

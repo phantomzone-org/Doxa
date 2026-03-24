@@ -11,6 +11,7 @@ import {
   WasmSpendTxBuilder,
   WasmSubpoolId,
   decodeHash,
+  derivePrivateIdentifier as wasmDerivePrivateIdentifier,
   derivePublicIdentifier as wasmDerivePublicIdentifier,
 } from "../wasm/tessera_client_wasm.js";
 
@@ -362,6 +363,17 @@ export async function deriveAccountFromPasskey(
 
   const seed = new Uint8Array(prfFirst).slice(0, 32);
   return Account.createWithSeed(seed, subpoolId);
+}
+
+// ── derivePrivateIdentifier ───────────────────────────────────────────────────
+
+/**
+ * Derive a `PrivateIdentifier` from a 32-byte seed using domain-separated SHA-256.
+ *
+ * Implements `sha256(seed || DS_WASM_SEEDED_PRIVATE_IDENTIFIER)` → `[F; 2]`.
+ */
+export function derivePrivateIdentifier(seed: Uint8Array): PrivateIdentifier {
+  return PrivateIdentifier.fromWasm(wasmDerivePrivateIdentifier(seed));
 }
 
 // ── derivePublicIdentifier ────────────────────────────────────────────────────
