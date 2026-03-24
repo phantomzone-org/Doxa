@@ -25,8 +25,8 @@ describe("deriveAccountFromPasskey", () => {
     mockCredentials(seed.buffer);
 
     const account = await deriveAccountFromPasskey(CREDENTIAL_ID, CHALLENGE, 1n);
-    expect(account.commitment()).toBeInstanceOf(Uint8Array);
-    expect(account.commitment().byteLength).toBe(32);
+    expect(account.commitment().toHex()).toMatch(/^[0-9a-f]{64}$/);
+    expect(account.commitment().toBytes().byteLength).toBe(32);
   });
 
   it("is deterministic: same PRF output → same commitment", async () => {
@@ -37,7 +37,7 @@ describe("deriveAccountFromPasskey", () => {
     mockCredentials(seed.buffer);
     const b = await deriveAccountFromPasskey(CREDENTIAL_ID, CHALLENGE, 1n);
 
-    expect(a.commitment()).toEqual(b.commitment());
+    expect(a.commitment().toHex()).toBe(b.commitment().toHex());
   });
 
   it("different PRF outputs → different accounts", async () => {
@@ -49,11 +49,7 @@ describe("deriveAccountFromPasskey", () => {
     mockCredentials(seedB.buffer);
     const b = await deriveAccountFromPasskey(CREDENTIAL_ID, CHALLENGE, 1n);
 
-    expect(
-      Buffer.from(a.commitment()).toString("hex")
-    ).not.toBe(
-      Buffer.from(b.commitment()).toString("hex")
-    );
+    expect(a.commitment().toHex()).not.toBe(b.commitment().toHex());
   });
 
   it("throws when PRF result is missing", async () => {

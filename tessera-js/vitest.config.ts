@@ -9,5 +9,6 @@ export default defineConfig({
     poolOptions: {
       forks: { singleFork: true },
     },
+    setupFiles: ["./tests/setup.ts"],
   },
 });

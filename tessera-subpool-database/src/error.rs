@@ -9,6 +9,8 @@ use serde_json::json;
 pub enum AppError {
     /// Resource already exists — 409 Conflict.
     AlreadyExists(String),
+    /// Resource not found — 404 Not Found.
+    NotFound(String),
     /// Input validation failed — 400 Bad Request.
     InvalidInput(String),
     /// Database or internal error — 500 Internal Server Error.
@@ -19,6 +21,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             AppError::AlreadyExists(msg) => (StatusCode::CONFLICT, msg),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Internal(err) => {
                 tracing::error!("internal error: {err:#}");

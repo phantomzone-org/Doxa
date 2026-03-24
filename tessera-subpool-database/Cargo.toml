@@ -23,3 +23,5 @@ primitive-types    = { workspace = true }
 plonky2_field      = { workspace = true }
 sqlx               = { workspace = true }
 chrono             = { workspace = true }
+tower-http         = { workspace = true }
+alloy              = { workspace = true }
