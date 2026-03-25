@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Step D: submit deposits to the demo sequencer and monitor on-chain state.
+# Step D: deposit on-chain, then request validation from the sequencer.
+#
+# For each deposit this script:
+#   1. Mints ToyUSDT to the operator
+#   2. Approves the bridge to spend it
+#   3. Calls depositAndRegister on-chain
+#   4. Sends a validation request to the sequencer's POST /deposit
 #
 # Args:
 #   $1  number of deposits (default 2)
 #
 # Prerequisites:
+#   - Anvil running (demo_a_anvil.sh)
+#   - Contracts deployed (demo_b_deploy.sh)
 #   - Demo sequencer running (demo_c_sequencer.sh)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,9 +22,14 @@ source "$ROOT_DIR/scripts/demo_env.sh"
 
 DEPOSIT_COUNT="${1:-2}"
 API="http://$DEMO_BIND_ADDR"
+AMOUNT=1000
 
 if [[ -z "${ROLLUP:-}" ]]; then
   echo "ERROR: ROLLUP not set. Run demo_b_deploy.sh first." >&2
+  exit 1
+fi
+if [[ -z "${TOKEN:-}" ]]; then
+  echo "ERROR: TOKEN not set. Run demo_b_deploy.sh first." >&2
   exit 1
 fi
 
@@ -48,38 +61,52 @@ STATUS=$(curl -sS "$API/status")
 echo "  sequencer status = $STATUS"
 
 # ---------------------------------------------------------------------------
-# Submit deposits.
+# Submit deposits (on-chain + sequencer validation request).
 # ---------------------------------------------------------------------------
 echo ""
 echo "Submitting $DEPOSIT_COUNT deposits..."
 for i in $(seq 1 "$DEPOSIT_COUNT"); do
-  # Generate a deterministic note commitment.
   NOTE=$(printf "0x%064x" "$i")
-  AMOUNT=1000
 
   echo ""
   echo "--- Deposit $i ---"
   echo "  note_commitment = $NOTE"
   echo "  amount          = $AMOUNT"
 
+  # 1. Mint ToyUSDT to operator.
+  echo "  minting $AMOUNT tokens..."
+  cast send "$TOKEN" "mint(address,uint256)" "$OPERATOR_ADDR" "$AMOUNT" \
+    --private-key "$OPERATOR_KEY" --rpc-url "$RPC" > /dev/null
+
+  # 2. Approve bridge to spend.
+  echo "  approving bridge..."
+  cast send "$TOKEN" "approve(address,uint256)" "$ROLLUP" "$AMOUNT" \
+    --private-key "$OPERATOR_KEY" --rpc-url "$RPC" > /dev/null
+
+  # 3. Deposit on-chain.
+  echo "  calling depositAndRegister..."
+  cast send "$ROLLUP" "depositAndRegister(bytes32,uint256)" "$NOTE" "$AMOUNT" \
+    --private-key "$OPERATOR_KEY" --rpc-url "$RPC" > /dev/null
+
+  # 4. Verify deposit is Pending on-chain.
+  DEP_STATUS=$(cast call "$ROLLUP" "getDeposit(bytes32)((uint256,address,uint8))" "$NOTE" --rpc-url "$RPC" 2>/dev/null || echo "call failed")
+  echo "  on-chain deposit = $DEP_STATUS"
+
+  # 5. Request validation from sequencer.
+  echo "  requesting validation from sequencer..."
   RESP=$(curl -sS -X POST "$API/deposit" \
     -H 'content-type: application/json' \
-    -d "{\"note_commitment\":\"$NOTE\",\"amount\":$AMOUNT}")
+    -d "{\"note_commitment\":\"$NOTE\"}")
 
   echo "  response = $RESP"
 
-  # Check response status.
   STATUS_FIELD=$(echo "$RESP" | jq -r '.status // empty' 2>/dev/null || true)
-  if [[ "$STATUS_FIELD" == "pending" ]]; then
-    echo "  OK: deposit accepted"
+  if [[ "$STATUS_FIELD" == "queued" ]]; then
+    echo "  OK: validation request queued"
   else
     echo "  ERROR: unexpected response" >&2
     exit 1
   fi
-
-  # Check on-chain deposit status.
-  DEP_STATUS=$(cast call "$ROLLUP" "getDeposit(bytes32)((uint8,uint256,address))" "$NOTE" --rpc-url "$RPC" 2>/dev/null || echo "call failed")
-  echo "  on-chain deposit = $DEP_STATUS"
 done
 
 # ---------------------------------------------------------------------------
@@ -93,5 +120,4 @@ echo "  $STATUS"
 echo ""
 echo "Deposits submitted. The sequencer will auto-flush the deposit batch"
 echo "after ${DEMO_BATCH_TIMEOUT_SECS}s and prove it after ${DEMO_PROVE_DELAY_SECS}s more."
-echo ""
-echo "Next: wait for confirmation -> scripts/demo_e_deposit_validate.sh"
+echo "Watch the sequencer logs for '=== Deposit batch CONFIRMED ==='."

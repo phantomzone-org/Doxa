@@ -6,7 +6,7 @@ set -euo pipefail
 # Sends one transaction with synthetic leaf data (no real Plonky2 proof).
 #
 # Prerequisites:
-#   - Deposit batch confirmed (demo_e_deposit_validate.sh)
+#   - Deposit batch confirmed (watch sequencer logs for '=== Deposit batch CONFIRMED ===')
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/demo_env.sh"
@@ -88,5 +88,4 @@ echo "  $STATUS"
 echo ""
 echo "Transaction submitted. The sequencer will auto-flush the TX batch"
 echo "after ${DEMO_BATCH_TIMEOUT_SECS}s and prove it after ${DEMO_PROVE_DELAY_SECS}s more."
-echo ""
-echo "Next: wait for confirmation -> scripts/demo_g_tx_validate.sh"
+echo "Watch the sequencer logs for '=== TX batch CONFIRMED ==='."
