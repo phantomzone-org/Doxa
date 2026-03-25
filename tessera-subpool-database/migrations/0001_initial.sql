@@ -66,6 +66,7 @@ CREATE TABLE deposit_tx_requests (
     deposit_amount           BYTEA             NOT NULL,
     asset_id                 BYTEA             NOT NULL,
     signed_public_tx         BYTEA             NOT NULL,
+    deposit_tx_hash          TEXT,
     status                   deposit_tx_status NOT NULL DEFAULT 'PENDING',
     approval_signature       BYTEA,
     rejection_reason         TEXT,

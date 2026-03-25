@@ -2,6 +2,7 @@ import init from "../wasm/tessera_client_wasm.js";
 import {
   createPublicClient,
   createWalletClient,
+  encodeFunctionData,
   http,
   erc20Abi,
   formatUnits,
@@ -12,6 +13,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import {
   Account,
   AccountAddress,
+  AssetId,
+  DepositNote,
   SubpoolId,
   SubpoolClient,
   derivePrivateIdentifier,
@@ -44,6 +47,7 @@ const subpoolClient = new SubpoolClient(API_BASE_URL);
 
 let credentialId: Uint8Array | null = null;
 let ethAddressFull: string | null = null;
+let privateAccAddressFull: string | null = null;
 let currentSeed: Uint8Array | null = null;
 let privateBalance = 0;
 
@@ -170,6 +174,33 @@ async function deriveEthAddress(seed: Uint8Array): Promise<string> {
   return (await deriveWalletAccount(seed)).address;
 }
 
+// ── Tessera contract ABI fragment ─────────────────────────────────────────────
+
+const TESSERA_ABI = [
+  {
+    name: "transferDepositAndRegister",
+    type: "function",
+    inputs: [
+      { name: "noteCommitment", type: "bytes32" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bytes32" }],
+  },
+] as const;
+
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+/** Encode a BigInt as a 32-byte little-endian hex string (U256 LE, no 0x prefix). */
+function u256LeHex(v: bigint): string {
+  const bytes = new Uint8Array(32);
+  let tmp = v;
+  for (let i = 0; i < 32; i++) {
+    bytes[i] = Number(tmp & 0xffn);
+    tmp >>= 8n;
+  }
+  return toHex(bytes);
+}
+
 // ── ABI encoding (hand-rolled, no library) ────────────────────────────────────
 
 function padLeft32(hex: string): string {
@@ -274,6 +305,7 @@ async function loadPrivateAccount(seed: Uint8Array) {
     subpoolId,
     publicId,
   ).toHex();
+  privateAccAddressFull = privateAccAddress;
   const accountData = await subpoolClient
     .getAccount(privateAccAddress)
     .catch(() => null);
@@ -525,15 +557,15 @@ p2pBtn.addEventListener("click", async () => {
       args: [account.address, TESSERA_CONTRACT as `0x${string}`],
     });
 
+    const walletClient = createWalletClient({
+      account,
+      chain: sepolia,
+      transport: http(SEPOLIA_RPC_URL),
+    });
+
     if (allowance < maxUint256) {
       const step = pStep(p2pSteps, "⏳ Approving USDX transfer…", "active");
       p2pBar.style.width = "40%";
-
-      const walletClient = createWalletClient({
-        account,
-        chain: sepolia,
-        transport: http(SEPOLIA_RPC_URL),
-      });
 
       const approveTxHash = await walletClient.writeContract({
         address: USDX_CONTRACT_ADDR,
@@ -548,9 +580,57 @@ p2pBtn.addEventListener("click", async () => {
       step.textContent = "✓ USDX transfer approved";
     }
 
-    pStep(p2pSteps, "✓ Ready to deposit", "done");
+    // ── Construct deposit note ────────────────────────────────────────────────
+    const step2 = pStep(p2pSteps, "⏳ Constructing deposit note…", "active");
+    p2pBar.style.width = "60%";
+
+    const amountUnits = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
+    const depositNote = DepositNote.create(
+      AccountAddress.fromHex(privateAccAddressFull!),
+      amountUnits,
+      AssetId.fromU64(1n),
+    );
+    const commitmentHex = ("0x" + depositNote.commitment().toHex()) as `0x${string}`;
+
+    step2.className = "p-step done";
+    step2.textContent = "✓ Deposit note constructed";
+
+    // ── Sign transferDepositAndRegister tx (do NOT broadcast) ─────────────────
+    const step3 = pStep(p2pSteps, "⏳ Signing deposit transaction…", "active");
+    p2pBar.style.width = "80%";
+
+    const calldata = encodeFunctionData({
+      abi: TESSERA_ABI,
+      functionName: "transferDepositAndRegister",
+      args: [commitmentHex, amountUnits],
+    });
+
+    const txRequest = await walletClient.prepareTransactionRequest({
+      to: TESSERA_CONTRACT as `0x${string}`,
+      data: calldata,
+    });
+    const signedTx = await walletClient.signTransaction(txRequest);
+    const signedTxHex = signedTx.replace(/^0x/, "");
+
+    step3.className = "p-step done";
+    step3.textContent = "✓ Transaction signed";
+
+    // ── Submit to backend ─────────────────────────────────────────────────────
+    const step4 = pStep(p2pSteps, "⏳ Submitting deposit request…", "active");
+    p2pBar.style.width = "90%";
+
+    await subpoolClient.submitDeposit({
+      recipient_acc_address: privateAccAddressFull!,
+      eth_address: ethAddressFull!,
+      deposit_note_identifier: depositNote.identifierHex(),
+      deposit_amount: u256LeHex(amountUnits),
+      asset_id: "0100000000000000", // u64(1) as 8-byte LE hex
+      signed_public_tx: signedTxHex,
+    });
+
+    step4.className = "p-step done";
+    step4.textContent = "✓ Deposit submitted";
     p2pBar.style.width = "100%";
-    p2pBtn.disabled = false;
   } catch (err) {
     p2pError.textContent = `Error: ${err}`;
     p2pBtn.disabled = false;
