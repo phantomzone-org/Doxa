@@ -130,10 +130,12 @@ fn prove_priv_tx(
 	let consume_sk = PrivateKey::new(Scalar::sample(&mut rng));
 	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
-	let subpool = SubpoolConfigTree::new(approval_cpk, rejection_cpk, consume_cpk);
+	let subpool = SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
 	let subpool_id = SubpoolId(F::ONE);
 	let mut main_pool = MainPoolConfigTree::new();
-	main_pool.set_subpool(0, subpool_id, subpool.root());
+	main_pool
+		.insert_subpool(subpool_id, subpool.root())
+		.unwrap();
 
 	let accin = StandardAccount::sample(&mut rng, subpool_id);
 
@@ -193,14 +195,20 @@ fn prove_priv_tx(
 		// Dummy proof: must use set_fake_tx_witness (is_fresh_acc=false).
 		// Using set_freshacc_tx_witness here would set is_fresh_acc=true, which the circuit
 		// constrains to imply not_fake_tx=true, forcing PI[2]=1 even for a dummy proof.
+		//
+		// All dummy PI values (AN, AC, NC, NN) must equal DUMMY_LEAF =
+		// double_hash([0;4]) so that the batch builder's fixed padding matches
+		// the circuit output.  NC/NN already equal this (derived from zero note
+		// seeds), so we set AN/AC overrides to the same value.
+		let dummy = double_hash_native([F::ZERO; 4]);
 		spend::set_fake_tx_witness(
 			&mut pw,
 			t,
 			HashOutput([F::ZERO; 4]),
 			HashOutput([F::ZERO; 4]),
-			[F::ZERO; 4],
-			[F::ZERO; 4],
-			[[F::ZERO; 4]; crate::NOTE_BATCH],
+			dummy,
+			dummy,
+			[dummy; crate::NOTE_BATCH],
 		);
 	}
 

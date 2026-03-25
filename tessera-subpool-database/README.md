@@ -12,3 +12,10 @@ Create .env file with necessary variables. Then start the server with:
 ```
 cargo run --release
 ```
+
+reset db:
+
+```
+sudo docker exec -i tessera-pg psql -U tessera -d postgres -c "DROP DATABASE tessera_subpool;" && \
+sudo docker exec -i tessera-pg psql -U tessera -d postgres -c "CREATE DATABASE tessera_subpool;"
+```

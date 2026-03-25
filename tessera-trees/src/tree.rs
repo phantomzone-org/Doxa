@@ -19,9 +19,6 @@ use crate::error::{MerkleTreeError, MerkleTreeResult};
 	deserialize = "H::Digest: Deserialize<'de>"
 ))]
 pub struct MerkleTree<H: MerkleHash> {
-	/// Roots history
-	pub(crate) roots: Vec<H::Digest>,
-
 	/// Leaves
 	pub(crate) leaves: Vec<H::Digest>,
 
@@ -38,30 +35,36 @@ impl<H: MerkleHash> MerkleTree<H> {
 	pub fn new(depth: usize) -> Self {
 		let mut default_siblings: Vec<H::Digest> = Vec::with_capacity(depth);
 
-		default_siblings.push(H::HEAD);
+		default_siblings.push(H::ZERO);
 		for i in 1..depth {
-			default_siblings.push(H::hash_2_to_1(
+			default_siblings.push(H::hash_2_to_1_swapped(
 				&default_siblings[i - 1],
 				&default_siblings[i - 1],
 				false,
 			));
 		}
 
-		let mut tree = Self {
-			roots: Vec::new(),
+		Self {
 			leaves: Vec::new(),
 			layers: vec![Vec::new(); depth],
 			default_siblings,
-		};
-
-		tree.roots.push(tree.compute_root());
-
-		tree
+		}
 	}
 
 	#[allow(dead_code)]
 	pub(crate) fn get_default_siblings(&self) -> &[H::Digest] {
 		&self.default_siblings
+	}
+
+	pub fn leaf(&self, index: usize) -> MerkleTreeResult<H::Digest> {
+		if self.num_leaves() <= index {
+			return Err(anyhow!(MerkleTreeError::IndexError(format!(
+				"index: {} >= self.num_leaves.len(): {}",
+				index,
+				self.num_leaves()
+			))));
+		}
+		Ok(self.leaves[index])
 	}
 
 	/// Generates a fixed-size sibling array for a given index.
@@ -75,7 +78,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 		assert!(end_depth <= self.depth());
 		assert!(end_depth > start_depth);
 
-		let mut siblings: Vec<H::Digest> = vec![H::HEAD; end_depth - start_depth];
+		let mut siblings: Vec<H::Digest> = vec![H::ZERO; end_depth - start_depth];
 		let mut pos: usize = index >> start_depth;
 
 		for level in start_depth..end_depth {
@@ -117,33 +120,20 @@ impl<H: MerkleHash> MerkleTree<H> {
 		&self.leaves
 	}
 
-	pub fn get_root(&self, i: usize) -> MerkleTreeResult<H::Digest> {
-		let root = self.roots.get(i).ok_or_else(|| {
-			anyhow!(MerkleTreeError::IndexError(format!(
-				"root index: {} >= self.roots.len(): {}",
-				i,
-				self.roots.len()
-			)))
-		})?;
-		Ok(*root)
-	}
-
-	pub fn get_last_root(&self) -> H::Digest {
-		self.get_root(self.roots.len() - 1).unwrap()
-	}
-
-	pub fn compute_root(&self) -> H::Digest {
+	pub fn root(&self) -> H::Digest {
 		let last_layer: &Vec<H::Digest> = self.layers.last().unwrap();
-		if last_layer.is_empty() {
+		let root = if last_layer.is_empty() {
 			// Empty tree: return the root of a tree with all empty leaves
 			// default_siblings[depth-1] is the root of a subtree with 2^(depth-1) empty leaves
 			// The empty root is hash_root(0, default_siblings[depth-1], default_siblings[depth-1])
 			let last_default = self.default_siblings.last().unwrap();
-			H::hash_root(0, last_default, last_default)
+			H::hash_2_to_1_swapped(last_default, last_default, false)
 		} else {
 			assert_eq!(last_layer.len(), 1);
 			last_layer[0]
-		}
+		};
+
+		root
 	}
 
 	pub(crate) fn update_merkle_path(&mut self, index: usize) {
@@ -204,17 +194,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 			// --------------------------------------------------
 			// Step 2: Compute parent hash
 			// --------------------------------------------------
-			// At the final level (root), use hash_root to commit num_leaves
-			current_hash = if level == self.depth() - 1 {
-				let (left, right) = if is_right {
-					(&sibling_hash, &current_hash)
-				} else {
-					(&current_hash, &sibling_hash)
-				};
-				H::hash_root(self.leaves.len(), left, right)
-			} else {
-				H::hash_2_to_1(&current_hash, &sibling_hash, is_right)
-			};
+			current_hash = H::hash_2_to_1_swapped(&current_hash, &sibling_hash, is_right);
 
 			// --------------------------------------------------
 			// Step 3: Write the parent hash
@@ -255,11 +235,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 		}
 	}
 
-	pub(crate) fn update_leaf(
-		&mut self,
-		index: usize,
-		new_leaf: H::Digest,
-	) -> MerkleTreeResult<()> {
+	pub fn update_leaf(&mut self, index: usize, new_leaf: H::Digest) -> MerkleTreeResult<()> {
 		if index >= self.leaves.len() {
 			return Err(anyhow!(MerkleTreeError::IndexError(format!(
 				"index: {} >= {}",
@@ -274,7 +250,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 		Ok(())
 	}
 
-	pub(crate) fn insert(&mut self, leaf: H::Digest) -> MerkleTreeResult<()> {
+	pub fn insert(&mut self, leaf: H::Digest) -> MerkleTreeResult<usize> {
 		if self.num_leaves() >= 1 << self.depth() {
 			return Err(anyhow!(MerkleTreeError::FullTree()));
 		}
@@ -282,10 +258,10 @@ impl<H: MerkleHash> MerkleTree<H> {
 		self.leaves.push(leaf);
 		self.update_merkle_path(self.leaves.len() - 1);
 
-		Ok(())
+		Ok(self.num_leaves() - 1)
 	}
 
-	pub(crate) fn insert_batch(&mut self, leaves: Vec<H::Digest>) -> MerkleTreeResult<()> {
+	pub fn insert_batch(&mut self, leaves: Vec<H::Digest>) -> MerkleTreeResult<()> {
 		let batch_size: usize = leaves.len();
 
 		if !self.num_leaves().is_multiple_of(batch_size) {
@@ -322,7 +298,6 @@ impl<H: MerkleHash> MerkleTree<H> {
 		batch_size: usize,
 	) -> MerkleTreeResult<()> {
 		let depth = self.depth();
-		let num_leaves = self.leaves.len();
 
 		if start + batch_size > 1 << depth {
 			return Err(anyhow!(MerkleTreeError::IndexError(
@@ -356,14 +331,14 @@ impl<H: MerkleHash> MerkleTree<H> {
 						if pos < self.leaves.len() {
 							self.leaves[pos]
 						} else {
-							H::HEAD
+							H::ZERO
 						}
 					},
 					Some(prev) => {
 						if pos < prev.len() {
 							prev[pos]
 						} else {
-							H::HEAD
+							H::ZERO
 						}
 					},
 				};
@@ -393,17 +368,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 				// -----------------------------
 				// Parent hash
 				// -----------------------------
-				// At the final level (root), use hash_root to commit num_leaves
-				let parent_hash = if level == depth - 1 {
-					let (left, right) = if is_right {
-						(&sibling_hash, &current_hash)
-					} else {
-						(&current_hash, &sibling_hash)
-					};
-					H::hash_root(num_leaves, left, right)
-				} else {
-					H::hash_2_to_1(&current_hash, &sibling_hash, is_right)
-				};
+				let parent_hash = H::hash_2_to_1_swapped(&current_hash, &sibling_hash, is_right);
 
 				// -----------------------------
 				// Write or append
@@ -472,16 +437,7 @@ impl<H: MerkleHash> MerkleTree<H> {
 
 				// Compute parent hash
 				// At the final level (root), use hash_root to commit num_leaves
-				let parent_hash = if level == self.depth() - 1 {
-					let (left, right) = if is_right {
-						(&sibling_hash, &current_hash)
-					} else {
-						(&current_hash, &sibling_hash)
-					};
-					H::hash_root(self.leaves.len(), left, right)
-				} else {
-					H::hash_2_to_1(&current_hash, &sibling_hash, is_right)
-				};
+				let parent_hash = H::hash_2_to_1_swapped(&current_hash, &sibling_hash, is_right);
 
 				// Write parent hash
 				let layer: &mut Vec<H::Digest> = &mut self.layers[level];

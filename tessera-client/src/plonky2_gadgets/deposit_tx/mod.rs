@@ -14,6 +14,7 @@ use plonky2_field::{
 	types::{Field, PrimeField64},
 };
 use primitive_types::{H160, U256};
+use tessera_trees::MerkleProof;
 use tessera_utils::{
 	F,
 	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
@@ -32,10 +33,7 @@ use crate::{
 			cb::DepositTxCircuitBuilder,
 			targets::{DepositNoteTarget, DepositTxSignatureTargets, DepositTxTargets},
 		},
-		merkle::{
-			SetDummyMerklePathOfWitness, SetMerklePathOfWitness,
-			conditional_merkle_verify_commitment_tree_gadget,
-		},
+		merkle::conditional_merkle_verify_gadget,
 		priv_tx::{
 			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
@@ -53,7 +51,6 @@ use crate::{
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 	schnorr::{CompressedPublicKey, Signature},
-	tree::CommitmentTreeMerkleProof,
 	utils::map_h160_to_f,
 };
 
@@ -150,11 +147,12 @@ where
 
 	// Step 1: Verify ACT membership.
 	// Deposit always requires a live account — not gated by tx kind.
-	let accin_act_merkle = conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
+	let accin_act_merkle = conditional_merkle_verify_gadget::<F, D>(
 		builder,
 		accin_comm.0,
 		root.0,
 		not_fake_tx,
+		COM_TREE_DEPTH,
 	);
 
 	// Step 2: Enforce recipient match — deposit note must target accin.
@@ -271,9 +269,9 @@ pub(crate) fn set_deposit_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &DepositTxTargets,
 	act_root: HashOutput,
-	main_pool: MainPoolConfigTree,
+	main_pool: MainPoolConfigTree<HashOutput>,
 	accin: &StandardAccount,
-	accin_act_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
+	accin_act_merkle_proof: MerkleProof<HashOutput>,
 	deposit_note: &DepositNote,
 	eth_address: &H160,
 	approval_key: &CompPubKey,
@@ -425,6 +423,48 @@ impl DepositTxCircuit {
 			.prove(pw)
 			.expect("dummy deposit_tx proof generation failed")
 	}
+
+	/// Generate a real deposit_tx proof (`not_fake_tx=1`).
+	///
+	/// Wraps [`set_deposit_tx_witness`] so that external callers do not need
+	/// access to the private `DepositTxTargets`.
+	#[allow(clippy::too_many_arguments)]
+	pub fn prove_real(
+		&self,
+		act_root: HashOutput,
+		main_pool: MainPoolConfigTree<HashOutput>,
+		accin: &StandardAccount,
+		accin_act_merkle_proof: MerkleProof<HashOutput>,
+		deposit_note: &DepositNote,
+		eth_address: &H160,
+		approval_key: &CompPubKey,
+		rejection_key: &CompPubKey,
+		consume_key: &CompPubKey,
+		subpool_id: SubpoolId,
+		consume_sig: Signature,
+		approval_sig: Signature,
+	) -> tessera_utils::ProofNative {
+		let mut pw = PartialWitness::new();
+		set_deposit_tx_witness(
+			&mut pw,
+			&self.targets,
+			act_root,
+			main_pool,
+			accin,
+			accin_act_merkle_proof,
+			deposit_note,
+			eth_address,
+			approval_key,
+			rejection_key,
+			consume_key,
+			subpool_id,
+			consume_sig,
+			approval_sig,
+		);
+		self.circuit_data
+			.prove(pw)
+			.expect("real deposit_tx proof generation failed")
+	}
 }
 
 /// Build the deposit_tx circuit using `HashOutput` as the Merkle hasher.
@@ -499,7 +539,7 @@ pub(crate) fn set_fake_deposit_tx_witness(
 	pw.set_target(t.accin_pos, F::ZERO).unwrap();
 
 	// ── ACT Merkle proof (all zeros) ──────────────────────────────────────────
-	t.accin_act_merkle.set_dummy_witness(pw, COM_TREE_DEPTH);
+	t.accin_act_merkle.set_dummy_witness(pw);
 
 	// ── AST Merkle proof (real path of default leaf at index 0) ──────────────
 	t.accin_ast_merkle
@@ -511,18 +551,23 @@ pub(crate) fn set_fake_deposit_tx_witness(
 	// not_fake_tx = false.
 	let fake_subpool =
 		SubpoolConfigTree::new(fake_approval_cpk, fake_rejection_cpk, fake_consume_cpk);
+
+	let fake_subpool_approval_key_proof = fake_subpool.approval_key_proof().unwrap();
+	let fake_subpool_rejection_key_proof = fake_subpool.rejection_key_proof().unwrap();
+	let fake_subpool_consume_key_proof = fake_subpool.consume_key_proof().unwrap();
+
 	t.subpool_proof_targets
 		.approval_proof
-		.set_witness(pw, &fake_subpool.approval_key_proof());
+		.set_witness(pw, &fake_subpool_approval_key_proof);
 	t.subpool_proof_targets
 		.rejection_proof
-		.set_witness(pw, &fake_subpool.rejection_key_proof());
+		.set_witness(pw, &fake_subpool_rejection_key_proof);
 	t.subpool_proof_targets
 		.consume_proof
-		.set_witness(pw, &fake_subpool.consume_key_proof());
+		.set_witness(pw, &fake_subpool_consume_key_proof);
 	t.subpool_proof_targets
 		.main_pool_proof
-		.set_dummy_witness(pw, MAIN_POOL_CONFIG_DEPTH);
+		.set_dummy_witness(pw);
 	pw.set_target_arr(
 		&t.subpool_proof_targets.subpool_config_root.0.elements,
 		&fake_subpool.root().0,
@@ -576,7 +621,7 @@ mod tests {
 	use primitive_types::{H160, U256};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::CommitmentTree;
+	use tessera_trees::MerkleTree;
 	use tessera_utils::hasher::HashOutput;
 
 	use super::*;
@@ -585,7 +630,7 @@ mod tests {
 		account::AccountStateTreeLeaf,
 		derive_deposit_tx_hash,
 		note::DepositNote,
-		pool_config::{CompPubKey, MainPoolConfigNode, MainPoolConfigTree, SubpoolConfigTree},
+		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
 	};
 
@@ -604,9 +649,12 @@ mod tests {
 		let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
 		let subpool_id = SubpoolId(F::ONE);
-		let subpool = SubpoolConfigTree::new(approval_cpk, rejection_cpk, consume_cpk);
+		let subpool =
+			SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
 		let mut main_pool = MainPoolConfigTree::new();
-		main_pool.set_subpool(0, subpool_id, subpool.root());
+		main_pool
+			.insert_subpool(subpool_id, subpool.root())
+			.unwrap();
 
 		// ── Sample accin ──────────────────────────────────────────────────────
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -619,15 +667,9 @@ mod tests {
 		};
 
 		// ── Insert accin into ACT ─────────────────────────────────────────────
-		let mut act = CommitmentTree::<HashOutput>::new(COM_TREE_DEPTH);
-		let accin_insert = act.insert(accin.commitment().0).unwrap();
-		assert_eq!(&accin_insert.siblings_new, &accin_insert.siblings_old);
-		let accin_merkle_proof = CommitmentTreeMerkleProof::new(
-			accin.commitment().0,
-			accin_insert.siblings_new,
-			accin_insert.path,
-			act.num_leaves(),
-		);
+		let mut act = MerkleTree::<HashOutput>::new(COM_TREE_DEPTH);
+		let accin_pos = act.insert(accin.commitment().0).unwrap();
+		let accin_merkle_proof = act.merkle_proof(accin_pos).unwrap();
 
 		// ── DepositNote targeting accin ───────────────────────────────────────
 		let asset_id = AssetId(F::from_canonical_u64(7));
@@ -671,7 +713,7 @@ mod tests {
 		set_deposit_tx_witness(
 			&mut pw,
 			&t,
-			act.get_root(),
+			act.root(),
 			main_pool,
 			&accin,
 			accin_merkle_proof,

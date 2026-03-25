@@ -9,10 +9,10 @@ use plonky2_field::types::Field;
 use tessera_utils::F;
 
 use crate::{
-	ACC_AST_DEPTH, COM_TREE_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK,
-	MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, SUBPOOL_CONFIG_DEPTH, StandardAccount,
+	COM_TREE_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, NOTE_BATCH,
+	StandardAccount,
 	plonky2_gadgets::{
-		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget, ConditionalMerkleTarget},
+		merkle::MerkleRootTarget,
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
 	},
@@ -252,13 +252,13 @@ pub(crate) struct AssetIdTarget(pub(crate) Target);
 #[derive(Clone)]
 pub(crate) struct SubpoolFullProofTargets {
 	/// Depth-2 Merkle proof that `approval_key` is in the subpool config tree.
-	pub(crate) approval_proof: ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) approval_proof: MerkleRootTarget,
 	/// Depth-2 Merkle proof that `rejection_key` is in the subpool config tree.
-	pub(crate) rejection_proof: ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) rejection_proof: MerkleRootTarget,
 	/// Depth-2 Merkle proof that `consume_key` is in the subpool config tree.
-	pub(crate) consume_proof: ConditionalMerkleTarget<SUBPOOL_CONFIG_DEPTH>,
+	pub(crate) consume_proof: MerkleRootTarget,
 	/// Depth-20 Merkle proof that the subpool config root is in the main pool tree.
-	pub(crate) main_pool_proof: ConditionalMerkleTarget<MAIN_POOL_CONFIG_DEPTH>,
+	pub(crate) main_pool_proof: MerkleRootTarget,
 	/// The subpool configuration root (derived from the three key proofs).
 	pub(crate) subpool_config_root: SubpoolConfigRootTarget,
 }
@@ -314,11 +314,12 @@ pub struct TxCircuitTargets {
 	pub(crate) accin_pos: Target,
 	// ── Merkle targets ────────────────────────────────────────────────────────
 	/// ACT membership proof for AccIn (conditional on `!is_fresh_acc && not_fake_tx`).
-	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<COM_TREE_DEPTH>,
+	pub(crate) accin_act_merkle: MerkleRootTarget,
 	/// AST leaf update proof (accin → accout for `asset_id`).
-	pub(crate) accin_ast_merkle: ComputeMerkleRootTarget<ACC_AST_DEPTH>,
+	pub(crate) accin_ast_merkle: MerkleRootTarget,
 	/// NCT membership proofs for each active input note.
-	pub(crate) inotes_nct_merkle: [CommitmentTreeMerkleTarget<COM_TREE_DEPTH>; NOTE_BATCH],
+	pub(crate) inotes_nct_merkle: [MerkleRootTarget; NOTE_BATCH],
+
 	// ── Notes ────────────────────────────────────────────────────────────────
 	/// Input notes (NOTE_BATCH slots; inactive slots are zero-padded).
 	pub(crate) inotes: [NoteTarget; NOTE_BATCH],

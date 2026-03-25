@@ -5,13 +5,12 @@ use plonky2::{
 		witness::{PartialWitness, WitnessWrite},
 	},
 };
-use tessera_utils::F;
+use tessera_utils::{F, hasher::HashOutput};
 
 use crate::{
 	SubpoolId,
 	ecgfp5::PointEw,
 	plonky2_gadgets::{
-		merkle::SetMerklePathOfWitness,
 		priv_tx::targets::SubpoolFullProofTargets,
 		signature::{PubkeyTarget, SchnorrTargets, set_schnorr_witness},
 	},
@@ -36,7 +35,7 @@ pub(crate) fn set_authority_keys(
 pub(crate) fn set_subpool_full_proof(
 	pw: &mut PartialWitness<F>,
 	targets: &SubpoolFullProofTargets,
-	main_pool: &MainPoolConfigTree,
+	main_pool: &MainPoolConfigTree<HashOutput>,
 	approval_key: &CompPubKey,
 	rejection_key: &CompPubKey,
 	consume_key: &CompPubKey,

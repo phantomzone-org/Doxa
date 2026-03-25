@@ -15,6 +15,7 @@ use plonky2_field::{
 	types::{Field, PrimeField64},
 };
 use primitive_types::{H160, U256};
+use tessera_trees::MerkleProof;
 use tessera_utils::{
 	F,
 	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
@@ -27,7 +28,7 @@ use crate::{
 	derive_withdraw_tx_hash,
 	ecgfp5::PointEw,
 	plonky2_gadgets::{
-		merkle::{SetMerklePathOfWitness, conditional_merkle_verify_commitment_tree_gadget},
+		merkle::conditional_merkle_verify_gadget,
 		priv_tx::{
 			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
@@ -43,7 +44,6 @@ use crate::{
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 	schnorr::Signature,
-	tree::CommitmentTreeMerkleProof,
 	utils::map_h160_to_f,
 };
 
@@ -121,11 +121,12 @@ where
 	let accin_null = AccountNullifierTarget(builder.derive_account_nullifier(accin_comm, nk).0);
 
 	// ── ACT membership ───────────────────────────────────────────────────────
-	let accin_act_merkle = conditional_merkle_verify_commitment_tree_gadget::<H, _, _, _>(
+	let accin_act_merkle = conditional_merkle_verify_gadget::<F, D>(
 		builder,
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
+		COM_TREE_DEPTH,
 	);
 
 	// ── Account invariants ───────────────────────────────────────────────────
@@ -262,9 +263,9 @@ pub(crate) fn set_withdraw_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &WithdrawTxTargets,
 	accin: &StandardAccount,
-	accin_act_merkle_proof: CommitmentTreeMerkleProof<COM_TREE_DEPTH>,
+	accin_act_merkle_proof: MerkleProof<HashOutput>,
 	act_root: HashOutput,
-	main_pool: &MainPoolConfigTree,
+	main_pool: &MainPoolConfigTree<HashOutput>,
 	withdrawals: &[(AssetId, U256)],
 	w_acc_addr: H160,
 	approval_key: &CompPubKey,
@@ -406,7 +407,7 @@ mod tests {
 	use primitive_types::{H160, U256};
 	use rand::SeedableRng;
 	use rand_chacha::ChaCha8Rng;
-	use tessera_trees::CommitmentTree;
+	use tessera_trees::MerkleTree;
 	use tessera_utils::hasher::HashOutput;
 
 	use super::*;
@@ -415,7 +416,6 @@ mod tests {
 		account::AccountStateTreeLeaf,
 		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
-		tree::CommitmentTreeMerkleProof,
 	};
 
 	const D: usize = 2;
@@ -433,9 +433,12 @@ mod tests {
 		let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
 		let subpool_id = SubpoolId(F::ONE);
-		let subpool = SubpoolConfigTree::new(approval_cpk, rejection_cpk, consume_cpk);
+		let subpool =
+			SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
 		let mut main_pool = MainPoolConfigTree::new();
-		main_pool.set_subpool(0, subpool_id, subpool.root());
+		main_pool
+			.insert_subpool(subpool_id, subpool.root())
+			.unwrap();
 
 		// ── Sample accin ──────────────────────────────────────────────────
 		let mut rng = ChaCha8Rng::seed_from_u64(2);
@@ -462,16 +465,12 @@ mod tests {
 			.unwrap();
 
 		// ── Insert accin into ACT ─────────────────────────────────────────
-		let mut act = CommitmentTree::<HashOutput>::new(COM_TREE_DEPTH);
+		let mut act = MerkleTree::<HashOutput>::new(COM_TREE_DEPTH);
 		let accin_insert = act.insert(accin.commitment().0).unwrap();
-		let accin_act_proof = CommitmentTreeMerkleProof::new(
-			accin.commitment().0,
-			accin_insert.siblings_new,
-			accin_insert.path,
-			act.num_leaves(),
-		);
-		let act_root = act.get_root();
-		assert!(accin_act_proof.verify(act_root));
+
+		let accin_act_proof = act.merkle_proof(accin_insert).unwrap();
+		let act_root = act.root();
+		assert!(accin_act_proof.verify());
 
 		// ── Withdrawals: (asset_id=2, 50) and (asset_id=3, 50) ───────────
 		let withdrawals = [

@@ -44,6 +44,20 @@ pub struct TestEnv {
 	pub _anvil: AnvilInstance,
 }
 
+/// Build a provider backed by Anvil's second default account (index 1).
+///
+/// Use this for user-side on-chain calls (mint, approve, depositAndRegister)
+/// so they don't collide with the sequencer's nonce on the operator account.
+pub fn depositor_provider(env: &TestEnv) -> (Address, impl Provider + Clone) {
+	let signer: PrivateKeySigner = env._anvil.keys()[1].clone().into();
+	let addr = signer.address();
+	let wallet = EthereumWallet::from(signer);
+	let provider = ProviderBuilder::new()
+		.wallet(wallet)
+		.connect_http(env._anvil.endpoint_url());
+	(addr, provider)
+}
+
 // ---------------------------------------------------------------------------
 // Deployment helpers
 // ---------------------------------------------------------------------------
@@ -85,7 +99,7 @@ pub async fn deploy_with_args<P: Provider + Clone>(
 // Environment setup variants
 // ---------------------------------------------------------------------------
 
-/// Deploys the real `VerifierSuperAggregatorV2` for both TX and deposit verifiers.
+/// Deploys the real `TesseraBatchTransactionVerifier` for both TX and deposit verifiers.
 pub async fn setup_env_real_verifier(
 	pool_config_root: [u8; 32],
 	verifier_bytecode_hex: &str,
@@ -128,7 +142,7 @@ pub async fn setup_env_real_verifier(
 	)
 }
 
-/// Deploys the real `VerifierSuperAggregatorV2` for TX and the real
+/// Deploys the real `TesseraBatchTransactionVerifier` for TX and the real
 /// `VerifierDepositSuperAggregatorV2` for deposits.
 pub async fn setup_env_real_deposit_verifier(
 	pool_config_root: [u8; 32],
@@ -220,7 +234,7 @@ pub fn try_load_prover() -> Option<Arc<InProcessProver>> {
 	InProcessProver::from_artifacts(&path).map(Arc::new)
 }
 
-/// Load the `VerifierSuperAggregatorV2` deployment bytecode from the Foundry
+/// Load the `TesseraBatchTransactionVerifier` deployment bytecode from the Foundry
 /// `out/` directory (`$TESSERA_FOUNDRY_OUT` or `<workspace>/tessera-solidity/out`).
 /// Returns `None` if the compiled JSON is absent or its `bytecode.object` is empty.
 pub fn try_load_verifier_bytecode() -> Option<String> {
@@ -231,8 +245,8 @@ pub fn try_load_verifier_bytecode() -> Option<String> {
 		manifest.parent()?.join("tessera-solidity/out")
 	};
 	let json_path = out_dir
-		.join("VerifierSuperAggregatorV2.sol")
-		.join("VerifierSuperAggregatorV2.json");
+		.join("TesseraBatchTransactionVerifier.sol")
+		.join("TesseraBatchTransactionVerifier.json");
 	let content = std::fs::read_to_string(&json_path).ok()?;
 	let json: serde_json::Value = serde_json::from_str(&content).ok()?;
 	let hex = json["bytecode"]["object"].as_str()?;

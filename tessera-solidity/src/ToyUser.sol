@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {TesseraRollupV2} from "./TesseraRollupV2.sol";
+import {TesseraContract} from "./TesseraContract.sol";
 
 interface IERC20Allowance {
     function allowance(address owner, address spender) external view returns (uint256);
@@ -22,7 +22,7 @@ interface IERC20Permit {
 /// @notice Toy user that atomically transfers tokens and records deposit.
 contract ToyUser {
     /// @notice Bridge that owns deposit state and escrow.
-    TesseraRollupV2 public immutable BRIDGE;
+    TesseraContract public immutable BRIDGE;
     /// @notice Monitored token used by the bridge.
     IERC20Allowance public immutable TOKEN;
 
@@ -31,7 +31,7 @@ contract ToyUser {
     /// @param _bridge Deployed bridge address.
     /// @param _token Monitored token address.
     constructor(address _bridge, address _token) {
-        BRIDGE = TesseraRollupV2(_bridge);
+        BRIDGE = TesseraContract(_bridge);
         TOKEN = IERC20Allowance(_token);
     }
 

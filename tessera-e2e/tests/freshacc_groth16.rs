@@ -1,5 +1,5 @@
 //! E2E test: FreshAcc TX proved end-to-end through the full Groth16 pipeline
-//! and verified on-chain by the real `VerifierSuperAggregatorV2` contract.
+//! and verified on-chain by the real `TesseraBatchTransactionVerifier` contract.
 
 #[macro_use]
 mod common;
@@ -24,7 +24,7 @@ async fn test_e2e_freshacc_groth16() -> Result<(), String> {
 	let verifier_bytecode = match common::try_load_verifier_bytecode() {
 		Some(b) => b,
 		None => skip!(
-			"VerifierSuperAggregatorV2 bytecode not found in Foundry out/ \
+			"TesseraBatchTransactionVerifier bytecode not found in Foundry out/ \
 			 (run `forge build` in tessera-solidity/ after the artifact binary)"
 		),
 	};

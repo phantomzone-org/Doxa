@@ -601,7 +601,12 @@ impl WasmSpendTx {
 			}
 		});
 
-		derive_priv_tx_hash(self.accin_null, self.accout.commitment(), inotes_null, onotes_comm)
+		derive_priv_tx_hash(
+			self.accin_null,
+			self.accout.commitment(),
+			inotes_null,
+			onotes_comm,
+		)
 	}
 }
 

@@ -18,9 +18,9 @@
 //!
 //! # Intended use
 //!
-//! In the TesseraRollupV2 design, N = 128 (depth 7). The `batch_poseidon_root`
+//! In the TesseraContract design, N = 128 (depth 7). The `batch_poseidon_root`
 //! is computed in-circuit from the 128 note commitments that are also embedded
-//! in the TX aggregation proof, allowing `SuperAggregatorV2` to cross-check
+//! in the TX aggregation proof, allowing `SuperAggregator` to cross-check
 //! them positionally.
 
 use std::{fs, path::Path};
@@ -106,7 +106,7 @@ impl SubtreeRootCircuit {
 			for i in 0..parent_len {
 				let left = nodes[2 * i];
 				let right = nodes[2 * i + 1];
-				nodes[i] = HashOutput::hash_leaf_circuit(&mut builder, left, right, f);
+				nodes[i] = HashOutput::hash_2_to_1_swapped_circuit(&mut builder, left, right, f);
 			}
 			nodes.truncate(parent_len);
 		}
@@ -174,7 +174,7 @@ impl SubtreeRootCircuit {
 		while nodes.len() > 1 {
 			let parent_len = nodes.len() >> 1;
 			for i in 0..parent_len {
-				nodes[i] = HashOutput::hash_2_to_1(&nodes[2 * i], &nodes[2 * i + 1], false);
+				nodes[i] = HashOutput::hash_2_to_1_swapped(&nodes[2 * i], &nodes[2 * i + 1], false);
 			}
 			nodes.truncate(parent_len);
 		}
@@ -279,8 +279,8 @@ mod tests {
 
 		// Cross-check native root against direct hash (direction = false).
 		let native_root = SubtreeRootCircuit::compute_root_native(&leaves);
-		let expected_root = HashOutput::hash_2_to_1(&leaf0, &leaf1, false);
-		let swapped_root = HashOutput::hash_2_to_1(&leaf1, &leaf0, false);
+		let expected_root = HashOutput::hash_2_to_1_swapped(&leaf0, &leaf1, false);
+		let swapped_root = HashOutput::hash_2_to_1_swapped(&leaf1, &leaf0, false);
 		assert_eq!(native_root, expected_root, "native root mismatch");
 		assert_ne!(native_root, swapped_root, "hash direction check failed");
 
@@ -354,9 +354,9 @@ mod tests {
 			HashOutput::new([F::from_canonical_u64(40), F::ZERO, F::ZERO, F::ZERO]),
 		];
 
-		let h01 = HashOutput::hash_2_to_1(&leaves[0], &leaves[1], false);
-		let h23 = HashOutput::hash_2_to_1(&leaves[2], &leaves[3], false);
-		let root = HashOutput::hash_2_to_1(&h01, &h23, false);
+		let h01 = HashOutput::hash_2_to_1_swapped(&leaves[0], &leaves[1], false);
+		let h23 = HashOutput::hash_2_to_1_swapped(&leaves[2], &leaves[3], false);
+		let root = HashOutput::hash_2_to_1_swapped(&h01, &h23, false);
 
 		assert_eq!(SubtreeRootCircuit::compute_root_native(&leaves), root);
 	}

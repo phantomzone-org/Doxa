@@ -8,10 +8,10 @@ use plonky2::{
 use tessera_utils::F;
 
 use crate::{
-	ACC_AST_DEPTH, COM_TREE_DEPTH,
+	COM_TREE_DEPTH,
 	note::DepositNote,
 	plonky2_gadgets::{
-		merkle::{CommitmentTreeMerkleTarget, ComputeMerkleRootTarget},
+		merkle::MerkleRootTarget,
 		priv_tx::targets::{
 			AccountTarget, AssetIdTarget, MainPoolConfigRootTarget, PublicIdentifierTaregt,
 			RootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
@@ -114,9 +114,9 @@ pub(crate) struct DepositTxTargets {
 	/// AccIn leaf index in the ACT (supplied by the prover for nullifier derivation).
 	pub(crate) accin_pos: Target,
 	/// Merkle proof that AccIn's commitment is in the ACT.
-	pub(crate) accin_act_merkle: CommitmentTreeMerkleTarget<COM_TREE_DEPTH>,
+	pub(crate) accin_act_merkle: MerkleRootTarget,
 	/// Merkle proof for the AST leaf update (accin → accout).
-	pub(crate) accin_ast_merkle: ComputeMerkleRootTarget<ACC_AST_DEPTH>,
+	pub(crate) accin_ast_merkle: MerkleRootTarget,
 	/// The deposit note fields.
 	pub(crate) deposit_note: DepositNoteTarget,
 	/// Derived commitment to `deposit_note` (public input).

@@ -43,11 +43,5 @@ workspace = true
 workspace = true
 
 [[bin]]
-name = "sequencer"
-path = "src/bin/sequencer.rs"
-
-[[bin]]
 name = "aggregation_prover"
 path = "src/bin/aggregation_prover.rs"
-
-

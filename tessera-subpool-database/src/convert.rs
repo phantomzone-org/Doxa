@@ -1,9 +1,13 @@
+use anyhow::Context;
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
 use tessera_client::{
-    AccountAddress, PrivateIdentifier, StandardAccount, SubpoolId,
+    AccountAddress, AssetId, Nonce, PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId,
+    schnorr::CompressedPublicKey,
 };
 use tessera_utils::F;
+
+use crate::types::account::AccountRow;
 
 // ── F element ────────────────────────────────────────────────────────────────
 
@@ -110,9 +114,98 @@ pub fn account_to_insert(acc: &StandardAccount, eth_address: String) -> AccountI
     }
 }
 
-// ── From DB bytes back to domain types (for future read routes) ───────────────
+// ── From DB bytes back to domain types ────────────────────────────────────────
 
 /// Reconstruct `SubpoolId` from 8 stored bytes.
 pub fn bytes_to_subpool_id(b: &[u8; 8]) -> SubpoolId {
     SubpoolId(bytes_to_f(b))
+}
+
+/// Reconstruct a `StandardAccount` from an `AccountRow`.
+///
+/// Restores private_identifier, nonce, spend_auth, balance, and AST from the
+/// DB-stored byte representations.
+pub fn account_from_row(row: &AccountRow, subpool_id: SubpoolId) -> anyhow::Result<StandardAccount> {
+    let pi_arr: [u8; 16] = row.private_identifier.as_slice().try_into()
+        .context("private_identifier must be 16 bytes")?;
+    let private_identifier = bytes_to_private_id(&pi_arr);
+
+    let mut acc = StandardAccount::new_with(private_identifier, subpool_id);
+
+    let nonce_arr: [u8; 8] = row.nonce.as_slice().try_into()
+        .context("nonce must be 8 bytes")?;
+    acc.nonce = Nonce(bytes_to_f(&nonce_arr));
+
+    let spend_pk_bytes: [u8; 40] = row.spend_auth.as_slice().try_into()
+        .context("spend_auth must be 40 bytes")?;
+    if spend_pk_bytes != [0u8; 40] {
+        let spend_pk = CompressedPublicKey::<F>::decode(&spend_pk_bytes);
+        acc.spend_auth = SpendAuth { spend_pk: Some(spend_pk) };
+    }
+
+    let bal_arr: [u8; 32] = row.balance.as_slice().try_into()
+        .context("balance must be 32 bytes")?;
+    acc.balance = bytes_to_u256(&bal_arr);
+
+    if let Some(ast_obj) = row.ast.as_object() {
+        for (key, val) in ast_obj {
+            let aid = key.parse::<u64>().context("invalid asset_id key in AST")?;
+            let amount_hex = val["amount"].as_str().context("missing amount in AST entry")?;
+            let amount_bytes = hex::decode(amount_hex).context("invalid amount hex in AST")?;
+            let amount = if amount_bytes.len() == 32 {
+                bytes_to_u256(amount_bytes.as_slice().try_into().unwrap())
+            } else {
+                U256::zero()
+            };
+            let asset_id = AssetId::from_u64(aid)?;
+            acc.ast.insert_or_update_asset(asset_id, amount);
+        }
+    }
+
+    Ok(acc)
+}
+
+// ── Hash / address helpers ───────────────────────────────────────────────────
+
+/// Encode 4 Goldilocks field elements as a 32-byte big-endian hex string
+/// (matching the sequencer's `parse_hex_bytes32` format).
+pub fn hash_to_hex(h: &[F; 4]) -> String {
+    let mut out = [0u8; 32];
+    for (i, f) in h.iter().enumerate() {
+        out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+    }
+    hex::encode(out)
+}
+
+/// Parse an Ethereum address string ("0x…") into a `primitive_types::H160`.
+pub fn parse_eth_address(s: &str) -> anyhow::Result<primitive_types::H160> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    let bytes = hex::decode(s).context("invalid eth_address hex")?;
+    anyhow::ensure!(bytes.len() == 20, "eth_address must be 20 bytes");
+    Ok(primitive_types::H160::from_slice(&bytes))
+}
+
+/// Build or update the AST JSON representation with a new asset balance.
+///
+/// Format: `{"<asset_id_decimal>": {"leaf_index": <u64>, "amount": "<hex_u256_64chars>"}}`
+pub fn build_ast_json(
+    existing_ast: &serde_json::Value,
+    asset_id: u64,
+    new_balance: U256,
+) -> serde_json::Value {
+    let mut ast = existing_ast.as_object().cloned().unwrap_or_default();
+    let key = asset_id.to_string();
+    let leaf_index = if let Some(entry) = ast.get(&key) {
+        entry["leaf_index"].as_u64().unwrap_or(0)
+    } else {
+        ast.len() as u64
+    };
+    ast.insert(
+        key,
+        serde_json::json!({
+            "leaf_index": leaf_index,
+            "amount": format!("{:064x}", new_balance),
+        }),
+    );
+    serde_json::Value::Object(ast)
 }

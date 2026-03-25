@@ -10,7 +10,7 @@ pub enum DepositTxStatus {
     Rejected,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct DepositTxRow {
     pub id: i64,
     pub recipient_acc_address: String,
