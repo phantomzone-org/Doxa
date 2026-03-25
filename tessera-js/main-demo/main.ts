@@ -178,7 +178,7 @@ async function deriveEthAddress(seed: Uint8Array): Promise<string> {
 
 const TESSERA_ABI = [
   {
-    name: "transferDepositAndRegister",
+    name: "depositAndRegister",
     type: "function",
     inputs: [
       { name: "noteCommitment", type: "bytes32" },
@@ -590,7 +590,8 @@ p2pBtn.addEventListener("click", async () => {
       amountUnits,
       AssetId.fromU64(1n),
     );
-    const commitmentHex = ("0x" + depositNote.commitment().toHex()) as `0x${string}`;
+    const commitmentHex = ("0x" +
+      depositNote.commitment().toHex()) as `0x${string}`;
 
     step2.className = "p-step done";
     step2.textContent = "✓ Deposit note constructed";
@@ -601,7 +602,7 @@ p2pBtn.addEventListener("click", async () => {
 
     const calldata = encodeFunctionData({
       abi: TESSERA_ABI,
-      functionName: "transferDepositAndRegister",
+      functionName: "depositAndRegister",
       args: [commitmentHex, amountUnits],
     });
 
