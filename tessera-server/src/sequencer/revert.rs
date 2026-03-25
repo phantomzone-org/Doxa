@@ -17,7 +17,7 @@
 /// # Returns
 /// A human-readable error string such as `"InvalidProof()"` or
 /// `"NoteNotFound(bytes32): 0xdeadbeef…"`.
-pub(super) fn humanize_bridge_revert(err: &impl std::fmt::Display) -> String {
+pub fn humanize_bridge_revert(err: &impl std::fmt::Display) -> String {
 	let s = err.to_string();
 	let Some(data) = extract_revert_data(&s) else {
 		if let Some(sel) = extract_custom_error_selector(&s) {
@@ -97,53 +97,75 @@ fn extract_revert_data(s: &str) -> Option<Vec<u8>> {
 ///   start at byte 4).
 fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String> {
 	// Selectors computed via `cast sig "ErrorName(argTypes)"`.
+	// ── No-arg errors ────────────────────────────────────────────────────────
 	const NOT_OPERATOR: [u8; 4] = [0x7c, 0x21, 0x4f, 0x04];
 	const PAUSED: [u8; 4] = [0xda, 0x82, 0x93, 0x39];
+	const ZERO_ADDRESS: [u8; 4] = [0xd9, 0x2e, 0x23, 0x3d];
+	const INVALID_TREE_DEPTH: [u8; 4] = [0xc2, 0x1c, 0xc8, 0xe2];
+	const POOL_CONFIG_MISMATCH: [u8; 4] = [0x3f, 0x0b, 0xa8, 0xe5];
 	const INVALID_PROOF: [u8; 4] = [0x09, 0xbd, 0xe3, 0x39];
-	// keccak256("ProofVerificationFailed(bytes32,uint256[8])") = 0x5ab88774
-	const PROOF_VERIFICATION_FAILED: [u8; 4] = [0x5a, 0xb8, 0x87, 0x74];
-	const NOTE_NOT_FOUND: [u8; 4] = [0x70, 0x82, 0x97, 0xd2];
-	const INVALID_DEPOSIT_STATE: [u8; 4] = [0xc4, 0xe1, 0x4b, 0x16];
-	const DUPLICATE_NOTE: [u8; 4] = [0x59, 0x5a, 0x0e, 0x08];
 	const INVALID_BATCH_SIZE: [u8; 4] = [0x78, 0x62, 0xe9, 0x59];
-	const INVALID_BATCH_LENGTH: [u8; 4] = [0xcc, 0x58, 0x2f, 0xc5];
 	const INVALID_MONITORED_TOKEN: [u8; 4] = [0xb0, 0x63, 0x6a, 0xce];
 	const INVALID_AMOUNT: [u8; 4] = [0x2c, 0x52, 0x11, 0xc6];
 	const NO_TOKEN_RECEIVED: [u8; 4] = [0x4b, 0xf4, 0x79, 0x0a];
 	const NOT_DEPOSIT_RECIPIENT: [u8; 4] = [0x63, 0xba, 0x28, 0x3e];
 	const TOKEN_TRANSFER_FAILED: [u8; 4] = [0x04, 0x5c, 0x4b, 0x02];
-	const ZERO_ADDRESS: [u8; 4] = [0xd9, 0x2e, 0x23, 0x3d];
-	// cast sig "InvalidinputsProof()" → 0xf9d080e4
+	const TREE_FULL: [u8; 4] = [0xb4, 0x8f, 0x2c, 0xf8];
 	const INVALID_INPUTS_PROOF: [u8; 4] = [0xf9, 0xd0, 0x80, 0xe4];
 	const PENDING_QUEUE_FULL: [u8; 4] = [0xce, 0xe3, 0x27, 0x22];
+	// ── uint256 arg errors ───────────────────────────────────────────────────
+	const ROOT_NOT_CONFIRMED: [u8; 4] = [0x14, 0x25, 0x9b, 0x4b];
+	const NULLIFIER_ALREADY_USED: [u8; 4] = [0xdc, 0x21, 0x5c, 0x0a];
 	const SLOT_CONFLICT: [u8; 4] = [0xb0, 0x69, 0xd3, 0xa3];
 	const UNKNOWN_BATCH: [u8; 4] = [0x43, 0x92, 0xee, 0x6a];
-	const ALREADY_CONFIRMED: [u8; 4] = [0xc7, 0x28, 0x1d, 0xfa];
 	const INPUTS_PROOF_ALREADY_CONFIRMED: [u8; 4] = [0x4c, 0x2d, 0xc5, 0xf4];
+	// ── bytes32 arg errors ───────────────────────────────────────────────────
+	const BATCH_ALREADY_SUBMITTED: [u8; 4] = [0x31, 0x02, 0xf1, 0x0c];
+	const BATCH_NOT_FOUND: [u8; 4] = [0x01, 0xbc, 0xcb, 0x93];
+	const BATCH_ALREADY_CONFIRMED: [u8; 4] = [0xc6, 0x54, 0x72, 0x9c];
+	const NOTE_NOT_FOUND: [u8; 4] = [0x70, 0x82, 0x97, 0xd2];
+	const INVALID_DEPOSIT_STATE: [u8; 4] = [0xc4, 0xe1, 0x4b, 0x16];
+	const DUPLICATE_NOTE: [u8; 4] = [0x59, 0x5a, 0x0e, 0x08];
+	// ── Multi-arg errors ─────────────────────────────────────────────────────
+	const PROOF_VERIFICATION_FAILED: [u8; 4] = [0x5a, 0xb8, 0x87, 0x74];
+	const INVALID_BATCH_LENGTH: [u8; 4] = [0xcc, 0x58, 0x2f, 0xc5];
+	const ALREADY_CONFIRMED: [u8; 4] = [0xc7, 0x28, 0x1d, 0xfa];
 	const INVALID_TREE_INDEX: [u8; 4] = [0xc3, 0x3a, 0x4e, 0x44];
 
 	let name = match *selector {
+		// no-arg
 		NOT_OPERATOR => "NotOperator()",
 		PAUSED => "PausedErr()",
+		ZERO_ADDRESS => "ZeroAddress()",
+		INVALID_TREE_DEPTH => "InvalidTreeDepth()",
+		POOL_CONFIG_MISMATCH => "PoolConfigMismatch()",
 		INVALID_PROOF => "InvalidProof()",
-		PROOF_VERIFICATION_FAILED => "ProofVerificationFailed(bytes32,uint256[8])",
-		NOTE_NOT_FOUND => "NoteNotFound(bytes32)",
-		INVALID_DEPOSIT_STATE => "InvalidDepositState(bytes32)",
-		DUPLICATE_NOTE => "DuplicateNoteCommitment(bytes32)",
 		INVALID_BATCH_SIZE => "InvalidBatchSize()",
-		INVALID_BATCH_LENGTH => "InvalidBatchLength(uint256,uint256)",
 		INVALID_MONITORED_TOKEN => "InvalidMonitoredToken()",
 		INVALID_AMOUNT => "InvalidAmount()",
 		NO_TOKEN_RECEIVED => "NoTokenReceived()",
 		NOT_DEPOSIT_RECIPIENT => "NotDepositRecipient()",
 		TOKEN_TRANSFER_FAILED => "TokenTransferFailed()",
-		ZERO_ADDRESS => "ZeroAddress()",
+		TREE_FULL => "TreeFull()",
 		INVALID_INPUTS_PROOF => "InvalidinputsProof()",
 		PENDING_QUEUE_FULL => "PendingQueueFull()",
+		// uint256
+		ROOT_NOT_CONFIRMED => "RootNotConfirmed(uint256)",
+		NULLIFIER_ALREADY_USED => "NullifierAlreadyUsed(uint256)",
 		SLOT_CONFLICT => "SlotConflict(uint256)",
 		UNKNOWN_BATCH => "UnknownBatch(uint256)",
-		ALREADY_CONFIRMED => "AlreadyConfirmed(uint256,uint8)",
 		INPUTS_PROOF_ALREADY_CONFIRMED => "InputsProofAlreadyConfirmed(uint256)",
+		// bytes32
+		BATCH_ALREADY_SUBMITTED => "BatchAlreadySubmitted(bytes32)",
+		BATCH_NOT_FOUND => "BatchNotFound(bytes32)",
+		BATCH_ALREADY_CONFIRMED => "BatchAlreadyConfirmed(bytes32)",
+		NOTE_NOT_FOUND => "NoteNotFound(bytes32)",
+		INVALID_DEPOSIT_STATE => "InvalidDepositState(bytes32)",
+		DUPLICATE_NOTE => "DuplicateNoteCommitment(bytes32)",
+		// multi-arg
+		PROOF_VERIFICATION_FAILED => "ProofVerificationFailed(bytes32,uint256[8])",
+		INVALID_BATCH_LENGTH => "InvalidBatchLength(uint256,uint256)",
+		ALREADY_CONFIRMED => "AlreadyConfirmed(uint256,uint8)",
 		INVALID_TREE_INDEX => "InvalidTreeIndex(uint8)",
 		_ => return None,
 	};
@@ -155,7 +177,6 @@ fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String>
 	match *selector {
 		PROOF_VERIFICATION_FAILED => {
 			// Layout: selector[4] | superPiCommitment[32] | pubInputs[8 × 32]
-			// Minimum: 4 + 32 = 36 bytes (commitment only)
 			let commitment = hex::encode(&data[4..36]);
 			if data.len() < 4 + 32 + 8 * 32 {
 				return Some(format!(
@@ -165,8 +186,6 @@ fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String>
 			let mut words = [0u32; 8];
 			for (i, w) in words.iter_mut().enumerate() {
 				let start = 4 + 32 + i * 32;
-				// Each pubInput is a uint256; the u32 value sits in the last 4 bytes of the 32-byte
-				// slot.
 				*w =
 					u32::from_be_bytes(data[start + 28..start + 32].try_into().unwrap_or([0u8; 4]));
 			}
@@ -176,11 +195,19 @@ fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String>
 				inputs_hex.join(", ")
 			))
 		},
-		NOTE_NOT_FOUND | INVALID_DEPOSIT_STATE | DUPLICATE_NOTE => {
+		// bytes32 arg errors
+		NOTE_NOT_FOUND | INVALID_DEPOSIT_STATE | DUPLICATE_NOTE
+		| BATCH_ALREADY_SUBMITTED | BATCH_NOT_FOUND | BATCH_ALREADY_CONFIRMED => {
 			let arg = &data[4..36];
 			Some(format!("{name}: 0x{}", hex::encode(arg)))
 		},
-		INVALID_BATCH_LENGTH | SLOT_CONFLICT | UNKNOWN_BATCH | INPUTS_PROOF_ALREADY_CONFIRMED => {
+		// uint256 arg errors
+		ROOT_NOT_CONFIRMED | NULLIFIER_ALREADY_USED
+		| SLOT_CONFLICT | UNKNOWN_BATCH | INPUTS_PROOF_ALREADY_CONFIRMED => {
+			let a = alloy::primitives::U256::from_be_slice(&data[4..36]);
+			Some(format!("{name}: {a}"))
+		},
+		INVALID_BATCH_LENGTH => {
 			let a = alloy::primitives::U256::from_be_slice(&data[4..36]);
 			if data.len() < 4 + 64 {
 				return Some(format!("{name}: {a}"));
@@ -197,7 +224,7 @@ fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String>
 			Some(format!("{name}: batch_id={a}, tree_index={b}"))
 		},
 		INVALID_TREE_INDEX => {
-			let b = data[4 + 31]; // uint8 is right-padded in a 32-byte slot
+			let b = data[4 + 31];
 			Some(format!("{name}: {b}"))
 		},
 		_ => Some(name.to_string()),

@@ -6,6 +6,7 @@ use tessera_client::NOTE_BATCH;
 use tessera_server::{
 	contract::{self, hash_to_u256_le, ITesseraRollupV2},
 	proof_aggregation::SubtreeRootCircuit,
+	sequencer::revert::humanize_bridge_revert,
 };
 use tessera_utils::hasher::HashOutput;
 use tracing::{error, info};
@@ -97,7 +98,7 @@ pub(crate) async fn flush_tx_batch(
 	let receipt = call
 		.send()
 		.await
-		.map_err(|e| anyhow::anyhow!("submitTransactionBatch failed: {e}"))?
+		.map_err(|e| anyhow::anyhow!("submitTransactionBatch failed: {}", humanize_bridge_revert(&e)))?
 		.get_receipt()
 		.await
 		.map_err(|e| anyhow::anyhow!("submitTransactionBatch receipt: {e}"))?;
@@ -157,7 +158,7 @@ async fn prove_tx_batch(
 		.proveTransactionBatch(pi_commitment, random_proof())
 		.send()
 		.await
-		.map_err(|e| anyhow::anyhow!("proveTransactionBatch failed: {e}"))?
+		.map_err(|e| anyhow::anyhow!("proveTransactionBatch failed: {}", humanize_bridge_revert(&e)))?
 		.get_receipt()
 		.await
 		.map_err(|e| anyhow::anyhow!("proveTransactionBatch receipt: {e}"))?;
@@ -243,7 +244,7 @@ pub(crate) async fn flush_deposit_batch(
 		.submitDepositBatch(deposit_batch)
 		.send()
 		.await
-		.map_err(|e| anyhow::anyhow!("submitDepositBatch failed: {e}"))?
+		.map_err(|e| anyhow::anyhow!("submitDepositBatch failed: {}", humanize_bridge_revert(&e)))?
 		.get_receipt()
 		.await
 		.map_err(|e| anyhow::anyhow!("submitDepositBatch receipt: {e}"))?;
@@ -299,7 +300,7 @@ async fn prove_deposit_batch(
 		.proveDepositBatch(pi_commitment, random_proof())
 		.send()
 		.await
-		.map_err(|e| anyhow::anyhow!("proveDepositBatch failed: {e}"))?
+		.map_err(|e| anyhow::anyhow!("proveDepositBatch failed: {}", humanize_bridge_revert(&e)))?
 		.get_receipt()
 		.await
 		.map_err(|e| anyhow::anyhow!("proveDepositBatch receipt: {e}"))?;

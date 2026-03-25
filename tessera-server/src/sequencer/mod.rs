@@ -27,7 +27,7 @@ mod deposits;
 mod handle;
 mod pipeline;
 mod recovery;
-mod revert;
+pub mod revert;
 mod transactions;
 
 pub use bn128_wrapper_service::*;

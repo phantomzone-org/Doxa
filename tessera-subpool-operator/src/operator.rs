@@ -11,7 +11,7 @@ use tessera_client::{
     schnorr::{CompressedPublicKey, PrivateKey, Scalar, schnorr_sign},
 };
 use tessera_utils::F;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::convert::{bytes_to_f, bytes_to_private_id};
 
@@ -72,11 +72,11 @@ pub async fn process_pending(
     .fetch_all(pool)
     .await?;
 
+    info!(pending = rows.len(), "polled freshacc_requests");
+
     if rows.is_empty() {
         return Ok(());
     }
-
-    info!(count = rows.len(), "found pending FreshAcc requests");
 
     for row in rows {
         if let Err(e) = process_one(pool, approval_sk, sequencer_url, http, &row).await {
@@ -158,25 +158,7 @@ async fn process_one(
     let approval_sig = schnorr_sign(approval_sk, &tx_hash.0, k);
     let sig_bytes = approval_sig.encode();
 
-    // ── 6. Update DB: APPROVED + signature ───────────────────────────────────
-    sqlx::query(
-        "UPDATE freshacc_requests \
-         SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
-         WHERE id = $2",
-    )
-    .bind(sig_bytes.as_ref())
-    .bind(row.id)
-    .execute(pool)
-    .await
-    .context("failed to update freshacc_requests")?;
-
-    info!(
-        id = row.id,
-        addr = %row.private_acc_address,
-        "FreshAcc request approved"
-    );
-
-    // ── 7. Build transaction request for sequencer ───────────────────────────
+    // ── 6. POST to sequencer (must succeed before updating DB) ─────────────
     let an = hash_to_hex(&accin.nullifier().0 .0);
     let ac = hash_to_hex(&accout.commitment().0 .0);
 
@@ -193,7 +175,6 @@ async fn process_one(
         tx_proof: hex::encode([0u8; 1]),
     };
 
-    // ── 8. POST to sequencer ─────────────────────────────────────────────────
     let url = format!("{}/transaction", sequencer_url.trim_end_matches('/'));
     let resp = http
         .post(&url)
@@ -202,23 +183,37 @@ async fn process_one(
         .await
         .context("failed to reach sequencer")?;
 
-    if resp.status().is_success() {
-        info!(
-            id = row.id,
-            addr = %row.private_acc_address,
-            "FreshAcc transaction submitted to sequencer"
-        );
-    } else {
+    if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        warn!(
-            id = row.id,
-            addr = %row.private_acc_address,
-            %status,
-            body,
-            "sequencer rejected FreshAcc transaction"
+        anyhow::bail!(
+            "sequencer rejected transaction (HTTP {status}): {body}"
         );
     }
+
+    info!(
+        id = row.id,
+        addr = %row.private_acc_address,
+        "FreshAcc transaction submitted to sequencer"
+    );
+
+    // ── 7. Update DB: APPROVED + signature (only after sequencer accepted) ──
+    sqlx::query(
+        "UPDATE freshacc_requests \
+         SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
+         WHERE id = $2",
+    )
+    .bind(sig_bytes.as_ref())
+    .bind(row.id)
+    .execute(pool)
+    .await
+    .context("failed to update freshacc_requests")?;
+
+    info!(
+        id = row.id,
+        addr = %row.private_acc_address,
+        "FreshAcc request approved in DB"
+    );
 
     Ok(())
 }
