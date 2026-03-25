@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-use crate::convert::AccountInsert;
+use crate::convert::{AccountInsert, f_to_bytes, u256_to_bytes};
 
 pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<sqlx::PgPool> {
     Ok(PgPoolOptions::new()
@@ -58,5 +58,28 @@ pub async fn insert_account_and_user(
     .context("failed to insert user row")?;
 
     tx.commit().await?;
+    Ok(())
+}
+
+/// Update an account's nonce and AST after a deposit is processed.
+pub async fn update_account_after_deposit(
+    pool: &PgPool,
+    private_acc_address: &str,
+    new_nonce: tessera_utils::F,
+    new_balance: primitive_types::U256,
+    ast_json: serde_json::Value,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE accounts \
+         SET nonce = $1, balance = $2, ast = $3, updated_at = NOW() \
+         WHERE private_acc_address = $4",
+    )
+    .bind(f_to_bytes(new_nonce).as_ref())
+    .bind(u256_to_bytes(new_balance).as_ref())
+    .bind(&ast_json)
+    .bind(private_acc_address)
+    .execute(pool)
+    .await
+    .context("failed to update account after deposit")?;
     Ok(())
 }

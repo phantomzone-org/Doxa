@@ -1,11 +1,16 @@
 [package]
-name    = "tessera-subpool-operator"
-version = "0.1.0"
-edition = "2021"
+name        = "tessera-subpool-operator"
+version     = "0.1.0"
+edition     = "2021"
+default-run = "tessera-subpool-operator"
 
 [[bin]]
 name = "tessera-subpool-operator"
 path = "src/main.rs"
+
+[[bin]]
+name = "test-deposit"
+path = "src/bin/test_deposit.rs"
 
 [dependencies]
 tessera-client = { workspace = true }
@@ -24,4 +29,6 @@ sqlx           = { workspace = true }
 chrono         = { workspace = true }
 rand           = { workspace = true }
 rand_chacha    = { workspace = true }
+alloy          = { workspace = true }
+primitive-types = { workspace = true }
 reqwest        = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

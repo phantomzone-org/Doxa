@@ -11,6 +11,8 @@ pub struct OperatorConfig {
     pub sequencer_url: String,
     /// Approval private key as 40-byte hex (5 × u64 LE). Env: APPROVAL_PRIVATE_KEY (required).
     pub approval_private_key: String,
+    /// Ethereum JSON-RPC URL for broadcasting deposit transactions. Env: RPC_URL (required).
+    pub rpc_url: String,
     /// How often to poll for pending FreshAcc requests. Env: POLL_INTERVAL_SECS (default 5).
     pub poll_interval: Duration,
 }
@@ -31,6 +33,9 @@ impl OperatorConfig {
         let approval_private_key =
             std::env::var("APPROVAL_PRIVATE_KEY").context("APPROVAL_PRIVATE_KEY not set")?;
 
+        let rpc_url =
+            std::env::var("RPC_URL").context("RPC_URL not set")?;
+
         let poll_interval = Duration::from_secs(
             std::env::var("POLL_INTERVAL_SECS")
                 .unwrap_or_else(|_| "5".to_string())
@@ -43,6 +48,7 @@ impl OperatorConfig {
             db_max_connections,
             sequencer_url,
             approval_private_key,
+            rpc_url,
             poll_interval,
         })
     }

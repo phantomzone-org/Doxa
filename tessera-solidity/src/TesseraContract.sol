@@ -289,18 +289,6 @@ contract TesseraContract {
         return _depositAndRegister(noteCommitment, payer, payer, maxAmount);
     }
 
-    /// @notice Transfers `amount` of monitoredToken from caller to this contract,
-    ///         then creates a `Pending` deposit for `noteCommitment`.
-    function transferDepositAndRegister(bytes32 noteCommitment, uint256 amount)
-        external
-        whenNotPaused
-        returns (bytes32)
-    {
-        bool ok = IERC20MonitoredToken(monitoredToken).transferFrom(msg.sender, address(this), amount);
-        if (!ok) revert TokenTransferFailed();
-        return _depositAndRegister(noteCommitment, msg.sender, msg.sender, amount);
-    }
-
     function _depositAndRegister(
         bytes32 noteCommitment,
         address payer,

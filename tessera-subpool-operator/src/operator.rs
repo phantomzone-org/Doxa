@@ -1,7 +1,7 @@
 use std::array;
 
 use anyhow::{Context, Result};
-use plonky2_field::types::{Field, PrimeField64};
+use plonky2_field::types::Field;
 use serde::Serialize;
 use sqlx::PgPool;
 use tessera_client::{
@@ -15,7 +15,7 @@ use tracing::{error, info};
 
 use tessera_subpool_database::{
     SUBPOOL_ID,
-    convert::{account_to_insert, bytes_to_private_id},
+    convert::{account_to_insert, bytes_to_private_id, hash_to_hex},
     db::insert_account_and_user,
 };
 
@@ -44,19 +44,6 @@ struct TransactionRequest {
     output_notes: Vec<String>,
     tx_proof: String,
 }
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Encode 4 Goldilocks field elements as a 32-byte big-endian hex string
-/// (matching the sequencer's `parse_hex_bytes32` format).
-fn hash_to_hex(h: &[F; 4]) -> String {
-    let mut out = [0u8; 32];
-    for (i, f) in h.iter().enumerate() {
-        out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
-    }
-    hex::encode(out)
-}
-
 
 // ── Core loop ───────────────────────────────────────────────────────────────
 
