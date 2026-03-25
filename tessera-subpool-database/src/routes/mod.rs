@@ -10,12 +10,14 @@ pub mod deposit;
 pub mod faucet;
 pub mod freshacc;
 pub mod register;
+pub mod spend_tx;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/register", post(register::register_handler))
         .route("/deposit", post(deposit::submit_deposit_handler))
         .route("/faucet", post(faucet::faucet_handler))
+        .route("/spend_tx", post(spend_tx::submit_spend_tx_handler))
         .route(
             "/account/{private_acc_address}",
             get(account::get_account_handler),
