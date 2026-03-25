@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Tessera Demo</title>
+        <style>
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
+            body {
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                background: #0f0f13;
+                color: #e8e8f0;
+                min-height: 100vh;
+                padding: 2rem 1rem 4rem;
+            }
+
+            header {
+                text-align: center;
+                margin-bottom: 3rem;
+            }
+            header h1 {
+                font-size: 2rem;
+                font-weight: 700;
+                letter-spacing: -0.5px;
+            }
+            header p {
+                color: #888;
+                margin-top: 0.4rem;
+                font-size: 0.95rem;
+            }
+
+            /* ── layout ── */
+            .sections {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 1.5rem;
+                max-width: 900px;
+                margin: 0 auto;
+            }
+            @media (max-width: 680px) {
+                .sections {
+                    grid-template-columns: 1fr;
+                }
+            }
+
+            .section-full {
+                max-width: 900px;
+                margin: 1.5rem auto 0;
+            }
+
+            .card {
+                background: #1a1a24;
+                border: 1px solid #2a2a3a;
+                border-radius: 12px;
+                padding: 1.75rem;
+            }
+            .card h2 {
+                font-size: 1.05rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: #aaa;
+                margin-bottom: 1.25rem;
+            }
+
+            /* ── buttons ── */
+            .btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.65rem 1.3rem;
+                border: none;
+                border-radius: 8px;
+                font-size: 0.95rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition:
+                    opacity 0.15s,
+                    transform 0.1s;
+                width: 100%;
+                justify-content: center;
+            }
+            .btn:active {
+                transform: scale(0.98);
+            }
+            .btn:disabled {
+                opacity: 0.4;
+                cursor: not-allowed;
+            }
+            .btn-primary {
+                background: #4f6ef7;
+                color: #fff;
+            }
+            .btn-primary:hover:not(:disabled) {
+                background: #3d5ce0;
+            }
+            .btn-secondary {
+                background: #2e2e42;
+                color: #c8c8e0;
+            }
+            .btn-secondary:hover:not(:disabled) {
+                background: #38384e;
+            }
+            .btn-ghost {
+                background: transparent;
+                color: #888;
+                border: 1px solid #2a2a3a;
+                margin-top: 0.6rem;
+                font-size: 0.88rem;
+            }
+            .btn-ghost:hover:not(:disabled) {
+                background: #1e1e2e;
+                color: #c8c8e0;
+            }
+
+            /* ── info rows ── */
+            .info-box {
+                display: none;
+                margin-top: 1.25rem;
+                background: #12121a;
+                border: 1px solid #2a2a3a;
+                border-radius: 8px;
+                padding: 1rem 1.1rem;
+            }
+            .info-box.visible {
+                display: block;
+            }
+            .info-row {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                padding: 0.35rem 0;
+                border-bottom: 1px solid #1e1e2e;
+                font-size: 0.88rem;
+                gap: 0.75rem;
+            }
+            .info-row:last-child {
+                border-bottom: none;
+            }
+            .info-row .label {
+                color: #666;
+                white-space: nowrap;
+            }
+            .info-row .value {
+                color: #c8c8e0;
+                font-family: monospace;
+                word-break: break-all;
+                text-align: right;
+            }
+            .info-row .value.balance {
+                color: #5af0a0;
+                font-size: 1rem;
+                font-weight: 600;
+                font-family: inherit;
+            }
+            .info-row .value.plain {
+                font-family: inherit;
+            }
+
+            /* ── KYC form ── */
+            .form-group {
+                margin-bottom: 1rem;
+            }
+            .form-group label {
+                display: block;
+                font-size: 0.8rem;
+                color: #777;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                margin-bottom: 0.35rem;
+            }
+            .form-group input,
+            .form-group textarea {
+                width: 100%;
+                background: #12121a;
+                border: 1px solid #2a2a3a;
+                border-radius: 6px;
+                color: #e8e8f0;
+                padding: 0.6rem 0.75rem;
+                font-size: 0.95rem;
+                outline: none;
+                transition: border-color 0.15s;
+                font-family: inherit;
+                resize: vertical;
+            }
+            .form-group input:focus,
+            .form-group textarea:focus {
+                border-color: #4f6ef7;
+            }
+
+            /* ── deposit on public account card ── */
+            #deposit-section {
+                display: none;
+                margin-top: 1rem;
+            }
+            #deposit-section.visible {
+                display: block;
+            }
+
+            /* ── progress bar (reused in both deposit flows) ── */
+            .progress-bar-wrap {
+                display: none;
+                margin-top: 0.9rem;
+                background: #12121a;
+                border: 1px solid #2a2a3a;
+                border-radius: 8px;
+                padding: 0.9rem 1rem;
+                font-size: 0.85rem;
+            }
+            .progress-bar-wrap.visible {
+                display: block;
+            }
+            .progress-bar-track {
+                height: 6px;
+                background: #2a2a3a;
+                border-radius: 3px;
+                overflow: hidden;
+                margin-bottom: 0.75rem;
+            }
+            .progress-bar-fill {
+                height: 100%;
+                width: 0%;
+                background: linear-gradient(90deg, #4f6ef7, #5af0a0);
+                border-radius: 3px;
+                transition: width 0.6s ease;
+            }
+            .p-step {
+                color: #888;
+                line-height: 1.9;
+                animation: fadein 0.3s ease;
+            }
+            .p-step.active {
+                color: #e8e8f0;
+            }
+            .p-step.done {
+                color: #5af0a0;
+            }
+            .p-step a {
+                color: #4f6ef7;
+                text-decoration: none;
+                font-family: monospace;
+                font-size: 0.8rem;
+            }
+            .p-step a:hover {
+                text-decoration: underline;
+            }
+
+            .etherscan-link {
+                display: none;
+                margin-top: 0.75rem;
+                font-size: 0.82rem;
+                color: #666;
+            }
+            .etherscan-link.visible {
+                display: block;
+            }
+            .etherscan-link a {
+                color: #4f6ef7;
+                text-decoration: none;
+                font-family: monospace;
+                font-size: 0.8rem;
+            }
+            .etherscan-link a:hover {
+                text-decoration: underline;
+            }
+
+            /* ── progress log (private registration) ── */
+            #progress {
+                display: none;
+                margin-top: 1.25rem;
+                background: #12121a;
+                border: 1px solid #2a2a3a;
+                border-radius: 8px;
+                padding: 1rem 1.1rem;
+                font-size: 0.88rem;
+                line-height: 1.8;
+            }
+            #progress.visible {
+                display: block;
+            }
+            .progress-line {
+                color: #888;
+                animation: fadein 0.3s ease;
+            }
+            .progress-line.done {
+                color: #5af0a0;
+            }
+            .progress-line.active {
+                color: #e8e8f0;
+            }
+            @keyframes fadein {
+                from {
+                    opacity: 0;
+                    transform: translateY(4px);
+                }
+                to {
+                    opacity: 1;
+                }
+            }
+
+            #tessera-address {
+                display: none;
+                margin-top: 1rem;
+                background: #12121a;
+                border: 1px solid #2a2a3a;
+                border-radius: 8px;
+                padding: 0.75rem 1rem;
+                font-size: 0.8rem;
+                color: #666;
+            }
+            #tessera-address.visible {
+                display: block;
+            }
+            #tessera-address span {
+                color: #c8c8e0;
+                font-family: monospace;
+                word-break: break-all;
+            }
+
+            /* ── p2p deposit section ── */
+            .amount-row {
+                display: flex;
+                gap: 0.75rem;
+                align-items: center;
+            }
+            .amount-row input {
+                flex: 1;
+                background: #12121a;
+                border: 1px solid #2a2a3a;
+                border-radius: 6px;
+                color: #e8e8f0;
+                padding: 0.6rem 0.75rem;
+                font-size: 0.95rem;
+                outline: none;
+                transition: border-color 0.15s;
+            }
+            .amount-row input:focus {
+                border-color: #4f6ef7;
+            }
+            .amount-row .btn {
+                width: auto;
+                flex-shrink: 0;
+            }
+
+            .subsection-label {
+                font-size: 0.75rem;
+                text-transform: uppercase;
+                letter-spacing: 0.07em;
+                color: #555;
+                margin: 1.1rem 0 0.4rem;
+            }
+            pre.code-block {
+                background: #0c0c14;
+                border: 1px solid #1e1e2e;
+                border-radius: 6px;
+                padding: 0.75rem 0.9rem;
+                font-size: 0.76rem;
+                line-height: 1.55;
+                color: #b0c4de;
+                overflow-x: auto;
+                white-space: pre-wrap;
+                word-break: break-all;
+            }
+
+            .hint {
+                font-size: 0.82rem;
+                color: #555;
+                margin-top: 0.6rem;
+            }
+
+            /* ── privacy info boxes ── */
+            .info-boxes {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 1rem;
+                margin: 1.25rem 0;
+            }
+            @media (max-width: 680px) {
+                .info-boxes {
+                    grid-template-columns: 1fr;
+                }
+            }
+            .info-card {
+                background: #12121a;
+                border: 1px solid #2a2a3a;
+                border-radius: 8px;
+                padding: 1rem;
+            }
+            .info-card h3 {
+                font-size: 0.75rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.07em;
+                color: #888;
+                margin-bottom: 0.6rem;
+            }
+            .info-card ul {
+                list-style: none;
+                padding: 0;
+                font-size: 0.82rem;
+                color: #666;
+                line-height: 1.75;
+            }
+            .info-card ul li::before {
+                content: "· ";
+                color: #3a3a52;
+            }
+
+            /* ── address book & transfer form ── */
+            .addr-book-row {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.3rem 0;
+                border-bottom: 1px solid #1a1a28;
+                font-size: 0.82rem;
+            }
+            .addr-book-row:last-child {
+                border-bottom: none;
+            }
+            .addr-book-row .addr-label {
+                color: #555;
+                width: 4.5rem;
+                flex-shrink: 0;
+            }
+            .addr-book-row .addr-val {
+                font-family: monospace;
+                color: #777;
+                flex: 1;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .copy-btn {
+                background: #1e1e2e;
+                border: 1px solid #2a2a3a;
+                color: #555;
+                border-radius: 4px;
+                padding: 0.15rem 0.55rem;
+                font-size: 0.72rem;
+                cursor: pointer;
+                flex-shrink: 0;
+                transition: color 0.15s;
+            }
+            .copy-btn:hover {
+                color: #c8c8e0;
+            }
+
+            .tick {
+                color: #5af0a0;
+                margin-left: 0.4rem;
+                font-size: 0.85rem;
+            }
+            .tick.hidden {
+                visibility: hidden;
+            }
+            .field-hint {
+                font-size: 0.75rem;
+                color: #f07070;
+                margin-top: 0.25rem;
+                min-height: 1em;
+            }
+
+            .error {
+                color: #f07070;
+                font-size: 0.85rem;
+                margin-top: 0.75rem;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <h1>Tessera</h1>
+            <p>Privacy-preserving accounts powered by WebAuthn passkeys</p>
+        </header>
+
+        <div class="sections">
+            <!-- ── Public account ── -->
+            <div class="card">
+                <h2>Public Account</h2>
+                <button class="btn btn-primary" id="create-wallet-btn">
+                    🔑 Create Wallet
+                </button>
+                <button class="btn btn-ghost" id="sign-in-btn">
+                    Sign in with existing passkey
+                </button>
+
+                <div class="info-box" id="wallet-info">
+                    <div class="info-row">
+                        <span class="label">Address</span>
+                        <span class="value" id="eth-address">—</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">USDX Balance</span>
+                        <span class="value balance" id="usdc-balance">—</span>
+                    </div>
+                </div>
+
+                <div id="deposit-section">
+                    <button class="btn btn-secondary" id="deposit-btn">
+                        ⬇ Deposit 10 USDX
+                    </button>
+                    <div class="progress-bar-wrap" id="deposit-progress">
+                        <div class="progress-bar-track">
+                            <div
+                                class="progress-bar-fill"
+                                id="deposit-bar"
+                            ></div>
+                        </div>
+                        <div id="deposit-steps"></div>
+                    </div>
+                    <div class="etherscan-link" id="etherscan-link">
+                        View on Etherscan:
+                        <a
+                            id="etherscan-anchor"
+                            href="#"
+                            target="_blank"
+                            rel="noopener"
+                        ></a>
+                    </div>
+                </div>
+
+                <div class="error" id="wallet-error"></div>
+            </div>
+
+            <!-- ── Private account ── -->
+            <div class="card">
+                <h2>Private Account</h2>
+
+                <div id="kyc-form">
+                    <div class="form-group">
+                        <label>Full name</label>
+                        <input
+                            type="text"
+                            id="kyc-name"
+                            placeholder="Alice Smith"
+                        />
+                    </div>
+                    <div class="form-group">
+                        <label>Street address</label>
+                        <input
+                            type="text"
+                            id="kyc-street"
+                            placeholder="123 Main St, Springfield"
+                        />
+                    </div>
+                    <div class="form-group">
+                        <label>Date of birth</label>
+                        <input type="date" id="kyc-dob" />
+                    </div>
+                    <button
+                        class="btn btn-secondary"
+                        id="register-btn"
+                        disabled
+                    >
+                        🛡 Register Private Account
+                    </button>
+                </div>
+
+                <div id="kyc-display" style="display: none">
+                    <div class="info-box visible">
+                        <div class="info-row">
+                            <span class="label">Full name</span>
+                            <span class="value plain" id="disp-name">—</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="label">Street address</span>
+                            <span class="value plain" id="disp-street">—</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="label">Date of birth</span>
+                            <span class="value plain" id="disp-dob">—</span>
+                        </div>
+                        <div
+                            class="info-row"
+                            id="priv-balance-row"
+                            style="display: none"
+                        >
+                            <span class="label">USDX Balance</span>
+                            <span class="value balance" id="priv-balance"
+                                >0.00 USDX</span
+                            >
+                        </div>
+                    </div>
+                </div>
+
+                <div id="progress"></div>
+
+                <div id="tessera-address">
+                    Tessera address: <span id="tessera-addr-value">—</span>
+                </div>
+
+                <div class="error" id="register-error"></div>
+            </div>
+        </div>
+
+        <!-- ── Public → Private Deposit ── -->
+        <div class="section-full">
+            <div class="card">
+                <h2>Public → Private Deposit</h2>
+
+                <div class="amount-row">
+                    <input
+                        type="number"
+                        id="p2p-amount"
+                        min="1"
+                        placeholder="Amount (USDX)"
+                    />
+                    <button class="btn btn-primary" id="p2p-btn" disabled>
+                        Deposit
+                    </button>
+                </div>
+                <p class="hint" id="p2p-hint">
+                    Connect a wallet above to enable deposits.
+                </p>
+
+                <div id="p2p-tx-wrap" style="display: none">
+                    <div class="subsection-label">Crafted transaction</div>
+                    <pre class="code-block" id="p2p-tx-display"></pre>
+
+                    <div class="subsection-label">Raw signature</div>
+                    <pre class="code-block" id="p2p-sig-display"></pre>
+                </div>
+
+                <div class="progress-bar-wrap" id="p2p-progress">
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill" id="p2p-bar"></div>
+                    </div>
+                    <div id="p2p-steps"></div>
+                </div>
+
+                <div class="error" id="p2p-error"></div>
+            </div>
+        </div>
+
+        <!-- ── Private Transfer ── -->
+        <div class="section-full">
+            <div class="card">
+                <h2>Private Transfer</h2>
+
+                <div class="subsection-label">Demo addresses</div>
+                <div id="addr-book"></div>
+
+                <div class="info-boxes">
+                    <div class="info-card">
+                        <h3>What's private?</h3>
+                        <ul>
+                            <li>Amount</li>
+                            <li>Sender and receiver</li>
+                            <li>Respective pools</li>
+                            <li>Memo</li>
+                        </ul>
+                    </div>
+                    <div class="info-card">
+                        <h3>Sending subpool owner</h3>
+                        <ul>
+                            <li>Views &amp; approves all outgoing txs</li>
+                            <li>Has all information for regulatory audits</li>
+                        </ul>
+                    </div>
+                    <div class="info-card">
+                        <h3>Receiving subpool owner</h3>
+                        <ul>
+                            <li>Can reject the incoming tx</li>
+                            <li>Has all information for regulatory audits</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 1.1rem">
+                    <label
+                        >Receiving address
+                        <span id="addr-tick" class="tick hidden">✓</span></label
+                    >
+                    <input
+                        type="text"
+                        id="xfer-addr"
+                        placeholder="80-char Tessera hex address"
+                    />
+                    <div class="field-hint" id="addr-hint"></div>
+                </div>
+                <div class="form-group">
+                    <label>Amount (USDX)</label>
+                    <input
+                        type="number"
+                        id="xfer-amount"
+                        min="1"
+                        placeholder="0"
+                    />
+                </div>
+                <div class="form-group">
+                    <label
+                        >Memo
+                        <span
+                            style="
+                                color: #444;
+                                font-size: 0.75em;
+                                text-transform: none;
+                                letter-spacing: 0;
+                            "
+                            >(optional)</span
+                        ></label
+                    >
+                    <textarea
+                        id="xfer-memo"
+                        rows="3"
+                        placeholder="Supports arbitrary text and message formats such as IVMS101, ISO 20022."
+                    ></textarea>
+                </div>
+
+                <button class="btn btn-primary" id="xfer-btn" disabled>
+                    Transfer
+                </button>
+
+                <div class="progress-bar-wrap" id="xfer-progress">
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill" id="xfer-bar"></div>
+                    </div>
+                    <div id="xfer-steps"></div>
+                </div>
+
+                <div class="error" id="xfer-error"></div>
+            </div>
+        </div>
+
+        <script type="module" src="./main.ts"></script>
+    </body>
+</html>
