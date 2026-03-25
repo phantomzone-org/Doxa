@@ -13,9 +13,9 @@ use sha2::{Digest, Sha256};
 use tessera_client::{
 	derive_priv_tx_hash, double_hash_native,
 	schnorr::{schnorr_sign, CompressedPublicKey, PrivateKey, Scalar},
-	AccountAddress, AccountNullifier, AssetId, HashOutput, NodeIdentifier, NoteCommitment,
-	NoteNullifier, PositionedStandardNode, PrivateIdentifier, PublicIdentifier, SpendAuth,
-	StandardAccount, StandardNote, SubpoolId,
+	AccountAddress, AccountNullifier, AssetId, DepositNote, HashOutput,
+	NodeIdentifier, NoteCommitment, NoteNullifier, PositionedStandardNode, PrivateIdentifier,
+	PublicIdentifier, SpendAuth, StandardAccount, StandardNote, SubpoolId,
 };
 use wasm_bindgen::prelude::*;
 
@@ -797,4 +797,150 @@ pub fn decode_hash(bytes: &[u8]) -> Result<WasmHashOutput, JsError> {
 		elems[i] = F::from_canonical_u64(v);
 	}
 	Ok(WasmHashOutput(HashOutput(elems)))
+}
+
+// ── WasmAssetId ───────────────────────────────────────────────────────────────
+
+/// A Goldilocks field element identifying an asset type (u64 < `F::ORDER`).
+#[wasm_bindgen]
+pub struct WasmAssetId(u64);
+
+#[wasm_bindgen]
+impl WasmAssetId {
+	/// Construct from a `u64`, validating that it is within the Goldilocks field range.
+	#[wasm_bindgen(js_name = fromU64)]
+	pub fn from_u64(v: u64) -> Result<WasmAssetId, JsError> {
+		parse_asset_id(v)?;
+		Ok(WasmAssetId(v))
+	}
+
+	/// Return the asset id as a `u64`.
+	#[wasm_bindgen(js_name = toU64)]
+	pub fn to_u64(&self) -> u64 {
+		self.0
+	}
+}
+
+// ── WasmDepositNoteCommitment ─────────────────────────────────────────────────
+
+/// A deposit-note commitment (4 Goldilocks field elements, 32 bytes / 64 hex chars).
+#[wasm_bindgen]
+pub struct WasmDepositNoteCommitment(HashOutput);
+
+#[wasm_bindgen]
+impl WasmDepositNoteCommitment {
+	/// 64 hex chars — 4 × u64 LE (32 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		hex::encode(hash_to_bytes(self.0))
+	}
+
+	/// 32 bytes (4 × u64 little-endian).
+	#[wasm_bindgen(js_name = toBytes)]
+	pub fn to_bytes(&self) -> Vec<u8> {
+		hash_to_bytes(self.0)
+	}
+
+	/// Parse from a 64-char hex string (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmDepositNoteCommitment, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from a 32-byte Uint8Array (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmDepositNoteCommitment, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmDepositNoteCommitment, JsError> {
+		if bytes.len() != 32 {
+			return Err(JsError::new("commitment must be 32 bytes (64 hex chars)"));
+		}
+		let mut elems = [F::ZERO; 4];
+		for (i, chunk) in bytes.chunks_exact(8).enumerate() {
+			elems[i] = F::from_canonical_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
+		}
+		Ok(WasmDepositNoteCommitment(HashOutput(elems)))
+	}
+}
+
+// ── WasmDepositNote ───────────────────────────────────────────────────────────
+
+/// A deposit note with a randomly-sampled identifier.
+#[wasm_bindgen]
+pub struct WasmDepositNote {
+	note: DepositNote,
+	/// Cached raw asset id to avoid needing access to `AssetId`'s private field.
+	asset_id_raw: u64,
+}
+
+#[wasm_bindgen]
+impl WasmDepositNote {
+	/// Construct a deposit note.
+	///
+	/// The identifier (`[F; 2]`) is sampled uniformly in `[0, F::ORDER)` inside
+	/// this call — no identifier parameter is needed from JS.
+	///
+	/// - `recipient`: the Tessera account address that will receive the deposit.
+	/// - `amount`: deposit amount as a JS `BigInt` (U256).
+	/// - `asset_id`: validated Goldilocks asset id.
+	#[wasm_bindgen(js_name = fromParts)]
+	pub fn from_parts(
+		recipient: &WasmAccountAddress,
+		amount: BigInt,
+		asset_id: &WasmAssetId,
+	) -> Result<WasmDepositNote, JsError> {
+		let mut rng = rand::rng();
+		let dist = Uniform::new(0, F::ORDER).unwrap();
+		let identifier = [
+			F::from_canonical_u64(rng.sample(dist)),
+			F::from_canonical_u64(rng.sample(dist)),
+		];
+		let amount = bigint_to_u256(amount)?;
+		let asset = parse_asset_id(asset_id.0)?;
+		Ok(WasmDepositNote {
+			note: DepositNote {
+				identifier,
+				recipient: recipient.0,
+				amount,
+				asset_id: asset,
+			},
+			asset_id_raw: asset_id.0,
+		})
+	}
+
+	/// Poseidon commitment to this deposit note.
+	pub fn commitment(&self) -> WasmDepositNoteCommitment {
+		WasmDepositNoteCommitment(self.note.commitment().0)
+	}
+
+	/// Hex-encoded identifier (`[F; 2]` = 16 bytes = 32 hex chars).
+	#[wasm_bindgen(js_name = identifierHex)]
+	pub fn identifier_hex(&self) -> String {
+		hex::encode(self.identifier_bytes())
+	}
+
+	/// Identifier as raw bytes (16 bytes, 2 × u64 LE).
+	#[wasm_bindgen(js_name = identifierBytes)]
+	pub fn identifier_bytes(&self) -> Vec<u8> {
+		let mut bytes = vec![0u8; 16];
+		bytes[0..8].copy_from_slice(&self.note.identifier[0].to_canonical_u64().to_le_bytes());
+		bytes[8..16].copy_from_slice(&self.note.identifier[1].to_canonical_u64().to_le_bytes());
+		bytes
+	}
+
+	/// Deposit amount as a JS `BigInt`.
+	pub fn amount(&self) -> BigInt {
+		let hex = format!("{:x}", self.note.amount);
+		BigInt::new(&JsValue::from_str(&format!("0x{hex}")))
+			.unwrap_or_else(|_| BigInt::from(0u64))
+	}
+
+	/// Asset id.
+	#[wasm_bindgen(js_name = assetId)]
+	pub fn asset_id(&self) -> WasmAssetId {
+		WasmAssetId(self.asset_id_raw)
+	}
 }

@@ -3,6 +3,9 @@ import {
   WasmAccountAddress,
   WasmAccountCommitment,
   WasmAccountNullifier,
+  WasmAssetId,
+  WasmDepositNote,
+  WasmDepositNoteCommitment,
   WasmInputNote,
   WasmPrivateIdentifier,
   WasmPublicIdentifier,
@@ -321,6 +324,122 @@ export class Account {
   static decodeHash(commitment: AccountCommitment): BigInt64Array {
     const h = decodeHash(commitment.toBytes());
     return BigInt64Array.from(h.limbs().map(BigInt));
+  }
+}
+
+// ── AssetId ───────────────────────────────────────────────────────────────────
+
+/** A Goldilocks field element identifying an asset type (u64 < `F::ORDER`). */
+export class AssetId {
+  readonly inner: WasmAssetId;
+
+  private constructor(inner: WasmAssetId) {
+    this.inner = inner;
+  }
+
+  static fromWasm(inner: WasmAssetId): AssetId {
+    return new AssetId(inner);
+  }
+
+  /** Construct from a `bigint`, validating it is within the Goldilocks field range. */
+  static fromU64(v: bigint): AssetId {
+    return new AssetId(WasmAssetId.fromU64(v));
+  }
+
+  toU64(): bigint {
+    return BigInt(this.inner.toU64());
+  }
+}
+
+// ── DepositNoteCommitment ─────────────────────────────────────────────────────
+
+/** A deposit-note commitment (4 Goldilocks field elements, 32 bytes / 64 hex chars). */
+export class DepositNoteCommitment {
+  readonly inner: WasmDepositNoteCommitment;
+
+  private constructor(inner: WasmDepositNoteCommitment) {
+    this.inner = inner;
+  }
+
+  static fromWasm(inner: WasmDepositNoteCommitment): DepositNoteCommitment {
+    return new DepositNoteCommitment(inner);
+  }
+
+  /** Parse from a 64-char hex string (4 × u64 LE). */
+  static fromHex(hex: string): DepositNoteCommitment {
+    return new DepositNoteCommitment(WasmDepositNoteCommitment.fromHex(hex));
+  }
+
+  /** Parse from a 32-byte Uint8Array (4 × u64 LE). */
+  static fromBytes(bytes: Uint8Array): DepositNoteCommitment {
+    return new DepositNoteCommitment(WasmDepositNoteCommitment.fromBytes(bytes));
+  }
+
+  /** 64 hex chars. */
+  toHex(): string {
+    return this.inner.toHex();
+  }
+
+  /** 32 bytes (4 × u64 little-endian). */
+  toBytes(): Uint8Array {
+    return this.inner.toBytes();
+  }
+}
+
+// ── DepositNote ───────────────────────────────────────────────────────────────
+
+/**
+ * A deposit note with a randomly-sampled identifier (sampled inside WASM as
+ * two Goldilocks field elements in `[0, F::ORDER)`).
+ */
+export class DepositNote {
+  private inner: WasmDepositNote;
+
+  private constructor(inner: WasmDepositNote) {
+    this.inner = inner;
+  }
+
+  /**
+   * Create a deposit note. The identifier (`[F; 2]`) is sampled uniformly
+   * inside WASM — no identifier parameter needed.
+   *
+   * @param recipient  The Tessera account address that will receive the deposit.
+   * @param amount     Deposit amount as a `bigint` (U256).
+   * @param assetId    Validated Goldilocks asset id.
+   */
+  static create(
+    recipient: AccountAddress,
+    amount: bigint,
+    assetId: AssetId,
+  ): DepositNote {
+    return new DepositNote(
+      WasmDepositNote.fromParts(recipient.inner, amount, assetId.inner),
+    );
+  }
+
+  /** Poseidon commitment to this deposit note. */
+  commitment(): DepositNoteCommitment {
+    return DepositNoteCommitment.fromWasm(this.inner.commitment());
+  }
+
+  /** Hex-encoded identifier (`[F; 2]` = 16 bytes = 32 hex chars). */
+  identifierHex(): string {
+    return this.inner.identifierHex();
+  }
+
+  /** Identifier as raw bytes (16 bytes, 2 × u64 LE). */
+  identifierBytes(): Uint8Array {
+    return this.inner.identifierBytes();
+  }
+
+  /** Deposit amount as `bigint`. */
+  amount(): bigint {
+    return this.inner.amount();
+  }
+
+  /** Asset id. */
+  assetId(): AssetId {
+    return AssetId.fromWasm(this.inner.assetId());
   }
 }
 
