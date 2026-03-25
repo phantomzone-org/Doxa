@@ -10,7 +10,7 @@ use tessera_server::{
 use tessera_utils::hasher::HashOutput;
 use tracing::{error, info};
 
-use super::helpers::zero_proof;
+use super::helpers::random_proof;
 use super::state::{DemoProvider, SharedState};
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ async fn prove_tx_batch(
 	info!(%pi_commitment, "proving TX batch (zero proof)");
 
 	let receipt = rollup
-		.proveTransactionBatch(pi_commitment, zero_proof())
+		.proveTransactionBatch(pi_commitment, random_proof())
 		.send()
 		.await
 		.map_err(|e| anyhow::anyhow!("proveTransactionBatch failed: {e}"))?
@@ -296,7 +296,7 @@ async fn prove_deposit_batch(
 	info!(%pi_commitment, "proving deposit batch (zero proof)");
 
 	let receipt = rollup
-		.proveDepositBatch(pi_commitment, zero_proof())
+		.proveDepositBatch(pi_commitment, random_proof())
 		.send()
 		.await
 		.map_err(|e| anyhow::anyhow!("proveDepositBatch failed: {e}"))?
