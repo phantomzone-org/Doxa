@@ -30,6 +30,11 @@ export interface FreshAccStatusResponse {
   status: FreshAccStatus;
 }
 
+/** Response body for POST /faucet (HTTP 201) */
+export interface FaucetResponse {
+  tx_hash: string;
+}
+
 /** Response body for GET /account/:private_acc_address */
 export interface AccountResponse {
   private_acc_address: string;

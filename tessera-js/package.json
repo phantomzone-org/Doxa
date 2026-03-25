@@ -14,5 +14,8 @@
     "vite": "^6.0.0",
     "vite-plugin-wasm": "^3.6.0",
     "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "viem": "^2.47.6"
   }
 }

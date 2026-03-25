@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @notice Toy ERC20 used for local testing.
+/// @notice Toy ERC20 used for local testing, with an operator allowed to mint.
 contract ToyUSDT {
     string public constant name = "USDX";
     string public constant symbol = "USDX";
@@ -18,6 +18,8 @@ contract ToyUSDT {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
+    address public immutable operator;
+
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(
         address indexed owner,
@@ -29,8 +31,10 @@ contract ToyUSDT {
     error InsufficientAllowance();
     error PermitExpired();
     error InvalidPermitSignature();
+    error Unauthorized();
 
-    constructor() {
+    constructor(address _operator) {
+        operator = _operator;
         // EIP-712 domain separator for `permit`.
         uint256 chainId = block.chainid;
         DOMAIN_SEPARATOR = keccak256(
@@ -47,6 +51,7 @@ contract ToyUSDT {
     }
 
     function mint(address to, uint256 value) external {
+        if (msg.sender != operator) revert Unauthorized();
         totalSupply += value;
         balanceOf[to] += value;
         emit Transfer(address(0), to, value);

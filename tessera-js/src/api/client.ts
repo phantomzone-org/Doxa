@@ -1,5 +1,5 @@
 import type { PrivateIdentifier, SpendAuthPk } from "../account.js";
-import type { AccountResponse, ApiError, FreshAccStatusResponse, RegisterRequest, RegisterResponse } from "./types.js";
+import type { AccountResponse, ApiError, FaucetResponse, FreshAccStatusResponse, RegisterRequest, RegisterResponse } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
 export class SubpoolApiError extends Error {
@@ -98,6 +98,21 @@ export class SubpoolClient {
     const json = await res.json();
     if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
     return json as FreshAccStatusResponse;
+  }
+
+  /**
+   * POST /faucet — request a small ETH transfer on Sepolia.
+   * Throws `SubpoolApiError` on non-2xx (e.g. 409 if address already funded).
+   */
+  async requestFaucet(ethAddress: string): Promise<FaucetResponse> {
+    const res = await fetch(`${this.baseUrl}/faucet`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eth_address: ethAddress }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as FaucetResponse;
   }
 
   async registerAccount(

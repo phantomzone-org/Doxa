@@ -1,4 +1,6 @@
 import init from "../wasm/tessera_client_wasm.js";
+import { createPublicClient, http, erc20Abi, formatUnits } from "viem";
+import { sepolia } from "viem/chains";
 import {
   Account,
   AccountAddress,
@@ -20,7 +22,9 @@ function log(msg: string) {
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const TESSERA_CONTRACT = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e";
-const USDX_TOKEN = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const USDX_CONTRACT_ADDR = import.meta.env
+  .VITE_USDX_CONTRACT_ADDR as `0x${string}`;
+const SEPOLIA_RPC_URL = import.meta.env.VITE_SEPOLIA_RPC_URL as string;
 const PRF_INPUT = new TextEncoder().encode("tessera::account::seed");
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -180,7 +184,7 @@ function craftTx(from: string, amount: number): object {
     gas: "0x186a0",
     maxFeePerGas: "0x77359400",
     maxPriorityFeePerGas: "0x3b9aca00",
-    _usdxToken: USDX_TOKEN,
+    _usdxToken: USDX_CONTRACT_ADDR,
     _depositAmount: amount + " USDX",
   };
 }
@@ -219,12 +223,20 @@ const etherscanAnchor = document.getElementById(
   "etherscan-anchor",
 ) as HTMLAnchorElement;
 
-let publicBalance = 0;
-
-function renderPublicBalance() {
+async function loadPublicBalance(address: string) {
+  const client = createPublicClient({
+    chain: sepolia,
+    transport: http(SEPOLIA_RPC_URL),
+  });
+  const raw = await client.readContract({
+    address: USDX_CONTRACT_ADDR,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [address as `0x${string}`],
+  });
+  const balance = Number(formatUnits(raw, 6));
   usdcBalanceEl.textContent =
-    publicBalance.toLocaleString("en-US", { minimumFractionDigits: 2 }) +
-    " USDX";
+    balance.toLocaleString("en-US", { minimumFractionDigits: 2 }) + " USDX";
 }
 
 async function showPublicWallet(seed: Uint8Array) {
@@ -232,8 +244,8 @@ async function showPublicWallet(seed: Uint8Array) {
   ethAddressEl.textContent =
     ethAddressFull.slice(0, 10) + "…" + ethAddressFull.slice(-8);
   ethAddressEl.title = ethAddressFull;
-  publicBalance = 0;
-  renderPublicBalance();
+  await loadPublicBalance(ethAddressFull);
+  setInterval(() => loadPublicBalance(ethAddressFull!), 10_000);
 }
 
 function renderVisiblePostSignIn() {
@@ -297,43 +309,31 @@ signInBtn.addEventListener("click", async () => {
   }
 });
 
-// existing 1000 USDX deposit on public card
 depositBtn.addEventListener("click", async () => {
   depositBtn.disabled = true;
   depositProgress.classList.add("visible");
   depositSteps.innerHTML = "";
   etherscanLink.classList.remove("visible");
 
-  const steps = [
-    { label: "Approving USDX transfer…", pct: 25, ms: 1200 },
-    { label: "Submitting deposit transaction…", pct: 60, ms: 1800 },
-    { label: "Waiting for block confirmation…", pct: 85, ms: 1500 },
-    { label: "✓ Deposit confirmed", pct: 100, ms: 0 },
-  ];
+  const step = pStep(depositSteps, "⏳ Submitting faucet request…", "active");
+  depositBar.style.width = "50%";
 
-  let prev: HTMLElement | null = null;
-  for (const step of steps) {
-    if (prev) {
-      prev.className = "p-step done";
-      prev.textContent = "✓ " + prev.textContent!.replace(/^⏳ /, "");
-    }
-    const el = pStep(
-      depositSteps,
-      (step.pct < 100 ? "⏳ " : "") + step.label,
-      step.pct < 100 ? "active" : "done",
-    );
-    depositBar.style.width = step.pct + "%";
-    if (step.ms > 0) await delay(step.ms);
-    prev = step.pct < 100 ? el : null;
+  try {
+    const { tx_hash } = await subpoolClient.requestFaucet(ethAddressFull!);
+
+    step.className = "p-step done";
+    step.textContent = "✓ Faucet transaction submitted";
+    depositBar.style.width = "100%";
+
+    etherscanAnchor.href = `https://sepolia.etherscan.io/tx/${tx_hash}`;
+    etherscanAnchor.textContent =
+      tx_hash.slice(0, 10) + "…" + tx_hash.slice(-8);
+    etherscanLink.classList.add("visible");
+  } catch (err) {
+    step.className = "p-step done";
+    step.textContent = `Error: ${err}`;
+    depositBtn.disabled = false;
   }
-
-  publicBalance += 1000;
-  renderPublicBalance();
-
-  const txHash = fakeTxHash();
-  etherscanAnchor.href = `https://etherscan.io/tx/${txHash}`;
-  etherscanAnchor.textContent = txHash.slice(0, 10) + "…" + txHash.slice(-8);
-  etherscanLink.classList.add("visible");
 });
 
 // ── Section 2: Private account ────────────────────────────────────────────────
