@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 tessera-client = { workspace = true }
 tessera-utils  = { workspace = true }
+tessera-subpool-database = { path = "../tessera-subpool-database" }
 anyhow         = { workspace = true }
 serde          = { workspace = true, features = ["derive"] }
 serde_json     = { workspace = true }

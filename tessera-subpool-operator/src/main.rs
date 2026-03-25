@@ -1,10 +1,9 @@
 mod config;
-mod convert;
 mod operator;
 
 use anyhow::Result;
-use sqlx::postgres::PgPoolOptions;
 use tessera_client::schnorr::PrivateKey;
+use tessera_subpool_database::db::create_pool;
 use tracing_subscriber::EnvFilter;
 
 use config::OperatorConfig;
@@ -26,10 +25,7 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("APPROVAL_PRIVATE_KEY invalid hex: {e}"))?;
     let approval_sk = PrivateKey::decode_reduce(&key_bytes);
 
-    let pool = PgPoolOptions::new()
-        .max_connections(config.db_max_connections)
-        .connect(&config.database_url)
-        .await?;
+    let pool = create_pool(&config.database_url, config.db_max_connections).await?;
 
     tracing::info!(
         sequencer = %config.sequencer_url,

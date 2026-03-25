@@ -1,7 +1,7 @@
 use std::array;
 
 use anyhow::{Context, Result};
-use plonky2_field::types::PrimeField64;
+use plonky2_field::types::{Field, PrimeField64};
 use serde::Serialize;
 use sqlx::PgPool;
 use tessera_client::{
@@ -13,7 +13,11 @@ use tessera_client::{
 use tessera_utils::F;
 use tracing::{error, info};
 
-use crate::convert::{bytes_to_f, bytes_to_private_id};
+use tessera_subpool_database::{
+    SUBPOOL_ID,
+    convert::{account_to_insert, bytes_to_private_id},
+    db::insert_account_and_user,
+};
 
 // ── DB row types ────────────────────────────────────────────────────────────
 
@@ -22,12 +26,11 @@ struct PendingFreshAcc {
     id: i64,
     private_acc_address: String,
     spend_auth: Vec<u8>,
-}
-
-#[derive(sqlx::FromRow)]
-struct AccountRow {
     private_identifier: Vec<u8>,
-    subpool_id: Vec<u8>,
+    eth_address: String,
+    name: String,
+    physical_address: String,
+    dob: chrono::NaiveDate,
 }
 
 // ── Sequencer request ───────────────────────────────────────────────────────
@@ -54,6 +57,7 @@ fn hash_to_hex(h: &[F; 4]) -> String {
     hex::encode(out)
 }
 
+
 // ── Core loop ───────────────────────────────────────────────────────────────
 
 pub async fn process_pending(
@@ -62,9 +66,9 @@ pub async fn process_pending(
     sequencer_url: &str,
     http: &reqwest::Client,
 ) -> Result<()> {
-    // 1. Fetch all PENDING freshacc_requests
     let rows: Vec<PendingFreshAcc> = sqlx::query_as(
-        "SELECT id, private_acc_address, spend_auth \
+        "SELECT id, private_acc_address, spend_auth, \
+                private_identifier, eth_address, name, physical_address, dob \
          FROM freshacc_requests \
          WHERE status = 'PENDING' \
          ORDER BY created_at ASC",
@@ -98,33 +102,18 @@ async fn process_one(
     http: &reqwest::Client,
     row: &PendingFreshAcc,
 ) -> Result<()> {
-    // ── 1. Fetch the account row ─────────────────────────────────────────────
-    let acc_row: AccountRow = sqlx::query_as(
-        "SELECT private_identifier, subpool_id FROM accounts WHERE private_acc_address = $1",
-    )
-    .bind(&row.private_acc_address)
-    .fetch_one(pool)
-    .await
-    .context("account row not found")?;
-
-    // ── 2. Reconstruct accin ─────────────────────────────────────────────────
-    let pi_arr: [u8; 16] = acc_row
+    // ── 1. Reconstruct accin from freshacc_requests data ──────────────────────
+    let pi_arr: [u8; 16] = row
         .private_identifier
         .as_slice()
         .try_into()
         .context("private_identifier must be 16 bytes")?;
     let private_identifier = bytes_to_private_id(&pi_arr);
 
-    let sp_arr: [u8; 8] = acc_row
-        .subpool_id
-        .as_slice()
-        .try_into()
-        .context("subpool_id must be 8 bytes")?;
-    let subpool_id = SubpoolId(bytes_to_f(&sp_arr));
-
+    let subpool_id = SubpoolId(F::from_canonical_u64(SUBPOOL_ID));
     let accin = StandardAccount::new_with(private_identifier, subpool_id);
 
-    // ── 3. Build accout (nonce 0→1, set spend_auth) ──────────────────────────
+    // ── 2. Build accout (nonce 0→1, set spend_auth) ──────────────────────────
     let spend_pk_bytes: [u8; 40] = row
         .spend_auth
         .as_slice()
@@ -137,7 +126,7 @@ async fn process_one(
         spend_pk: Some(spend_pk),
     };
 
-    // ── 4. Sample dummy notes and compute tx_hash ────────────────────────────
+    // ── 3. Sample dummy notes and compute tx_hash ────────────────────────────
     let mut rng = rand::rng();
     let (dinotes, donotes) = sample_dummy_notes(&mut rng);
 
@@ -153,19 +142,18 @@ async fn process_one(
         donote_comms.clone(),
     );
 
-    // ── 5. Sign tx_hash with approval key ────────────────────────────────────
+    // ── 4. Sign tx_hash with approval key ────────────────────────────────────
     let k = Scalar::sample(&mut rng);
     let approval_sig = schnorr_sign(approval_sk, &tx_hash.0, k);
     let sig_bytes = approval_sig.encode();
 
-    // ── 6. POST to sequencer (must succeed before updating DB) ─────────────
+    // ── 5. POST to sequencer (must succeed before updating DB) ───────────────
     let an = hash_to_hex(&accin.nullifier().0 .0);
     let ac = hash_to_hex(&accout.commitment().0 .0);
 
     let input_notes: Vec<String> = dinote_nulls.iter().map(|n| hash_to_hex(&n.0 .0)).collect();
     let output_notes: Vec<String> = donote_comms.iter().map(|c| hash_to_hex(&c.0 .0)).collect();
 
-    // Demo mode: use empty proof bytes (AcceptAllVerifier).
     let tx_req = TransactionRequest {
         tx_id: Some(format!("freshacc-{}", row.private_acc_address)),
         input_account_leaf: an,
@@ -197,7 +185,7 @@ async fn process_one(
         "FreshAcc transaction submitted to sequencer"
     );
 
-    // ── 7. Update DB: APPROVED + signature (only after sequencer accepted) ──
+    // ── 6. Update freshacc_requests: APPROVED + signature ────────────────────
     sqlx::query(
         "UPDATE freshacc_requests \
          SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
@@ -213,6 +201,16 @@ async fn process_one(
         id = row.id,
         addr = %row.private_acc_address,
         "FreshAcc request approved in DB"
+    );
+
+    // ── 7. Create accounts + users rows (only after approval) ────────────────
+    let insert = account_to_insert(&accout, row.eth_address.clone());
+    insert_account_and_user(pool, &insert, &row.name, &row.physical_address, row.dob).await?;
+
+    info!(
+        id = row.id,
+        addr = %row.private_acc_address,
+        "account + user rows created in DB"
     );
 
     Ok(())
