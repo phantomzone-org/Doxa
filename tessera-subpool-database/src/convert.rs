@@ -137,16 +137,20 @@ pub fn bytes_to_subpool_id(b: &[u8; 8]) -> SubpoolId {
 ///
 /// Restores private_identifier, nonce, spend_auth, and AST from the
 /// DB-stored byte representations.
-pub fn account_from_row(
-	row: &AccountRow,
-	subpool_id: SubpoolId,
-) -> anyhow::Result<StandardAccount> {
+pub fn account_from_row(row: &AccountRow) -> anyhow::Result<StandardAccount> {
 	let pi_arr: [u8; 16] = row
 		.private_identifier
 		.as_slice()
 		.try_into()
 		.context("private_identifier must be 16 bytes")?;
 	let private_identifier = bytes_to_private_id(&pi_arr);
+
+	let subpool_id_arr: [u8; 8] = row
+		.subpool_id
+		.as_slice()
+		.try_into()
+		.context("subpool_id must be 8 bytes")?;
+	let subpool_id = bytes_to_subpool_id(&subpool_id_arr);
 
 	let mut acc = StandardAccount::new_with(private_identifier, subpool_id);
 

@@ -2,12 +2,14 @@ use axum::{extract::State, http::StatusCode, Json};
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use plonky2_field::types::PrimeField64;
+use tessera_client::AssetId;
 
 use crate::{
-    convert::bytes_to_u256,
+    convert::{account_from_row, bytes_to_f, bytes_to_u256},
     error::AppError,
     state::AppState,
-    types::spend_tx::InputNoteStatus,
+    types::{account::AccountRow, spend_tx::InputNoteStatus},
 };
 
 #[derive(Deserialize)]
@@ -88,6 +90,33 @@ pub async fn submit_spend_tx_handler(
         inote_amounts.push(bytes_to_u256(&arr));
     }
 
+    // ── 1b. Validate shared asset_id ──────────────────────────────────────────
+    let all_asset_ids: Vec<&str> = req.input_notes.iter()
+        .chain(req.output_notes.iter())
+        .map(|n| n.asset_id.as_str())
+        .collect();
+
+    let asset_id_hex = all_asset_ids
+        .first()
+        .ok_or_else(|| AppError::InvalidInput("spend tx must have at least one note".into()))?;
+
+    for id in &all_asset_ids {
+        if id != asset_id_hex {
+            return Err(AppError::InvalidInput(
+                "all notes must share the same asset_id".into(),
+            ));
+        }
+    }
+
+    let asset_id_bytes = hex::decode(asset_id_hex)
+        .map_err(|_| AppError::InvalidInput("invalid asset_id hex".into()))?;
+    let asset_id_arr: [u8; 8] = asset_id_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| AppError::InvalidInput("asset_id must be 8 bytes".into()))?;
+    let asset_id = AssetId::from_u64(bytes_to_f(&asset_id_arr).to_canonical_u64())
+        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+
     // ── 2. Validate and decode each output note ────────────────────────────────
     struct DecodedOutput {
         identifier: String,
@@ -139,30 +168,34 @@ pub async fn submit_spend_tx_handler(
         });
     }
 
-    // ── 3. Fetch account (existence check) ────────────────────────────────────
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM accounts WHERE private_acc_address = $1)",
+    // ── 3. Fetch and parse account ─────────────────────────────────────────────
+    let row: Option<AccountRow> = sqlx::query_as(
+        "SELECT * FROM accounts WHERE private_acc_address = $1",
     )
     .bind(&req.priv_acc_address)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await
     .map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
 
-    if !exists {
-        return Err(AppError::NotFound(format!("account '{}' not found", req.priv_acc_address)));
-    }
+    let row = row.ok_or_else(|| {
+        AppError::NotFound(format!("account '{}' not found", req.priv_acc_address))
+    })?;
 
-    // ── 4. Balance check: sum(inotes) == sum(onotes) ───────────────────────────
+    let account = account_from_row(&row).map_err(AppError::Internal)?;
+
+    let acc_balance = account.ast.amount_for(asset_id).map(|(_, amt)| amt).unwrap_or(U256::zero());
+
+    // ── 4. Balance check: acc_balance + sum(inotes) == sum(onotes) ─────────────
     let total_in = inote_amounts
         .iter()
-        .fold(U256::zero(), |acc, &v| u256_add(acc, v));
+        .fold(acc_balance, |a, &v| u256_add(a, v));
     let total_out = decoded_outputs
         .iter()
         .fold(U256::zero(), |acc, d| u256_add(acc, d.amount));
 
     if total_in != total_out {
         return Err(AppError::InvalidInput(
-            "balance mismatch: sum(inotes) != sum(onotes)".into(),
+            "balance mismatch: acc_balance + sum(inotes) != sum(onotes)".into(),
         ));
     }
 
