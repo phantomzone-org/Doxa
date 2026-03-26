@@ -1,13 +1,13 @@
 use alloy::providers::Provider;
 use anyhow::{Context, Result};
-use plonky2_field::types::{Field, PrimeField64};
+use plonky2_field::types::PrimeField64;
 use primitive_types::U256;
 use serde::Serialize;
 use sqlx::PgPool;
 use tessera_client::{
 	derive_deposit_tx_hash,
 	schnorr::{schnorr_sign, PrivateKey, Scalar},
-	AccountAddress, AssetId, DepositNote, StandardAccount, SubpoolId,
+	AccountAddress, AssetId, DepositNote, StandardAccount,
 };
 use tessera_subpool_database::{
 	convert::{
@@ -15,7 +15,6 @@ use tessera_subpool_database::{
 	},
 	db::update_account_after_deposit,
 	types::{account::AccountRow, deposit::DepositTxRow},
-	SUBPOOL_ID,
 };
 use tessera_utils::F;
 use tracing::{error, info};
@@ -217,8 +216,7 @@ async fn process_one_deposit<P: Provider + Clone>(
 			.await
 			.context("account row not found for deposit recipient")?;
 
-	let subpool_id = SubpoolId(F::from_canonical_u64(SUBPOOL_ID));
-	let accin = account_from_row(&acc_row, subpool_id)?;
+	let accin = account_from_row(&acc_row)?;
 
 	// ── 3. Parse deposit fields and build note commitment ────────────────────
 	let deposit = parse_deposit_fields(row)?;
