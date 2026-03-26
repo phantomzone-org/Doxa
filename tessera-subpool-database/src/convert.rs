@@ -2,8 +2,8 @@ use anyhow::Context;
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
 use tessera_client::{
-	schnorr::CompressedPublicKey, AccountAddress, AssetId, Nonce, PrivateIdentifier, SpendAuth,
-	StandardAccount, SubpoolId,
+	schnorr::CompressedPublicKey, AccountAddress, AccountStateTree, AssetId, Nonce,
+	PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId,
 };
 use tessera_utils::F;
 
@@ -100,6 +100,20 @@ pub fn account_to_insert(acc: &StandardAccount, eth_address: String) -> AccountI
 		zero_40().to_vec()
 	};
 
+	let ast = {
+		let mut map = serde_json::Map::new();
+		for (asset_id, (leaf_index, amount)) in &acc.ast.assets {
+			map.insert(
+				asset_id.to_u64().to_string(),
+				serde_json::json!({
+					"leaf_index": leaf_index,
+					"amount": hex::encode(u256_to_bytes(*amount)),
+				}),
+			);
+		}
+		serde_json::Value::Object(map)
+	};
+
 	AccountInsert {
 		private_acc_address,
 		eth_address,
@@ -108,7 +122,7 @@ pub fn account_to_insert(acc: &StandardAccount, eth_address: String) -> AccountI
 		nonce: f_to_bytes(acc.nonce.0).to_vec(),
 		spend_auth,
 		consume_auth,
-		ast: serde_json::json!({}),
+		ast,
 	}
 }
 
@@ -156,8 +170,12 @@ pub fn account_from_row(
 	}
 
 	if let Some(ast_obj) = row.ast.as_object() {
+		let mut asset_map = std::collections::HashMap::new();
 		for (key, val) in ast_obj {
 			let aid = key.parse::<u64>().context("invalid asset_id key in AST")?;
+			let leaf_index = val["leaf_index"]
+				.as_u64()
+				.context("missing leaf_index in AST entry")? as usize;
 			let amount_hex = val["amount"]
 				.as_str()
 				.context("missing amount in AST entry")?;
@@ -168,8 +186,9 @@ pub fn account_from_row(
 				.with_context(|| format!("AST amount for asset_id '{aid}' must be 32 bytes, got {}", amount_bytes.len()))?;
 			let amount = bytes_to_u256(&amount_arr);
 			let asset_id = AssetId::from_u64(aid)?;
-			acc.ast.insert_or_update_asset(asset_id, amount);
+			asset_map.insert(asset_id, (leaf_index, amount));
 		}
+		acc.ast = AccountStateTree::new_from_asset_map(asset_map)?;
 	}
 
 	Ok(acc)
@@ -214,7 +233,7 @@ pub fn build_ast_json(
 		key,
 		serde_json::json!({
 			"leaf_index": leaf_index,
-			"amount": format!("{:064x}", new_balance),
+			"amount": hex::encode(u256_to_bytes(new_balance)),
 		}),
 	);
 	serde_json::Value::Object(ast)

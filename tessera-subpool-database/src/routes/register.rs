@@ -110,32 +110,9 @@ pub async fn register_handler(
 		.map_err(|_| AppError::InvalidInput("dob must be in YYYY-MM-DD format".into()))?;
 
 	// ── 7. Transactional insert ───────────────────────────────────────────────
-	// let insert = account_to_insert(&acc, body.eth_address.clone());
 	let spend_auth_bytes = spend_pk.encode();
 
 	let mut tx = pool.begin().await?;
-
-	// // Insert accounts first (FK anchor for users and freshacc_requests)
-	// sqlx::query(
-	//     r#"
-	//     INSERT INTO accounts
-	//         (private_acc_address, eth_address,
-	//          private_identifier, subpool_id, balance, nonce,
-	//          spend_auth, consume_auth, ast)
-	//     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	//     "#,
-	// )
-	// .bind(&insert.private_acc_address)
-	// .bind(&insert.eth_address)
-	// .bind(&insert.private_identifier)
-	// .bind(&insert.subpool_id)
-	// .bind(&insert.balance)
-	// .bind(&insert.nonce)
-	// .bind(&insert.spend_auth)
-	// .bind(&insert.consume_auth)
-	// .bind(&insert.ast)
-	// .execute(&mut *tx)
-	// .await?;
 
 	sqlx::query(
 		r#"
