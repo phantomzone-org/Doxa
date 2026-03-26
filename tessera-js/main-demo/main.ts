@@ -1,9 +1,20 @@
 import init from "../wasm/tessera_client_wasm.js";
-import { createPublicClient, http, erc20Abi, formatUnits } from "viem";
+import {
+  createPublicClient,
+  createWalletClient,
+  encodeFunctionData,
+  http,
+  erc20Abi,
+  formatUnits,
+  maxUint256,
+} from "viem";
 import { sepolia } from "viem/chains";
+import { privateKeyToAccount } from "viem/accounts";
 import {
   Account,
   AccountAddress,
+  AssetId,
+  DepositNote,
   SubpoolId,
   SubpoolClient,
   derivePrivateIdentifier,
@@ -36,6 +47,7 @@ const subpoolClient = new SubpoolClient(API_BASE_URL);
 
 let credentialId: Uint8Array | null = null;
 let ethAddressFull: string | null = null;
+let privateAccAddressFull: string | null = null;
 let currentSeed: Uint8Array | null = null;
 let privateBalance = 0;
 
@@ -149,13 +161,44 @@ async function sha256(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", data));
 }
 
-async function deriveEthAddress(seed: Uint8Array): Promise<string> {
-  const domain = new TextEncoder().encode("tessera::eth::address");
+async function deriveWalletAccount(seed: Uint8Array) {
+  const domain = new TextEncoder().encode("tessera::eth::privkey");
   const input = new Uint8Array(seed.length + domain.length);
   input.set(seed);
   input.set(domain, seed.length);
-  const hash = await sha256(input);
-  return "0x" + toHex(hash.slice(12));
+  const privKey = ("0x" + toHex(await sha256(input))) as `0x${string}`;
+  return privateKeyToAccount(privKey);
+}
+
+async function deriveEthAddress(seed: Uint8Array): Promise<string> {
+  return (await deriveWalletAccount(seed)).address;
+}
+
+// ── Tessera contract ABI fragment ─────────────────────────────────────────────
+
+const TESSERA_ABI = [
+  {
+    name: "depositAndRegister",
+    type: "function",
+    inputs: [
+      { name: "noteCommitment", type: "bytes32" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bytes32" }],
+  },
+] as const;
+
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+/** Encode a BigInt as a 32-byte little-endian hex string (U256 LE, no 0x prefix). */
+function u256LeHex(v: bigint): string {
+  const bytes = new Uint8Array(32);
+  let tmp = v;
+  for (let i = 0; i < 32; i++) {
+    bytes[i] = Number(tmp & 0xffn);
+    tmp >>= 8n;
+  }
+  return toHex(bytes);
 }
 
 // ── ABI encoding (hand-rolled, no library) ────────────────────────────────────
@@ -262,6 +305,7 @@ async function loadPrivateAccount(seed: Uint8Array) {
     subpoolId,
     publicId,
   ).toHex();
+  privateAccAddressFull = privateAccAddress;
   const accountData = await subpoolClient
     .getAccount(privateAccAddress)
     .catch(() => null);
@@ -492,100 +536,102 @@ p2pBtn.addEventListener("click", async () => {
 
   p2pBtn.disabled = true;
   p2pError.textContent = "";
-  p2pTxWrap.style.display = "none";
-  p2pProgress.classList.remove("visible");
+  p2pProgress.classList.add("visible");
   p2pSteps.innerHTML = "";
   p2pBar.style.width = "0%";
 
   try {
-    // 1. Craft transaction
-    const tx = craftTx(ethAddressFull, amount);
-    p2pTxDisplay.textContent = JSON.stringify(tx, null, 2);
-
-    // 2. Prompt passkey → sign
-    p2pTxDisplay.textContent = JSON.stringify(tx, null, 2);
-    p2pTxWrap.style.display = "block";
-
     const seed = await evalPrf();
+    const account = await deriveWalletAccount(seed);
 
-    const txBytes = new TextEncoder().encode(JSON.stringify(tx));
-    const txHash = await sha256(txBytes);
-    const combined = new Uint8Array(seed.length + txHash.length);
-    combined.set(seed);
-    combined.set(txHash, seed.length);
-    const sig = await sha256(combined); // demo signature: sha256(seed || sha256(tx))
+    const publicClient = createPublicClient({
+      chain: sepolia,
+      transport: http(SEPOLIA_RPC_URL),
+    });
 
-    p2pSigDisplay.textContent = "0x" + toHex(sig);
+    // Check current USDX allowance for TESSERA_CONTRACT
+    const allowance = await publicClient.readContract({
+      address: USDX_CONTRACT_ADDR,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [account.address, TESSERA_CONTRACT as `0x${string}`],
+    });
 
-    // 3. Progress bar
-    p2pProgress.classList.add("visible");
+    const walletClient = createWalletClient({
+      account,
+      chain: sepolia,
+      transport: http(SEPOLIA_RPC_URL),
+    });
 
-    const relayTxHash = fakeTxHash();
-    const shortHash = relayTxHash.slice(0, 10) + "…" + relayTxHash.slice(-8);
+    if (allowance < maxUint256) {
+      const step = pStep(p2pSteps, "⏳ Approving USDX transfer…", "active");
+      p2pBar.style.width = "40%";
 
-    const steps: Array<{
-      label: string | (() => string | HTMLElement);
-      pct: number;
-      ms: number;
-    }> = [
-      { label: "⏳ Waiting for approval…", pct: 20, ms: 1600 },
-      { label: "✓ Deposit approved", pct: 40, ms: 1200 },
-      {
-        label: () => {
-          const span = document.createDocumentFragment();
-          const txt = document.createTextNode("✓ Transaction relayed — ");
-          const a = document.createElement("a");
-          a.href = `https://etherscan.io/tx/${relayTxHash}`;
-          a.target = "_blank";
-          a.rel = "noopener";
-          a.textContent = shortHash;
-          span.append(txt, a);
-          return span as any;
-        },
-        pct: 65,
-        ms: 1800,
-      },
-      { label: "⚙️ Generating deposit proof…", pct: 85, ms: 2000 },
-      { label: "✓ Deposit settled", pct: 100, ms: 0 },
-    ];
+      const approveTxHash = await walletClient.writeContract({
+        address: USDX_CONTRACT_ADDR,
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [TESSERA_CONTRACT as `0x${string}`, maxUint256],
+      });
 
-    for (const step of steps) {
-      const el = document.createElement("div");
-      el.className = `p-step ${step.pct < 100 ? "active" : "done"}`;
-      if (typeof step.label === "function") {
-        el.appendChild(step.label() as any);
-      } else {
-        el.textContent = step.label;
-      }
-      p2pSteps.appendChild(el);
-      p2pBar.style.width = step.pct + "%";
-      if (step.ms > 0) {
-        await delay(step.ms);
-        if (
-          step.pct < 100 &&
-          typeof step.label === "string" &&
-          step.label.startsWith("⏳")
-        ) {
-          el.className = "p-step done";
-          el.textContent = step.label.replace("⏳ ", "✓ ").replace("…", "");
-        } else if (
-          step.pct < 100 &&
-          typeof step.label === "string" &&
-          step.label.startsWith("⚙️")
-        ) {
-          el.className = "p-step done";
-          el.textContent = "✓ Deposit proof generated";
-        }
-      }
+      await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
+
+      step.className = "p-step done";
+      step.textContent = "✓ USDX transfer approved";
     }
 
-    // 4. Update private balance
-    privateBalance += amount;
-    renderPrivateBalance();
-    kycDisplay.style.display = "block";
+    // ── Construct deposit note ────────────────────────────────────────────────
+    const step2 = pStep(p2pSteps, "⏳ Constructing deposit note…", "active");
+    p2pBar.style.width = "60%";
 
-    p2pBtn.disabled = false;
-    p2pAmountInput.value = "";
+    const amountUnits = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
+    const depositNote = DepositNote.create(
+      AccountAddress.fromHex(privateAccAddressFull!),
+      amountUnits,
+      AssetId.fromU64(1n),
+    );
+    const commitmentHex = ("0x" +
+      depositNote.commitment().toHex()) as `0x${string}`;
+
+    step2.className = "p-step done";
+    step2.textContent = "✓ Deposit note constructed";
+
+    // ── Sign transferDepositAndRegister tx (do NOT broadcast) ─────────────────
+    const step3 = pStep(p2pSteps, "⏳ Signing deposit transaction…", "active");
+    p2pBar.style.width = "80%";
+
+    const calldata = encodeFunctionData({
+      abi: TESSERA_ABI,
+      functionName: "depositAndRegister",
+      args: [commitmentHex, amountUnits],
+    });
+
+    const txRequest = await walletClient.prepareTransactionRequest({
+      to: TESSERA_CONTRACT as `0x${string}`,
+      data: calldata,
+    });
+    const signedTx = await walletClient.signTransaction(txRequest);
+    const signedTxHex = signedTx.replace(/^0x/, "");
+
+    step3.className = "p-step done";
+    step3.textContent = "✓ Transaction signed";
+
+    // ── Submit to backend ─────────────────────────────────────────────────────
+    const step4 = pStep(p2pSteps, "⏳ Submitting deposit request…", "active");
+    p2pBar.style.width = "90%";
+
+    await subpoolClient.submitDeposit({
+      recipient_acc_address: privateAccAddressFull!,
+      eth_address: ethAddressFull!,
+      deposit_note_identifier: depositNote.identifierHex(),
+      deposit_amount: u256LeHex(amountUnits),
+      asset_id: "0100000000000000", // u64(1) as 8-byte LE hex
+      signed_public_tx: signedTxHex,
+    });
+
+    step4.className = "p-step done";
+    step4.textContent = "✓ Deposit submitted";
+    p2pBar.style.width = "100%";
   } catch (err) {
     p2pError.textContent = `Error: ${err}`;
     p2pBtn.disabled = false;

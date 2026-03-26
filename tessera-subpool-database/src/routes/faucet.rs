@@ -1,11 +1,11 @@
 use alloy::{
-    network::EthereumWallet,
-    primitives::{Address, U256},
-    providers::{PendingTransactionBuilder, Provider, ProviderBuilder},
-    rpc::types::TransactionRequest,
-    signers::local::PrivateKeySigner,
-    sol,
-    sol_types::SolCall,
+	network::EthereumWallet,
+	primitives::{Address, U256},
+	providers::{PendingTransactionBuilder, Provider, ProviderBuilder},
+	rpc::types::TransactionRequest,
+	signers::local::PrivateKeySigner,
+	sol,
+	sol_types::SolCall,
 };
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
@@ -13,19 +13,19 @@ use serde::{Deserialize, Serialize};
 use crate::{error::AppError, state::AppState};
 
 /// 0.000000001 ETH in wei
-const FAUCET_AMOUNT_WEI: u128 = 1_000_000_000;
+const FAUCET_AMOUNT_WEI: u128 = 300_000_000_000;
 /// 10 USDX (6 decimals)
 const USDX_MINT_AMOUNT: u64 = 10_000_000;
 
 sol! {
-    interface IUSDX {
-        function mint(address to, uint256 value) external;
-    }
+	interface IUSDX {
+		function mint(address to, uint256 value) external;
+	}
 }
 
 #[derive(Deserialize)]
 pub struct FaucetRequest {
-    pub eth_address: String,
+	pub eth_address: String,
 }
 
 #[derive(Serialize)]

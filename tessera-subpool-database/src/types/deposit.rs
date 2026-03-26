@@ -19,6 +19,7 @@ pub struct DepositTxRow {
     pub deposit_amount: Vec<u8>,
     pub asset_id: Vec<u8>,
     pub signed_public_tx: Vec<u8>,
+    pub deposit_tx_hash: Option<String>,
     pub status: DepositTxStatus,
     pub approval_signature: Option<Vec<u8>>,
     pub rejection_reason: Option<String>,

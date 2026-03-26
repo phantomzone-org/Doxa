@@ -35,6 +35,25 @@ export interface FaucetResponse {
   tx_hash: string;
 }
 
+/** Request body for POST /deposit */
+export interface DepositRequest {
+  recipient_acc_address: string;
+  eth_address: string;
+  /** 32 hex chars — [F;2] identifier, 2 × u64 LE */
+  deposit_note_identifier: string;
+  /** 64 hex chars — U256 amount, 32 bytes LE */
+  deposit_amount: string;
+  /** 16 hex chars — u64 asset_id, 8 bytes LE */
+  asset_id: string;
+  /** hex-encoded RLP-encoded signed ETH tx (no 0x prefix) */
+  signed_public_tx: string;
+}
+
+/** Response body for a successful POST /deposit (HTTP 201) */
+export interface DepositResponse {
+  id: number;
+}
+
 /** Response body for GET /account/:private_acc_address */
 export interface AccountResponse {
   private_acc_address: string;

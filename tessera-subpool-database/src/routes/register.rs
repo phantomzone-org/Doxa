@@ -5,10 +5,10 @@ use tessera_client::{schnorr::CompressedPublicKey, AccountAddress, StandardAccou
 use tessera_utils::F;
 
 use crate::{
-    convert::bytes_to_private_id,
-    error::AppError,
-    state::AppState,
-    SUBPOOL_ID,
+	convert::{account_to_insert, bytes_to_private_id},
+	error::AppError,
+	state::AppState,
+	SUBPOOL_ID,
 };
 
 /// JSON request body for `POST /register`.
@@ -53,37 +53,50 @@ pub async fn register_handler(
 	let pi_arr: &[u8; 16] = pi_bytes.as_slice().try_into().unwrap();
 	let private_identifier = bytes_to_private_id(pi_arr);
 
-    // ── 2. Build account and derive address ───────────────────────────────────
-    let subpool_id = SubpoolId(F::from_canonical_u64(SUBPOOL_ID));
-    let acc = StandardAccount::new_with(private_identifier, subpool_id);
-    let private_acc_address = AccountAddress::from_acc(&acc).to_hex();
+	// ── 2. Build account and derive address ───────────────────────────────────
+	let subpool_id = SubpoolId(F::from_canonical_u64(SUBPOOL_ID));
+	let mut acc = StandardAccount::new_with(private_identifier, subpool_id);
+	let private_acc_address = AccountAddress::from_acc(&acc).to_hex();
 
-    // ── 3. Existence check ────────────────────────────────────────────────────
-    let pool = &state.pool;
+	// ── 3. Existence checks ───────────────────────────────────────────────────
+	let pool = &state.pool;
 
-    let freshacc_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM freshacc_requests WHERE private_acc_address = $1)",
-    )
-    .bind(&private_acc_address)
-    .fetch_one(pool)
-    .await?;
+	let user_exists: bool =
+		sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE private_acc_address = $1)")
+			.bind(&private_acc_address)
+			.fetch_one(pool)
+			.await?;
 
-    if freshacc_exists {
-        return Err(AppError::AlreadyExists(
-            "a freshacc request already exists for this account".into(),
-        ));
-    }
+	if user_exists {
+		return Err(AppError::AlreadyExists(
+			"account address already registered".into(),
+		));
+	}
 
-    // ── 4. Decode and validate spend_auth_pk (must be exactly 40 bytes) ───────
-    let pk_bytes = hex::decode(&body.spend_auth_pk)
-        .map_err(|_| AppError::InvalidInput("spend_auth_pk must be a valid hex string".into()))?;
-    if pk_bytes.len() != 40 {
-        return Err(AppError::InvalidInput(
-            "spend_auth_pk must be 40 bytes (80 hex chars)".into(),
-        ));
-    }
-    let pk_arr: &[u8; 40] = pk_bytes.as_slice().try_into().unwrap();
-    let _spend_pk = CompressedPublicKey::<F>::decode(pk_arr);
+	let freshacc_exists: bool = sqlx::query_scalar(
+		"SELECT EXISTS(SELECT 1 FROM freshacc_requests WHERE private_acc_address = $1)",
+	)
+	.bind(&private_acc_address)
+	.fetch_one(pool)
+	.await?;
+
+	if freshacc_exists {
+		return Err(AppError::AlreadyExists(
+			"a pending freshacc request already exists for this account".into(),
+		));
+	}
+
+	// ── 4. Decode and validate spend_auth_pk (must be exactly 40 bytes) ───────
+	let pk_bytes = hex::decode(&body.spend_auth_pk)
+		.map_err(|_| AppError::InvalidInput("spend_auth_pk must be a valid hex string".into()))?;
+	if pk_bytes.len() != 40 {
+		return Err(AppError::InvalidInput(
+			"spend_auth_pk must be 40 bytes (80 hex chars)".into(),
+		));
+	}
+	let pk_arr: &[u8; 40] = pk_bytes.as_slice().try_into().unwrap();
+	let spend_pk = CompressedPublicKey::<F>::decode(pk_arr);
+	acc.spend_auth.spend_pk = Some(spend_pk);
 
 	// ── 5. Validate eth_address ───────────────────────────────────────────────
 	if !body.eth_address.starts_with("0x") || body.eth_address.len() != 42 {
@@ -96,30 +109,64 @@ pub async fn register_handler(
 	let dob = chrono::NaiveDate::parse_from_str(&body.dob, "%Y-%m-%d")
 		.map_err(|_| AppError::InvalidInput("dob must be in YYYY-MM-DD format".into()))?;
 
-    // ── 7. Insert freshacc_requests only ──────────────────────────────────────
-    //   Account + user rows will be created by the operator after approval.
-    let pi_bytes = crate::convert::private_id_to_bytes(&private_identifier);
+	// ── 7. Transactional insert ───────────────────────────────────────────────
+	// let insert = account_to_insert(&acc, body.eth_address.clone());
+	let spend_auth_bytes = spend_pk.encode();
 
-    sqlx::query(
-        r#"
-        INSERT INTO freshacc_requests
-            (private_acc_address, spend_auth, private_identifier,
-             eth_address, name, physical_address, dob, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING')
+	let mut tx = pool.begin().await?;
+
+	// // Insert accounts first (FK anchor for users and freshacc_requests)
+	// sqlx::query(
+	//     r#"
+	//     INSERT INTO accounts
+	//         (private_acc_address, eth_address,
+	//          private_identifier, subpool_id, balance, nonce,
+	//          spend_auth, consume_auth, ast)
+	//     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	//     "#,
+	// )
+	// .bind(&insert.private_acc_address)
+	// .bind(&insert.eth_address)
+	// .bind(&insert.private_identifier)
+	// .bind(&insert.subpool_id)
+	// .bind(&insert.balance)
+	// .bind(&insert.nonce)
+	// .bind(&insert.spend_auth)
+	// .bind(&insert.consume_auth)
+	// .bind(&insert.ast)
+	// .execute(&mut *tx)
+	// .await?;
+
+	sqlx::query(
+		r#"
+        INSERT INTO users (private_acc_address, name, physical_address, dob)
+        VALUES ($1, $2, $3, $4)
         "#,
-    )
-    .bind(&private_acc_address)
-    .bind(pk_bytes.as_slice())
-    .bind(pi_bytes.as_ref())
-    .bind(&body.eth_address)
-    .bind(&body.name)
-    .bind(&body.physical_address)
-    .bind(dob)
-    .execute(pool)
-    .await?;
+	)
+	.bind(&private_acc_address)
+	.bind(&body.name)
+	.bind(&body.physical_address)
+	.bind(dob)
+	.execute(&mut *tx)
+	.await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(RegisterResponse { private_acc_address }),
-    ))
+	sqlx::query(
+		r#"
+        INSERT INTO freshacc_requests (private_acc_address, spend_auth, status)
+        VALUES ($1, $2, 'PENDING')
+        "#,
+	)
+	.bind(&private_acc_address)
+	.bind(spend_auth_bytes.as_ref())
+	.execute(&mut *tx)
+	.await?;
+
+	tx.commit().await?;
+
+	Ok((
+		StatusCode::CREATED,
+		Json(RegisterResponse {
+			private_acc_address,
+		}),
+	))
 }

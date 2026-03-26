@@ -1,6 +1,6 @@
 Start database with:
 ```
-sudo docker run -d --name tessera-pg \
+docker run -d --name tessera-pg \
   -e POSTGRES_USER=tessera \
   -e POSTGRES_PASSWORD=tessera \
   -e POSTGRES_DB=tessera_subpool \
