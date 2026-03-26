@@ -344,6 +344,8 @@ async function loadPrivateAccount(seed: Uint8Array) {
     .catch(() => null);
   if (accountData) {
     privateAccount = Account.fromAccountData(accountData);
+  } else {
+    console.log("Private account is null");
   }
   renderPrivateSection(privateAccAddress, accountData);
 }
