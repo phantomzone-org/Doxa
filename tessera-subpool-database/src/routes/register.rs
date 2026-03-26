@@ -101,7 +101,6 @@ pub async fn register_handler(
 		.map_err(|_| AppError::InvalidInput("dob must be in YYYY-MM-DD format".into()))?;
 
 	// ── 7. Transactional insert ───────────────────────────────────────────────
-	// let insert = account_to_insert(&acc, body.eth_address.clone());
 	let spend_auth_bytes = spend_pk.encode();
 
 	// Insert only into freshacc_requests. The operator will create both

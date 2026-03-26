@@ -129,6 +129,10 @@ impl AssetId {
 		);
 		Ok(Self(F::from_canonical_u64(v)))
 	}
+
+	pub fn to_u64(&self) -> u64 {
+		self.0.to_canonical_u64()
+	}
 }
 
 /// A single leaf in the Account State Tree (AST), recording an asset balance.
@@ -181,7 +185,7 @@ impl AccountStateTreeLeaf {
 pub struct AccountStateTree<H: MerkleHash> {
 	pub(crate) tree: MerkleTree<H>,
 	/// AssetId → (leaf_index, current_amount)
-	assets: HashMap<AssetId, (usize, U256)>,
+	pub assets: HashMap<AssetId, (usize, U256)>,
 }
 
 impl<H> Default for AccountStateTree<H>
@@ -203,6 +207,34 @@ where
 			tree: MerkleTree::new(ACC_AST_DEPTH),
 			assets: HashMap::new(),
 		}
+	}
+
+	/// Reconstruct an AST from a saved asset map.
+	///
+	/// Entries are inserted in `leaf_index` order. Returns `Err` if the
+	/// leaf indices are not contiguous starting from 0.
+	pub fn new_from_asset_map(
+		map: HashMap<AssetId, (usize, U256)>,
+	) -> anyhow::Result<Self> {
+		let mut entries: Vec<(AssetId, usize, U256)> = map
+			.into_iter()
+			.map(|(asset_id, (leaf_index, amount))| (asset_id, leaf_index, amount))
+			.collect();
+		entries.sort_by_key(|&(_, leaf_index, _)| leaf_index);
+
+		for (expected, &(_, leaf_index, _)) in entries.iter().enumerate() {
+			anyhow::ensure!(
+				leaf_index == expected,
+				"leaf_index sequence is not contiguous: expected {expected}, got {leaf_index}"
+			);
+		}
+
+		let mut ast = Self::new();
+		for (asset_id, _, amount) in entries {
+			ast.insert_asset(asset_id, amount)
+				.map_err(|e| anyhow::anyhow!(e))?;
+		}
+		Ok(ast)
 	}
 
 	/// Current Merkle root of the AST.
@@ -297,7 +329,6 @@ where
 pub struct StandardAccount {
 	pub private_identifier: PrivateIdentifier,
 	pub subpool_id: SubpoolId,
-	pub balance: U256,
 	pub nonce: Nonce,
 	// TODO: make spend_auth generic over Field
 	pub spend_auth: SpendAuth,
@@ -314,7 +345,6 @@ impl StandardAccount {
 		StandardAccount {
 			private_identifier,
 			subpool_id,
-			balance: U256::zero(),
 			nonce: Nonce(F::ZERO),
 			spend_auth: SpendAuth::default(),
 			consume_auth: ConsumeAuth::default(),
@@ -327,7 +357,6 @@ impl StandardAccount {
 		StandardAccount {
 			private_identifier,
 			subpool_id,
-			balance: U256::zero(),
 			nonce: Nonce(F::ZERO),
 			spend_auth: SpendAuth::default(),
 			consume_auth: ConsumeAuth::default(),
@@ -457,7 +486,10 @@ pub struct AccountAddress {
 impl AccountAddress {
 	/// Construct an address from its components.
 	pub fn new(subpool_id: SubpoolId, public_id: PublicIdentifier) -> Self {
-		Self { subpool_id, public_id }
+		Self {
+			subpool_id,
+			public_id,
+		}
 	}
 
 	/// Derive the address from an account.

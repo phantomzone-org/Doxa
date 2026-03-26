@@ -2,6 +2,8 @@
 
 CREATE TYPE freshacc_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE deposit_tx_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE spend_tx_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE input_note_status AS ENUM ('APPROVED', 'REJECTED');
 
 -- ── accounts ──────────────────────────────────────────────────────────────────
 -- All Goldilocks field elements stored as BYTEA via to_canonical_u64().to_le_bytes().
@@ -17,7 +19,6 @@ CREATE TABLE accounts (
     eth_address              TEXT        NOT NULL,
     private_identifier       BYTEA       NOT NULL,
     subpool_id               BYTEA       NOT NULL,
-    balance                  BYTEA       NOT NULL,
     nonce                    BYTEA       NOT NULL,
     spend_auth               BYTEA       NOT NULL,
     consume_auth             BYTEA       NOT NULL,
@@ -27,7 +28,6 @@ CREATE TABLE accounts (
 );
 
 -- ── users ─────────────────────────────────────────────────────────────────────
--- No FK to accounts — account row is created separately after approval.
 
 CREATE TABLE users (
     id                       BIGSERIAL   PRIMARY KEY,
@@ -39,7 +39,6 @@ CREATE TABLE users (
 );
 
 -- ── freshacc_requests ─────────────────────────────────────────────────────────
--- No FK to accounts — submitted before account is approved/created.
 
 CREATE TABLE freshacc_requests (
     id                       BIGSERIAL       PRIMARY KEY,
@@ -81,4 +80,46 @@ CREATE TABLE faucet_requests (
     eth_address TEXT        NOT NULL UNIQUE,
     tx_hash     TEXT        NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ── spend_tx_requests ─────────────────────────────────────────────────────────
+
+CREATE TABLE spend_tx_requests (
+    id                 BIGSERIAL       PRIMARY KEY,
+    priv_acc_address   TEXT            NOT NULL,
+    inote_identifiers  TEXT[]          NOT NULL,
+    onote_identifiers  TEXT[]          NOT NULL,
+    dinotes            TEXT[]          NOT NULL,
+    donotes            TEXT[]          NOT NULL,
+    status             spend_tx_status NOT NULL DEFAULT 'PENDING',
+    approval_signature BYTEA,
+    rejection_reason   TEXT,
+    created_at         TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+-- ── input_notes ───────────────────────────────────────────────────────────────
+
+CREATE TABLE input_notes (
+    id                BIGSERIAL         PRIMARY KEY,
+    identifier        TEXT              NOT NULL UNIQUE,
+    asset_id          BYTEA             NOT NULL,
+    amount            BYTEA             NOT NULL,
+    recipient_address TEXT              NOT NULL,
+    sender_address    TEXT              NOT NULL,
+    status            input_note_status NOT NULL DEFAULT 'APPROVED',
+    created_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+);
+
+-- ── output_notes ──────────────────────────────────────────────────────────────
+
+CREATE TABLE output_notes (
+    id                BIGSERIAL   PRIMARY KEY,
+    identifier        TEXT        NOT NULL UNIQUE,
+    asset_id          BYTEA       NOT NULL,
+    amount            BYTEA       NOT NULL,
+    recipient_address TEXT        NOT NULL,
+    sender_address    TEXT        NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

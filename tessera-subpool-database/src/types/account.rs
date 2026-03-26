@@ -6,7 +6,6 @@ pub struct AccountRow {
     pub eth_address: String,
     pub private_identifier: Vec<u8>,
     pub subpool_id: Vec<u8>,
-    pub balance: Vec<u8>,
     pub nonce: Vec<u8>,
     pub spend_auth: Vec<u8>,
     pub consume_auth: Vec<u8>,

@@ -139,33 +139,30 @@ pub async fn submit_spend_tx_handler(
         });
     }
 
-    // ── 3. Fetch account ───────────────────────────────────────────────────────
-    let account_balance_bytes: Vec<u8> = sqlx::query_scalar(
-        "SELECT balance FROM accounts WHERE private_acc_address = $1",
+    // ── 3. Fetch account (existence check) ────────────────────────────────────
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE private_acc_address = $1)",
     )
     .bind(&req.priv_acc_address)
-    .fetch_optional(&state.pool)
+    .fetch_one(&state.pool)
     .await
-    .map_err(|e: sqlx::Error| AppError::Internal(e.into()))?
-    .ok_or_else(|| AppError::NotFound(format!("account '{}' not found", req.priv_acc_address)))?;
+    .map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
 
-    let bal_arr: [u8; 32] = account_balance_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| AppError::InvalidInput("account balance must be 32 bytes".into()))?;
-    let account_balance = bytes_to_u256(&bal_arr);
+    if !exists {
+        return Err(AppError::NotFound(format!("account '{}' not found", req.priv_acc_address)));
+    }
 
-    // ── 4. Balance check: account.balance + sum(inotes) == sum(onotes) ─────────
+    // ── 4. Balance check: sum(inotes) == sum(onotes) ───────────────────────────
     let total_in = inote_amounts
         .iter()
-        .fold(account_balance, |acc, &v| u256_add(acc, v));
+        .fold(U256::zero(), |acc, &v| u256_add(acc, v));
     let total_out = decoded_outputs
         .iter()
         .fold(U256::zero(), |acc, d| u256_add(acc, d.amount));
 
     if total_in != total_out {
         return Err(AppError::InvalidInput(
-            "balance mismatch: account.balance + sum(inotes) != sum(onotes)".into(),
+            "balance mismatch: sum(inotes) != sum(onotes)".into(),
         ));
     }
 
