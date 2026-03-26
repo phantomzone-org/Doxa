@@ -831,7 +831,7 @@ xferBtn.addEventListener("click", async () => {
 
     const transferAmount = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
     const recipientAddr = AccountAddress.fromHex(xferAddrIn.value.trim());
-    builder.addOutputNote(recipientAddr, transferAmount);
+    builder.addOutputNote(recipientAddr, transferAmount, new Uint8Array(0));
 
     const spendTx = builder.build();
     step2.className = "p-step done";
@@ -852,6 +852,7 @@ xferBtn.addEventListener("click", async () => {
       amount: n.amount,
       recipient_address: n.recipient_address,
       sender_address: n.sender_address,
+      memo: n.memo,
     }));
 
     const outputNotePayloads: NotePayload[] = spendTx
@@ -862,6 +863,7 @@ xferBtn.addEventListener("click", async () => {
         amount: n.amountHex(),
         recipient_address: n.recipientHex(),
         sender_address: n.senderHex(),
+        memo: n.memoHex(),
       }));
 
     // ── Submit ────────────────────────────────────────────────────────────────

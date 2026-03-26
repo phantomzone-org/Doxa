@@ -64,6 +64,8 @@ export interface InputNote {
   amount: string;
   recipient_address: string;
   sender_address: string;
+  /** hex-encoded memo (≤ 1024 hex chars = ≤ 512 bytes) */
+  memo: string;
 }
 
 /** A note payload for POST /spend_tx */
@@ -76,6 +78,8 @@ export interface NotePayload {
   amount: string;
   recipient_address: string;
   sender_address: string;
+  /** hex-encoded memo (≤ 1024 hex chars = ≤ 512 bytes) */
+  memo: string;
 }
 
 /** Request body for POST /spend_tx */

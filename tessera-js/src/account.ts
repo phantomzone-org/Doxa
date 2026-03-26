@@ -623,8 +623,8 @@ export class SpendTxBuilder {
   }
 
   /** Add an output note to create, sending `amount` to `recipient`. */
-  addOutputNote(recipient: AccountAddress, amount: bigint): this {
-    this.builder.addOutputNote(recipient.inner, amount);
+  addOutputNote(recipient: AccountAddress, amount: bigint, memo: Uint8Array): this {
+    this.builder.addOutputNote(recipient.inner, amount, memo);
     return this;
   }
 

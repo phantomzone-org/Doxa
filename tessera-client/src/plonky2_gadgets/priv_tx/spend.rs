@@ -187,6 +187,7 @@ pub fn set_spend_tx_witness(
 		amt: U256::zero(),
 		recipient: AccountAddress::from_acc(accin),
 		sender: zero_addr,
+		memo: [0u8; 512],
 	};
 
 	for i in 0..NOTE_BATCH {
@@ -214,6 +215,7 @@ pub fn set_spend_tx_witness(
 		amt: U256::zero(),
 		recipient: zero_addr,
 		sender: zero_addr,
+		memo: [0u8; 512],
 	};
 
 	for i in 0..NOTE_BATCH {
@@ -385,6 +387,7 @@ pub fn set_fake_tx_witness(
 		amt: U256::zero(),
 		recipient: AccountAddress::from_acc(&accin),
 		sender: zero_addr,
+		memo: [0u8; 512],
 	};
 	for i in 0..NOTE_BATCH {
 		t.inotes[i].set_witness(pw, &inactive_inote);
@@ -400,6 +403,7 @@ pub fn set_fake_tx_witness(
 		amt: U256::zero(),
 		recipient: zero_addr,
 		sender: zero_addr,
+		memo: [0u8; 512],
 	};
 	for i in 0..NOTE_BATCH {
 		t.onotes[i].set_witness(pw, &inactive_onote);
@@ -558,6 +562,7 @@ mod tests {
 			amt: U256::from(100u64),
 			recipient: crate::AccountAddress::from_acc(&acc0),
 			sender: crate::AccountAddress::from_acc(&acc1),
+			memo: [0u8; 512],
 		};
 		let n1 = StandardNote {
 			identifier: NodeIdentifier::from_rng(&mut rng),
@@ -565,6 +570,7 @@ mod tests {
 			amt: U256::from(50u64),
 			recipient: crate::AccountAddress::from_acc(&acc0),
 			sender: crate::AccountAddress::from_acc(&acc1),
+			memo: [0u8; 512],
 		};
 
 		// ── Build accout (post-consume state) ─────────────────────────────────

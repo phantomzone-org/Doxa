@@ -590,6 +590,7 @@ impl WasmHashOutput {
 
 /// A standard note together with its NCT position and asset_id.
 /// Add to a `WasmSpendTxBuilder` via `addInputNote`.
+/// TODO: remove asset_id field since note has asset_id
 #[wasm_bindgen]
 pub struct WasmInputNote {
 	note: StandardNote,
@@ -694,6 +695,12 @@ impl WasmOutputNote {
 	#[wasm_bindgen(js_name = senderHex)]
 	pub fn sender_hex(&self) -> String {
 		self.0.sender.to_hex()
+	}
+
+	/// Memo as hex (full 512 bytes = 1024 hex chars).
+	#[wasm_bindgen(js_name = memoHex)]
+	pub fn memo_hex(&self) -> String {
+		hex::encode(self.0.memo)
 	}
 }
 
@@ -862,6 +869,7 @@ impl WasmSpendTxBuilder {
 		&mut self,
 		recipient: &WasmAccountAddress,
 		amount: BigInt,
+		memo: &[u8],
 	) -> Result<(), JsError> {
 		use tessera_client::NOTE_BATCH;
 		if self.onotes.len() >= NOTE_BATCH {
@@ -869,12 +877,17 @@ impl WasmSpendTxBuilder {
 				"output notes already full (max {NOTE_BATCH})"
 			)));
 		}
+		if memo.len() > 512 {
+			return Err(JsError::new("memo must be at most 512 bytes"));
+		}
+		let mut memo_arr = [0u8; 512];
+		memo_arr[..memo.len()].copy_from_slice(memo);
 		let amt = bigint_to_u256(amount)?;
 		let asset = parse_asset_id(self.asset_id).unwrap(); // validated at `new`
 		let sender_addr = AccountAddress::from_acc(&self.accin.borrow());
 		let recipient_addr = recipient.0;
 		let mut rng = rand::rng();
-		let note = StandardNote::create(&mut rng, recipient_addr, sender_addr, amt, asset);
+		let note = StandardNote::create(&mut rng, recipient_addr, sender_addr, amt, asset, memo_arr);
 		self.onotes.push(note);
 		Ok(())
 	}

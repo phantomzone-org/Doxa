@@ -41,6 +41,7 @@ pub struct InputNoteRow {
     pub amount: Vec<u8>,
     pub recipient_address: String,
     pub sender_address: String,
+    pub memo: Vec<u8>,
     pub status: InputNoteStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -54,5 +55,6 @@ pub struct OutputNoteRow {
     pub amount: Vec<u8>,
     pub recipient_address: String,
     pub sender_address: String,
+    pub memo: Vec<u8>,
     pub created_at: DateTime<Utc>,
 }

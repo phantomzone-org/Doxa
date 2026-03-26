@@ -155,6 +155,7 @@ pub(crate) fn set_reject_tx_witness(
 		amt: U256::zero(),
 		recipient: AccountAddress::from_acc(accin),
 		sender: zero_addr,
+		memo: [0u8; 512],
 	};
 	for i in 0..NOTE_BATCH {
 		if i < inotes.len() {
@@ -181,6 +182,7 @@ pub(crate) fn set_reject_tx_witness(
 		amt: U256::zero(),
 		recipient: zero_addr,
 		sender: zero_addr,
+		memo: [0u8; 512],
 	};
 	for i in 0..NOTE_BATCH {
 		if i < onotes.len() {
@@ -337,6 +339,7 @@ mod tests {
 			amt: U256::from(100u64),
 			recipient: AccountAddress::from_acc(&acc),
 			sender: sender_addr,
+			memo: [0u8; 512],
 		};
 		let note1 = StandardNote {
 			identifier: NodeIdentifier::from_rng(&mut rng),
@@ -344,6 +347,7 @@ mod tests {
 			amt: U256::from(50u64),
 			recipient: AccountAddress::from_acc(&acc),
 			sender: sender_addr,
+			memo: [0u8; 512],
 		};
 
 		// Insert notes into the same unified tree, then generate all proofs against final root
@@ -365,6 +369,7 @@ mod tests {
 			amt: note0.amt,
 			recipient: sender_addr,
 			sender: sender_addr,
+			memo: [0u8; 512],
 		};
 		let onote1 = StandardNote {
 			identifier: note1.identifier,
@@ -372,6 +377,7 @@ mod tests {
 			amt: note1.amt,
 			recipient: sender_addr,
 			sender: sender_addr,
+			memo: [0u8; 512],
 		};
 
 		// ── Dummy notes ───────────────────────────────────────────────────────

@@ -135,6 +135,7 @@ pub(crate) fn set_freshacc_tx_witness(
 		amt: primitive_types::U256::zero(),
 		recipient: AccountAddress::from_acc(accin),
 		sender: zero_addr,
+		memo: [0u8; 512],
 	};
 	for i in 0..NOTE_BATCH {
 		t.inotes[i].set_witness(pw, &inote);
@@ -151,6 +152,7 @@ pub(crate) fn set_freshacc_tx_witness(
 		amt: primitive_types::U256::zero(),
 		recipient: zero_addr,
 		sender: zero_addr,
+		memo: [0u8; 512],
 	};
 	for i in 0..NOTE_BATCH {
 		t.onotes[i].set_witness(pw, &onote);

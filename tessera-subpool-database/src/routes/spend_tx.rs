@@ -22,6 +22,8 @@ pub struct NotePayload {
     pub amount: String,
     pub recipient_address: String,
     pub sender_address: String,
+    /// hex-encoded memo (≤ 512 bytes = ≤ 1024 hex chars)
+    pub memo: String,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +129,7 @@ pub async fn submit_spend_tx_handler(
         amount: U256,
         recipient_address: String,
         sender_address: String,
+        memo_bytes: Vec<u8>,
     }
 
     let mut decoded_outputs: Vec<DecodedOutput> = Vec::with_capacity(req.output_notes.len());
@@ -160,6 +163,15 @@ pub async fn submit_spend_tx_handler(
         let arr: [u8; 32] = amount_bytes.as_slice().try_into().unwrap();
         let amount = bytes_to_u256(&arr);
 
+        let memo_bytes = hex::decode(&note.memo)
+            .map_err(|_| AppError::InvalidInput(format!("invalid memo hex in output note '{}'", note.identifier)))?;
+        if memo_bytes.len() > 512 {
+            return Err(AppError::InvalidInput(format!(
+                "output note '{}' memo must be at most 512 bytes",
+                note.identifier
+            )));
+        }
+
         decoded_outputs.push(DecodedOutput {
             identifier: note.identifier.clone(),
             asset_id_bytes,
@@ -167,6 +179,7 @@ pub async fn submit_spend_tx_handler(
             amount,
             recipient_address: note.recipient_address.clone(),
             sender_address: note.sender_address.clone(),
+            memo_bytes,
         });
     }
 
@@ -237,14 +250,15 @@ pub async fn submit_spend_tx_handler(
     for out in &decoded_outputs {
         sqlx::query(
             r#"INSERT INTO output_notes
-                   (identifier, asset_id, amount, recipient_address, sender_address)
-               VALUES ($1, $2, $3, $4, $5)"#,
+                   (identifier, asset_id, amount, recipient_address, sender_address, memo)
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
         )
         .bind(&out.identifier)
         .bind(&out.asset_id_bytes)
         .bind(&out.amount_bytes)
         .bind(&out.recipient_address)
         .bind(&out.sender_address)
+        .bind(&out.memo_bytes)
         .execute(&mut *tx)
         .await
         .map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;

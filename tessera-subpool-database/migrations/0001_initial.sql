@@ -109,6 +109,7 @@ CREATE TABLE input_notes (
     amount            BYTEA             NOT NULL,
     recipient_address TEXT              NOT NULL,
     sender_address    TEXT              NOT NULL,
+    memo              BYTEA             NOT NULL DEFAULT '\x'::bytea,
     status            input_note_status NOT NULL DEFAULT 'APPROVED',
     created_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW()
@@ -123,5 +124,6 @@ CREATE TABLE output_notes (
     amount            BYTEA       NOT NULL,
     recipient_address TEXT        NOT NULL,
     sender_address    TEXT        NOT NULL,
+    memo              BYTEA       NOT NULL DEFAULT '\x'::bytea,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

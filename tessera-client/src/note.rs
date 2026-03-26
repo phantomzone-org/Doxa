@@ -113,6 +113,8 @@ pub struct StandardNote {
 	pub recipient: AccountAddress,
 	/// Account that originally sent the funds (used for rejection).
 	pub sender: AccountAddress,
+	/// Arbitrary memo, up to 512 bytes; zero-padded.
+	pub memo: [u8; 512],
 }
 
 impl StandardNote {
@@ -123,6 +125,7 @@ impl StandardNote {
 		sender: AccountAddress,
 		amt: U256,
 		asset_id: AssetId,
+		memo: [u8; 512],
 	) -> Self {
 		StandardNote {
 			identifier: NodeIdentifier::from_rng(rng),
@@ -130,6 +133,7 @@ impl StandardNote {
 			amt,
 			recipient,
 			sender,
+			memo,
 		}
 	}
 
@@ -147,6 +151,7 @@ impl StandardNote {
 			amt,
 			recipient,
 			sender,
+			memo: [0u8; 512],
 		}
 	}
 
@@ -245,6 +250,7 @@ mod tests {
 				amt,
 				recipient,
 				sender,
+				memo: [0u8; 512],
 			}
 		}
 	}
