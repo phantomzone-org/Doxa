@@ -1,0 +1,15 @@
+FROM rust:1.83-bookworm AS builder
+
+WORKDIR /app
+COPY . .
+
+RUN cargo build --release -p tessera-demo
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/tessera-demo /usr/local/bin/tessera-demo
+
+EXPOSE 3000
+CMD ["tessera-demo"]

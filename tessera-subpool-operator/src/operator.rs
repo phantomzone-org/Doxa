@@ -14,7 +14,6 @@ use tessera_utils::F;
 use tracing::{error, info};
 
 use tessera_subpool_database::{
-    SUBPOOL_ID,
     convert::{account_to_insert, bytes_to_private_id, hash_to_hex},
     db::insert_account_and_user,
 };
@@ -52,6 +51,7 @@ pub async fn process_pending(
     approval_sk: &PrivateKey,
     sequencer_url: &str,
     http: &reqwest::Client,
+    subpool_id: u64,
 ) -> Result<()> {
     let rows: Vec<PendingFreshAcc> = sqlx::query_as(
         "SELECT id, private_acc_address, spend_auth, \
@@ -70,7 +70,7 @@ pub async fn process_pending(
     }
 
     for row in rows {
-        if let Err(e) = process_one(pool, approval_sk, sequencer_url, http, &row).await {
+        if let Err(e) = process_one(pool, approval_sk, sequencer_url, http, &row, subpool_id).await {
             error!(
                 id = row.id,
                 addr = %row.private_acc_address,
@@ -88,6 +88,7 @@ async fn process_one(
     sequencer_url: &str,
     http: &reqwest::Client,
     row: &PendingFreshAcc,
+    subpool_id: u64,
 ) -> Result<()> {
     // ── 1. Reconstruct accin from freshacc_requests data ──────────────────────
     let pi_arr: [u8; 16] = row
@@ -97,7 +98,7 @@ async fn process_one(
         .context("private_identifier must be 16 bytes")?;
     let private_identifier = bytes_to_private_id(&pi_arr);
 
-    let subpool_id = SubpoolId(F::from_canonical_u64(SUBPOOL_ID));
+    let subpool_id = SubpoolId(F::from_canonical_u64(subpool_id));
     let accin = StandardAccount::new_with(private_identifier, subpool_id);
 
     // ── 2. Build accout (nonce 0→1, set spend_auth) ──────────────────────────

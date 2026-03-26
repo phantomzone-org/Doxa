@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "test-deposit"
 path = "src/bin/test_deposit.rs"
 
+[[bin]]
+name = "test-e2e"
+path = "src/bin/test_e2e.rs"
+
 [dependencies]
 tessera-client = { workspace = true }
 tessera-utils  = { workspace = true }

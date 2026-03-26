@@ -60,6 +60,106 @@ pub async fn insert_account_and_user(
     Ok(())
 }
 
+/// Insert a row into the `input_notes` table with status APPROVED (default).
+/// If `note_commitment` is provided, it is stored for later NCT position lookup.
+pub async fn insert_input_note(
+    pool: &PgPool,
+    identifier: &str,
+    asset_id: &[u8],
+    amount: &[u8],
+    recipient_address: &str,
+    sender_address: &str,
+) -> Result<()> {
+    insert_input_note_opt(pool, identifier, asset_id, amount, recipient_address, sender_address, None).await
+}
+
+/// Insert a row into the `input_notes` table with status APPROVED and a note commitment.
+pub async fn insert_input_note_with_commitment(
+    pool: &PgPool,
+    identifier: &str,
+    asset_id: &[u8],
+    amount: &[u8],
+    recipient_address: &str,
+    sender_address: &str,
+    note_commitment: &[u8],
+) -> Result<()> {
+    insert_input_note_opt(pool, identifier, asset_id, amount, recipient_address, sender_address, Some(note_commitment)).await
+}
+
+async fn insert_input_note_opt(
+    pool: &PgPool,
+    identifier: &str,
+    asset_id: &[u8],
+    amount: &[u8],
+    recipient_address: &str,
+    sender_address: &str,
+    note_commitment: Option<&[u8]>,
+) -> Result<()> {
+    sqlx::query(
+        r#"INSERT INTO input_notes
+               (identifier, asset_id, amount, recipient_address, sender_address, note_commitment)
+           VALUES ($1, $2, $3, $4, $5, $6)"#,
+    )
+    .bind(identifier)
+    .bind(asset_id)
+    .bind(amount)
+    .bind(recipient_address)
+    .bind(sender_address)
+    .bind(note_commitment)
+    .execute(pool)
+    .await
+    .context("failed to insert input_note")?;
+    Ok(())
+}
+
+/// Insert a row into the `input_notes` table with status PENDING and a
+/// note commitment hash, so the operator can confirm it on-chain before use.
+pub async fn insert_pending_input_note(
+    pool: &PgPool,
+    identifier: &str,
+    asset_id: &[u8],
+    amount: &[u8],
+    recipient_address: &str,
+    sender_address: &str,
+    note_commitment: &[u8],
+) -> Result<()> {
+    sqlx::query(
+        r#"INSERT INTO input_notes
+               (identifier, asset_id, amount, recipient_address, sender_address,
+                status, note_commitment)
+           VALUES ($1, $2, $3, $4, $5, 'PENDING', $6)"#,
+    )
+    .bind(identifier)
+    .bind(asset_id)
+    .bind(amount)
+    .bind(recipient_address)
+    .bind(sender_address)
+    .bind(note_commitment)
+    .execute(pool)
+    .await
+    .context("failed to insert pending input_note")?;
+    Ok(())
+}
+
+/// Update only the AST column for an account (e.g. when receiving a note).
+pub async fn update_account_ast(
+    pool: &PgPool,
+    private_acc_address: &str,
+    ast_json: serde_json::Value,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE accounts \
+         SET ast = $1, updated_at = NOW() \
+         WHERE private_acc_address = $2",
+    )
+    .bind(&ast_json)
+    .bind(private_acc_address)
+    .execute(pool)
+    .await
+    .context("failed to update account AST")?;
+    Ok(())
+}
+
 /// Update an account's nonce and AST after a deposit is processed.
 pub async fn update_account_after_deposit(
     pool: &PgPool,

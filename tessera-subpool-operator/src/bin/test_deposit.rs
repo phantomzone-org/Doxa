@@ -37,8 +37,9 @@ use tessera_client::{
     schnorr::{CompressedPublicKey, PrivateKey, Scalar},
 };
 use tessera_subpool_database::convert::{f_to_bytes, hash_to_hex, private_id_to_bytes, u256_to_bytes};
-use tessera_subpool_database::SUBPOOL_ID;
 use tessera_utils::F;
+
+const SUBPOOL_ID: u64 = 1;
 
 /// Anvil account 1 (depositor).
 const DEPOSITOR_KEY: &str = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";

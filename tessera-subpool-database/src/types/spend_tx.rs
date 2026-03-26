@@ -13,6 +13,7 @@ pub enum SpendTxStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[sqlx(type_name = "input_note_status", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InputNoteStatus {
+    Pending,
     Approved,
     Rejected,
 }

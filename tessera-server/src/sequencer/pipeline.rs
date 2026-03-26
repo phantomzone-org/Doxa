@@ -90,28 +90,30 @@ impl Sequencer {
 			}
 		}
 
-		// noteNullifiers: 7 per slot (skip AN at position NOTE_BATCH=7), LE-packed.
-		let mut note_nullifiers = Vec::with_capacity(n_slots * tessera_client::NOTE_BATCH);
+		// accountCommitments: all 64 slots, LE-packed.
+		let account_commitments: Vec<alloy::primitives::U256> = finalized
+			.ac_leaves
+			.iter()
+			.map(contract::bytes32_be_to_u256_le)
+			.collect();
+
+		// Nullifiers: only from real TX slots (padding slots have no nullifiers).
+		let mut note_nullifiers = Vec::new();
+		let mut account_nullifiers = Vec::new();
 		for s in 0..n_slots {
+			if !finalized.tx_proofs_by_slot.contains_key(&s) {
+				continue;
+			}
 			let nn_base = s * stride;
 			for j in 0..tessera_client::NOTE_BATCH {
 				note_nullifiers.push(contract::bytes32_be_to_u256_le(
 					&finalized.nn_leaves[nn_base + j],
 				));
 			}
+			account_nullifiers.push(contract::bytes32_be_to_u256_le(
+				&finalized.an_leaves[s],
+			));
 		}
-
-		// accountCommitments / accountNullifiers: all 64 slots, LE-packed.
-		let account_commitments: Vec<alloy::primitives::U256> = finalized
-			.ac_leaves
-			.iter()
-			.map(contract::bytes32_be_to_u256_le)
-			.collect();
-		let account_nullifiers: Vec<alloy::primitives::U256> = finalized
-			.an_leaves
-			.iter()
-			.map(contract::bytes32_be_to_u256_le)
-			.collect();
 
 		let batch_poseidon_root = contract::hash_to_u256_le(&finalized.batch_poseidon_root);
 		let root = contract::hash_to_u256_le(&self.confirmed_root);

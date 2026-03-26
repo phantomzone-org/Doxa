@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
         .layer(CorsLayer::permissive());
 
     let listener = TcpListener::bind(&config.api_bind_addr).await?;
-    tracing::info!("listening on {}", config.api_bind_addr);
+    tracing::info!("subpool_id={}, listening on {}", config.subpool_id, config.api_bind_addr);
     axum::serve(listener, app).await?;
 
     Ok(())
