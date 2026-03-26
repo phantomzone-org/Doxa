@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub sepolia_rpc_url: String,
     /// Deployed ToyUSDTWOperator contract address. Env: USDX_CONTRACT_ADDR (required).
     pub usdx_contract_addr: String,
+    /// Subpool identifier. Env: SUBPOOL_ID (default 1).
+    pub subpool_id: u64,
 }
 
 impl AppConfig {
@@ -35,6 +37,11 @@ impl AppConfig {
         let usdx_contract_addr =
             std::env::var("USDX_CONTRACT_ADDR").context("USDX_CONTRACT_ADDR not set")?;
 
+        let subpool_id = std::env::var("SUBPOOL_ID")
+            .unwrap_or_else(|_| "1".to_string())
+            .parse::<u64>()
+            .context("SUBPOOL_ID must be a positive integer")?;
+
         Ok(Self {
             database_url,
             api_bind_addr,
@@ -42,6 +49,7 @@ impl AppConfig {
             faucet_private_key,
             sepolia_rpc_url,
             usdx_contract_addr,
+            subpool_id,
         })
     }
 }

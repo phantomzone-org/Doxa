@@ -30,13 +30,14 @@ async fn main() -> Result<()> {
         faucet_private_key: config.faucet_private_key,
         sepolia_rpc_url: config.sepolia_rpc_url,
         usdx_contract_addr: config.usdx_contract_addr,
+        subpool_id: config.subpool_id,
     };
     let app = routes::router(state)
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());
 
     let listener = TcpListener::bind(&config.api_bind_addr).await?;
-    tracing::info!("listening on {}", config.api_bind_addr);
+    tracing::info!("subpool_id={}, listening on {}", config.subpool_id, config.api_bind_addr);
     axum::serve(listener, app).await?;
 
     Ok(())

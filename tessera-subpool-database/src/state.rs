@@ -6,4 +6,5 @@ pub struct AppState {
     pub faucet_private_key: String,
     pub sepolia_rpc_url: String,
     pub usdx_contract_addr: String,
+    pub subpool_id: u64,
 }

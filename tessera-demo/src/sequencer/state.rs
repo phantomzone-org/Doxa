@@ -1,5 +1,5 @@
 use std::{
-	collections::BTreeSet,
+	collections::{BTreeSet, HashMap},
 	sync::Arc,
 	time::{Duration, Instant},
 };
@@ -24,6 +24,18 @@ pub(crate) struct SequencerState {
 	/// Local Poseidon Merkle tree mirroring the on-chain commitment tree.
 	/// Leaves are inserted in batch after each proven batch.
 	pub local_tree: MerkleTree<HashOutput>,
+	/// Per-subpool queues of forwarded notes awaiting pickup by operators.
+	pub note_pool: HashMap<u64, Vec<ForwardedNote>>,
+}
+
+/// A note forwarded from one subpool operator to another via the sequencer.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ForwardedNote {
+	pub identifier: String,
+	pub asset_id: String,
+	pub amount: String,
+	pub recipient_address: String,
+	pub sender_address: String,
 }
 
 pub(crate) type SharedState = Arc<Mutex<SequencerState>>;

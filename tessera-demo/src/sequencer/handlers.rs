@@ -7,8 +7,10 @@ use tessera_client::NOTE_BATCH;
 use tessera_server::{contract::ITesseraRollupV2, sequencer::BatchBuilder};
 use tracing::info;
 
+use axum::extract::Path;
+
 use super::helpers::{parse_hex_bytes, parse_hex_bytes32};
-use super::state::AppState;
+use super::state::{AppState, ForwardedNote};
 
 // ---------------------------------------------------------------------------
 // Request / response types
@@ -222,4 +224,58 @@ pub(crate) async fn handle_config(State((state, _)): State<AppState>) -> Json<Co
 		token_address: format!("{}", st.token_addr),
 		operator_address: format!("{}", st.operator),
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Cross-subpool note forwarding
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct ForwardNoteRequest {
+	pub target_subpool_id: u64,
+	#[serde(flatten)]
+	pub note: ForwardedNote,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ForwardNoteResponse {
+	status: String,
+	target_subpool_id: u64,
+	queue_size: usize,
+}
+
+pub(crate) async fn handle_forward_note(
+	State((state, _)): State<AppState>,
+	Json(req): Json<ForwardNoteRequest>,
+) -> Result<Json<ForwardNoteResponse>, (StatusCode, String)> {
+	let mut st = state.lock().await;
+	let queue = st.note_pool.entry(req.target_subpool_id).or_default();
+	queue.push(req.note);
+	let queue_size = queue.len();
+
+	info!(
+		target_subpool = req.target_subpool_id,
+		queue_size,
+		"forwarded note queued"
+	);
+
+	Ok(Json(ForwardNoteResponse {
+		status: "queued".to_string(),
+		target_subpool_id: req.target_subpool_id,
+		queue_size,
+	}))
+}
+
+pub(crate) async fn handle_pending_notes(
+	State((state, _)): State<AppState>,
+	Path(subpool_id): Path<u64>,
+) -> Json<Vec<ForwardedNote>> {
+	let mut st = state.lock().await;
+	let notes = st.note_pool.remove(&subpool_id).unwrap_or_default();
+
+	if !notes.is_empty() {
+		info!(subpool_id, count = notes.len(), "drained pending notes");
+	}
+
+	Json(notes)
 }

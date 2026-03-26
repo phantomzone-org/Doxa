@@ -6,7 +6,7 @@ mod state;
 
 pub use config::DemoSequencerConfig;
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::{BTreeSet, HashMap}, sync::Arc};
 
 use alloy::{
 	network::EthereumWallet,
@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info};
 
 use batches::{flush_deposit_batch, flush_tx_batch};
-use handlers::{handle_config, handle_deposit, handle_status, handle_transaction};
+use handlers::{handle_config, handle_deposit, handle_forward_note, handle_pending_notes, handle_status, handle_transaction};
 use state::{AppState, SequencerState, SharedState};
 
 /// A demo sequencer that can be started with [`DemoSequencer::run`].
@@ -57,6 +57,8 @@ impl DemoSequencer {
 		info!("  POST /transaction    - submit a private transaction");
 		info!("  GET  /status         - sequencer status");
 		info!("  GET  /config         - contract addresses");
+		info!("  POST /forward_note   - forward note to another subpool");
+		info!("  GET  /pending_notes/:id - poll forwarded notes for a subpool");
 
 		let handle = tokio::spawn(async move {
 			axum::serve(listener, app).await.ok();
@@ -121,12 +123,15 @@ impl DemoSequencer {
 			deposit_batch_pending_since: None,
 			prove_delay: config.prove_delay,
 			local_tree: MerkleTree::new(COM_TREE_DEPTH),
+			note_pool: HashMap::new(),
 		}));
 
 		let app_state: AppState = (state.clone(), provider.clone());
 		let app = Router::new()
 			.route("/deposit", post(handle_deposit))
 			.route("/transaction", post(handle_transaction))
+			.route("/forward_note", post(handle_forward_note))
+			.route("/pending_notes/{subpool_id}", get(handle_pending_notes))
 			.route("/status", get(handle_status))
 			.route("/config", get(handle_config))
 			.with_state(app_state);

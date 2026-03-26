@@ -15,6 +15,10 @@ pub struct OperatorConfig {
     pub rpc_url: String,
     /// How often to poll for pending FreshAcc requests. Env: POLL_INTERVAL_SECS (default 5).
     pub poll_interval: Duration,
+    /// Subpool ID for this operator instance. Env: SUBPOOL_ID (default 1).
+    pub subpool_id: u64,
+    /// Deployed rollup contract address. Env: ROLLUP_ADDRESS (required).
+    pub rollup_address: String,
 }
 
 impl OperatorConfig {
@@ -43,6 +47,14 @@ impl OperatorConfig {
                 .context("POLL_INTERVAL_SECS must be a positive integer")?,
         );
 
+        let subpool_id = std::env::var("SUBPOOL_ID")
+            .unwrap_or_else(|_| "1".to_string())
+            .parse::<u64>()
+            .context("SUBPOOL_ID must be a positive integer")?;
+
+        let rollup_address =
+            std::env::var("ROLLUP_ADDRESS").context("ROLLUP_ADDRESS not set")?;
+
         Ok(Self {
             database_url,
             db_max_connections,
@@ -50,6 +62,8 @@ impl OperatorConfig {
             approval_private_key,
             rpc_url,
             poll_interval,
+            subpool_id,
+            rollup_address,
         })
     }
 }
