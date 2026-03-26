@@ -106,13 +106,13 @@ impl NodeIdentifier {
 ///   process it.
 #[derive(Clone, Copy)]
 pub struct StandardNote {
-	pub(crate) identifier: NodeIdentifier,
-	pub(crate) asset_id: AssetId,
-	pub(crate) amt: U256,
+	pub identifier: NodeIdentifier,
+	pub asset_id: AssetId,
+	pub amt: U256,
 	/// Account that will receive the funds.
-	pub(crate) recipient: AccountAddress,
+	pub recipient: AccountAddress,
 	/// Account that originally sent the funds (used for rejection).
-	pub(crate) sender: AccountAddress,
+	pub sender: AccountAddress,
 }
 
 impl StandardNote {

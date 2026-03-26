@@ -6,6 +6,11 @@ export {
   AssetId,
   DepositNote,
   DepositNoteCommitment,
+  DummyNote,
+  InputNote,
+  OutputNote,
+  SpendTx,
+  SpendTxBuilder,
   SubpoolId,
   PrivateIdentifier,
   PublicIdentifier,
@@ -17,4 +22,4 @@ export {
 export type { HashBytes } from "./account.js";
 
 export { SubpoolClient, SubpoolApiError } from "./api/index.js";
-export type { RegisterRequest, RegisterResponse, AccountResponse, FreshAccStatus, FreshAccStatusResponse, ApiError } from "./api/index.js";
+export type { RegisterRequest, RegisterResponse, AccountResponse, FreshAccStatus, FreshAccStatusResponse, ApiError, NotePayload, SpendTxRequest, SpendTxResponse } from "./api/index.js";

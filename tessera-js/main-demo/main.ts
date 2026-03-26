@@ -15,19 +15,21 @@ import {
   AccountAddress,
   AssetId,
   DepositNote,
+  InputNote,
+  SpendTxBuilder,
   SubpoolId,
   SubpoolClient,
   derivePrivateIdentifier,
   derivePublicIdentifier,
 } from "../src/index";
-import type { AccountResponse } from "../src/index";
+import type { AccountResponse, NotePayload } from "../src/index";
 
 await init();
 
 const status = document.getElementById("status") as HTMLPreElement;
 function log(msg: string) {
   // status.textContent += "\n" + msg;
-  // console.log(msg);
+  // console.log(msg)clone(e
 }
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -51,6 +53,7 @@ const subpoolClient = new SubpoolClient(API_BASE_URL);
 let credentialId: Uint8Array | null = null;
 let ethAddressFull: string | null = null;
 let privateAccAddressFull: string | null = null;
+let privateAccount: Account | null = null;
 let currentSeed: Uint8Array | null = null;
 let privateBalance = 0;
 
@@ -193,6 +196,33 @@ const TESSERA_ABI = [
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
+/** Decode a hex string (no 0x prefix) to a Uint8Array. */
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+/** Parse a little-endian hex string (32 bytes) as a BigInt (U256). */
+function hexLeToU256(hex: string): bigint {
+  const bytes = hexToBytes(hex);
+  let result = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    result = (result << 8n) | BigInt(bytes[i]);
+  }
+  return result;
+}
+
+/** Parse a little-endian hex string (8 bytes) as a BigInt (u64). */
+function hexLeToU64(hex: string): bigint {
+  const bytes = hexToBytes(hex);
+  let v = 0n;
+  for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i]);
+  return v;
+}
+
 /** Encode a BigInt as a 32-byte little-endian hex string (U256 LE, no 0x prefix). */
 function u256LeHex(v: bigint): string {
   const bytes = new Uint8Array(32);
@@ -312,6 +342,9 @@ async function loadPrivateAccount(seed: Uint8Array) {
   const accountData = await subpoolClient
     .getAccount(privateAccAddress)
     .catch(() => null);
+  if (accountData) {
+    privateAccount = Account.fromAccountData(accountData);
+  }
   renderPrivateSection(privateAccAddress, accountData);
 }
 
@@ -759,21 +792,92 @@ xferBtn.addEventListener("click", async () => {
 
   try {
     const seed = await evalPrf();
+    await loadPrivateAccount(seed);
 
     xferProgress.classList.add("visible");
-    const step = pStep(xferSteps, "⏳ Fetching incoming notes…", "active");
-    xferBar.style.width = "50%";
+    const step1 = pStep(xferSteps, "⏳ Fetching incoming notes…", "active");
+    xferBar.style.width = "25%";
 
-    await loadPrivateAccount(seed);
     const inotes = (
       await subpoolClient.getInputNotes(privateAccAddressFull!)
     ).filter((n) => n.asset_id === ASSET_ID_HEX);
 
-    step.className = "p-step done";
-    step.textContent = `✓ Found ${inotes.length} incoming note(s)`;
-    xferBar.style.width = "100%";
+    step1.className = "p-step done";
+    step1.textContent = `✓ Found ${inotes.length} incoming note(s)`;
 
-    console.log("Incoming approved notes:", inotes);
+    // ── Build spend tx ────────────────────────────────────────────────────────
+    const step2 = pStep(xferSteps, "⏳ Building spend tx…", "active");
+    xferBar.style.width = "50%";
+
+    const assetIdU64 = hexLeToU64(ASSET_ID_HEX);
+    const builder = new SpendTxBuilder(privateAccount!, assetIdU64);
+
+    for (const n of inotes) {
+      const identBytes = hexToBytes(n.identifier); // 16 bytes
+      const senderAddr = AccountAddress.fromHex(n.sender_address);
+      builder.addInputNote(
+        new InputNote(
+          identBytes,
+          assetIdU64,
+          hexLeToU256(n.amount),
+          privateAccount!.address(),
+          senderAddr,
+          0n, // position placeholder (not stored in DB)
+        ),
+      );
+    }
+
+    const transferAmount = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
+    const recipientAddr = AccountAddress.fromHex(xferAddrIn.value.trim());
+    builder.addOutputNote(recipientAddr, transferAmount);
+
+    const spendTx = builder.build();
+    step2.className = "p-step done";
+    step2.textContent = "✓ Spend tx built";
+
+    // ── Sign ─────────────────────────────────────────────────────────────────
+    const step3 = pStep(xferSteps, "⏳ Signing…", "active");
+    xferBar.style.width = "70%";
+
+    const sigHex = toHex(spendTx.sign(seed));
+    step3.className = "p-step done";
+    step3.textContent = "✓ Signed";
+
+    // ── Collect payloads ──────────────────────────────────────────────────────
+    const inputNotePayloads: NotePayload[] = inotes.map((n) => ({
+      identifier: n.identifier,
+      asset_id: n.asset_id,
+      amount: n.amount,
+      recipient_address: n.recipient_address,
+      sender_address: n.sender_address,
+    }));
+
+    const outputNotePayloads: NotePayload[] = spendTx
+      .outputNotes()
+      .map((n) => ({
+        identifier: n.identifierHex(),
+        asset_id: ASSET_ID_HEX,
+        amount: n.amountHex(),
+        recipient_address: n.recipientHex(),
+        sender_address: n.senderHex(),
+      }));
+
+    // ── Submit ────────────────────────────────────────────────────────────────
+    const step4 = pStep(xferSteps, "⏳ Submitting spend tx…", "active");
+    xferBar.style.width = "90%";
+
+    const resp = await subpoolClient.submitSpendTx({
+      priv_acc_address: privateAccAddressFull!,
+      input_notes: inputNotePayloads,
+      output_notes: outputNotePayloads,
+      dinotes: spendTx.diNotes().map((d) => d.toHex()),
+      donotes: spendTx.doNotes().map((d) => d.toHex()),
+      spend_tx_signature: sigHex,
+    });
+
+    step4.className = "p-step done";
+    step4.textContent = `✓ Submitted (id=${resp.id})`;
+    xferBar.style.width = "100%";
 
     xferBtn.disabled = false;
     xferAmtIn.value = "";

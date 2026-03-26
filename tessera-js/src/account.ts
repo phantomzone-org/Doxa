@@ -1,3 +1,4 @@
+import type { AccountResponse } from "./api/index.js";
 import {
   WasmAccount,
   WasmAccountAddress,
@@ -6,7 +7,9 @@ import {
   WasmAssetId,
   WasmDepositNote,
   WasmDepositNoteCommitment,
+  WasmDummyNote,
   WasmInputNote,
+  WasmOutputNote,
   WasmPrivateIdentifier,
   WasmPublicIdentifier,
   WasmSpendAuthPk,
@@ -266,6 +269,17 @@ export class Account {
     return new Account(WasmAccount.newWithSeed(seed, subpoolId));
   }
 
+  /** Reconstruct an Account from a server AccountResponse. No seed required. */
+  static fromAccountData(accountData: AccountResponse): Account {
+    return new Account(WasmAccount.fromAccountData(
+      accountData.private_identifier,
+      accountData.subpool_id,
+      accountData.nonce,
+      accountData.spend_auth,
+      JSON.stringify(accountData.ast),
+    ));
+  }
+
   /**
    * The Poseidon commitment of the full account state.
    * This is what gets inserted into the Account Commitment Tree.
@@ -519,19 +533,40 @@ export class InputNote {
     identifier: Uint8Array, // 16 bytes
     assetId: bigint,
     amount: bigint,
-    recipient: Account,
-    sender: Account,
+    recipient: AccountAddress,
+    sender: AccountAddress,
     position: bigint,
   ) {
     this.inner = new WasmInputNote(
       identifier,
       assetId,
       amount,
-      recipient.wasmInner,
-      sender.wasmInner,
+      recipient.inner,
+      sender.inner,
       position,
     );
   }
+}
+
+// ── OutputNote ────────────────────────────────────────────────────────────────
+
+/** An output note produced by a built spend transaction. */
+export class OutputNote {
+  constructor(private inner: WasmOutputNote) {}
+
+  identifierHex(): string { return this.inner.identifierHex(); }
+  assetId(): bigint       { return BigInt(this.inner.assetId()); }
+  amountHex(): string     { return this.inner.amountHex(); }
+  recipientHex(): string  { return this.inner.recipientHex(); }
+  senderHex(): string     { return this.inner.senderHex(); }
+}
+
+// ── DummyNote ─────────────────────────────────────────────────────────────────
+
+/** A dummy note seed — its raw 32-byte value is sent to the server. */
+export class DummyNote {
+  constructor(private inner: WasmDummyNote) {}
+  toHex(): string { return this.inner.toHex(); }
 }
 
 // ── SpendTx ───────────────────────────────────────────────────────────────────
@@ -553,6 +588,21 @@ export class SpendTx {
   /** Sign the tx hash with the spend-auth key derived from `seed`. Returns 80 bytes (r || s). */
   sign(seed: Uint8Array): Uint8Array {
     return this.inner.sign(seed);
+  }
+
+  outputNotes(): OutputNote[] {
+    return Array.from({ length: this.inner.outputNoteCount() }, (_, i) =>
+      new OutputNote(this.inner.outputNoteAt(i)));
+  }
+
+  diNotes(): DummyNote[] {
+    return Array.from({ length: this.inner.diNoteCount() }, (_, i) =>
+      new DummyNote(this.inner.diNoteAt(i)));
+  }
+
+  doNotes(): DummyNote[] {
+    return Array.from({ length: this.inner.doNoteCount() }, (_, i) =>
+      new DummyNote(this.inner.doNoteAt(i)));
   }
 }
 

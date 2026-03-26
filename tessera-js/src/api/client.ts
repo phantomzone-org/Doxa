@@ -1,5 +1,5 @@
 import type { PrivateIdentifier, SpendAuthPk } from "../account.js";
-import type { AccountResponse, ApiError, DepositRequest, DepositResponse, FaucetResponse, FreshAccStatusResponse, InputNote, RegisterRequest, RegisterResponse } from "./types.js";
+import type { AccountResponse, ApiError, DepositRequest, DepositResponse, FaucetResponse, FreshAccStatusResponse, InputNote, RegisterRequest, RegisterResponse, SpendTxRequest, SpendTxResponse } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
 export class SubpoolApiError extends Error {
@@ -138,6 +138,21 @@ export class SubpoolClient {
     const json = await res.json();
     if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
     return json as InputNote[];
+  }
+
+  /**
+   * POST /spend_tx — submit a signed spend transaction.
+   * Throws `SubpoolApiError` on non-2xx responses.
+   */
+  async submitSpendTx(req: SpendTxRequest): Promise<SpendTxResponse> {
+    const res = await fetch(`${this.baseUrl}/spend_tx`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as SpendTxResponse;
   }
 
   async registerAccount(

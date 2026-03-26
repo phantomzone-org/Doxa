@@ -66,6 +66,36 @@ export interface InputNote {
   sender_address: string;
 }
 
+/** A note payload for POST /spend_tx */
+export interface NotePayload {
+  /** 32 hex chars */
+  identifier: string;
+  /** 16 hex chars — F asset_id, 8 bytes LE */
+  asset_id: string;
+  /** 64 hex chars — U256 amount, 32 bytes LE */
+  amount: string;
+  recipient_address: string;
+  sender_address: string;
+}
+
+/** Request body for POST /spend_tx */
+export interface SpendTxRequest {
+  priv_acc_address: string;
+  input_notes: NotePayload[];
+  output_notes: NotePayload[];
+  /** Raw 32-byte dummy input note seeds as 64 hex chars each */
+  dinotes: string[];
+  /** Raw 32-byte dummy output note seeds as 64 hex chars each */
+  donotes: string[];
+  /** 80-byte Schnorr signature as hex */
+  spend_tx_signature: string;
+}
+
+/** Response body for a successful POST /spend_tx (HTTP 201) */
+export interface SpendTxResponse {
+  id: number;
+}
+
 /** Response body for GET /account/:private_acc_address */
 export interface AccountResponse {
   private_acc_address: string;

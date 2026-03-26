@@ -117,7 +117,7 @@ pub struct ConsumeAuth {
 /// Must satisfy `0 <= value < F::ORDER` (Goldilocks field order).
 /// Used as the key in the Account State Tree to track per-asset balances.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub struct AssetId(pub(crate) F);
+pub struct AssetId(pub F);
 
 impl AssetId {
 	/// Construct an `AssetId` from a `u64`, returning an error if the value
@@ -213,9 +213,7 @@ where
 	///
 	/// Entries are inserted in `leaf_index` order. Returns `Err` if the
 	/// leaf indices are not contiguous starting from 0.
-	pub fn new_from_asset_map(
-		map: HashMap<AssetId, (usize, U256)>,
-	) -> anyhow::Result<Self> {
+	pub fn new_from_asset_map(map: HashMap<AssetId, (usize, U256)>) -> anyhow::Result<Self> {
 		let mut entries: Vec<(AssetId, usize, U256)> = map
 			.into_iter()
 			.map(|(asset_id, (leaf_index, amount))| (asset_id, leaf_index, amount))
