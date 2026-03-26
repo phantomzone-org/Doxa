@@ -17,7 +17,7 @@ CREATE TABLE accounts (
     id                       BIGSERIAL   PRIMARY KEY,
     private_acc_address      TEXT        NOT NULL UNIQUE,
     eth_address              TEXT        NOT NULL,
-    private_identifier       BYTEA       NOT NULL,
+    private_identifier       TEXT        NOT NULL UNIQUE,
     subpool_id               BYTEA       NOT NULL,
     nonce                    BYTEA       NOT NULL,
     spend_auth               BYTEA       NOT NULL,
@@ -43,6 +43,7 @@ CREATE TABLE users (
 CREATE TABLE freshacc_requests (
     id                       BIGSERIAL       PRIMARY KEY,
     private_acc_address      TEXT            NOT NULL UNIQUE,
+    private_identifier       TEXT            NOT NULL UNIQUE,
     spend_auth               BYTEA           NOT NULL,
     approval_signature       BYTEA,
     rejection_msg            TEXT,

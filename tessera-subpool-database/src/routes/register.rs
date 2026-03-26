@@ -4,12 +4,7 @@ use serde::{Deserialize, Serialize};
 use tessera_client::{schnorr::CompressedPublicKey, AccountAddress, StandardAccount, SubpoolId};
 use tessera_utils::F;
 
-use crate::{
-	convert::{account_to_insert, bytes_to_private_id},
-	error::AppError,
-	state::AppState,
-	SUBPOOL_ID,
-};
+use crate::{convert::bytes_to_private_id, error::AppError, state::AppState, SUBPOOL_ID};
 
 /// JSON request body for `POST /register`.
 #[derive(Deserialize)]
@@ -55,8 +50,9 @@ pub async fn register_handler(
 
 	// ── 2. Build account and derive address ───────────────────────────────────
 	let subpool_id = SubpoolId(F::from_canonical_u64(SUBPOOL_ID));
-	let mut acc = StandardAccount::new_with(private_identifier, subpool_id);
-	let private_acc_address = AccountAddress::from_acc(&acc).to_hex();
+	let private_acc_address =
+		AccountAddress::from_acc(&StandardAccount::new_with(private_identifier, subpool_id))
+			.to_hex();
 
 	// ── 3. Existence checks ───────────────────────────────────────────────────
 	let pool = &state.pool;
@@ -74,9 +70,9 @@ pub async fn register_handler(
 	}
 
 	let freshacc_exists: bool = sqlx::query_scalar(
-		"SELECT EXISTS(SELECT 1 FROM freshacc_requests WHERE private_acc_address = $1)",
+		"SELECT EXISTS(SELECT 1 FROM freshacc_requests WHERE private_identifier = $1)",
 	)
-	.bind(&private_acc_address)
+	.bind(&body.private_identifier)
 	.fetch_one(pool)
 	.await?;
 
@@ -96,7 +92,6 @@ pub async fn register_handler(
 	}
 	let pk_arr: &[u8; 40] = pk_bytes.as_slice().try_into().unwrap();
 	let spend_pk = CompressedPublicKey::<F>::decode(pk_arr);
-	acc.spend_auth.spend_pk = Some(spend_pk);
 
 	// ── 5. Validate eth_address ───────────────────────────────────────────────
 	if !body.eth_address.starts_with("0x") || body.eth_address.len() != 42 {
@@ -110,8 +105,6 @@ pub async fn register_handler(
 		.map_err(|_| AppError::InvalidInput("dob must be in YYYY-MM-DD format".into()))?;
 
 	// ── 7. Transactional insert ───────────────────────────────────────────────
-	let spend_auth_bytes = spend_pk.encode();
-
 	let mut tx = pool.begin().await?;
 
 	sqlx::query(
@@ -129,12 +122,13 @@ pub async fn register_handler(
 
 	sqlx::query(
 		r#"
-        INSERT INTO freshacc_requests (private_acc_address, spend_auth, status)
-        VALUES ($1, $2, 'PENDING')
+        INSERT INTO freshacc_requests (private_acc_address, private_identifier, spend_auth, status)
+        VALUES ($1, $2, $3, 'PENDING')
         "#,
 	)
 	.bind(&private_acc_address)
-	.bind(spend_auth_bytes.as_ref())
+	.bind(&body.private_identifier)
+	.bind(spend_pk.encode().as_ref())
 	.execute(&mut *tx)
 	.await?;
 

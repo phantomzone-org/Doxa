@@ -12,6 +12,7 @@ pub enum FreshAccStatus {
 pub struct FreshAccRow {
 	pub id: i64,
 	pub private_acc_address: String,
+	pub private_identifier: String,
 	pub spend_auth: Vec<u8>,
 	pub approval_signature: Option<Vec<u8>>,
 	pub rejection_msg: Option<String>,

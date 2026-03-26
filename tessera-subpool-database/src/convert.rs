@@ -72,7 +72,7 @@ pub fn zero_40() -> [u8; 40] {
 pub struct AccountInsert {
 	pub private_acc_address: String,
 	pub eth_address: String,
-	pub private_identifier: Vec<u8>,
+	pub private_identifier: String,
 	pub subpool_id: Vec<u8>,
 	pub nonce: Vec<u8>,
 	pub spend_auth: Vec<u8>,
@@ -117,7 +117,7 @@ pub fn account_to_insert(acc: &StandardAccount, eth_address: String) -> AccountI
 	AccountInsert {
 		private_acc_address,
 		eth_address,
-		private_identifier: private_id_to_bytes(&acc.private_identifier).to_vec(),
+		private_identifier: hex::encode(private_id_to_bytes(&acc.private_identifier)),
 		subpool_id: f_to_bytes(acc.subpool_id.0).to_vec(),
 		nonce: f_to_bytes(acc.nonce.0).to_vec(),
 		spend_auth,
@@ -138,8 +138,9 @@ pub fn bytes_to_subpool_id(b: &[u8; 8]) -> SubpoolId {
 /// Restores private_identifier, nonce, spend_auth, and AST from the
 /// DB-stored byte representations.
 pub fn account_from_row(row: &AccountRow) -> anyhow::Result<StandardAccount> {
-	let pi_arr: [u8; 16] = row
-		.private_identifier
+	let pi_bytes = hex::decode(&row.private_identifier)
+		.context("private_identifier must be valid hex")?;
+	let pi_arr: [u8; 16] = pi_bytes
 		.as_slice()
 		.try_into()
 		.context("private_identifier must be 16 bytes")?;
