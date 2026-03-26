@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-use crate::convert::{AccountInsert, f_to_bytes, u256_to_bytes};
+use crate::convert::{AccountInsert, f_to_bytes};
 
 pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<sqlx::PgPool> {
     Ok(PgPoolOptions::new()
@@ -25,16 +25,15 @@ pub async fn insert_account_and_user(
         r#"
         INSERT INTO accounts
             (private_acc_address, eth_address,
-             private_identifier, subpool_id, balance, nonce,
+             private_identifier, subpool_id, nonce,
              spend_auth, consume_auth, ast)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(&insert.private_acc_address)
     .bind(&insert.eth_address)
     .bind(&insert.private_identifier)
     .bind(&insert.subpool_id)
-    .bind(&insert.balance)
     .bind(&insert.nonce)
     .bind(&insert.spend_auth)
     .bind(&insert.consume_auth)
@@ -66,16 +65,14 @@ pub async fn update_account_after_deposit(
     pool: &PgPool,
     private_acc_address: &str,
     new_nonce: tessera_utils::F,
-    new_balance: primitive_types::U256,
     ast_json: serde_json::Value,
 ) -> Result<()> {
     sqlx::query(
         "UPDATE accounts \
-         SET nonce = $1, balance = $2, ast = $3, updated_at = NOW() \
-         WHERE private_acc_address = $4",
+         SET nonce = $1, ast = $2, updated_at = NOW() \
+         WHERE private_acc_address = $3",
     )
     .bind(f_to_bytes(new_nonce).as_ref())
-    .bind(u256_to_bytes(new_balance).as_ref())
     .bind(&ast_json)
     .bind(private_acc_address)
     .execute(pool)

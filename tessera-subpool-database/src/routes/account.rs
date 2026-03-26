@@ -19,8 +19,6 @@ pub struct AccountResponse {
     pub private_identifier: String,
     /// 16 hex chars — 8 bytes (1 × u64 LE), `SubpoolId(F)`
     pub subpool_id: String,
-    /// 64 hex chars — 32 bytes (4 × u64 LE), `U256` balance
-    pub balance: String,
     /// 16 hex chars — 8 bytes (1 × u64 LE), `Nonce(F)`
     pub nonce: String,
     /// 80 hex chars — 40 bytes (5 × u64 LE), `CompressedPublicKey` spend-auth; all-zeros if absent
@@ -39,7 +37,6 @@ impl From<AccountRow> for AccountResponse {
             eth_address: row.eth_address,
             private_identifier: hex::encode(&row.private_identifier),
             subpool_id: hex::encode(&row.subpool_id),
-            balance: hex::encode(&row.balance),
             nonce: hex::encode(&row.nonce),
             spend_auth: hex::encode(&row.spend_auth),
             consume_auth: hex::encode(&row.consume_auth),

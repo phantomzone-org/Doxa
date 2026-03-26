@@ -297,7 +297,6 @@ where
 pub struct StandardAccount {
 	pub private_identifier: PrivateIdentifier,
 	pub subpool_id: SubpoolId,
-	pub balance: U256,
 	pub nonce: Nonce,
 	// TODO: make spend_auth generic over Field
 	pub spend_auth: SpendAuth,
@@ -314,7 +313,6 @@ impl StandardAccount {
 		StandardAccount {
 			private_identifier,
 			subpool_id,
-			balance: U256::zero(),
 			nonce: Nonce(F::ZERO),
 			spend_auth: SpendAuth::default(),
 			consume_auth: ConsumeAuth::default(),
@@ -327,7 +325,6 @@ impl StandardAccount {
 		StandardAccount {
 			private_identifier,
 			subpool_id,
-			balance: U256::zero(),
 			nonce: Nonce(F::ZERO),
 			spend_auth: SpendAuth::default(),
 			consume_auth: ConsumeAuth::default(),
@@ -457,7 +454,10 @@ pub struct AccountAddress {
 impl AccountAddress {
 	/// Construct an address from its components.
 	pub fn new(subpool_id: SubpoolId, public_id: PublicIdentifier) -> Self {
-		Self { subpool_id, public_id }
+		Self {
+			subpool_id,
+			public_id,
+		}
 	}
 
 	/// Derive the address from an account.
