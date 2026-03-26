@@ -1,10 +1,12 @@
-use alloy::primitives::{Address, B256, Bytes};
-use alloy::providers::Provider;
-use alloy::rpc::types::TransactionRequest;
-use alloy::sol;
-use alloy::sol_types::SolCall;
+use alloy::{
+	primitives::{Address, Bytes, B256},
+	providers::Provider,
+	rpc::types::TransactionRequest,
+	sol,
+	sol_types::SolCall,
+};
 use anyhow::{Context, Result};
-use plonky2_field::types::PrimeField64;
+use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::U256;
 use serde::Serialize;
 use sqlx::PgPool;
@@ -194,8 +196,16 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 	}
 
 	for row in rows {
-		if let Err(e) =
-			process_one_deposit(pool, approval_sk, sequencer_url, http, rpc_provider, &row, subpool_id).await
+		if let Err(e) = process_one_deposit(
+			pool,
+			approval_sk,
+			sequencer_url,
+			http,
+			rpc_provider,
+			&row,
+			subpool_id,
+		)
+		.await
 		{
 			error!(
 				id = row.id,
@@ -219,6 +229,7 @@ async fn process_one_deposit<P: Provider + Clone>(
 ) -> Result<()> {
 	// ── 1. Broadcast deposit tx on-chain ─────────────────────────────────────
 	info!(id = row.id, addr = %row.recipient_acc_address, "broadcasting deposit tx on-chain");
+	// TODO: get the tx_hash of the broadcasted tx and put in deposit_tx_request row
 	broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
 
 	// ── 2. Reconstruct accin from DB ─────────────────────────────────────────
@@ -233,12 +244,15 @@ async fn process_one_deposit<P: Provider + Clone>(
 
 	// ── 3. Parse deposit fields and build note commitment ────────────────────
 	let deposit = parse_deposit_fields(row)?;
+	// TODO: use proper names (also use single purpose functions)
 	let nc_hash = build_deposit_note(&accin, &deposit);
 
 	// ── 4. Build accout with deposit applied ─────────────────────────────────
 	let accout = apply_deposit(&accin, &deposit);
 
 	// ── 5. Sign deposit tx_hash ──────────────────────────────────────────────
+	// TODO: don't redo wrappin gin DepositNOteCommitment. Have builde_deposit_note return
+	// DepositNoteCommitment
 	let deposit_note_comm =
 		tessera_client::DepositNoteCommitment(tessera_client::HashOutput(nc_hash));
 	let tx_hash = derive_deposit_tx_hash(
@@ -271,6 +285,10 @@ async fn process_one_deposit<P: Provider + Clone>(
 	.context("failed to update deposit_tx_requests")?;
 
 	// ── 8. Update account in DB ──────────────────────────────────────────────
+
+	// TODO: accout is aready updated with the latest balance. Convert accout (an instance of
+	// StandardAccount) to AccountInsert using `account_to_insert` method in convert.rs and then
+	// update the account using private_acc_address
 	let new_asset_balance = accout
 		.ast
 		.amount_for(deposit.asset_id)
@@ -352,7 +370,10 @@ pub async fn confirm_pending_notes<P: Provider + Clone>(
 		let nc: [u8; 32] = nc_bytes.as_slice().try_into().unwrap();
 		let nc_b256 = B256::from(nc);
 
-		let calldata = getDepositCall { noteCommitment: nc_b256 }.abi_encode();
+		let calldata = getDepositCall {
+			noteCommitment: nc_b256,
+		}
+		.abi_encode();
 		let tx = TransactionRequest::default()
 			.to(rollup_address)
 			.input(Bytes::from(calldata).into());
@@ -384,16 +405,19 @@ pub async fn confirm_pending_notes<P: Provider + Clone>(
 				}
 				// 0=None, 1=Pending, 3=Withdrawn → keep polling
 				if status > 3 {
-					error!(id = row.id, status, "unexpected deposit status from on-chain getDeposit");
+					error!(
+						id = row.id,
+						status, "unexpected deposit status from on-chain getDeposit"
+					);
 				}
-			}
+			},
 			Err(e) => {
 				error!(
 					id = row.id,
 					note_id = %row.identifier,
 					"failed to query on-chain deposit status: {e}"
 				);
-			}
+			},
 		}
 	}
 
