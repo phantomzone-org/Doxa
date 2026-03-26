@@ -429,7 +429,7 @@ This section describes how each transaction type flows through the system, which
    │                   │                 │                   │                  │                │
    │ mint + approve    │                 │                   │                  │                │
    │ (on-chain ERC20)  │                 │                   │                  │       ┌────────│
-   │─────────────────────────────────────────────────────────────────────────────────> │  ERC20 │
+   │──────────────────────────────────────────────────────────────────────────────────> │  ERC20 │
    │                   │                 │                   │                  │       └────────│
    │                   │                 │                   │                  │                │
    │ build signed      │                 │                   │                  │                │
@@ -453,9 +453,9 @@ This section describes how each transaction type flows through the system, which
    │                   │                 │                   │                  │                │
    │                   │                 │                   │ broadcast signed │                │
    │                   │                 │                   │ deposit tx       │                │
-   │                   │                 │                   │────────────────────────────────> │
+   │                   │                 │                   │─────────────────────────────────> │
    │                   │                 │                   │                  │   confirmed    │
-   │                   │                 │                   │<────────────────────────────────│
+   │                   │                 │                   │<──────────────────────────────────│
    │                   │                 │                   │                  │                │
    │                   │                 │                   │ POST /deposit    │                │
    │                   │                 │                   │ (note_commitment)│                │
@@ -481,12 +481,12 @@ This section describes how each transaction type flows through the system, which
    │                   │                 │   note_commitment)│                  │                │
    │                   │                 │<──────────────────│                  │                │
    │                   │                 │                   │                  │                │
-   │                   │                 │         ... later, on-chain confirmation ...         │
+   │                   │                 │         ... later, on-chain confirmation ...          │
    │                   │                 │                   │                  │                │
    │                   │                 │                   │ getDeposit(comm) │                │
-   │                   │                 │                   │────────────────────────────────> │
+   │                   │                 │                   │──────────────────────────────────>│
    │                   │                 │                   │                  │  status=2      │
-   │                   │                 │                   │<────────────────────────────────│
+   │                   │                 │                   │<──────────────────────────────────│
    │                   │                 │                   │                  │  (Validated)   │
    │                   │                 │                   │                  │                │
    │                   │                 │  UPDATE           │                  │                │

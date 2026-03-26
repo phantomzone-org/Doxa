@@ -279,7 +279,7 @@ impl BatchBuilder {
 		// Poseidon subtree root over nc_leaves: 8 per slot × 64 slots = 512 (power of two).
 		let nc_hashes: Vec<HashOutput> = nc_leaves
 			.iter()
-			.map(|c| HashOutput::from_32bytes_digest(*c))
+			.map(|c| HashOutput::from_encoded_fields(*c))
 			.collect();
 		let batch_poseidon_root = SubtreeRootCircuit::compute_root_native(&nc_hashes);
 

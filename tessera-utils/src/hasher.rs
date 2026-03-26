@@ -406,6 +406,27 @@ impl HashOutput {
 		}
 		Self::new(elems)
 	}
+
+	/// Convert 32 bytes back into a [`HashOutput`] **without** masking.
+	///
+	/// # Safety (logical)
+	///
+	/// The caller must guarantee that each 8-byte chunk represents a valid
+	/// Goldilocks field element (i.e. `< F::ORDER`).  This is the case when
+	/// the bytes were produced by encoding `[F; 4]` as big-endian u64s
+	/// (e.g. via [`hash_to_hex`] / [`to_u64`]).
+	///
+	/// Use [`from_32bytes_digest`] instead when the bytes come from an
+	/// external hash (SHA-256, Keccak, …) whose values may exceed the
+	/// field order.
+	pub fn from_encoded_fields(bytes: [u8; 32]) -> Self {
+		let mut elems = [F::ZERO; HASH_SIZE];
+		for i in 0..HASH_SIZE {
+			let chunk = u64::from_be_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
+			elems[i] = F::from_canonical_u64(chunk);
+		}
+		Self::new(elems)
+	}
 }
 
 impl PartialOrd for HashOutput {

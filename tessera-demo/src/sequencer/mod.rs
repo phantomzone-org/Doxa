@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info};
 
 use batches::{flush_deposit_batch, flush_tx_batch};
-use handlers::{handle_config, handle_deposit, handle_forward_note, handle_pending_notes, handle_status, handle_transaction};
+use handlers::{handle_config, handle_deposit, handle_forward_note, handle_note_position, handle_pending_notes, handle_status, handle_transaction};
 use state::{AppState, SequencerState, SharedState};
 
 /// A demo sequencer that can be started with [`DemoSequencer::run`].
@@ -59,6 +59,7 @@ impl DemoSequencer {
 		info!("  GET  /config         - contract addresses");
 		info!("  POST /forward_note   - forward note to another subpool");
 		info!("  GET  /pending_notes/:id - poll forwarded notes for a subpool");
+		info!("  GET  /note_position/:hex - lookup NCT leaf index for a note commitment");
 
 		let handle = tokio::spawn(async move {
 			axum::serve(listener, app).await.ok();
@@ -124,6 +125,7 @@ impl DemoSequencer {
 			prove_delay: config.prove_delay,
 			local_tree: MerkleTree::new(COM_TREE_DEPTH),
 			note_pool: HashMap::new(),
+			note_positions: HashMap::new(),
 		}));
 
 		let app_state: AppState = (state.clone(), provider.clone());
@@ -132,6 +134,7 @@ impl DemoSequencer {
 			.route("/transaction", post(handle_transaction))
 			.route("/forward_note", post(handle_forward_note))
 			.route("/pending_notes/{subpool_id}", get(handle_pending_notes))
+			.route("/note_position/{commitment_hex}", get(handle_note_position))
 			.route("/status", get(handle_status))
 			.route("/config", get(handle_config))
 			.with_state(app_state);

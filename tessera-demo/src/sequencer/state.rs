@@ -26,6 +26,9 @@ pub(crate) struct SequencerState {
 	pub local_tree: MerkleTree<HashOutput>,
 	/// Per-subpool queues of forwarded notes awaiting pickup by operators.
 	pub note_pool: HashMap<u64, Vec<ForwardedNote>>,
+	/// Mapping from note commitment hex (64 chars) to NCT leaf index.
+	/// Populated after each batch (tx or deposit) is proven on-chain.
+	pub note_positions: HashMap<String, u64>,
 }
 
 /// A note forwarded from one subpool operator to another via the sequencer.

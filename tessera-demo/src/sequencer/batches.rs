@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use alloy::primitives::{B256, U256};
-use plonky2::field::types::Field;
+use plonky2::field::types::{Field, PrimeField64};
 use tessera_client::NOTE_BATCH;
 use tessera_server::{
 	contract::{self, hash_to_u256_le, ITesseraRollupV2},
@@ -40,6 +40,7 @@ pub(crate) async fn flush_tx_batch(
 	let n_slots = finalized.ac_leaves.len();
 	let stride = NOTE_BATCH + 1; // 8 entries per slot in nc/nn_leaves
 
+	// All slots contribute commitments (including padding — they go into the NCT).
 	let mut note_commitments = Vec::with_capacity(n_slots * NOTE_BATCH);
 	for s in 0..n_slots {
 		let nc_base = s * stride;
@@ -49,27 +50,29 @@ pub(crate) async fn flush_tx_batch(
 			));
 		}
 	}
+	let account_commitments: Vec<U256> = finalized
+		.ac_leaves
+		.iter()
+		.map(contract::bytes32_be_to_u256_le)
+		.collect();
 
-	let mut note_nullifiers = Vec::with_capacity(n_slots * NOTE_BATCH);
+	// Only real TX slots contribute nullifiers — padding slots have no nullifiers.
+	let mut note_nullifiers = Vec::new();
+	let mut account_nullifiers = Vec::new();
 	for s in 0..n_slots {
+		if !finalized.tx_proofs_by_slot.contains_key(&s) {
+			continue;
+		}
 		let nn_base = s * stride;
 		for j in 0..NOTE_BATCH {
 			note_nullifiers.push(contract::bytes32_be_to_u256_le(
 				&finalized.nn_leaves[nn_base + j],
 			));
 		}
+		account_nullifiers.push(contract::bytes32_be_to_u256_le(
+			&finalized.an_leaves[s],
+		));
 	}
-
-	let account_commitments: Vec<U256> = finalized
-		.ac_leaves
-		.iter()
-		.map(contract::bytes32_be_to_u256_le)
-		.collect();
-	let account_nullifiers: Vec<U256> = finalized
-		.an_leaves
-		.iter()
-		.map(contract::bytes32_be_to_u256_le)
-		.collect();
 
 	let batch_poseidon_root = hash_to_u256_le(&finalized.batch_poseidon_root);
 
@@ -120,7 +123,7 @@ pub(crate) async fn flush_tx_batch(
 	let batch_leaves: Vec<HashOutput> = finalized
 		.nc_leaves
 		.iter()
-		.map(|c| HashOutput::from_32bytes_digest(*c))
+		.map(|c| HashOutput::from_encoded_fields(*c))
 		.collect();
 
 	info!(
@@ -180,15 +183,31 @@ async fn prove_tx_batch(
 	st.confirmed_root = new_root;
 	st.confirmed_root_history.insert(new_root);
 
+	// Capture base leaf index before insertion so we can record positions.
+	let base_leaf = st.local_tree.num_leaves() as u64;
+
 	// Insert all 512 batch leaves into the local tree.
 	st.local_tree
-		.insert_batch(batch_leaves)
+		.insert_batch(batch_leaves.clone())
 		.map_err(|e| anyhow::anyhow!("local tree insert_batch: {e}"))?;
+
+	// Record NCT leaf positions for every non-zero leaf.
+	let mut recorded = 0usize;
+	for (offset, leaf) in batch_leaves.iter().enumerate() {
+		if leaf.0.iter().all(|f| f.to_canonical_u64() == 0) {
+			continue;
+		}
+		let hex_key = hash_output_to_hex(leaf);
+		st.note_positions.insert(hex_key, base_leaf + offset as u64);
+		recorded += 1;
+	}
+
 	let confirmed_roots = st.confirmed_root_history.len();
 	info!(
 		new_root = %new_root,
 		confirmed_roots,
 		local_tree_leaves = st.local_tree.num_leaves(),
+		recorded_positions = recorded,
 		"=== TX batch CONFIRMED ==="
 	);
 
@@ -218,7 +237,7 @@ pub(crate) async fn flush_deposit_batch(
 
 	let deposit_nc_hashes: Vec<HashOutput> = deposits
 		.iter()
-		.map(|nc| HashOutput::from_32bytes_digest(nc.0))
+		.map(|nc| HashOutput::from_encoded_fields(nc.0))
 		.collect();
 
 	const DEPOSIT_BATCH_SIZE: usize = 512;
@@ -322,17 +341,44 @@ async fn prove_deposit_batch(
 	st.confirmed_root = new_root;
 	st.confirmed_root_history.insert(new_root);
 
+	// Capture base leaf index before insertion so we can record positions.
+	let base_leaf = st.local_tree.num_leaves() as u64;
+
 	// Insert deposit leaves into the local tree.
 	st.local_tree
-		.insert_batch(deposit_leaves)
+		.insert_batch(deposit_leaves.clone())
 		.map_err(|e| anyhow::anyhow!("local tree insert_batch (deposit): {e}"))?;
+
+	// Record NCT leaf positions for every non-zero deposit leaf.
+	let mut recorded = 0usize;
+	for (offset, leaf) in deposit_leaves.iter().enumerate() {
+		if leaf.0.iter().all(|f| f.to_canonical_u64() == 0) {
+			continue;
+		}
+		let hex_key = hash_output_to_hex(leaf);
+		st.note_positions.insert(hex_key, base_leaf + offset as u64);
+		recorded += 1;
+	}
+
 	let confirmed_roots = st.confirmed_root_history.len();
 	info!(
 		new_root = %new_root,
 		confirmed_roots,
 		local_tree_leaves = st.local_tree.num_leaves(),
+		recorded_positions = recorded,
 		"=== Deposit batch CONFIRMED ==="
 	);
 
 	Ok(())
 }
+
+/// Encode a `HashOutput` (4 × Goldilocks field elements) as a 64-char hex string.
+/// Uses the same big-endian u64 encoding as the operator's `hash_to_hex`.
+fn hash_output_to_hex(h: &HashOutput) -> String {
+	let mut out = [0u8; 32];
+	for (i, f) in h.0.iter().enumerate() {
+		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+	}
+	hex::encode(out)
+}
+

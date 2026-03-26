@@ -27,7 +27,7 @@ use tracing::{error, info};
 // ── On-chain contract interface (subset) ────────────────────────────────────
 
 sol! {
-	function getDeposit(bytes32 noteCommitment) external view returns (uint8 status, uint256 amount, address depositor);
+	function getDeposit(bytes32 noteCommitment) external view returns (uint256 value, address recipient, uint8 status);
 }
 
 // ── Sequencer deposit request ───────────────────────────────────────────────
@@ -383,7 +383,10 @@ pub async fn confirm_pending_notes<P: Provider + Clone>(
 						"input note confirmed on-chain (deposit Validated)"
 					);
 				}
-				// status 0/1/3 → not yet validated, keep polling
+				// 0=None, 1=Pending, 3=Withdrawn → keep polling
+				if status > 3 {
+					error!(id = row.id, status, "unexpected deposit status from on-chain getDeposit");
+				}
 			}
 			Err(e) => {
 				error!(

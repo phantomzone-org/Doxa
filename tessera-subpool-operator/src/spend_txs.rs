@@ -1,24 +1,24 @@
-use std::array;
+use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use primitive_types::U256;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tessera_client::{
-    NOTE_BATCH, NoteCommitment, NoteNullifier, SubpoolId,
-    derive_priv_tx_hash, double_hash_native, sample_dummy_notes,
+    AccountAddress, AssetId, HashOutput, NOTE_BATCH, NodeIdentifier, NoteCommitment, NoteNullifier,
+    StandardNote, SubpoolId,
+    compute_note_nullifier, derive_priv_tx_hash, double_hash_native, sample_dummy_notes,
     schnorr::{PrivateKey, Scalar, schnorr_sign},
 };
 use tessera_utils::F;
-use plonky2_field::types::Field;
+use plonky2_field::types::{Field, PrimeField64};
 use tracing::{error, info};
 
 use tessera_subpool_database::{
     convert::{
-        account_from_row, bytes_to_u256, hash_to_hex,
-        f_to_bytes, u256_to_bytes,
+        account_from_row, build_ast_json, bytes_to_f, bytes_to_u256, hash_to_hex,
     },
-    db::insert_input_note,
+    db::{insert_input_note, insert_input_note_with_commitment, update_account_after_deposit},
     types::{
         account::AccountRow,
         spend_tx::{InputNoteRow, OutputNoteRow, SpendTxRow},
@@ -94,7 +94,8 @@ async fn process_one_spend_tx(
     let accin = account_from_row(&acc_row, sid)?;
 
     // ── 2. Sanity check: input notes exist and are unconsumed ──────────────────
-    let mut total_input = U256::zero();
+    // Track per-asset input totals for balance verification.
+    let mut input_by_asset: HashMap<u64, U256> = HashMap::new();
 
     for inote_id in &row.inote_identifiers {
         let inote: InputNoteRow = sqlx::query_as(
@@ -119,11 +120,15 @@ async fn process_one_spend_tx(
 
         let amount_arr: [u8; 32] = inote.amount.as_slice().try_into()
             .with_context(|| format!("input note '{inote_id}' amount must be 32 bytes"))?;
-        total_input = total_input + bytes_to_u256(&amount_arr);
+        let asset_id_arr: [u8; 8] = inote.asset_id.as_slice().try_into()
+            .with_context(|| format!("input note '{inote_id}' asset_id must be 8 bytes"))?;
+        let asset_id_u64 = bytes_to_f(&asset_id_arr).to_canonical_u64();
+
+        *input_by_asset.entry(asset_id_u64).or_insert(U256::zero()) += bytes_to_u256(&amount_arr);
     }
 
-    // ── 3. Sanity check: fetch output notes and verify balance ─────────────────
-    let mut total_output = U256::zero();
+    // ── 3. Sanity check: fetch output notes and verify per-asset balance ────────
+    let mut output_by_asset: HashMap<u64, U256> = HashMap::new();
     let mut output_notes: Vec<OutputNoteRow> = Vec::with_capacity(row.onote_identifiers.len());
 
     for onote_id in &row.onote_identifiers {
@@ -137,40 +142,76 @@ async fn process_one_spend_tx(
 
         let amount_arr: [u8; 32] = onote.amount.as_slice().try_into()
             .with_context(|| format!("output note '{onote_id}' amount must be 32 bytes"))?;
-        total_output = total_output + bytes_to_u256(&amount_arr);
+        let asset_id_arr: [u8; 8] = onote.asset_id.as_slice().try_into()
+            .with_context(|| format!("output note '{onote_id}' asset_id must be 8 bytes"))?;
+        let asset_id_u64 = bytes_to_f(&asset_id_arr).to_canonical_u64();
+
+        *output_by_asset.entry(asset_id_u64).or_insert(U256::zero()) += bytes_to_u256(&amount_arr);
 
         output_notes.push(onote);
     }
 
-    // Balance check: account.balance + sum(inotes) == sum(onotes)
-    let balance_in = accin.balance + total_input;
-    if balance_in != total_output {
-        anyhow::bail!(
-            "balance mismatch: account.balance({}) + inotes({}) != onotes({})",
-            accin.balance, total_input, total_output
-        );
+    // Per-asset conservation check: sum(inotes) == sum(onotes) for each asset
+    for (&asset_id_u64, &out_total) in &output_by_asset {
+        let in_total = input_by_asset.get(&asset_id_u64).copied().unwrap_or(U256::zero());
+        if in_total != out_total {
+            anyhow::bail!(
+                "balance mismatch for asset {asset_id_u64}: inotes({in_total}) != onotes({out_total})"
+            );
+        }
     }
 
     // ── 4. Build accout with spend applied ─────────────────────────────────────
-    let mut accout = accin.clone_with_incremented_nonce();
-    accout.spend_auth = accin.spend_auth.clone();
-    accout.ast = accin.ast.clone();
+    let accout = accin.clone_with_incremented_nonce();
 
-    // Update balance: new_balance = accin.balance + total_input - total_output
-    // Since balance_in == total_output, the new account balance is 0 if all funds are spent,
-    // or the remainder if partial. We need to track per-asset, but for now use aggregate.
-    accout.balance = balance_in - total_output;
-
-    // ── 5. Sample dummy notes and compute tx_hash ──────────────────────────────
-    // For the demo (AcceptAllVerifier), we use dummy notes for the sequencer submission.
-    // Real note nullifiers/commitments require NCT positions which the operator doesn't track.
+    // ── 5. Derive proper note commitments and nullifiers ────────────────────────
     let mut rng = rand::rng();
-    let (dinotes, donotes) = sample_dummy_notes(&mut rng);
+    let sender_nk = accin.nk();
+    let sender_addr = accin.address();
 
-    let dinote_nulls: [NoteNullifier; NOTE_BATCH] =
-        array::from_fn(|i| NoteNullifier(double_hash_native(dinotes[i]).into()));
-    let donote_comms: [NoteCommitment; NOTE_BATCH] =
-        array::from_fn(|i| NoteCommitment(double_hash_native(donotes[i]).into()));
+    // Sample random dummy seeds for padding unused note slots.
+    let (dummy_dinotes, dummy_donotes) = sample_dummy_notes(&mut rng);
+
+    // Output note commitments: real notes first, random padding for unused slots.
+    let mut donote_comms: [NoteCommitment; NOTE_BATCH] = std::array::from_fn(|i| {
+        NoteCommitment(HashOutput::new(double_hash_native(dummy_donotes[i])))
+    });
+    for (i, onote) in output_notes.iter().enumerate().take(NOTE_BATCH) {
+        let note = build_standard_note_from_row(onote, sender_addr)?;
+        donote_comms[i] = note.commitment();
+    }
+
+    // Input note nullifiers: real nullifiers first, random padding for unused slots.
+    let mut dinote_nulls: [NoteNullifier; NOTE_BATCH] = std::array::from_fn(|i| {
+        NoteNullifier(HashOutput::new(double_hash_native(dummy_dinotes[i])))
+    });
+    for (i, inote_id) in row.inote_identifiers.iter().enumerate().take(NOTE_BATCH) {
+        let inote: InputNoteRow = sqlx::query_as(
+            "SELECT * FROM input_notes WHERE identifier = $1",
+        )
+        .bind(inote_id)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("input note '{inote_id}' not found (nullifier derivation)"))?;
+
+        let nc_bytes = inote.note_commitment.as_ref()
+            .with_context(|| format!("input note '{inote_id}' has no stored note_commitment"))?;
+        let nc_arr: [u8; 32] = nc_bytes.as_slice().try_into()
+            .with_context(|| format!("input note '{inote_id}' note_commitment must be 32 bytes"))?;
+
+        // Query sequencer for NCT leaf position.
+        let nc_hex = hex::encode(nc_arr);
+        let position = query_note_position(http, sequencer_url, &nc_hex).await
+            .with_context(|| format!("failed to get NCT position for input note '{inote_id}'"))?;
+
+        // Reconstruct commitment as HashOutput and derive nullifier.
+        let commitment = NoteCommitment(HashOutput::from_encoded_fields(nc_arr));
+        dinote_nulls[i] = compute_note_nullifier(
+            &commitment,
+            F::from_canonical_u64(position),
+            &sender_nk,
+        );
+    }
 
     let tx_hash = derive_priv_tx_hash(
         accin.nullifier(),
@@ -239,25 +280,32 @@ async fn process_one_spend_tx(
     .await
     .context("failed to update spend_tx_requests")?;
 
-    // ── 10. Update account in DB ───────────────────────────────────────────────
-    // For now, keep existing AST (per-asset tracking will be refined later).
-    let ast_json = acc_row.ast.clone();
+    // ── 10. Update sender's account in DB (nonce + AST) ─────────────────────
+    // Compute per-asset amounts sent to OTHER accounts (not change back to self).
+    let mut sent_by_asset: HashMap<u64, U256> = HashMap::new();
+    for onote in &output_notes {
+        if onote.recipient_address != row.priv_acc_address {
+            let amount_arr: [u8; 32] = onote.amount.as_slice().try_into().unwrap_or([0u8; 32]);
+            let asset_id_arr: [u8; 8] = onote.asset_id.as_slice().try_into().unwrap_or([0u8; 8]);
+            let asset_id_u64 = bytes_to_f(&asset_id_arr).to_canonical_u64();
+            *sent_by_asset.entry(asset_id_u64).or_insert(U256::zero()) += bytes_to_u256(&amount_arr);
+        }
+    }
 
-    sqlx::query(
-        "UPDATE accounts \
-         SET nonce = $1, balance = $2, ast = $3, updated_at = NOW() \
-         WHERE private_acc_address = $4",
-    )
-    .bind(f_to_bytes(accout.nonce.0).as_ref())
-    .bind(u256_to_bytes(accout.balance).as_ref())
-    .bind(&ast_json)
-    .bind(&row.priv_acc_address)
-    .execute(pool)
-    .await
-    .context("failed to update account after spend tx")?;
+    // Update sender's AST: subtract sent amounts per asset
+    let mut sender_ast_json = acc_row.ast.clone();
+    for (&asset_id_u64, &sent_amount) in &sent_by_asset {
+        let old_balance = parse_ast_balance(&sender_ast_json, asset_id_u64);
+        let new_balance = old_balance.saturating_sub(sent_amount);
+        sender_ast_json = build_ast_json(&sender_ast_json, asset_id_u64, new_balance);
+    }
+
+    update_account_after_deposit(pool, &row.priv_acc_address, accout.nonce.0, sender_ast_json)
+        .await
+        .context("failed to update sender account after spend tx")?;
 
     // ── 11. Create input notes for local recipients ────────────────────────────
-    for onote in &output_notes {
+    for (onote_idx, onote) in output_notes.iter().enumerate() {
         // Check if the recipient account exists in this subpool
         let local: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM accounts WHERE private_acc_address = $1)",
@@ -267,14 +315,18 @@ async fn process_one_spend_tx(
         .await
         .unwrap_or(false);
 
+        // Serialize the note commitment (32 bytes: 4 × u64 BE) for DB storage.
+        let nc_bytes = commitment_to_bytes(&donote_comms[onote_idx]);
+
         if local {
-            insert_input_note(
+            insert_input_note_with_commitment(
                 pool,
                 &onote.identifier,
                 &onote.asset_id,
                 &onote.amount,
                 &onote.recipient_address,
                 &onote.sender_address,
+                &nc_bytes,
             )
             .await?;
 
@@ -405,13 +457,94 @@ pub async fn poll_incoming_notes(
             &note.sender_address,
         )
         .await?;
-
-        info!(
-            note_id = %note.identifier,
-            recipient = %note.recipient_address,
-            "created input note from forwarded note"
-        );
     }
 
     Ok(())
+}
+
+// ── Note derivation helpers ─────────────────────────────────────────────────
+
+/// Build a `StandardNote` from an `OutputNoteRow` and the sender's address.
+fn build_standard_note_from_row(
+    onote: &OutputNoteRow,
+    sender_addr: AccountAddress,
+) -> Result<StandardNote> {
+    // Decode identifier (16 bytes = 2 × u64 LE → [F; 2])
+    let id_bytes = hex::decode(&onote.identifier)
+        .context("invalid identifier hex in output note")?;
+    let id_arr: [u8; 16] = id_bytes.as_slice().try_into()
+        .context("output note identifier must be 16 bytes")?;
+    let identifier = NodeIdentifier([
+        bytes_to_f(&id_arr[..8].try_into().unwrap()),
+        bytes_to_f(&id_arr[8..].try_into().unwrap()),
+    ]);
+
+    // Decode asset_id (8 bytes → F → AssetId)
+    let asset_id_arr: [u8; 8] = onote.asset_id.as_slice().try_into()
+        .context("output note asset_id must be 8 bytes")?;
+    let asset_id = AssetId::from_u64(bytes_to_f(&asset_id_arr).to_canonical_u64())?;
+
+    // Decode amount (32 bytes → U256)
+    let amount_arr: [u8; 32] = onote.amount.as_slice().try_into()
+        .context("output note amount must be 32 bytes")?;
+    let amt = bytes_to_u256(&amount_arr);
+
+    // Decode recipient address (80 hex chars)
+    let recipient = AccountAddress::from_hex(&onote.recipient_address)
+        .context("invalid recipient address in output note")?;
+
+    Ok(StandardNote::new(identifier, asset_id, amt, recipient, sender_addr))
+}
+
+/// Serialize a NoteCommitment to 32 bytes (4 × u64 BE), matching `hash_to_hex` encoding.
+fn commitment_to_bytes(nc: &NoteCommitment) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, f) in nc.0 .0.iter().enumerate() {
+        out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+    }
+    out
+}
+
+/// Query the sequencer for the NCT leaf position of a note commitment.
+#[derive(Deserialize)]
+struct NotePositionResponse {
+    position: u64,
+}
+
+async fn query_note_position(
+    http: &reqwest::Client,
+    sequencer_url: &str,
+    commitment_hex: &str,
+) -> Result<u64> {
+    let url = format!(
+        "{}/note_position/{}",
+        sequencer_url.trim_end_matches('/'),
+        commitment_hex,
+    );
+    let resp = http.get(&url).send().await
+        .context("failed to reach sequencer for note_position")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("sequencer returned {status} for note_position: {body}");
+    }
+
+    let body: NotePositionResponse = resp.json().await
+        .context("invalid JSON from note_position")?;
+    Ok(body.position)
+}
+
+/// Parse a U256 balance from an AST-format JSON object for a given asset.
+fn parse_ast_balance(ast: &serde_json::Value, asset_id: u64) -> U256 {
+    let key = asset_id.to_string();
+    ast.get(&key)
+        .and_then(|e| e.get("amount"))
+        .and_then(|v| v.as_str())
+        .and_then(|hex_str| {
+            let bytes = hex::decode(hex_str).ok()?;
+            let arr: [u8; 32] = bytes.as_slice().try_into().ok()?;
+            Some(bytes_to_u256(&arr))
+        })
+        .unwrap_or(U256::zero())
 }

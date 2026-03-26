@@ -225,6 +225,26 @@ impl PositionedStandardNode {
 	}
 }
 
+/// Compute a note nullifier from a pre-computed commitment, NCT position, and nullifier key.
+///
+/// `nullifier = H(commitment[4] || position[1] || nk[4])`
+///
+/// This is equivalent to `PositionedStandardNode::nullifier` but works with
+/// a raw `NoteCommitment` rather than requiring the full `StandardNote`.
+pub fn compute_note_nullifier(
+	commitment: &NoteCommitment,
+	position: F,
+	nk: &NullifierKey,
+) -> NoteNullifier {
+	let mut input = [F::ZERO; 9];
+	input[..4].copy_from_slice(&commitment.0 .0);
+	input[4] = position;
+	input[5..9].copy_from_slice(nk.0.as_slice());
+	NoteNullifier(HashOutput(
+		<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
+	))
+}
+
 #[cfg(test)]
 mod tests {
 	use rand::rng;

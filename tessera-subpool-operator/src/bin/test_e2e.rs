@@ -3,15 +3,21 @@
 //! This binary:
 //! 1. Registers 3 accounts, one on each subpool (DB API ports 8081/8082/8083)
 //! 2. Waits for operator approval on each
-//! 3. Each client deposits funds via the rollup contract
-//! 4. Waits for deposit approval (account balance updated)
-//! 5. Each client submits a spend tx sending to the next client (1→2, 2→3, 3→1)
+//! 3. Each client deposits different amounts (1000, 2000, 3000)
+//! 4. Waits for deposit approval (AST updated)
+//! 5. Each client sends a partial amount to the next (1→2: 300, 2→3: 500, 3→1: 700),
+//!    keeping the change as a second output note
+//! 6. Waits for spend tx approval, then prints final balances
+//!
+//! Expected final balances (asset 1):
+//!   client 1: 1000 - 300 + 700 = 1400
+//!   client 2: 2000 - 500 + 300 = 1800
+//!   client 3: 3000 - 700 + 500 = 2800
 //!
 //! Env vars:
 //!   ROLLUP_ADDRESS   - deployed TesseraRollupV2 address (required)
 //!   TOKEN_ADDRESS    - deployed ToyUSDT/USDX address (required)
 //!   RPC_URL          - Anvil RPC (default http://localhost:8545)
-//!   DEPOSIT_AMOUNT   - amount in token units (default 1000)
 //!   ASSET_ID         - asset ID as u64 (default 1)
 //!   DB_API_BASE      - base URL without port (default http://localhost)
 
@@ -73,7 +79,8 @@ struct Client {
     depositor_addr: Address,
     deposit_note_id_hex: String, // 32-char hex (the input note identifier after deposit)
     asset_id_hex: String,        // 16-char hex
-    amount_hex: String,          // 64-char hex
+    deposit_amount: u64,         // per-client deposit amount
+    send_amount: u64,            // amount to send to the next client
 }
 
 #[tokio::main]
@@ -84,10 +91,12 @@ async fn main() -> Result<()> {
     let token_addr: Address = env_required("TOKEN_ADDRESS")?.parse().context("invalid TOKEN_ADDRESS")?;
     let rpc_url = env_or("RPC_URL", "http://localhost:8545");
     let db_api_base = env_or("DB_API_BASE", "http://localhost");
-    let deposit_amount: u64 = env_or("DEPOSIT_AMOUNT", "1000").parse().context("invalid DEPOSIT_AMOUNT")?;
     let asset_id_u64: u64 = env_or("ASSET_ID", "1").parse().context("invalid ASSET_ID")?;
-    let amount_u256 = U256::from(deposit_amount);
     let asset_id = AssetId::from_u64(asset_id_u64)?;
+
+    // Per-client deposit and send amounts
+    let deposit_amounts: [u64; 3] = [1000, 2000, 3000];
+    let send_amounts: [u64; 3] = [300, 500, 700]; // 1→2: 300, 2→3: 500, 3→1: 700
 
     let http = reqwest::Client::new();
     let mut rng = rand::rng();
@@ -162,7 +171,8 @@ async fn main() -> Result<()> {
             depositor_addr,
             deposit_note_id_hex: String::new(),
             asset_id_hex: hex::encode(f_to_bytes(F::from_canonical_u64(asset_id_u64))),
-            amount_hex: hex::encode(u256_to_bytes(primitive_types::U256::from(deposit_amount))),
+            deposit_amount: deposit_amounts[i],
+            send_amount: send_amounts[i],
         });
     }
 
@@ -194,13 +204,16 @@ async fn main() -> Result<()> {
     println!("\n═══ PHASE 3: Deposit funds ═══\n");
 
     for c in &mut clients {
+        let amount = c.deposit_amount;
+        let amount_u256 = U256::from(amount);
+
         let wallet = EthereumWallet::from(c.depositor_signer.clone());
         let provider = ProviderBuilder::new()
             .wallet(wallet)
             .connect_http(rpc_url.parse()?);
 
         // Mint tokens
-        println!("[client {}] minting {} tokens...", c.index + 1, deposit_amount);
+        println!("[client {}] minting {} tokens...", c.index + 1, amount);
         let mint_calldata = IERC20::mintCall {
             to: c.depositor_addr,
             value: amount_u256,
@@ -237,7 +250,7 @@ async fn main() -> Result<()> {
         let deposit_note = DepositNote {
             identifier: note_identifier,
             recipient,
-            amount: primitive_types::U256::from(deposit_amount),
+            amount: primitive_types::U256::from(amount),
             asset_id,
         };
         let note_comm = deposit_note.commitment();
@@ -285,7 +298,7 @@ async fn main() -> Result<()> {
             out
         };
         let note_id_hex = hex::encode(note_id_bytes);
-        let amount_bytes = u256_to_bytes(primitive_types::U256::from(deposit_amount));
+        let amount_bytes = u256_to_bytes(primitive_types::U256::from(amount));
         let asset_id_bytes = f_to_bytes(F::from_canonical_u64(asset_id_u64));
 
         let body = serde_json::json!({
@@ -313,7 +326,7 @@ async fn main() -> Result<()> {
         // Store note identifier for the spend tx input note
         c.deposit_note_id_hex = note_id_hex;
 
-        println!("[client {}] deposit submitted (note_id={})", c.index + 1, &c.deposit_note_id_hex);
+        println!("[client {}] deposit of {} submitted (note_id={})", c.index + 1, amount, &c.deposit_note_id_hex);
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -331,11 +344,10 @@ async fn main() -> Result<()> {
 
             if resp.status().is_success() {
                 let body: serde_json::Value = resp.json().await?;
-                // Check if balance is non-zero (deposit was applied)
-                if let Some(balance_hex) = body.get("balance").and_then(|v| v.as_str()) {
-                    let bal_bytes = hex::decode(balance_hex).unwrap_or_default();
-                    if bal_bytes.len() == 32 && bal_bytes.iter().any(|&b| b != 0) {
-                        println!(" balance updated!");
+                // Check if AST has a non-empty entry (deposit was applied to the account state tree)
+                if let Some(ast) = body.get("ast").and_then(|v| v.as_object()) {
+                    if !ast.is_empty() {
+                        println!(" AST updated!");
                         break;
                     }
                 }
@@ -350,70 +362,106 @@ async fn main() -> Result<()> {
     // ════════════════════════════════════════════════════════════════════════════
     println!("\n═══ PHASE 5: Spend transactions ═══\n");
 
-    // Collect recipient addresses before mutably borrowing
+    // Collect data needed across clients before the loop
     let recipient_addresses: Vec<String> = clients.iter().map(|c| c.acc_address.clone()).collect();
+    let deposit_amount_hexes: Vec<String> = clients.iter().map(|c| {
+        hex::encode(u256_to_bytes(primitive_types::U256::from(c.deposit_amount)))
+    }).collect();
 
     for i in 0..3 {
         let next = (i + 1) % 3;
         let sender = &clients[i];
         let recipient_addr = &recipient_addresses[next];
+        let send_amount = sender.send_amount;
+        let change_amount = sender.deposit_amount - send_amount;
 
-        // The input note is the deposit note (created when operator approved the deposit).
-        // The spend tx uses:
-        //   - input_notes: [deposit_note] (amount = deposit_amount)
-        //   - output_notes: [note to recipient] (amount = deposit_amount)
-        // Balance check: account.balance(deposit_amount) + input_note(deposit_amount) = 2 * deposit_amount
-        //   BUT that means output must also be 2 * deposit_amount.
-        //
-        // For simplicity: don't reference input notes. Just use account balance.
-        //   account.balance(deposit_amount) + 0 = deposit_amount
-        //   output: 1 note of deposit_amount to next client.
+        // The spend tx consumes the deposit input note and creates:
+        //   - 1 output note to the recipient (send_amount)
+        //   - 1 output note back to self as change (change_amount)
+        // Conservation: deposit_amount == send_amount + change_amount
 
-        // Generate a random identifier for the output note
-        let onote_id: [F; 2] = [
-            F::from_canonical_u64(rng.sample(Uniform::new(0, F::ORDER).unwrap())),
-            F::from_canonical_u64(rng.sample(Uniform::new(0, F::ORDER).unwrap())),
-        ];
-        let onote_id_hex = {
+        let send_amount_hex = hex::encode(u256_to_bytes(primitive_types::U256::from(send_amount)));
+        let change_amount_hex = hex::encode(u256_to_bytes(primitive_types::U256::from(change_amount)));
+
+        // Generate random identifiers for output notes
+        let gen_note_id_hex = |rng: &mut rand::rngs::ThreadRng| -> String {
+            let id: [F; 2] = [
+                F::from_canonical_u64(rng.sample(Uniform::new(0, F::ORDER).unwrap())),
+                F::from_canonical_u64(rng.sample(Uniform::new(0, F::ORDER).unwrap())),
+            ];
             let mut out = [0u8; 16];
-            out[..8].copy_from_slice(&f_to_bytes(onote_id[0]));
-            out[8..].copy_from_slice(&f_to_bytes(onote_id[1]));
+            out[..8].copy_from_slice(&f_to_bytes(id[0]));
+            out[8..].copy_from_slice(&f_to_bytes(id[1]));
             hex::encode(out)
         };
 
+        let send_note_id = gen_note_id_hex(&mut rng);
+        let change_note_id = gen_note_id_hex(&mut rng);
+
         let spend_body = serde_json::json!({
             "priv_acc_address": sender.acc_address,
-            "input_notes": [],
-            "output_notes": [{
-                "identifier": onote_id_hex,
+            "input_notes": [{
+                "identifier": sender.deposit_note_id_hex,
                 "asset_id": sender.asset_id_hex,
-                "amount": sender.amount_hex,
-                "recipient_address": recipient_addr,
+                "amount": deposit_amount_hexes[i],
+                "recipient_address": sender.acc_address,
                 "sender_address": sender.acc_address,
             }],
+            "output_notes": [
+                {
+                    "identifier": send_note_id,
+                    "asset_id": sender.asset_id_hex,
+                    "amount": send_amount_hex,
+                    "recipient_address": recipient_addr,
+                    "sender_address": sender.acc_address,
+                },
+                {
+                    "identifier": change_note_id,
+                    "asset_id": sender.asset_id_hex,
+                    "amount": change_amount_hex,
+                    "recipient_address": sender.acc_address,
+                    "sender_address": sender.acc_address,
+                }
+            ],
             "dinotes": [],
             "donotes": [],
         });
 
         println!(
-            "[client {}] spending {} to client {} (subpool {} → subpool {})",
-            i + 1, deposit_amount, next + 1, sender.subpool_id, clients[next].subpool_id
+            "[client {}] sending {} to client {}, keeping {} change (subpool {} -> subpool {})",
+            i + 1, send_amount, next + 1, change_amount, sender.subpool_id, clients[next].subpool_id
         );
 
-        let resp = http
-            .post(format!("{}/spend_tx", sender.api_url))
-            .json(&spend_body)
-            .send()
-            .await
-            .with_context(|| format!("failed to POST spend_tx for client {}", i + 1))?;
+        // Retry until input notes are APPROVED (on-chain deposit confirmation may take a few seconds)
+        let mut attempts = 0;
+        loop {
+            let resp = http
+                .post(format!("{}/spend_tx", sender.api_url))
+                .json(&spend_body)
+                .send()
+                .await
+                .with_context(|| format!("failed to POST spend_tx for client {}", i + 1))?;
 
-        let status = resp.status();
-        let resp_text = resp.text().await.unwrap_or_default();
+            let status = resp.status();
+            let resp_text = resp.text().await.unwrap_or_default();
 
-        if status.is_success() {
-            println!("[client {}] spend tx submitted: {}", i + 1, resp_text);
-        } else {
-            println!("[client {}] spend tx FAILED (HTTP {status}): {resp_text}", i + 1, );
+            if status.is_success() {
+                println!("[client {}] spend tx submitted: {}", i + 1, resp_text);
+                break;
+            }
+
+            attempts += 1;
+            if attempts > 30 {
+                println!("[client {}] spend tx FAILED after 30 attempts: {resp_text}", i + 1);
+                break;
+            }
+
+            // Input notes may still be PENDING (awaiting on-chain confirmation), retry
+            if attempts == 1 {
+                print!("[client {}] waiting for input notes to be approved", i + 1);
+            }
+            print!(".");
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     }
 
@@ -422,7 +470,8 @@ async fn main() -> Result<()> {
     // ════════════════════════════════════════════════════════════════════════════
     println!("\n═══ PHASE 6: Wait for spend tx approval ═══\n");
 
-    // After spend tx approval, sender's balance should be 0
+    // After spend tx approval, sender's nonce should be incremented to 2
+    // (nonce 0→1 from deposit, 1→2 from spend tx).
     for c in &clients {
         print!("[client {}] waiting for spend tx to be processed", c.index + 1);
         let mut attempts = 0;
@@ -434,18 +483,23 @@ async fn main() -> Result<()> {
 
             if resp.status().is_success() {
                 let body: serde_json::Value = resp.json().await?;
-                if let Some(balance_hex) = body.get("balance").and_then(|v| v.as_str()) {
-                    let bal_bytes = hex::decode(balance_hex).unwrap_or_default();
-                    if bal_bytes.len() == 32 && bal_bytes.iter().all(|&b| b == 0) {
-                        println!(" balance is now 0 (spend complete)!");
-                        break;
+                // Nonce is hex-encoded u64 LE (8 bytes = 16 hex chars).
+                // After deposit (nonce=1) + spend (nonce=2), we expect nonce >= 2.
+                if let Some(nonce_hex) = body.get("nonce").and_then(|v| v.as_str()) {
+                    let nonce_bytes = hex::decode(nonce_hex).unwrap_or_default();
+                    if nonce_bytes.len() == 8 {
+                        let nonce_val = u64::from_le_bytes(nonce_bytes.try_into().unwrap());
+                        if nonce_val >= 2 {
+                            println!(" nonce={nonce_val} (spend tx processed)!");
+                            break;
+                        }
                     }
                 }
             }
 
             attempts += 1;
             if attempts > 30 {
-                println!(" TIMEOUT (balance not zeroed after 60s)");
+                println!(" TIMEOUT (nonce not updated after 60s)");
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -453,10 +507,103 @@ async fn main() -> Result<()> {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════════════
+    //  PHASE 7: Print final balances
+    // ════════════════════════════════════════════════════════════════════════════
+    println!("\n═══ PHASE 7: Final balances ═══\n");
+
+    let asset_key = asset_id_u64.to_string();
+    // After spend txs:
+    //   AST (confirmed) = deposit - sent_to_others
+    //   total (once confirmed) = AST + pending = deposit - sent + received
+    let expected_ast = [
+        deposit_amounts[0] - send_amounts[0], // 700
+        deposit_amounts[1] - send_amounts[1], // 1500
+        deposit_amounts[2] - send_amounts[2], // 2300
+    ];
+    let expected_pending = [
+        send_amounts[2], // 700  (received from client 3)
+        send_amounts[0], // 300  (received from client 1)
+        send_amounts[1], // 500  (received from client 2)
+    ];
+    let expected_total = [
+        expected_ast[0] + expected_pending[0], // 1400
+        expected_ast[1] + expected_pending[1], // 1800
+        expected_ast[2] + expected_pending[2], // 2800
+    ];
+
+    // Wait for cross-subpool note forwarding to settle
+    println!("Waiting for cross-subpool notes to settle...");
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+    // Parse AST balance for a given asset key from the AST JSON object
+    let parse_ast_balance = |ast: &serde_json::Value, key: &str| -> u64 {
+        ast.get(key)
+            .and_then(|e| e.get("amount"))
+            .and_then(|v| v.as_str())
+            .and_then(|hex_str| {
+                let bytes = hex::decode(hex_str).ok()?;
+                let arr: [u8; 32] = bytes.as_slice().try_into().ok()?;
+                Some(tessera_subpool_database::convert::bytes_to_u256(&arr))
+            })
+            .map(|u| u.as_u64())
+            .unwrap_or(0)
+    };
+
+    for c in &clients {
+        let resp = http
+            .get(format!("{}/account/{}", c.api_url, c.acc_address))
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            let body: serde_json::Value = resp.json().await?;
+
+            let ast_bal = body.get("ast").map(|a| parse_ast_balance(a, &asset_key)).unwrap_or(0);
+
+            // Query notes_balance endpoint for the sum of unconsumed input notes.
+            let notes_bal = {
+                let nb_resp = http
+                    .get(format!("{}/notes_balance/{}", c.api_url, c.acc_address))
+                    .send()
+                    .await?;
+                if nb_resp.status().is_success() {
+                    let nb_body: serde_json::Value = nb_resp.json().await?;
+                    nb_body
+                        .get("balances")
+                        .and_then(|b| b.get(&asset_key))
+                        .and_then(|e| e.get("amount"))
+                        .and_then(|v| v.as_str())
+                        .and_then(|hex_str| {
+                            let trimmed = hex_str.trim_start_matches('0');
+                            if trimmed.is_empty() { Some(0) } else { u64::from_str_radix(trimmed, 16).ok() }
+                        })
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            };
+
+            let total = notes_bal;
+
+            let ast_check = if ast_bal == expected_ast[c.index] { "OK" } else { "MISMATCH" };
+            let total_check = if total == expected_total[c.index] { "OK" } else { "MISMATCH" };
+
+            println!(
+                "[client {}] subpool {} | asset {} | confirmed: {} (exp {}) [{}] | total: {} (exp {}) [{}]",
+                c.index + 1, c.subpool_id, asset_id_u64,
+                ast_bal, expected_ast[c.index], ast_check,
+                total, expected_total[c.index], total_check,
+            );
+        } else {
+            println!("[client {}] failed to fetch account", c.index + 1);
+        }
+    }
+
     println!("\n═══ E2E TEST COMPLETE ═══");
-    println!("  3 accounts registered across 3 subpools");
-    println!("  3 deposits processed");
-    println!("  3 cross-subpool spend txs submitted");
+    println!("  deposits:  client 1={}, client 2={}, client 3={}", deposit_amounts[0], deposit_amounts[1], deposit_amounts[2]);
+    println!("  transfers: 1->2: {}, 2->3: {}, 3->1: {}", send_amounts[0], send_amounts[1], send_amounts[2]);
+    println!("  expected totals: client 1={}, client 2={}, client 3={}", expected_total[0], expected_total[1], expected_total[2]);
 
     Ok(())
 }

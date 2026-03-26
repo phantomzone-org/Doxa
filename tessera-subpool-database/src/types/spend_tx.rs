@@ -13,6 +13,7 @@ pub enum SpendTxStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[sqlx(type_name = "input_note_status", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InputNoteStatus {
+    Pending,
     Approved,
     Rejected,
 }
@@ -41,6 +42,7 @@ pub struct InputNoteRow {
     pub recipient_address: String,
     pub sender_address: String,
     pub status: InputNoteStatus,
+    pub note_commitment: Option<Vec<u8>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

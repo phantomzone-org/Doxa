@@ -279,3 +279,31 @@ pub(crate) async fn handle_pending_notes(
 
 	Json(notes)
 }
+
+// ---------------------------------------------------------------------------
+// NCT position lookup
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub(crate) struct NotePositionResponse {
+	commitment: String,
+	position: u64,
+}
+
+pub(crate) async fn handle_note_position(
+	State((state, _)): State<AppState>,
+	Path(commitment_hex): Path<String>,
+) -> Result<Json<NotePositionResponse>, (StatusCode, String)> {
+	let st = state.lock().await;
+	let position = st.note_positions.get(&commitment_hex).copied().ok_or_else(|| {
+		(
+			StatusCode::NOT_FOUND,
+			format!("note commitment '{commitment_hex}' not found in NCT"),
+		)
+	})?;
+
+	Ok(Json(NotePositionResponse {
+		commitment: commitment_hex,
+		position,
+	}))
+}
