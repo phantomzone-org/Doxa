@@ -92,6 +92,7 @@ CREATE TABLE spend_tx_requests (
     onote_identifiers  TEXT[]          NOT NULL,
     dinotes            TEXT[]          NOT NULL,
     donotes            TEXT[]          NOT NULL,
+    spend_tx_signature BYTEA           NOT NULL,
     status             spend_tx_status NOT NULL DEFAULT 'PENDING',
     approval_signature BYTEA,
     rejection_reason   TEXT,

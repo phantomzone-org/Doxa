@@ -25,6 +25,7 @@ pub struct SpendTxRow {
     pub onote_identifiers: Vec<String>,
     pub dinotes: Vec<String>,
     pub donotes: Vec<String>,
+    pub spend_tx_signature: Vec<u8>,
     pub status: SpendTxStatus,
     pub approval_signature: Option<Vec<u8>>,
     pub rejection_reason: Option<String>,

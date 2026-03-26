@@ -31,6 +31,8 @@ pub struct SpendTxRequest {
     pub output_notes: Vec<NotePayload>,
     pub dinotes: Vec<String>,
     pub donotes: Vec<String>,
+    /// hex-encoded spend tx signature
+    pub spend_tx_signature: String,
 }
 
 #[derive(Serialize)]
@@ -200,6 +202,9 @@ pub async fn submit_spend_tx_handler(
     }
 
     // ── 5. Transactional insert ────────────────────────────────────────────────
+    let spend_tx_sig_bytes = hex::decode(&req.spend_tx_signature)
+        .map_err(|_| AppError::InvalidInput("invalid spend_tx_signature hex".into()))?;
+
     let inote_identifiers: Vec<String> = req.input_notes.iter().map(|n| n.identifier.clone()).collect();
     let onote_identifiers: Vec<String> = req.output_notes.iter().map(|n| n.identifier.clone()).collect();
 
@@ -211,8 +216,8 @@ pub async fn submit_spend_tx_handler(
 
     let row = sqlx::query(
         r#"INSERT INTO spend_tx_requests
-               (priv_acc_address, inote_identifiers, onote_identifiers, dinotes, donotes)
-           VALUES ($1, $2, $3, $4, $5)
+               (priv_acc_address, inote_identifiers, onote_identifiers, dinotes, donotes, spend_tx_signature)
+           VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING id"#,
     )
     .bind(&req.priv_acc_address)
@@ -220,6 +225,7 @@ pub async fn submit_spend_tx_handler(
     .bind(&onote_identifiers)
     .bind(&req.dinotes)
     .bind(&req.donotes)
+    .bind(&spend_tx_sig_bytes)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;

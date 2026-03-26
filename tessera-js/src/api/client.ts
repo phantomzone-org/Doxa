@@ -1,5 +1,5 @@
 import type { PrivateIdentifier, SpendAuthPk } from "../account.js";
-import type { AccountResponse, ApiError, DepositRequest, DepositResponse, FaucetResponse, FreshAccStatusResponse, RegisterRequest, RegisterResponse } from "./types.js";
+import type { AccountResponse, ApiError, DepositRequest, DepositResponse, FaucetResponse, FreshAccStatusResponse, InputNote, RegisterRequest, RegisterResponse } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
 export class SubpoolApiError extends Error {
@@ -128,6 +128,16 @@ export class SubpoolClient {
     const json = await res.json();
     if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
     return json as DepositResponse;
+  }
+
+  /**
+   * GET /input_notes/:recipientAddress — approved incoming notes for an account.
+   */
+  async getInputNotes(recipientAddress: string): Promise<InputNote[]> {
+    const res = await fetch(`${this.baseUrl}/input_notes/${recipientAddress}`);
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as InputNote[];
   }
 
   async registerAccount(

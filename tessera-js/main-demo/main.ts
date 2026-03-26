@@ -37,6 +37,9 @@ const USDX_CONTRACT_ADDR = import.meta.env
   .VITE_USDX_CONTRACT_ADDR as `0x${string}`;
 const SEPOLIA_RPC_URL = import.meta.env.VITE_SEPOLIA_RPC_URL as string;
 const PRF_INPUT = new TextEncoder().encode("tessera::account::seed");
+const SUBPOOL_ID = 1n;
+const ASSET_ID_HEX = "0100000000000000"; // u64(1) as 8-byte LE hex
+const ASSET_ID = 1n;
 
 // ── API client ────────────────────────────────────────────────────────────────
 
@@ -469,7 +472,7 @@ registerBtn.addEventListener("click", async () => {
     const seed =
       currentSeed ??
       (credentialId ? await evalPrf() : await registerAndGetSeed());
-    const account = Account.createWithSeed(seed, 1n);
+    const account = Account.createWithSeed(seed, SUBPOOL_ID);
     const privateAccAddress = account.address().toHex();
 
     const s1 = appendProgressLine("⏳ Registering account…", "active");
@@ -588,7 +591,7 @@ p2pBtn.addEventListener("click", async () => {
     const depositNote = DepositNote.create(
       AccountAddress.fromHex(privateAccAddressFull!),
       amountUnits,
-      AssetId.fromU64(1n),
+      AssetId.fromU64(ASSET_ID),
     );
     const commitmentHex = ("0x" +
       depositNote.commitment().toHex()) as `0x${string}`;
@@ -625,7 +628,7 @@ p2pBtn.addEventListener("click", async () => {
       eth_address: ethAddressFull!,
       deposit_note_identifier: depositNote.identifierHex(),
       deposit_amount: u256LeHex(amountUnits),
-      asset_id: "0100000000000000", // u64(1) as 8-byte LE hex
+      asset_id: ASSET_ID_HEX,
       signed_public_tx: signedTxHex,
     });
 
@@ -755,39 +758,22 @@ xferBtn.addEventListener("click", async () => {
   const amount = parseFloat(xferAmtIn.value);
 
   try {
-    await evalPrf(); // prompt passkey — seed not needed for simulation
+    const seed = await evalPrf();
 
     xferProgress.classList.add("visible");
+    const step = pStep(xferSteps, "⏳ Fetching incoming notes…", "active");
+    xferBar.style.width = "50%";
 
-    const steps = [
-      {
-        label: "⏳ Waiting for approval from subpool owner…",
-        pct: 33,
-        ms: 1800,
-      },
-      { label: "⚙️ Generating proof…", pct: 66, ms: 2200 },
-      { label: "✓ Send settled", pct: 100, ms: 0 },
-    ];
+    await loadPrivateAccount(seed);
+    const inotes = (
+      await subpoolClient.getInputNotes(privateAccAddressFull!)
+    ).filter((n) => n.asset_id === ASSET_ID_HEX);
 
-    for (const step of steps) {
-      const el = pStep(
-        xferSteps,
-        step.label,
-        step.pct < 100 ? "active" : "done",
-      );
-      xferBar.style.width = step.pct + "%";
-      if (step.ms > 0) {
-        await delay(step.ms);
-        el.className = "p-step done";
-        el.textContent = step.label
-          .replace("⏳ ", "✓ ")
-          .replace("⚙️ ", "✓ ")
-          .replace("…", "");
-      }
-    }
+    step.className = "p-step done";
+    step.textContent = `✓ Found ${inotes.length} incoming note(s)`;
+    xferBar.style.width = "100%";
 
-    privateBalance -= amount;
-    renderPrivateBalance();
+    console.log("Incoming approved notes:", inotes);
 
     xferBtn.disabled = false;
     xferAmtIn.value = "";

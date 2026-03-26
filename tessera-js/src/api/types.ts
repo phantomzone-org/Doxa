@@ -54,6 +54,18 @@ export interface DepositResponse {
   id: number;
 }
 
+/** Entry returned by GET /input_notes/:recipient_address */
+export interface InputNote {
+  /** 32 hex chars — [F;2] identifier */
+  identifier: string;
+  /** 16 hex chars — F asset_id, 8 bytes LE */
+  asset_id: string;
+  /** 64 hex chars — U256 amount, 32 bytes LE */
+  amount: string;
+  recipient_address: string;
+  sender_address: string;
+}
+
 /** Response body for GET /account/:private_acc_address */
 export interface AccountResponse {
   private_acc_address: string;
