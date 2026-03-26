@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
         faucet_private_key: config.faucet_private_key,
         sepolia_rpc_url: config.sepolia_rpc_url,
         usdx_contract_addr: config.usdx_contract_addr,
+        subpool_id: config.subpool_id,
     };
     let app = routes::router(state)
         .layer(TraceLayer::new_for_http())

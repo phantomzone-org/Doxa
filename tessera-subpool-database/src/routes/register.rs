@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tessera_client::{schnorr::CompressedPublicKey, AccountAddress, StandardAccount, SubpoolId};
 use tessera_utils::F;
 
-use crate::{convert::bytes_to_private_id, error::AppError, state::AppState, SUBPOOL_ID};
+use crate::{convert::bytes_to_private_id, error::AppError, state::AppState};
 
 /// JSON request body for `POST /register`.
 #[derive(Deserialize)]
@@ -49,7 +49,7 @@ pub async fn register_handler(
 	let private_identifier = bytes_to_private_id(pi_arr);
 
 	// ── 2. Build account and derive address ───────────────────────────────────
-	let subpool_id = SubpoolId(F::from_canonical_u64(SUBPOOL_ID));
+	let subpool_id = state.subpool_id;
 	let private_acc_address =
 		AccountAddress::from_acc(&StandardAccount::new_with(private_identifier, subpool_id))
 			.to_hex();
