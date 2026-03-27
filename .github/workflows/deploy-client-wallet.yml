@@ -1,0 +1,50 @@
+name: Deploy client-wallet
+
+on:
+  push:
+    branches: [fixes_tmp1]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache wasm output — only rebuilds when tessera-client-wasm changes
+      - uses: actions/cache@v4
+        id: wasm-cache
+        with:
+          path: tessera-js/wasm
+          key: wasm-${{ hashFiles('tessera-client-wasm/src/**', 'tessera-client-wasm/Cargo.toml') }}
+
+      - name: Install Rust + wasm32 target
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+
+      - name: Install wasm-pack
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build wasm
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        working-directory: tessera-js
+        run: npm install && npm run build:wasm
+
+      - name: Build client-wallet
+        working-directory: demo/client-wallet
+        env:
+          VITE_USDX_CONTRACT_ADDR: ${{ secrets.VITE_USDX_CONTRACT_ADDR }}
+          VITE_SEPOLIA_RPC_URL: ${{ secrets.VITE_SEPOLIA_RPC_URL }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        run: npm install && npm run build
+
+      - name: Deploy to Netlify
+        run: npx netlify-cli deploy --dir=demo/client-wallet/dist --prod
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
