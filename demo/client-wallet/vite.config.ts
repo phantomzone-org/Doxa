@@ -8,7 +8,7 @@ export default defineConfig({
   },
   server: {
     fs: {
-      allow: ["../../tessera-js"],
+      allow: [".", "../../tessera-js"],
     },
   },
 });

@@ -1,5 +1,18 @@
 import type { PrivateIdentifier, SpendAuthPk } from "../account.js";
-import type { AccountResponse, ApiError, DepositRequest, DepositResponse, DepositStatusResponse, FaucetResponse, FreshAccStatusResponse, InputNote, RegisterRequest, RegisterResponse, SpendTxRequest, SpendTxResponse } from "./types.js";
+import type {
+  AccountResponse,
+  ApiError,
+  DepositRequest,
+  DepositResponse,
+  DepositStatusResponse,
+  FaucetResponse,
+  FreshAccStatusResponse,
+  InputNote,
+  RegisterRequest,
+  RegisterResponse,
+  SpendTxRequest,
+  SpendTxResponse,
+} from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
 export class SubpoolApiError extends Error {
