@@ -57,23 +57,6 @@ let privateAccount: Account | null = null;
 let currentSeed: Uint8Array | null = null;
 let privateBalance = 0;
 
-// ── localStorage ─────────────────────────────────────────────────────────────
-
-interface KycRecord {
-  name: string;
-  street: string;
-  dob: string;
-  tesseraAddress: string;
-  registeredAt: string;
-}
-function loadKyc(): KycRecord | null {
-  const raw = localStorage.getItem("tessera::kyc");
-  return raw ? JSON.parse(raw) : null;
-}
-function saveKyc(r: KycRecord) {
-  localStorage.setItem("tessera::kyc", JSON.stringify(r));
-}
-
 // ── passkey helpers ───────────────────────────────────────────────────────────
 
 async function registerAndGetSeed(): Promise<Uint8Array> {
@@ -153,10 +136,6 @@ function toHex(b: Uint8Array): string {
   return Array.from(b)
     .map((x) => x.toString(16).padStart(2, "0"))
     .join("");
-}
-
-function fakeTxHash(): string {
-  return "0x" + toHex(crypto.getRandomValues(new Uint8Array(32)));
 }
 
 function delay(ms: number) {
@@ -240,31 +219,6 @@ function padLeft32(hex: string): string {
   return hex.replace("0x", "").padStart(64, "0");
 }
 
-function encodeDeposit(recipientAddr: string, amount: number): string {
-  // deposit(address recipient, uint256 amount) — fake selector 0x47e7ef24
-  const selector = "47e7ef24";
-  const addr = padLeft32(recipientAddr);
-  const amt = padLeft32(BigInt(amount * 1e6).toString(16)); // USDX uses 6 decimals
-  return "0x" + selector + addr + amt;
-}
-
-function craftTx(from: string, amount: number): object {
-  return {
-    type: "0x2",
-    chainId: "0x1",
-    from,
-    to: TESSERA_CONTRACT,
-    data: encodeDeposit(from, amount),
-    value: "0x0",
-    nonce: "0x" + Math.floor(Math.random() * 256).toString(16),
-    gas: "0x186a0",
-    maxFeePerGas: "0x77359400",
-    maxPriorityFeePerGas: "0x3b9aca00",
-    _usdxToken: USDX_CONTRACT_ADDR,
-    _depositAmount: amount + " USDX",
-  };
-}
-
 // ── p-step progress helper ────────────────────────────────────────────────────
 
 function pStep(
@@ -327,7 +281,6 @@ async function showPublicWallet(seed: Uint8Array) {
 function renderVisiblePostSignIn() {
   walletInfo.classList.add("visible");
   depositSection.classList.add("visible");
-  enableP2pBtn();
 }
 
 async function loadPrivateAccount(seed: Uint8Array) {
@@ -344,10 +297,11 @@ async function loadPrivateAccount(seed: Uint8Array) {
     .catch(() => null);
   if (accountData) {
     privateAccount = Account.fromAccountData(accountData);
+    enableP2pBtn();
   } else {
     console.log("Private account is null");
   }
-  renderPrivateSection(privateAccAddress, accountData);
+  renderPrivateSection();
 }
 
 createWalletBtn.addEventListener("click", async () => {
@@ -445,18 +399,13 @@ function renderPrivateBalance() {
   privBalanceRow.style.display = privateBalance > 0 ? "" : "none";
 }
 
-function renderPrivateSection(
-  privateAccAddress: string,
-  accountData: AccountResponse | null,
-) {
-  if (accountData) {
+function renderPrivateSection() {
+  if (privateAccount) {
     kycForm.style.display = "none";
     kycDisplay.style.display = "block";
-    tesseraAddrVal.textContent = privateAccAddress;
+    tesseraAddrVal.textContent = privateAccAddressFull;
     tesseraAddrBox.classList.add("visible");
-    const balanceBigInt = BigInt(
-      "0x" + (accountData.balance || "0".repeat(64)),
-    );
+    const balanceBigInt = privateAccount.balanceFor(AssetId.fromU64(ASSET_ID));
     privateBalance = Number(balanceBigInt) / 1e6;
     renderPrivateBalance();
   } else {

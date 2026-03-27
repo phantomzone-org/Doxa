@@ -17,6 +17,7 @@ pub fn router(state: AppState) -> Router {
 	Router::new()
 		.route("/register", post(register::register_handler))
 		.route("/deposit", post(deposit::submit_deposit_handler))
+		.route("/deposit/{id}/status", get(deposit::get_deposit_status_handler))
 		.route("/faucet", post(faucet::faucet_handler))
 		.route("/spend_tx", post(spend_tx::submit_spend_tx_handler))
 		.route(

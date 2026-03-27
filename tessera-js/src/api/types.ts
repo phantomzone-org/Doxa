@@ -108,8 +108,6 @@ export interface AccountResponse {
   private_identifier: string;
   /** 16 hex chars — SubpoolId */
   subpool_id: string;
-  /** 64 hex chars — U256 balance */
-  balance: string;
   /** 16 hex chars — Nonce */
   nonce: string;
   /** 80 hex chars — spend-auth CompressedPublicKey; all-zeros if absent */

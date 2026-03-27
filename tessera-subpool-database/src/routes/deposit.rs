@@ -1,8 +1,8 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::{Path, State}, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::{error::AppError, state::AppState};
+use crate::{error::AppError, state::AppState, types::deposit::DepositTxStatus};
 
 #[derive(Deserialize)]
 pub struct DepositRequest {
@@ -21,6 +21,33 @@ pub struct DepositRequest {
 #[derive(Serialize)]
 pub struct DepositResponse {
 	pub id: i64,
+}
+
+#[derive(Serialize)]
+pub struct DepositStatusResponse {
+	pub id: i64,
+	pub status: DepositTxStatus,
+	pub deposit_tx_hash: Option<String>,
+}
+
+pub async fn get_deposit_status_handler(
+	State(state): State<AppState>,
+	Path(id): Path<i64>,
+) -> Result<(StatusCode, Json<DepositStatusResponse>), AppError> {
+	let row: Option<(i64, DepositTxStatus, Option<String>)> = sqlx::query_as(
+		"SELECT id, status, deposit_tx_hash FROM deposit_tx_requests WHERE id = $1",
+	)
+	.bind(id)
+	.fetch_optional(&state.pool)
+	.await?;
+
+	match row {
+		None => Err(AppError::NotFound(format!("deposit {id} not found"))),
+		Some((id, status, deposit_tx_hash)) => Ok((
+			StatusCode::OK,
+			Json(DepositStatusResponse { id, status, deposit_tx_hash }),
+		)),
+	}
 }
 
 pub async fn submit_deposit_handler(
