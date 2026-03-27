@@ -267,8 +267,7 @@ pub(crate) async fn handle_forward_note(
 
 	info!(
 		target_subpool = req.target_subpool_id,
-		queue_size,
-		"forwarded note queued"
+		queue_size, "forwarded note queued"
 	);
 
 	Ok(Json(ForwardNoteResponse {
@@ -282,8 +281,8 @@ pub(crate) async fn handle_pending_notes(
 	State((state, _)): State<AppState>,
 	Path(subpool_id): Path<u64>,
 ) -> Json<Vec<ForwardedNote>> {
-	let mut st = state.lock().await;
-	let notes = st.note_pool.remove(&subpool_id).unwrap_or_default();
+	let st = state.lock().await;
+	let notes = st.note_pool.get(&subpool_id).cloned().unwrap_or_default();
 
 	if !notes.is_empty() {
 		let note_ids: Vec<&str> = notes.iter().map(|n| n.identifier.as_str()).collect();
@@ -291,11 +290,33 @@ pub(crate) async fn handle_pending_notes(
 			subpool_id,
 			count = notes.len(),
 			note_ids = ?note_ids,
-			"drained pending notes"
+			"peeked pending notes"
 		);
 	}
 
 	Json(notes)
+}
+
+pub(crate) async fn handle_ack_notes(
+	State((state, _)): State<AppState>,
+	Path(subpool_id): Path<u64>,
+	Json(ids): Json<Vec<String>>,
+) -> StatusCode {
+	let mut st = state.lock().await;
+	if let Some(queue) = st.note_pool.get_mut(&subpool_id) {
+		queue.retain(|n| !ids.contains(&n.identifier));
+		if queue.is_empty() {
+			st.note_pool.remove(&subpool_id);
+		}
+	}
+
+	info!(
+		subpool_id,
+		acked = ids.len(),
+		"acknowledged forwarded notes"
+	);
+
+	StatusCode::OK
 }
 
 // ---------------------------------------------------------------------------

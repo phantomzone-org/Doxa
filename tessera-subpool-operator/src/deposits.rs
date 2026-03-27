@@ -6,7 +6,7 @@ use alloy::{
 	sol_types::SolCall,
 };
 use anyhow::{Context, Result};
-use plonky2_field::types::{PrimeField64};
+use plonky2_field::types::PrimeField64;
 use primitive_types::U256;
 use serde::Serialize;
 use sqlx::PgPool;
@@ -17,8 +17,7 @@ use tessera_client::{
 };
 use tessera_subpool_database::{
 	convert::{
-		account_from_row, bytes_to_f, bytes_to_u256, f_to_bytes, hash_to_hex,
-		u256_to_bytes,
+		account_from_row, bytes_to_f, bytes_to_u256, f_to_bytes, hash_to_hex, u256_to_bytes,
 	},
 	db::{insert_pending_input_note, update_account, update_deposit_tx_request_to_approved},
 	types::{account::AccountRow, deposit::DepositTxRow},
@@ -136,13 +135,13 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 	for row in rows {
 		if let Err(e) =
 			process_one_deposit(pool, approval_sk, sequencer_url, http, rpc_provider, &row).await
-			{
-				error!(
-					id = row.id,
-					addr = row.recipient_address,
-					"failed to process deposit request: {e:#}"
-				);
-			}
+		{
+			error!(
+				id = row.id,
+				addr = row.recipient_address,
+				"failed to process deposit request: {e:#}"
+			);
+		}
 	}
 
 	Ok(())
@@ -227,26 +226,29 @@ async fn process_one_deposit<P: Provider + Clone>(
 	post_deposit_to_sequencer(http, sequencer_url, &nc_hex).await?;
 	info!(id = row.id, addr = %row.recipient_address, "deposit note submitted to sequencer");
 
-	// ── 7. Update deposit_tx_requests: APPROVED ──────────────────────────────
-	update_deposit_tx_request_to_approved(pool, sig_bytes.as_ref(), row.id).await?;
+	// ── 7–9. Approve deposit, update account, and insert input note atomically
+	let note_id_hex = hex::encode(&row.deposit_note_identifier);
+	let asset_id_bytes = f_to_bytes(deposit.asset_id.0);
+	let amount_bytes = u256_to_bytes(deposit.amount);
 
-	// ── 8. Update account in DB ──────────────────────────────────────────────
+	let mut tx = pool
+		.begin()
+		.await
+		.context("failed to begin deposit transaction")?;
+
+	update_deposit_tx_request_to_approved(&mut *tx, sig_bytes.as_ref(), row.id).await?;
+
 	update_account(
-		pool,
+		&mut *tx,
 		&accout,
 		acc_row.eth_address,
 		row.recipient_address.clone(),
 	)
 	.await?;
 
-	// ── 9. Create PENDING input note for the deposit recipient ────────────────
 	// The note stays PENDING until the deposit is confirmed on-chain (status = Validated).
-	let note_id_hex = hex::encode(&row.deposit_note_identifier);
-	let asset_id_bytes = f_to_bytes(deposit.asset_id.0);
-	let amount_bytes = u256_to_bytes(deposit.amount);
-
 	insert_pending_input_note(
-		pool,
+		&mut *tx,
 		&note_id_hex,
 		&asset_id_bytes,
 		&amount_bytes,
@@ -254,6 +256,10 @@ async fn process_one_deposit<P: Provider + Clone>(
 		&format!("{:?}", deposit_eth_address),
 	)
 	.await?;
+
+	tx.commit()
+		.await
+		.context("failed to commit deposit transaction")?;
 
 	let new_asset_balance = accout
 		.ast
@@ -362,7 +368,6 @@ pub async fn confirm_pending_notes<P: Provider + Clone>(
 	}
 
 	for row in &rows {
-
 		let deposit_note = row.note()?;
 		let deposit_note_comm = deposit_note.commitment();
 

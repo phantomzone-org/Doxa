@@ -4,7 +4,9 @@ use plonky2_field::types::PrimeField64;
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Type};
-use tessera_client::{AccountAddress, AssetId, DepositNote, NoteCommitment, NoteIdentifier, StandardNote};
+use tessera_client::{
+	AccountAddress, AssetId, DepositNote, NoteCommitment, NoteIdentifier, StandardNote,
+};
 
 use crate::convert::{bytes_to_f, bytes_to_u256};
 
@@ -52,9 +54,9 @@ impl SpendTxRow {
 					.await
 					.with_context(|| format!("input note '{inote_id}' not found"))?;
 
-				if !matches!(inote.status, InputNoteStatus::Approved) || inote.consume {
-					anyhow::bail!("input note '{inote_id}' is not in APPROVED status");
-				}
+			if !matches!(inote.status, InputNoteStatus::Approved) || inote.consume {
+				anyhow::bail!("input note '{inote_id}' is not in APPROVED status");
+			}
 
 			if inote.recipient_address != self.priv_acc_address {
 				anyhow::bail!(
@@ -190,7 +192,7 @@ impl InputNoteRow {
 				sender,
 				memo: self.memo()?,
 			}
-				.commitment()),
+			.commitment()),
 			Err(_) => Ok(NoteCommitment(
 				DepositNote {
 					identifier,

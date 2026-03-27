@@ -4,10 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::{
-	convert::{bytes_to_u256},
-	error::AppError,
-	state::AppState,
-	types::{spend_tx::InputNoteStatus},
+	convert::bytes_to_u256, error::AppError, state::AppState, types::spend_tx::InputNoteStatus,
 };
 
 #[derive(Deserialize)]

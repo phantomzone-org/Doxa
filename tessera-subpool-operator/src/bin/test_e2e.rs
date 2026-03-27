@@ -35,9 +35,14 @@ use anyhow::{Context, Result};
 use plonky2_field::types::{Field, Field64, PrimeField64};
 use rand::{distr::Uniform, RngExt};
 use tessera_client::{
-	AccountAddress, AssetId, DepositNote, NoteIdentifier, PrivateIdentifier, StandardAccount, SubpoolId, NOTE_BATCH, sample_dummy_notes, schnorr::{CompressedPublicKey, PrivateKey, Scalar}
+	sample_dummy_notes,
+	schnorr::{CompressedPublicKey, PrivateKey, Scalar},
+	AccountAddress, AssetId, DepositNote, NoteIdentifier, PrivateIdentifier, StandardAccount,
+	SubpoolId, NOTE_BATCH,
 };
-use tessera_subpool_database::convert::{f_to_bytes, hash_to_hex, private_id_to_bytes, u256_to_bytes};
+use tessera_subpool_database::convert::{
+	f_to_bytes, hash_to_hex, private_id_to_bytes, u256_to_bytes,
+};
 use tessera_utils::F;
 
 /// Anvil accounts 1–3 (depositors for each subpool client).

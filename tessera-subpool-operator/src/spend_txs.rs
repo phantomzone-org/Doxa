@@ -10,9 +10,7 @@ use tessera_client::{
 };
 use tessera_subpool_database::{
 	convert::{account_from_row, hash_to_hex, hex_to_hash_checked},
-	db::{
-		insert_approved_input_note, update_account, update_spend_tx_request_to_approved
-	},
+	db::{insert_approved_input_note, update_account, update_spend_tx_request_to_approved},
 	types::{account::AccountRow, spend_tx::SpendTxRow},
 };
 use tracing::{error, info};
@@ -228,8 +226,8 @@ async fn process_one_spend_tx(
 	if !resp.status().is_success() {
 		let status = resp.status();
 		let body = resp.text().await.unwrap_or_default();
-		let already_in_batch =
-			status == reqwest::StatusCode::CONFLICT && body.contains("AN leaf already in current batch");
+		let already_in_batch = status == reqwest::StatusCode::CONFLICT
+			&& body.contains("AN leaf already in current batch");
 		if !already_in_batch {
 			anyhow::bail!("sequencer rejected spend tx (HTTP {status}): {body}");
 		}
@@ -242,43 +240,57 @@ async fn process_one_spend_tx(
 
 	info!(id = row.id, addr = %row.priv_acc_address, "spend tx submitted to sequencer");
 
-	// ── 8. Mark input notes as consumed ────────────────────────────────────────
+	// ── 8–11. Finalize spend atomically: consume inputs, approve request,
+	//          update account, and create local output notes in one transaction.
+
+	struct CrossSubpoolNote {
+		target_subpool: u64,
+		identifier: String,
+		asset_id: String,
+		amount: String,
+		recipient_address: String,
+		sender_address: String,
+	}
+
+	let mut cross_subpool_notes = Vec::new();
+
+	let mut tx = pool
+		.begin()
+		.await
+		.context("failed to begin spend finalization transaction")?;
+
 	for inote_id in &row.inote_identifiers {
 		sqlx::query(
 			"UPDATE input_notes SET consume = true, updated_at = NOW() WHERE identifier = $1",
 		)
 		.bind(inote_id)
-		.execute(pool)
+		.execute(&mut *tx)
 		.await
 		.with_context(|| format!("failed to mark input note '{inote_id}' as consumed"))?;
 	}
 
-	// ── 9. Update spend_tx_requests: APPROVED ──────────────────────────────────
-	update_spend_tx_request_to_approved(pool, sig_bytes.as_ref(), row.id).await?;
+	update_spend_tx_request_to_approved(&mut *tx, sig_bytes.as_ref(), row.id).await?;
 
-	// ── 10. Update account state ───────────────────────────────────────────────
 	update_account(
-		pool,
+		&mut *tx,
 		&accout,
 		acc_row.eth_address,
 		row.priv_acc_address.clone(),
 	)
 	.await?;
 
-	// ── 11. Create input notes for local recipients ────────────────────────────
-	for (_, onote) in onotes.iter().enumerate() {
-		// Check if the recipient account exists in this subpool
+	for onote in &onotes {
 		let local: bool = sqlx::query_scalar(
 			"SELECT EXISTS(SELECT 1 FROM accounts WHERE private_acc_address = $1)",
 		)
 		.bind(&onote.recipient_address)
-		.fetch_one(pool)
+		.fetch_one(&mut *tx)
 		.await
 		.unwrap_or(false);
 
 		if local {
 			insert_approved_input_note(
-				pool,
+				&mut *tx,
 				&onote.identifier,
 				&onote.asset_id,
 				&onote.amount,
@@ -294,49 +306,60 @@ async fn process_one_spend_tx(
 				"created input note for local recipient"
 			);
 		} else {
-			// Forward to sequencer for cross-subpool delivery.
-			// Determine target subpool from the recipient address prefix (first 8 bytes = LE u64).
 			let target_subpool = recipient_subpool_id(&onote.recipient_address);
-
-			let forward_body = serde_json::json!({
-				"target_subpool_id": target_subpool,
-				"identifier": onote.identifier,
-				"asset_id": hex::encode(&onote.asset_id),
-				"amount": hex::encode(&onote.amount),
-				"recipient_address": onote.recipient_address,
-				"sender_address": onote.sender_address,
+			cross_subpool_notes.push(CrossSubpoolNote {
+				target_subpool,
+				identifier: onote.identifier.clone(),
+				asset_id: hex::encode(&onote.asset_id),
+				amount: hex::encode(&onote.amount),
+				recipient_address: onote.recipient_address.clone(),
+				sender_address: onote.sender_address.clone(),
 			});
+		}
+	}
 
-			let fwd_url = format!("{}/forward_note", sequencer_url.trim_end_matches('/'));
-			let resp = http.post(&fwd_url).json(&forward_body).send().await;
-			match resp {
-				Ok(r) if r.status().is_success() => {
-					info!(
-						id = row.id,
-						note_id = %onote.identifier,
-						target_subpool,
-						recipient = %onote.recipient_address,
-						sender = %onote.sender_address,
-						"forwarded output note to sequencer"
-					);
-				},
-				Ok(r) => {
-					let status = r.status();
-					let body = r.text().await.unwrap_or_default();
-					error!(
-						id = row.id,
-						note_id = %onote.identifier,
-						"sequencer rejected forward_note (HTTP {status}): {body}"
-					);
-				},
-				Err(e) => {
-					error!(
-						id = row.id,
-						note_id = %onote.identifier,
-						"failed to reach sequencer for forward_note: {e}"
-					);
-				},
-			}
+	tx.commit()
+		.await
+		.context("failed to commit spend finalization transaction")?;
+
+	// ── 12. Forward cross-subpool notes (after local state is committed) ────
+	for note in &cross_subpool_notes {
+		let forward_body = serde_json::json!({
+			"target_subpool_id": note.target_subpool,
+			"identifier": note.identifier,
+			"asset_id": note.asset_id,
+			"amount": note.amount,
+			"recipient_address": note.recipient_address,
+			"sender_address": note.sender_address,
+		});
+
+		let fwd_url = format!("{}/forward_note", sequencer_url.trim_end_matches('/'));
+		let resp = http.post(&fwd_url).json(&forward_body).send().await;
+		match resp {
+			Ok(r) if r.status().is_success() => {
+				info!(
+					id = row.id,
+					note_id = %note.identifier,
+					target_subpool = note.target_subpool,
+					recipient = %note.recipient_address,
+					sender = %note.sender_address,
+					"forwarded output note to sequencer"
+				);
+			},
+			Ok(r) => {
+				let status = r.status();
+				let body = r.text().await.unwrap_or_default();
+				anyhow::bail!(
+					"sequencer rejected forward_note '{}' (HTTP {status}): {body}",
+					note.identifier
+				);
+			},
+			Err(e) => {
+				anyhow::bail!(
+					"failed to reach sequencer for forward_note '{}': {e}",
+					note.identifier
+				);
+			},
 		}
 	}
 
@@ -411,6 +434,8 @@ pub async fn poll_incoming_notes(
 		subpool_id, "received forwarded notes from sequencer"
 	);
 
+	let mut acked_ids = Vec::new();
+
 	for note in &notes {
 		info!(
 			subpool_id,
@@ -435,12 +460,47 @@ pub async fn poll_incoming_notes(
 		)
 		.await?;
 
+		acked_ids.push(note.identifier.clone());
+
 		info!(
 			subpool_id,
 			note_id = %note.identifier,
 			recipient = %note.recipient_address,
 			"inserted forwarded note as local input note"
 		);
+	}
+
+	// Acknowledge successfully inserted notes so the sequencer can remove them.
+	if !acked_ids.is_empty() {
+		let ack_url = format!(
+			"{}/ack_notes/{}",
+			sequencer_url.trim_end_matches('/'),
+			subpool_id
+		);
+		let resp = http.post(&ack_url).json(&acked_ids).send().await;
+		match resp {
+			Ok(r) if r.status().is_success() => {
+				info!(
+					subpool_id,
+					count = acked_ids.len(),
+					"acknowledged forwarded notes"
+				);
+			},
+			Ok(r) => {
+				let status = r.status();
+				let body = r.text().await.unwrap_or_default();
+				info!(
+					subpool_id,
+					"failed to ack forwarded notes (HTTP {status}): {body} — notes will be re-delivered"
+				);
+			},
+			Err(e) => {
+				info!(
+					subpool_id,
+					"failed to reach sequencer for ack_notes: {e} — notes will be re-delivered"
+				);
+			},
+		}
 	}
 
 	Ok(())

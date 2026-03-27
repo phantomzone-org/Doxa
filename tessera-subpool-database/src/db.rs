@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Postgres};
 use tessera_client::StandardAccount;
 
 use crate::convert::{account_to_insert, AccountInsert};
@@ -60,8 +60,8 @@ pub async fn insert_account_and_user(
 	Ok(())
 }
 
-pub async fn insert_approved_input_note(
-	pool: &PgPool,
+pub async fn insert_approved_input_note<'e>(
+	executor: impl Executor<'e, Database = Postgres>,
 	identifier: &str,
 	asset_id: &[u8],
 	amount: &[u8],
@@ -79,15 +79,15 @@ pub async fn insert_approved_input_note(
 	.bind(amount)
 	.bind(recipient_address)
 	.bind(sender_address)
-	.execute(pool)
+	.execute(executor)
 	.await
 	.context("failed to insert input_note")?;
 	Ok(())
 }
 
 /// Insert a row into the `input_notes` table with status PENDING.
-pub async fn insert_pending_input_note(
-	pool: &PgPool,
+pub async fn insert_pending_input_note<'e>(
+	executor: impl Executor<'e, Database = Postgres>,
 	identifier: &str,
 	asset_id: &[u8],
 	amount: &[u8],
@@ -105,14 +105,14 @@ pub async fn insert_pending_input_note(
 	.bind(amount)
 	.bind(recipient_address)
 	.bind(sender_address)
-	.execute(pool)
+	.execute(executor)
 	.await
 	.context("failed to insert pending input_note")?;
 	Ok(())
 }
 
-pub async fn update_account(
-	pool: &PgPool,
+pub async fn update_account<'e>(
+	executor: impl Executor<'e, Database = Postgres>,
 	account: &StandardAccount,
 	eth_address: String,
 	priv_acc_address: String,
@@ -131,15 +131,15 @@ pub async fn update_account(
 	.bind(&updated_account.consume_auth)
 	.bind(&updated_account.ast)
 	.bind(&priv_acc_address)
-	.execute(pool)
+	.execute(executor)
 	.await
 	.context("failed to update sender account after spend tx")?;
 
 	Ok(())
 }
 
-pub async fn update_spend_tx_request_to_approved(
-	pool: &PgPool,
+pub async fn update_spend_tx_request_to_approved<'e>(
+	executor: impl Executor<'e, Database = Postgres>,
 	sig_bytes: &[u8],
 	id: i64,
 ) -> Result<()> {
@@ -150,14 +150,14 @@ pub async fn update_spend_tx_request_to_approved(
 	)
 	.bind(sig_bytes)
 	.bind(id)
-	.execute(pool)
+	.execute(executor)
 	.await
 	.context("failed to update spend_tx_requests")?;
 	Ok(())
 }
 
-pub async fn update_deposit_tx_request_to_approved(
-	pool: &PgPool,
+pub async fn update_deposit_tx_request_to_approved<'e>(
+	executor: impl Executor<'e, Database = Postgres>,
 	sig_bytes: &[u8],
 	id: i64,
 ) -> Result<()> {
@@ -168,7 +168,7 @@ pub async fn update_deposit_tx_request_to_approved(
 	)
 	.bind(sig_bytes)
 	.bind(id)
-	.execute(pool)
+	.execute(executor)
 	.await
 	.context("failed to update deposit_tx_requests")?;
 	Ok(())

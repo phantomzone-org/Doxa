@@ -164,7 +164,14 @@ async fn process_one(
 		"FreshAcc transaction submitted to sequencer"
 	);
 
-	// ── 6. Update freshacc_requests: APPROVED + signature ────────────────────
+	// ── 6–7. Approve request and create account row atomically ───────────────
+	let insert = account_to_insert(&accout, String::new());
+
+	let mut tx = pool
+		.begin()
+		.await
+		.context("failed to begin freshacc transaction")?;
+
 	sqlx::query(
 		"UPDATE freshacc_requests \
          SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
@@ -172,18 +179,10 @@ async fn process_one(
 	)
 	.bind(sig_bytes.as_ref())
 	.bind(row.id)
-	.execute(pool)
+	.execute(&mut *tx)
 	.await
 	.context("failed to update freshacc_requests")?;
 
-	info!(
-		id = row.id,
-		addr = %row.private_acc_address,
-		"FreshAcc request approved in DB"
-	);
-
-	// ── 7. Create accounts row (only after approval) ─────────────────────────
-	let insert = account_to_insert(&accout, String::new());
 	sqlx::query(
 		r#"
         INSERT INTO accounts
@@ -201,14 +200,18 @@ async fn process_one(
 	.bind(&insert.spend_auth)
 	.bind(&insert.consume_auth)
 	.bind(&insert.ast)
-	.execute(pool)
+	.execute(&mut *tx)
 	.await
 	.context("failed to insert account row")?;
+
+	tx.commit()
+		.await
+		.context("failed to commit freshacc transaction")?;
 
 	info!(
 		id = row.id,
 		addr = %row.private_acc_address,
-		"account row created in DB"
+		"FreshAcc request approved and account row created in DB"
 	);
 
 	Ok(())
