@@ -569,6 +569,7 @@ export class OutputNote {
   amountHex(): string     { return this.inner.amountHex(); }
   recipientHex(): string  { return this.inner.recipientHex(); }
   senderHex(): string     { return this.inner.senderHex(); }
+  memoHex(): string       { return this.inner.memoHex(); }
 }
 
 // ── DummyNote ─────────────────────────────────────────────────────────────────
