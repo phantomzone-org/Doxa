@@ -54,6 +54,15 @@ export interface DepositResponse {
   id: number;
 }
 
+export type DepositTxStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+/** Response body for GET /deposit/:id/status */
+export interface DepositStatusResponse {
+  id: number;
+  status: DepositTxStatus;
+  deposit_tx_hash: string | null;
+}
+
 /** Entry returned by GET /input_notes/:recipient_address */
 export interface InputNote {
   /** 32 hex chars — [F;2] identifier */
@@ -108,8 +117,6 @@ export interface AccountResponse {
   private_identifier: string;
   /** 16 hex chars — SubpoolId */
   subpool_id: string;
-  /** 64 hex chars — U256 balance */
-  balance: string;
   /** 16 hex chars — Nonce */
   nonce: string;
   /** 80 hex chars — spend-auth CompressedPublicKey; all-zeros if absent */
