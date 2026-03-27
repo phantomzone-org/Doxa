@@ -38,7 +38,7 @@ const TESSERA_CONTRACT = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e";
 const USDX_CONTRACT_ADDR = import.meta.env
   .VITE_USDX_CONTRACT_ADDR as `0x${string}`;
 const SEPOLIA_RPC_URL = import.meta.env.VITE_SEPOLIA_RPC_URL as string;
-const API_BASE_URL = import.meta.env.API_BAS_URL ?? "http://localhost:8080";
+const API_BASE_URL = import.meta.env.API_BASE_URL ?? "http://localhost:8080";
 const PRF_INPUT = new TextEncoder().encode("tessera::account::seed");
 const SUBPOOL_ID = 1n;
 const SUBPOOL_ID_HEX = "0100000000000000";
