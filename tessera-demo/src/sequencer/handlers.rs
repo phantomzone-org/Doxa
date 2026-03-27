@@ -1,16 +1,20 @@
 use std::time::Instant;
 
 use alloy::primitives::B256;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+	extract::{Path, State},
+	http::StatusCode,
+	Json,
+};
 use serde::{Deserialize, Serialize};
 use tessera_client::NOTE_BATCH;
 use tessera_server::{contract::ITesseraRollupV2, sequencer::BatchBuilder};
 use tracing::info;
 
-use axum::extract::Path;
-
-use super::helpers::{parse_hex_bytes, parse_hex_bytes32};
-use super::state::{AppState, ForwardedNote};
+use super::{
+	helpers::{parse_hex_bytes, parse_hex_bytes32},
+	state::{AppState, ForwardedNote},
+};
 
 // ---------------------------------------------------------------------------
 // Request / response types
@@ -255,8 +259,7 @@ pub(crate) async fn handle_forward_note(
 
 	info!(
 		target_subpool = req.target_subpool_id,
-		queue_size,
-		"forwarded note queued"
+		queue_size, "forwarded note queued"
 	);
 
 	Ok(Json(ForwardNoteResponse {
@@ -295,12 +298,16 @@ pub(crate) async fn handle_note_position(
 	Path(commitment_hex): Path<String>,
 ) -> Result<Json<NotePositionResponse>, (StatusCode, String)> {
 	let st = state.lock().await;
-	let position = st.note_positions.get(&commitment_hex).copied().ok_or_else(|| {
-		(
-			StatusCode::NOT_FOUND,
-			format!("note commitment '{commitment_hex}' not found in NCT"),
-		)
-	})?;
+	let position = st
+		.note_positions
+		.get(&commitment_hex)
+		.copied()
+		.ok_or_else(|| {
+			(
+				StatusCode::NOT_FOUND,
+				format!("note commitment '{commitment_hex}' not found in NCT"),
+			)
+		})?;
 
 	Ok(Json(NotePositionResponse {
 		commitment: commitment_hex,

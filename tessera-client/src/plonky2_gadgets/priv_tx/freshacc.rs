@@ -20,7 +20,7 @@ use crate::{
 	account::PublicIdentifier,
 	derive_priv_tx_hash,
 	ecgfp5::CompressedPoint,
-	note::{NodeIdentifier, StandardNote},
+	note::{NoteIdentifier, StandardNote},
 	plonky2_gadgets::{
 		set_hash, set_u256_zero,
 		witness::{
@@ -130,7 +130,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	// ── Input notes (all inactive) ────────────────────────────────────────────
 	let zero_addr = AccountAddress::zero();
 	let inote = StandardNote {
-		identifier: NodeIdentifier::ZERO,
+		identifier: NoteIdentifier::ZERO,
 		asset_id: AssetId(F::ZERO),
 		amt: primitive_types::U256::zero(),
 		recipient: AccountAddress::from_acc(accin),
@@ -147,7 +147,7 @@ pub(crate) fn set_freshacc_tx_witness(
 
 	// ── Output notes (all inactive) ───────────────────────────────────────────
 	let onote = StandardNote {
-		identifier: NodeIdentifier::ZERO,
+		identifier: NoteIdentifier::ZERO,
 		asset_id: AssetId(F::ZERO),
 		amt: primitive_types::U256::zero(),
 		recipient: zero_addr,

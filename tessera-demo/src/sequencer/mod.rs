@@ -4,9 +4,10 @@ mod handlers;
 mod helpers;
 mod state;
 
-pub use config::DemoSequencerConfig;
-
-use std::{collections::{BTreeSet, HashMap}, sync::Arc};
+use std::{
+	collections::{BTreeSet, HashMap},
+	sync::Arc,
+};
 
 use alloy::{
 	network::EthereumWallet,
@@ -18,15 +19,18 @@ use axum::{
 	routing::{get, post},
 	Router,
 };
+use batches::{flush_deposit_batch, flush_tx_batch};
+pub use config::DemoSequencerConfig;
+use handlers::{
+	handle_config, handle_deposit, handle_forward_note, handle_note_position, handle_pending_notes,
+	handle_status, handle_transaction,
+};
+use state::{AppState, SequencerState, SharedState};
 use tessera_client::COM_TREE_DEPTH;
 use tessera_server::contract::ITesseraRollupV2;
 use tessera_trees::MerkleTree;
 use tokio::sync::Mutex;
 use tracing::{error, info};
-
-use batches::{flush_deposit_batch, flush_tx_batch};
-use handlers::{handle_config, handle_deposit, handle_forward_note, handle_note_position, handle_pending_notes, handle_status, handle_transaction};
-use state::{AppState, SequencerState, SharedState};
 
 /// A demo sequencer that can be started with [`DemoSequencer::run`].
 pub struct DemoSequencer {
@@ -42,7 +46,9 @@ pub struct RunningSequencer {
 
 impl DemoSequencer {
 	pub fn new(config: DemoSequencerConfig) -> Self {
-		Self { config }
+		Self {
+			config,
+		}
 	}
 
 	/// Start the sequencer in the background and return a handle with the

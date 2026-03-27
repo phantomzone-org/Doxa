@@ -1,7 +1,6 @@
 use axum::{extract::State, http::StatusCode, Json};
-use plonky2_field::types::Field;
 use serde::{Deserialize, Serialize};
-use tessera_client::{schnorr::CompressedPublicKey, AccountAddress, StandardAccount, SubpoolId};
+use tessera_client::{schnorr::CompressedPublicKey, AccountAddress, StandardAccount};
 use tessera_utils::F;
 
 use crate::{convert::bytes_to_private_id, error::AppError, state::AppState};

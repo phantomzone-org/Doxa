@@ -4,7 +4,10 @@ use std::{
 	time::{Duration, Instant},
 };
 
-use alloy::{network::EthereumWallet, primitives::{Address, B256, U256}};
+use alloy::{
+	network::EthereumWallet,
+	primitives::{Address, B256, U256},
+};
 use tessera_server::sequencer::BatchBuilder;
 use tessera_trees::MerkleTree;
 use tessera_utils::hasher::HashOutput;

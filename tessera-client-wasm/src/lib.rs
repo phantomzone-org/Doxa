@@ -13,9 +13,9 @@ use sha2::{Digest, Sha256};
 use tessera_client::{
 	derive_priv_tx_hash, double_hash_native,
 	schnorr::{schnorr_sign, CompressedPublicKey, PrivateKey, Scalar},
-	AccountAddress, AccountNullifier, AccountStateTree, AssetId, DepositNote, HashOutput,
-	NodeIdentifier, Nonce, NoteCommitment, NoteNullifier, PositionedStandardNode,
-	PrivateIdentifier, PublicIdentifier, SpendAuth, StandardAccount, StandardNote, SubpoolId,
+	AccountAddress, AccountNullifier, AccountStateTree, AssetId, DepositNote, HashOutput, Nonce,
+	NoteCommitment, NoteIdentifier, NoteNullifier, PositionedStandardNode, PrivateIdentifier,
+	PublicIdentifier, SpendAuth, StandardAccount, StandardNote, SubpoolId,
 };
 use wasm_bindgen::prelude::*;
 
@@ -638,7 +638,7 @@ impl WasmInputNote {
 		let amt = bigint_to_u256(amount)?;
 
 		let note = StandardNote::new(
-			NodeIdentifier([
+			NoteIdentifier([
 				F::from_canonical_u64(id0_raw),
 				F::from_canonical_u64(id1_raw),
 			]),
@@ -887,7 +887,8 @@ impl WasmSpendTxBuilder {
 		let sender_addr = AccountAddress::from_acc(&self.accin.borrow());
 		let recipient_addr = recipient.0;
 		let mut rng = rand::rng();
-		let note = StandardNote::create(&mut rng, recipient_addr, sender_addr, amt, asset, memo_arr);
+		let note =
+			StandardNote::create(&mut rng, recipient_addr, sender_addr, amt, asset, memo_arr);
 		self.onotes.push(note);
 		Ok(())
 	}

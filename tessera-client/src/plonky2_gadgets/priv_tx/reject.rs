@@ -14,7 +14,7 @@ use crate::{
 	StandardAccount, SubpoolId,
 	account::PublicIdentifier,
 	derive_priv_tx_hash,
-	note::{NodeIdentifier, PositionedStandardNode, StandardNote},
+	note::{NoteIdentifier, StandardNote},
 	plonky2_gadgets::{
 		set_hash,
 		witness::{set_hash_blocks, set_real_schnorr_signature, set_subpool_full_proof},
@@ -61,12 +61,7 @@ pub(crate) fn set_reject_tx_witness(
 
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = core::array::from_fn(|i| {
 		if i < inotes.len() {
-			let pos_f = F::from_canonical_usize(inotes_nct_proofs[i].pos);
-			NoteNullifier(
-				PositionedStandardNode::from_note(inotes[i], pos_f)
-					.nullifier(&nk)
-					.0,
-			)
+			StandardNote::nullifier(&inotes[i].commitment(), inotes_nct_proofs[i].pos, &nk)
 		} else {
 			NoteNullifier(HashOutput(double_hash_native(dinotes[i])))
 		}
@@ -150,7 +145,7 @@ pub(crate) fn set_reject_tx_witness(
 	// ── Input notes ───────────────────────────────────────────────────────────
 	let zero_addr = AccountAddress::zero();
 	let inactive_inote = StandardNote {
-		identifier: NodeIdentifier::ZERO,
+		identifier: NoteIdentifier::ZERO,
 		asset_id,
 		amt: U256::zero(),
 		recipient: AccountAddress::from_acc(accin),
@@ -177,7 +172,7 @@ pub(crate) fn set_reject_tx_witness(
 
 	// ── Output notes ──────────────────────────────────────────────────────────
 	let inactive_onote = StandardNote {
-		identifier: NodeIdentifier::ZERO,
+		identifier: NoteIdentifier::ZERO,
 		asset_id,
 		amt: U256::zero(),
 		recipient: zero_addr,
@@ -265,7 +260,7 @@ mod tests {
 		AssetId, COM_TREE_DEPTH, DS_PUBLIC_IDENTIFIER, NOTE_BATCH, Nonce, SpendAuth,
 		StandardAccount, SubpoolId,
 		account::{AccountAddress, PublicIdentifier},
-		note::{NodeIdentifier, PositionedStandardNode, StandardNote},
+		note::{NoteIdentifier, StandardNote},
 		plonky2_gadgets::priv_tx::{priv_tx_circuit, sample_dummy_notes},
 		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
 		schnorr::{CompressedPublicKey, PrivateKey, Scalar, schnorr_sign},
@@ -334,7 +329,7 @@ mod tests {
 		// ── Two input notes addressed to acc, sent from sender ────────────────
 		let asset_id_val = AssetId(F::ONE);
 		let note0 = StandardNote {
-			identifier: NodeIdentifier::from_rng(&mut rng),
+			identifier: NoteIdentifier::from_rng(&mut rng),
 			asset_id: asset_id_val,
 			amt: U256::from(100u64),
 			recipient: AccountAddress::from_acc(&acc),
@@ -342,7 +337,7 @@ mod tests {
 			memo: [0u8; 512],
 		};
 		let note1 = StandardNote {
-			identifier: NodeIdentifier::from_rng(&mut rng),
+			identifier: NoteIdentifier::from_rng(&mut rng),
 			asset_id: asset_id_val,
 			amt: U256::from(50u64),
 			recipient: AccountAddress::from_acc(&acc),
@@ -390,16 +385,8 @@ mod tests {
 		accout.nonce = Nonce(F::from_canonical_u64(2));
 
 		let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = core::array::from_fn(|i| match i {
-			0 => NoteNullifier(
-				PositionedStandardNode::from_note(note0.clone(), F::from_canonical_usize(n0_pos))
-					.nullifier(&nk)
-					.0,
-			),
-			1 => NoteNullifier(
-				PositionedStandardNode::from_note(note1.clone(), F::from_canonical_usize(n1_pos))
-					.nullifier(&nk)
-					.0,
-			),
+			0 => NoteNullifier(StandardNote::nullifier(&note0.commitment(), n0_pos, &nk).0),
+			1 => NoteNullifier(StandardNote::nullifier(&note1.commitment(), n1_pos, &nk).0),
 			_ => NoteNullifier(HashOutput(double_hash_native(dinotes[i]))),
 		});
 		let tx_onote_comms: [NoteCommitment; NOTE_BATCH] = core::array::from_fn(|i| match i {

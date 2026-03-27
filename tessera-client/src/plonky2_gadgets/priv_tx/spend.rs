@@ -21,7 +21,7 @@ use crate::{
 	account::{AccountStateTreeLeaf, PublicIdentifier},
 	derive_priv_tx_hash,
 	ecgfp5::CompressedPoint,
-	note::{NodeIdentifier, PositionedStandardNode, StandardNote},
+	note::{NoteIdentifier, StandardNote},
 	plonky2_gadgets::{
 		set_hash, set_u256_zero,
 		witness::{
@@ -107,12 +107,7 @@ pub fn set_spend_tx_witness(
 	let nk = accin.nk();
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = array::from_fn(|i| {
 		if i < inotes.len() {
-			let pos_f = F::from_canonical_usize(inotes_nct_proofs[i].pos);
-			NoteNullifier(
-				PositionedStandardNode::from_note(inotes[i], pos_f)
-					.nullifier(&nk)
-					.0,
-			)
+			StandardNote::nullifier(&inotes[i].commitment(), inotes_nct_proofs[i].pos, &nk)
 		} else {
 			NoteNullifier(HashOutput(double_hash_native(dinotes[i])))
 		}
@@ -182,7 +177,7 @@ pub fn set_spend_tx_witness(
 	// ── Input notes ───────────────────────────────────────────────────────────
 	let zero_addr = AccountAddress::zero();
 	let inactive_inote = StandardNote {
-		identifier: NodeIdentifier::ZERO,
+		identifier: NoteIdentifier::ZERO,
 		asset_id,
 		amt: U256::zero(),
 		recipient: AccountAddress::from_acc(accin),
@@ -210,7 +205,7 @@ pub fn set_spend_tx_witness(
 
 	// ── Output notes ──────────────────────────────────────────────────────────
 	let inactive_onote = StandardNote {
-		identifier: NodeIdentifier::ZERO,
+		identifier: NoteIdentifier::ZERO,
 		asset_id,
 		amt: U256::zero(),
 		recipient: zero_addr,
@@ -382,7 +377,7 @@ pub fn set_fake_tx_witness(
 	// ── Input notes (all inactive) ────────────────────────────────────────────
 	let zero_addr = AccountAddress::zero();
 	let inactive_inote = StandardNote {
-		identifier: NodeIdentifier::ZERO,
+		identifier: NoteIdentifier::ZERO,
 		asset_id: AssetId(F::ZERO),
 		amt: U256::zero(),
 		recipient: AccountAddress::from_acc(&accin),
@@ -398,7 +393,7 @@ pub fn set_fake_tx_witness(
 
 	// ── Output notes (all inactive) ───────────────────────────────────────────
 	let inactive_onote = StandardNote {
-		identifier: NodeIdentifier::ZERO,
+		identifier: NoteIdentifier::ZERO,
 		asset_id: AssetId(F::ZERO),
 		amt: U256::zero(),
 		recipient: zero_addr,
@@ -557,7 +552,7 @@ mod tests {
 		// ── Create notes N0, N1 ───────────────────────────────────────────────
 		let asset_id_val = crate::AssetId(F::ONE);
 		let n0 = StandardNote {
-			identifier: NodeIdentifier::from_rng(&mut rng),
+			identifier: NoteIdentifier::from_rng(&mut rng),
 			asset_id: asset_id_val,
 			amt: U256::from(100u64),
 			recipient: crate::AccountAddress::from_acc(&acc0),
@@ -565,7 +560,7 @@ mod tests {
 			memo: [0u8; 512],
 		};
 		let n1 = StandardNote {
-			identifier: NodeIdentifier::from_rng(&mut rng),
+			identifier: NoteIdentifier::from_rng(&mut rng),
 			asset_id: asset_id_val,
 			amt: U256::from(50u64),
 			recipient: crate::AccountAddress::from_acc(&acc0),
@@ -605,16 +600,8 @@ mod tests {
 		// ── Compute note nullifiers and tx_hash ───────────────────────────────
 		let nk0 = acc0.nk();
 		// After Part 1 fix, native order matches circuit: commitment || position || nk
-		let n0_null_arr: [F; 4] =
-			PositionedStandardNode::from_note(n0, F::from_canonical_usize(n0_pos))
-				.nullifier(&nk0)
-				.0
-				.0;
-		let n1_null_arr: [F; 4] =
-			PositionedStandardNode::from_note(n1, F::from_canonical_usize(n1_pos))
-				.nullifier(&nk0)
-				.0
-				.0;
+		let n0_null_arr: [F; 4] = StandardNote::nullifier(&n0.commitment(), n0_pos, &nk0).0.0;
+		let n1_null_arr: [F; 4] = StandardNote::nullifier(&n1.commitment(), n1_pos, &nk0).0.0;
 
 		// tx_hash: real nullifiers for active notes (0, 1), dummy for rest
 		let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = array::from_fn(|i| {

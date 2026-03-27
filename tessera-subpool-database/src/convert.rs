@@ -1,9 +1,8 @@
 use anyhow::Context;
-use plonky2_field::types::{Field, PrimeField64};
+use plonky2_field::types::{Field, Field64, PrimeField64};
 use primitive_types::U256;
 use tessera_client::{
-	schnorr::CompressedPublicKey, AccountAddress, AccountStateTree, AssetId, Nonce,
-	PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId,
+	AccountAddress, AccountStateTree, AssetId, HashOutput, Nonce, PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId, schnorr::CompressedPublicKey
 };
 use tessera_utils::F;
 
@@ -138,8 +137,8 @@ pub fn bytes_to_subpool_id(b: &[u8; 8]) -> SubpoolId {
 /// Restores private_identifier, nonce, spend_auth, and AST from the
 /// DB-stored byte representations.
 pub fn account_from_row(row: &AccountRow) -> anyhow::Result<StandardAccount> {
-	let pi_bytes = hex::decode(&row.private_identifier)
-		.context("private_identifier must be valid hex")?;
+	let pi_bytes =
+		hex::decode(&row.private_identifier).context("private_identifier must be valid hex")?;
 	let pi_arr: [u8; 16] = pi_bytes
 		.as_slice()
 		.try_into()
@@ -185,10 +184,12 @@ pub fn account_from_row(row: &AccountRow) -> anyhow::Result<StandardAccount> {
 				.as_str()
 				.context("missing amount in AST entry")?;
 			let amount_bytes = hex::decode(amount_hex).context("invalid amount hex in AST")?;
-			let amount_arr: [u8; 32] = amount_bytes
-				.as_slice()
-				.try_into()
-				.with_context(|| format!("AST amount for asset_id '{aid}' must be 32 bytes, got {}", amount_bytes.len()))?;
+			let amount_arr: [u8; 32] = amount_bytes.as_slice().try_into().with_context(|| {
+				format!(
+					"AST amount for asset_id '{aid}' must be 32 bytes, got {}",
+					amount_bytes.len()
+				)
+			})?;
 			let amount = bytes_to_u256(&amount_arr);
 			let asset_id = AssetId::from_u64(aid)?;
 			asset_map.insert(asset_id, (leaf_index, amount));
@@ -209,6 +210,24 @@ pub fn hash_to_hex(h: &[F; 4]) -> String {
 		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
 	}
 	hex::encode(out)
+}
+
+/// Decode a 64-char big-endian hex string back to `[F; 4]`.
+/// Inverse of `hash_to_hex`.
+pub fn hex_to_hash_checked(s: &str) -> anyhow::Result<HashOutput> {
+	let bytes = hex::decode(s).context("invalid hex string")?;
+	anyhow::ensure!(
+		bytes.len() == 32,
+		"hex_to_hash expects 32 bytes (64 hex chars)"
+	);
+	let mut out = [F::ZERO; 4];
+	for i in 0..4 {
+		let chunk: [u8; 8] = bytes[i * 8..(i + 1) * 8].try_into().unwrap();
+		let val = u64::from_be_bytes(chunk);
+		anyhow::ensure!(val <= F::ORDER, "val: {val} > F::ORDER");
+		out[i] = F::from_canonical_u64(val);
+	}
+	Ok(HashOutput(out))
 }
 
 /// Parse an Ethereum address string ("0x…") into a `primitive_types::H160`.

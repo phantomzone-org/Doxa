@@ -4,9 +4,12 @@ use plonky2_field::types::{Field, Field64};
 use primitive_types::U256;
 use rand::{CryptoRng, Rng, RngExt, distr::Uniform};
 use serde::{Deserialize, Serialize};
-use tessera_utils::{F, hasher::HashOutput};
+use tessera_utils::{
+	F,
+	hasher::{HashOutput, MerkleHash},
+};
 
-use crate::{AccountAddress, AssetId, account::NullifierKey};
+use crate::{AccountAddress, AssetId, account::NullifierKey, double_hash_native};
 
 /// Commitment to a [`DepositNote`], inserted into the Note Commitment Tree
 /// by the deposit transaction circuit.
@@ -62,6 +65,12 @@ impl DepositNote {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteCommitment(pub HashOutput);
 
+impl NoteCommitment {
+	pub const fn zero() -> Self {
+		Self(HashOutput::ZERO)
+	}
+}
+
 /// Spend-once nullifier for a note, derived from its commitment, tree position,
 /// and the owner's nullifier key.
 ///
@@ -72,13 +81,19 @@ pub struct NoteCommitment(pub HashOutput);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteNullifier(pub HashOutput);
 
+impl NoteNullifier{
+	pub const fn zero() -> Self{
+		Self(HashOutput::ZERO)
+	}
+}
+
 /// Random 2-field-element nonce that makes each note commitment unique.
 ///
 /// Sampled fresh for every note creation to prevent commitment collisions.
-#[derive(Clone, Copy)]
-pub struct NodeIdentifier(pub [F; 2]);
+#[derive(Clone, Copy, Debug)]
+pub struct NoteIdentifier(pub [F; 2]);
 
-impl NodeIdentifier {
+impl NoteIdentifier {
 	/// All-zero identifier used as a padding value in dummy notes.
 	pub(crate) const ZERO: Self = Self([F::ZERO; 2]);
 
@@ -106,7 +121,7 @@ impl NodeIdentifier {
 ///   process it.
 #[derive(Clone, Copy)]
 pub struct StandardNote {
-	pub identifier: NodeIdentifier,
+	pub identifier: NoteIdentifier,
 	pub asset_id: AssetId,
 	pub amt: U256,
 	/// Account that will receive the funds.
@@ -128,7 +143,7 @@ impl StandardNote {
 		memo: [u8; 512],
 	) -> Self {
 		StandardNote {
-			identifier: NodeIdentifier::from_rng(rng),
+			identifier: NoteIdentifier::from_rng(rng),
 			asset_id,
 			amt,
 			recipient,
@@ -139,7 +154,7 @@ impl StandardNote {
 
 	/// Create a note with an explicit identifier (for use by external crates).
 	pub fn new(
-		identifier: NodeIdentifier,
+		identifier: NoteIdentifier,
 		asset_id: AssetId,
 		amt: U256,
 		recipient: AccountAddress,
@@ -190,43 +205,23 @@ impl StandardNote {
 			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
 		))
 	}
-}
 
-/// A [`StandardNote`] together with its leaf index in the Note Commitment Tree.
-///
-/// The position is required to derive the note's nullifier and to generate the
-/// Merkle proof for NCT membership verification in the circuit.
-#[derive(Clone)]
-pub struct PositionedStandardNode {
-	note: StandardNote,
-	/// Leaf index of this note's commitment in the NCT.
-	position: F,
-}
-
-impl PositionedStandardNode {
-	/// Pair a note with its NCT leaf position.
-	pub fn from_note(n: StandardNote, position: F) -> Self {
-		Self {
-			note: n,
-			position,
-		}
-	}
-
-	/// Derive the spend-once nullifier for this note.
-	///
-	/// `nullifier = H(note_commitment[4] || position[1] || nk[4])`
-	///
-	/// The position binds the nullifier to the note's NCT slot, preventing
-	/// the same note from generating different nullifiers at different positions.
-	pub fn nullifier(&self, nk: &NullifierKey) -> NoteNullifier {
+	pub fn nullifier(
+		commitment: &NoteCommitment,
+		position: usize,
+		nk: &NullifierKey,
+	) -> NoteNullifier {
 		let mut input = [F::ZERO; 9];
-		input[..4].copy_from_slice(&self.note.commitment().0.0);
-		input[4] = self.position;
+		input[..4].copy_from_slice(&commitment.0.0);
+		input[4] = F::from_canonical_u64(position as u64);
 		input[5..9].copy_from_slice(nk.0.as_slice());
-
 		NoteNullifier(HashOutput(
 			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
 		))
+	}
+
+	pub fn dummy_nullifier(commitment: &NoteCommitment) -> NoteNullifier{
+		NoteNullifier(HashOutput::new(double_hash_native(commitment.0.0)))
 	}
 }
 
@@ -245,7 +240,7 @@ mod tests {
 		) -> Self {
 			let mut rng = rng();
 			StandardNote {
-				identifier: NodeIdentifier::from_rng(&mut rng),
+				identifier: NoteIdentifier::from_rng(&mut rng),
 				asset_id,
 				amt,
 				recipient,

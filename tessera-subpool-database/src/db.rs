@@ -112,7 +112,7 @@ async fn insert_input_note_opt(
 	sender_address: &str,
 	note_commitment: Option<&[u8]>,
 ) -> Result<()> {
-	// TODO: what is the status of the input note at insertion?
+	// TODO JP: what is the status of the input note at insertion?
 	sqlx::query(
 		r#"INSERT INTO input_notes
                (identifier, asset_id, amount, recipient_address, sender_address, note_commitment)

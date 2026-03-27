@@ -179,7 +179,6 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 	sequencer_url: &str,
 	http: &reqwest::Client,
 	rpc_provider: &P,
-	subpool_id: u64,
 ) -> Result<()> {
 	let rows: Vec<DepositTxRow> = sqlx::query_as(
 		"SELECT * FROM deposit_tx_requests \
@@ -196,16 +195,8 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 	}
 
 	for row in rows {
-		if let Err(e) = process_one_deposit(
-			pool,
-			approval_sk,
-			sequencer_url,
-			http,
-			rpc_provider,
-			&row,
-			subpool_id,
-		)
-		.await
+		if let Err(e) =
+			process_one_deposit(pool, approval_sk, sequencer_url, http, rpc_provider, &row).await
 		{
 			error!(
 				id = row.id,
@@ -225,11 +216,10 @@ async fn process_one_deposit<P: Provider + Clone>(
 	http: &reqwest::Client,
 	rpc_provider: &P,
 	row: &DepositTxRow,
-	subpool_id: u64,
 ) -> Result<()> {
 	// ── 1. Broadcast deposit tx on-chain ─────────────────────────────────────
 	info!(id = row.id, addr = %row.recipient_acc_address, "broadcasting deposit tx on-chain");
-	// TODO: get the tx_hash of the broadcasted tx and put in deposit_tx_request row
+	// TODO JP: get the tx_hash of the broadcasted tx and put in deposit_tx_request row
 	broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
 
 	// ── 2. Reconstruct accin from DB ─────────────────────────────────────────
@@ -244,14 +234,14 @@ async fn process_one_deposit<P: Provider + Clone>(
 
 	// ── 3. Parse deposit fields and build note commitment ────────────────────
 	let deposit = parse_deposit_fields(row)?;
-	// TODO: use proper names (also use single purpose functions)
+	// TODO JP: use proper names (also use single purpose functions)
 	let nc_hash = build_deposit_note(&accin, &deposit);
 
 	// ── 4. Build accout with deposit applied ─────────────────────────────────
 	let accout = apply_deposit(&accin, &deposit);
 
 	// ── 5. Sign deposit tx_hash ──────────────────────────────────────────────
-	// TODO: don't redo wrappin gin DepositNOteCommitment. Have builde_deposit_note return
+	// TODO JP: don't redo wrappin gin DepositNOteCommitment. Have builde_deposit_note return
 	// DepositNoteCommitment
 	let deposit_note_comm =
 		tessera_client::DepositNoteCommitment(tessera_client::HashOutput(nc_hash));
@@ -286,7 +276,7 @@ async fn process_one_deposit<P: Provider + Clone>(
 
 	// ── 8. Update account in DB ──────────────────────────────────────────────
 
-	// TODO: accout is aready updated with the latest balance. Convert accout (an instance of
+	// TODO JP: accout is aready updated with the latest balance. Convert accout (an instance of
 	// StandardAccount) to AccountInsert using `account_to_insert` method in convert.rs and then
 	// update the account using private_acc_address
 	let new_asset_balance = accout

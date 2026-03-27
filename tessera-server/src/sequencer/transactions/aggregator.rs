@@ -228,7 +228,7 @@ impl TransactionProverRuntime {
 		let nc_hashes: Vec<HashOutput> = request
 			.nc_leaves
 			.iter()
-			.map(|c| HashOutput::from_encoded_fields(*c))
+			.map(|c| HashOutput::from_encoded_fields_unchecked(*c))
 			.collect();
 
 		// ── 3. Prove SubtreeRootCircuit ──────────────────────────────────────

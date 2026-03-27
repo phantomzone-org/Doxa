@@ -51,7 +51,7 @@ pub async fn process_pending(
 	http: &reqwest::Client,
 	subpool_id: u64,
 ) -> Result<()> {
-	// TODO: make this agree with freshacc structure in tessera-subpool-database
+	// TODO JP: make this agree with freshacc structure in tessera-subpool-database
 	let rows: Vec<PendingFreshAcc> = sqlx::query_as(
 		"SELECT id, private_acc_address, spend_auth, \
                 private_identifier, eth_address, name, physical_address, dob \
@@ -191,7 +191,7 @@ async fn process_one(
 
 	// ── 7. Create accounts + users rows (only after approval) ────────────────
 	let insert = account_to_insert(&accout, row.eth_address.clone());
-	// TODO: rmove user insetion. User is already insert at /register time
+	// TODO JP: rmove user insetion. User is already insert at /register time
 	insert_account_and_user(pool, &insert, &row.name, &row.physical_address, row.dob).await?;
 
 	info!(
