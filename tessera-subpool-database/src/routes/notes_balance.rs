@@ -34,7 +34,7 @@ pub async fn get_notes_balance_handler(
 ) -> Result<(StatusCode, Json<NotesBalanceResponse>), AppError> {
     let rows: Vec<NoteRow> = sqlx::query_as(
         "SELECT asset_id, amount FROM input_notes \
-         WHERE recipient_address = $1 AND status = 'APPROVED'",
+         WHERE recipient_address = $1 AND status = 'APPROVED' AND consume = false",
     )
     .bind(&private_acc_address)
     .fetch_all(&state.pool)

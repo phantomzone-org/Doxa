@@ -578,7 +578,7 @@ pub(crate) fn set_fake_deposit_tx_witness(
 	t.deposit_note.set_witness(
 		pw,
 		&DepositNote {
-			identifier: [F::ZERO; 2],
+			identifier: crate::NoteIdentifier([F::ZERO; 2]),
 			recipient: AccountAddress::from_acc(&accin),
 			asset_id: AssetId(F::ZERO),
 			amount: U256::zero(),
@@ -674,7 +674,10 @@ mod tests {
 		// ── DepositNote targeting accin ───────────────────────────────────────
 		let asset_id = AssetId(F::from_canonical_u64(7));
 		let deposit_note = DepositNote {
-			identifier: [F::from_canonical_u64(11), F::from_canonical_u64(22)],
+			identifier: crate::NoteIdentifier([
+				F::from_canonical_u64(11),
+				F::from_canonical_u64(22),
+			]),
 			recipient: AccountAddress::from_acc(&accin),
 			amount: U256::from(1000u64),
 			asset_id,

@@ -3,7 +3,7 @@
 CREATE TYPE freshacc_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE deposit_tx_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE spend_tx_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
-CREATE TYPE input_note_status AS ENUM ('APPROVED', 'REJECTED');
+CREATE TYPE input_note_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 
 -- ── accounts ──────────────────────────────────────────────────────────────────
 -- All Goldilocks field elements stored as BYTEA via to_canonical_u64().to_le_bytes().
@@ -60,7 +60,7 @@ CREATE TABLE freshacc_requests (
 
 CREATE TABLE deposit_tx_requests (
     id                       BIGSERIAL         PRIMARY KEY,
-    recipient_acc_address    TEXT              NOT NULL,
+    recipient_address    TEXT              NOT NULL,
     eth_address              TEXT              NOT NULL,
     deposit_note_identifier  BYTEA             NOT NULL UNIQUE,
     deposit_amount           BYTEA             NOT NULL,
@@ -110,6 +110,7 @@ CREATE TABLE input_notes (
     recipient_address TEXT              NOT NULL,
     sender_address    TEXT              NOT NULL,
     memo              BYTEA             NOT NULL DEFAULT '\x'::bytea,
+    consume           BOOLEAN           NOT NULL DEFAULT FALSE,
     status            input_note_status NOT NULL DEFAULT 'APPROVED',
     created_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW()

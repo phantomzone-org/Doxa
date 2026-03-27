@@ -17,8 +17,8 @@ use tessera_client::{
 	prove_real_priv_tx, sample_dummy_notes,
 	schnorr::{schnorr_sign, PrivateKey, Scalar},
 	AccountAddress, AssetId, ConsumeAuth, DepositNote, DepositTxCircuit, FreshAccInputs, Nonce,
-	NoteCommitment, NoteNullifier, PrivTxInputs, PrivateIdentifier, SpendAuth, SpendTxInputs,
-	StandardAccount, SubpoolId, COM_TREE_DEPTH, NOTE_BATCH,
+	NoteCommitment, NoteIdentifier, NoteNullifier, PrivTxInputs, PrivateIdentifier, SpendAuth,
+	SpendTxInputs, StandardAccount, SubpoolId, COM_TREE_DEPTH, NOTE_BATCH,
 };
 use tessera_trees::MerkleTree;
 use tessera_utils::{hasher::HashOutput, CircuitDataNative, D, F};
@@ -310,10 +310,10 @@ impl TesseraClientState {
 			.map_err(|e| anyhow::anyhow!("ACT merkle_proof: {e:?}"))?;
 
 		// Build deposit note targeting this account
-		let identifier = [
+		let identifier = NoteIdentifier([
 			F::from_canonical_u64(rng.random::<u64>() >> 1),
 			F::from_canonical_u64(rng.random::<u64>() >> 1),
-		];
+		]);
 		let deposit_note = DepositNote {
 			identifier,
 			recipient: AccountAddress::from_acc(&accin),

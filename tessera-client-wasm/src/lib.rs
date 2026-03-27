@@ -14,8 +14,8 @@ use tessera_client::{
 	derive_priv_tx_hash, double_hash_native,
 	schnorr::{schnorr_sign, CompressedPublicKey, PrivateKey, Scalar},
 	AccountAddress, AccountNullifier, AccountStateTree, AssetId, DepositNote, HashOutput, Nonce,
-	NoteCommitment, NoteIdentifier, NoteNullifier, PositionedStandardNode, PrivateIdentifier,
-	PublicIdentifier, SpendAuth, StandardAccount, StandardNote, SubpoolId,
+	NoteCommitment, NoteIdentifier, NoteNullifier, PrivateIdentifier, PublicIdentifier, SpendAuth,
+	StandardAccount, StandardNote, SubpoolId,
 };
 use wasm_bindgen::prelude::*;
 
@@ -734,7 +734,7 @@ impl WasmSpendTx {
 		let inotes_null: [NoteNullifier; NOTE_BATCH] = std::array::from_fn(|i| {
 			if i < self.inotes.len() {
 				let (note, pos) = &self.inotes[i];
-				PositionedStandardNode::from_note(*note, F::from_canonical_u64(*pos)).nullifier(&nk)
+				StandardNote::nullifier(&note.commitment(), *pos as usize, &nk)
 			} else {
 				self.dummy_inotes[i - self.inotes.len()].to_nullifier()
 			}
@@ -1089,10 +1089,10 @@ impl WasmDepositNote {
 	) -> Result<WasmDepositNote, JsError> {
 		let mut rng = rand::rng();
 		let dist = Uniform::new(0, F::ORDER).unwrap();
-		let identifier = [
+		let identifier = NoteIdentifier([
 			F::from_canonical_u64(rng.sample(dist)),
 			F::from_canonical_u64(rng.sample(dist)),
-		];
+		]);
 		let amount = bigint_to_u256(amount)?;
 		let asset = parse_asset_id(asset_id.0)?;
 		Ok(WasmDepositNote {
@@ -1121,8 +1121,8 @@ impl WasmDepositNote {
 	#[wasm_bindgen(js_name = identifierBytes)]
 	pub fn identifier_bytes(&self) -> Vec<u8> {
 		let mut bytes = vec![0u8; 16];
-		bytes[0..8].copy_from_slice(&self.note.identifier[0].to_canonical_u64().to_le_bytes());
-		bytes[8..16].copy_from_slice(&self.note.identifier[1].to_canonical_u64().to_le_bytes());
+		bytes[0..8].copy_from_slice(&self.note.identifier.0[0].to_canonical_u64().to_le_bytes());
+		bytes[8..16].copy_from_slice(&self.note.identifier.0[1].to_canonical_u64().to_le_bytes());
 		bytes
 	}
 

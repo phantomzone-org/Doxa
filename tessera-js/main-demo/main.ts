@@ -659,7 +659,7 @@ p2pBtn.addEventListener("click", async () => {
     p2pBar.style.width = "90%";
 
     await subpoolClient.submitDeposit({
-      recipient_acc_address: privateAccAddressFull!,
+      recipient_address: privateAccAddressFull!,
       eth_address: ethAddressFull!,
       deposit_note_identifier: depositNote.identifierHex(),
       deposit_amount: u256LeHex(amountUnits),

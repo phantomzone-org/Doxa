@@ -252,6 +252,14 @@ pub(crate) async fn handle_forward_note(
 	State((state, _)): State<AppState>,
 	Json(req): Json<ForwardNoteRequest>,
 ) -> Result<Json<ForwardNoteResponse>, (StatusCode, String)> {
+	info!(
+		target_subpool = req.target_subpool_id,
+		note_id = %req.note.identifier,
+		recipient = %req.note.recipient_address,
+		sender = %req.note.sender_address,
+		"received forward_note request"
+	);
+
 	let mut st = state.lock().await;
 	let queue = st.note_pool.entry(req.target_subpool_id).or_default();
 	queue.push(req.note);
@@ -259,7 +267,8 @@ pub(crate) async fn handle_forward_note(
 
 	info!(
 		target_subpool = req.target_subpool_id,
-		queue_size, "forwarded note queued"
+		queue_size,
+		"forwarded note queued"
 	);
 
 	Ok(Json(ForwardNoteResponse {
@@ -277,7 +286,13 @@ pub(crate) async fn handle_pending_notes(
 	let notes = st.note_pool.remove(&subpool_id).unwrap_or_default();
 
 	if !notes.is_empty() {
-		info!(subpool_id, count = notes.len(), "drained pending notes");
+		let note_ids: Vec<&str> = notes.iter().map(|n| n.identifier.as_str()).collect();
+		info!(
+			subpool_id,
+			count = notes.len(),
+			note_ids = ?note_ids,
+			"drained pending notes"
+		);
 	}
 
 	Json(notes)

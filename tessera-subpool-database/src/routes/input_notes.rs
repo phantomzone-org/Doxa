@@ -27,7 +27,7 @@ pub async fn get_input_notes_handler(
 	let rows: Vec<(String, Vec<u8>, Vec<u8>, String, String, Vec<u8>)> = sqlx::query_as(
 		r#"SELECT identifier, asset_id, amount, recipient_address, sender_address, memo
            FROM input_notes
-           WHERE recipient_address = $1 AND status = 'APPROVED'"#,
+           WHERE recipient_address = $1 AND status = 'APPROVED' AND consume = false"#,
 	)
 	.bind(&recipient_address)
 	.fetch_all(&state.pool)

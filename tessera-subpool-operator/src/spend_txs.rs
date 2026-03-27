@@ -11,8 +11,7 @@ use tessera_client::{
 use tessera_subpool_database::{
 	convert::{account_from_row, hash_to_hex, hex_to_hash_checked},
 	db::{
-		insert_input_note, insert_input_note_with_commitment, update_account,
-		update_spend_tx_request_to_approved,
+		insert_approved_input_note, update_account, update_spend_tx_request_to_approved
 	},
 	types::{account::AccountRow, spend_tx::SpendTxRow},
 };
@@ -130,16 +129,14 @@ async fn process_one_spend_tx(
 
 	// Real nullifiers: [0..num_inotes]
 	for (i, inote) in inotes.iter().enumerate() {
-		let note = inote.to_standard_note()?;
-
-		let commitment = note.commitment();
+		let commitment = inote.commitment()?;
 
 		let position = query_note_position(http, sequencer_url, &commitment)
 			.await
 			.with_context(|| {
 				format!(
 					"failed to get NCT position for input note '{:?}'",
-					note.identifier
+					inote.identifier
 				)
 			})?;
 
@@ -231,7 +228,16 @@ async fn process_one_spend_tx(
 	if !resp.status().is_success() {
 		let status = resp.status();
 		let body = resp.text().await.unwrap_or_default();
-		anyhow::bail!("sequencer rejected spend tx (HTTP {status}): {body}");
+		let already_in_batch =
+			status == reqwest::StatusCode::CONFLICT && body.contains("AN leaf already in current batch");
+		if !already_in_batch {
+			anyhow::bail!("sequencer rejected spend tx (HTTP {status}): {body}");
+		}
+		info!(
+			id = row.id,
+			addr = %row.priv_acc_address,
+			"spend tx was already submitted to the current sequencer batch; resuming DB finalization"
+		);
 	}
 
 	info!(id = row.id, addr = %row.priv_acc_address, "spend tx submitted to sequencer");
@@ -260,7 +266,7 @@ async fn process_one_spend_tx(
 	.await?;
 
 	// ── 11. Create input notes for local recipients ────────────────────────────
-	for (onote_idx, onote) in onotes.iter().enumerate() {
+	for (_, onote) in onotes.iter().enumerate() {
 		// Check if the recipient account exists in this subpool
 		let local: bool = sqlx::query_scalar(
 			"SELECT EXISTS(SELECT 1 FROM accounts WHERE private_acc_address = $1)",
@@ -270,18 +276,14 @@ async fn process_one_spend_tx(
 		.await
 		.unwrap_or(false);
 
-		// Serialize the note commitment (32 bytes: 4 × u64 BE) for DB storage.
-		let nc_bytes = commitment_to_bytes(&onotes_comm[onote_idx]);
-
 		if local {
-			insert_input_note_with_commitment(
+			insert_approved_input_note(
 				pool,
 				&onote.identifier,
 				&onote.asset_id,
 				&onote.amount,
 				&onote.recipient_address,
 				&onote.sender_address,
-				&nc_bytes,
 			)
 			.await?;
 
@@ -313,6 +315,8 @@ async fn process_one_spend_tx(
 						id = row.id,
 						note_id = %onote.identifier,
 						target_subpool,
+						recipient = %onote.recipient_address,
+						sender = %onote.sender_address,
 						"forwarded output note to sequencer"
 					);
 				},
@@ -408,12 +412,20 @@ pub async fn poll_incoming_notes(
 	);
 
 	for note in &notes {
+		info!(
+			subpool_id,
+			note_id = %note.identifier,
+			recipient = %note.recipient_address,
+			sender = %note.sender_address,
+			"processing forwarded note from sequencer"
+		);
+
 		let asset_id_bytes =
 			hex::decode(&note.asset_id).context("invalid asset_id hex in forwarded note")?;
 		let amount_bytes =
 			hex::decode(&note.amount).context("invalid amount hex in forwarded note")?;
 
-		insert_input_note(
+		insert_approved_input_note(
 			pool,
 			&note.identifier,
 			&asset_id_bytes,
@@ -422,6 +434,13 @@ pub async fn poll_incoming_notes(
 			&note.sender_address,
 		)
 		.await?;
+
+		info!(
+			subpool_id,
+			note_id = %note.identifier,
+			recipient = %note.recipient_address,
+			"inserted forwarded note as local input note"
+		);
 	}
 
 	Ok(())

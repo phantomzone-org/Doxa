@@ -37,7 +37,7 @@ export interface FaucetResponse {
 
 /** Request body for POST /deposit */
 export interface DepositRequest {
-  recipient_acc_address: string;
+  recipient_address: string;
   eth_address: string;
   /** 32 hex chars — [F;2] identifier, 2 × u64 LE */
   deposit_note_identifier: string;

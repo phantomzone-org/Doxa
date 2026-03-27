@@ -60,78 +60,32 @@ pub async fn insert_account_and_user(
 	Ok(())
 }
 
-/// Insert a row into the `input_notes` table with status APPROVED (default).
-/// If `note_commitment` is provided, it is stored for later NCT position lookup.
-pub async fn insert_input_note(
+pub async fn insert_approved_input_note(
 	pool: &PgPool,
 	identifier: &str,
 	asset_id: &[u8],
 	amount: &[u8],
 	recipient_address: &str,
 	sender_address: &str,
-) -> Result<()> {
-	insert_approved_input_note(
-		pool,
-		identifier,
-		asset_id,
-		amount,
-		recipient_address,
-		sender_address,
-		None,
-	)
-	.await
-}
-
-/// Insert a row into the `input_notes` table with status APPROVED and a note commitment.
-pub async fn insert_input_note_with_commitment(
-	pool: &PgPool,
-	identifier: &str,
-	asset_id: &[u8],
-	amount: &[u8],
-	recipient_address: &str,
-	sender_address: &str,
-	note_commitment: &[u8],
-) -> Result<()> {
-	insert_approved_input_note(
-		pool,
-		identifier,
-		asset_id,
-		amount,
-		recipient_address,
-		sender_address,
-		Some(note_commitment),
-	)
-	.await
-}
-
-async fn insert_approved_input_note(
-	pool: &PgPool,
-	identifier: &str,
-	asset_id: &[u8],
-	amount: &[u8],
-	recipient_address: &str,
-	sender_address: &str,
-	note_commitment: Option<&[u8]>,
 ) -> Result<()> {
 	sqlx::query(
 		r#"INSERT INTO input_notes
-               (identifier, asset_id, amount, recipient_address, sender_address, note_commitment)
-           VALUES ($1, $2, $3, $4, $5, 'APPROVED', $6)"#,
+               (identifier, asset_id, amount, recipient_address, sender_address, status)
+           VALUES ($1, $2, $3, $4, $5, 'APPROVED')
+           ON CONFLICT (identifier) DO NOTHING"#,
 	)
 	.bind(identifier)
 	.bind(asset_id)
 	.bind(amount)
 	.bind(recipient_address)
 	.bind(sender_address)
-	.bind(note_commitment)
 	.execute(pool)
 	.await
 	.context("failed to insert input_note")?;
 	Ok(())
 }
 
-/// Insert a row into the `input_notes` table with status PENDING and a
-/// note commitment hash, so the operator can confirm it on-chain before use.
+/// Insert a row into the `input_notes` table with status PENDING.
 pub async fn insert_pending_input_note(
 	pool: &PgPool,
 	identifier: &str,
@@ -139,20 +93,18 @@ pub async fn insert_pending_input_note(
 	amount: &[u8],
 	recipient_address: &str,
 	sender_address: &str,
-	note_commitment: &[u8],
 ) -> Result<()> {
 	sqlx::query(
 		r#"INSERT INTO input_notes
-               (identifier, asset_id, amount, recipient_address, sender_address,
-                status, note_commitment)
-           VALUES ($1, $2, $3, $4, $5, 'PENDING', $6)"#,
+               (identifier, asset_id, amount, recipient_address, sender_address, status)
+           VALUES ($1, $2, $3, $4, $5, 'PENDING')
+           ON CONFLICT (identifier) DO NOTHING"#,
 	)
 	.bind(identifier)
 	.bind(asset_id)
 	.bind(amount)
 	.bind(recipient_address)
 	.bind(sender_address)
-	.bind(note_commitment)
 	.execute(pool)
 	.await
 	.context("failed to insert pending input_note")?;
@@ -201,5 +153,23 @@ pub async fn update_spend_tx_request_to_approved(
 	.execute(pool)
 	.await
 	.context("failed to update spend_tx_requests")?;
+	Ok(())
+}
+
+pub async fn update_deposit_tx_request_to_approved(
+	pool: &PgPool,
+	sig_bytes: &[u8],
+	id: i64,
+) -> Result<()> {
+	sqlx::query(
+		"UPDATE deposit_tx_requests \
+         SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
+         WHERE id = $2",
+	)
+	.bind(sig_bytes)
+	.bind(id)
+	.execute(pool)
+	.await
+	.context("failed to update deposit_tx_requests")?;
 	Ok(())
 }

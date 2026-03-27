@@ -24,7 +24,7 @@ pub struct DepositNoteCommitment(pub HashOutput);
 /// the on-chain Ethereum event to the ZK proof.
 pub struct DepositNote {
 	/// 2-element random identifier that makes each note unique.
-	pub identifier: [F; 2],
+	pub identifier: NoteIdentifier,
 	/// The Tessera account address that will receive the deposit.
 	pub recipient: AccountAddress,
 	/// Amount to deposit (U256).
@@ -46,7 +46,7 @@ impl DepositNote {
 		// identifier[2] || recipient.subpool_id[1] || recipient.public_id[4]
 		// || amount[8 u32 limbs, LE] || asset_id[1]
 		let mut input = [F::ZERO; 16];
-		input[0..2].copy_from_slice(&self.identifier);
+		input[0..2].copy_from_slice(&self.identifier.0);
 		input[2] = self.recipient.subpool_id.0;
 		input[3..7].copy_from_slice(&self.recipient.public_id.0.0);
 		for (i, word) in self.amount.0.iter().enumerate() {

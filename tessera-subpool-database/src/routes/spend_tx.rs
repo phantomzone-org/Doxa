@@ -1,15 +1,13 @@
 use axum::{extract::State, http::StatusCode, Json};
-use plonky2_field::types::PrimeField64;
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use tessera_client::AssetId;
 
 use crate::{
-	convert::{account_from_row, bytes_to_f, bytes_to_u256},
+	convert::{bytes_to_u256},
 	error::AppError,
 	state::AppState,
-	types::{account::AccountRow, spend_tx::InputNoteStatus},
+	types::{spend_tx::InputNoteStatus},
 };
 
 #[derive(Deserialize)]
@@ -61,15 +59,15 @@ pub async fn submit_spend_tx_handler(
 			)));
 		}
 
-		let row: Option<(String, Vec<u8>, InputNoteStatus)> = sqlx::query_as(
-			"SELECT recipient_address, amount, status FROM input_notes WHERE identifier = $1",
+		let row: Option<(String, Vec<u8>, bool, InputNoteStatus)> = sqlx::query_as(
+			"SELECT recipient_address, amount, consume, status FROM input_notes WHERE identifier = $1",
 		)
 		.bind(&note.identifier)
 		.fetch_optional(&state.pool)
 		.await
 		.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
 
-		let (recipient_address, amount_bytes, status) = row.ok_or_else(|| {
+		let (recipient_address, amount_bytes, consume, status) = row.ok_or_else(|| {
 			AppError::InvalidInput(format!("input note '{}' not found", note.identifier))
 		})?;
 
@@ -80,7 +78,7 @@ pub async fn submit_spend_tx_handler(
 			)));
 		}
 
-		if !matches!(status, InputNoteStatus::Approved) {
+		if !matches!(status, InputNoteStatus::Approved) || consume {
 			return Err(AppError::InvalidInput(format!(
 				"input note '{}' is not approved",
 				note.identifier
@@ -113,15 +111,6 @@ pub async fn submit_spend_tx_handler(
 			));
 		}
 	}
-
-	let asset_id_bytes = hex::decode(asset_id_hex)
-		.map_err(|_| AppError::InvalidInput("invalid asset_id hex".into()))?;
-	let asset_id_arr: [u8; 8] = asset_id_bytes
-		.as_slice()
-		.try_into()
-		.map_err(|_| AppError::InvalidInput("asset_id must be 8 bytes".into()))?;
-	let asset_id = AssetId::from_u64(bytes_to_f(&asset_id_arr).to_canonical_u64())
-		.map_err(|e| AppError::InvalidInput(e.to_string()))?;
 
 	// ── 2. Validate and decode each output note ────────────────────────────────
 	struct DecodedOutput {
@@ -197,41 +186,21 @@ pub async fn submit_spend_tx_handler(
 		});
 	}
 
-	// ── 3. Fetch and parse account ─────────────────────────────────────────────
-	let row: Option<AccountRow> =
-		sqlx::query_as("SELECT * FROM accounts WHERE private_acc_address = $1")
-			.bind(&req.priv_acc_address)
-			.fetch_optional(&state.pool)
-			.await
-			.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
-
-	let row = row.ok_or_else(|| {
-		AppError::NotFound(format!("account '{}' not found", req.priv_acc_address))
-	})?;
-
-	let account = account_from_row(&row).map_err(AppError::Internal)?;
-
-	let acc_balance = account
-		.ast
-		.amount_for(asset_id)
-		.map(|(_, amt)| amt)
-		.unwrap_or(U256::zero());
-
-	// ── 4. Balance check: acc_balance + sum(inotes) == sum(onotes) ─────────────
+	// ── 3. Balance check: sum(inotes) == sum(onotes) ──────────────────────────
 	let total_in = inote_amounts
 		.iter()
-		.fold(acc_balance, |a, &v| u256_add(a, v));
+		.fold(U256::zero(), |a, &v| u256_add(a, v));
 	let total_out = decoded_outputs
 		.iter()
 		.fold(U256::zero(), |acc, d| u256_add(acc, d.amount));
 
 	if total_in != total_out {
 		return Err(AppError::InvalidInput(
-			"balance mismatch: acc_balance + sum(inotes) != sum(onotes)".into(),
+			"balance mismatch: sum(inotes) != sum(onotes)".into(),
 		));
 	}
 
-	// ── 5. Transactional insert ────────────────────────────────────────────────
+	// ── 4. Transactional insert ────────────────────────────────────────────────
 	let spend_tx_sig_bytes = hex::decode(&req.spend_tx_signature)
 		.map_err(|_| AppError::InvalidInput("invalid spend_tx_signature hex".into()))?;
 

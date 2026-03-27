@@ -10,6 +10,7 @@ pub mod deposit;
 pub mod faucet;
 pub mod freshacc;
 pub mod input_notes;
+pub mod notes_balance;
 pub mod register;
 pub mod spend_tx;
 
@@ -26,6 +27,10 @@ pub fn router(state: AppState) -> Router {
 		.route(
 			"/input_notes/{recipient_address}",
 			get(input_notes::get_input_notes_handler),
+		)
+		.route(
+			"/notes_balance/{private_acc_address}",
+			get(notes_balance::get_notes_balance_handler),
 		)
 		.route(
 			"/freshacc/{private_acc_address}/status",

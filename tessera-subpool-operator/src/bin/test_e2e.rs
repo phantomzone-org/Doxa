@@ -35,10 +35,9 @@ use anyhow::{Context, Result};
 use plonky2_field::types::{Field, Field64, PrimeField64};
 use rand::{distr::Uniform, RngExt};
 use tessera_client::{
-	schnorr::{CompressedPublicKey, PrivateKey, Scalar},
-	AccountAddress, AssetId, DepositNote, PrivateIdentifier, StandardAccount, SubpoolId,
+	AccountAddress, AssetId, DepositNote, NoteIdentifier, PrivateIdentifier, StandardAccount, SubpoolId, NOTE_BATCH, sample_dummy_notes, schnorr::{CompressedPublicKey, PrivateKey, Scalar}
 };
-use tessera_subpool_database::convert::{f_to_bytes, private_id_to_bytes, u256_to_bytes};
+use tessera_subpool_database::convert::{f_to_bytes, hash_to_hex, private_id_to_bytes, u256_to_bytes};
 use tessera_utils::F;
 
 /// Anvil accounts 1–3 (depositors for each subpool client).
@@ -260,10 +259,10 @@ async fn main() -> Result<()> {
 			.await?;
 
 		// Build deposit note
-		let note_identifier: [F; 2] = [
+		let note_identifier = NoteIdentifier([
 			F::from_canonical_u64(rng.sample(Uniform::new(0, F::ORDER).unwrap())),
 			F::from_canonical_u64(rng.sample(Uniform::new(0, F::ORDER).unwrap())),
-		];
+		]);
 
 		let sid = SubpoolId(F::from_canonical_u64(c.subpool_id));
 		let acc = StandardAccount::new_with(c.private_identifier, sid);
@@ -317,8 +316,8 @@ async fn main() -> Result<()> {
 		// Encode and POST deposit
 		let note_id_bytes = {
 			let mut out = [0u8; 16];
-			out[..8].copy_from_slice(&f_to_bytes(note_identifier[0]));
-			out[8..].copy_from_slice(&f_to_bytes(note_identifier[1]));
+			out[..8].copy_from_slice(&f_to_bytes(note_identifier.0[0]));
+			out[8..].copy_from_slice(&f_to_bytes(note_identifier.0[1]));
 			out
 		};
 		let note_id_hex = hex::encode(note_id_bytes);
@@ -326,7 +325,7 @@ async fn main() -> Result<()> {
 		let asset_id_bytes = f_to_bytes(F::from_canonical_u64(asset_id_u64));
 
 		let body = serde_json::json!({
-			"recipient_acc_address": c.acc_address,
+			"recipient_address": c.acc_address,
 			"eth_address": format!("{}", c.depositor_addr),
 			"deposit_note_identifier": &note_id_hex,
 			"deposit_amount": hex::encode(amount_bytes),
@@ -435,6 +434,17 @@ async fn main() -> Result<()> {
 
 		let send_note_id = gen_note_id_hex(&mut rng);
 		let change_note_id = gen_note_id_hex(&mut rng);
+		let (dummy_in_notes, dummy_out_notes) = sample_dummy_notes(&mut rand::rng());
+		let dinotes: Vec<String> = dummy_in_notes
+			.into_iter()
+			.take(NOTE_BATCH - 1)
+			.map(|note| hash_to_hex(&note))
+			.collect();
+		let donotes: Vec<String> = dummy_out_notes
+			.into_iter()
+			.take(NOTE_BATCH - 2)
+			.map(|note| hash_to_hex(&note))
+			.collect();
 
 		let spend_body = serde_json::json!({
 			"priv_acc_address": sender.acc_address,
@@ -444,6 +454,7 @@ async fn main() -> Result<()> {
 				"amount": deposit_amount_hexes[i],
 				"recipient_address": sender.acc_address,
 				"sender_address": sender.acc_address,
+				"memo": "",
 			}],
 			"output_notes": [
 				{
@@ -452,6 +463,7 @@ async fn main() -> Result<()> {
 					"amount": send_amount_hex,
 					"recipient_address": recipient_addr,
 					"sender_address": sender.acc_address,
+					"memo": "",
 				},
 				{
 					"identifier": change_note_id,
@@ -459,10 +471,12 @@ async fn main() -> Result<()> {
 					"amount": change_amount_hex,
 					"recipient_address": sender.acc_address,
 					"sender_address": sender.acc_address,
+					"memo": "",
 				}
 			],
-			"dinotes": [],
-			"donotes": [],
+			"dinotes": dinotes,
+			"donotes": donotes,
+			"spend_tx_signature": "",
 		});
 
 		println!(
@@ -582,10 +596,6 @@ async fn main() -> Result<()> {
 		expected_ast[2] + expected_pending[2], // 2800
 	];
 
-	// Wait for cross-subpool note forwarding to settle
-	println!("Waiting for cross-subpool notes to settle...");
-	tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-
 	// Parse AST balance for a given asset key from the AST JSON object
 	let parse_ast_balance = |ast: &serde_json::Value, key: &str| -> u64 {
 		ast.get(key)
@@ -600,68 +610,113 @@ async fn main() -> Result<()> {
 			.unwrap_or(0)
 	};
 
-	for c in &clients {
-		let resp = http
-			.get(format!("{}/account/{}", c.api_url, c.acc_address))
-			.send()
-			.await?;
-
-		if resp.status().is_success() {
-			let body: serde_json::Value = resp.json().await?;
-
-			let ast_bal = body
-				.get("ast")
-				.map(|a| parse_ast_balance(a, &asset_key))
-				.unwrap_or(0);
-
-			// Query notes_balance endpoint for the sum of unconsumed input notes.
-			let notes_bal = {
-				let nb_resp = http
-					.get(format!("{}/notes_balance/{}", c.api_url, c.acc_address))
-					.send()
-					.await?;
-				if nb_resp.status().is_success() {
-					let nb_body: serde_json::Value = nb_resp.json().await?;
-					nb_body
-						.get("balances")
-						.and_then(|b| b.get(&asset_key))
-						.and_then(|e| e.get("amount"))
-						.and_then(|v| v.as_str())
-						.and_then(|hex_str| {
-							let trimmed = hex_str.trim_start_matches('0');
-							if trimmed.is_empty() {
-								Some(0)
-							} else {
-								u64::from_str_radix(trimmed, 16).ok()
-							}
-						})
-						.unwrap_or(0)
+	let parse_notes_balance = |body: &serde_json::Value| -> u64 {
+		body.get("balances")
+			.and_then(|b| b.get(&asset_key))
+			.and_then(|e| e.get("amount"))
+			.and_then(|v| v.as_str())
+			.and_then(|hex_str| {
+				let trimmed = hex_str.trim_start_matches('0');
+				if trimmed.is_empty() {
+					Some(0)
 				} else {
-					0
+					u64::from_str_radix(trimmed, 16).ok()
 				}
+			})
+			.unwrap_or(0)
+	};
+
+	println!("Waiting for cross-subpool notes to settle...");
+	let mut printed = vec![false; clients.len()];
+	for c in &clients {
+		println!("[client {}] waiting for final confirmation", c.index + 1);
+	}
+	for attempt in 0..=30 {
+		let mut remaining = 0usize;
+		for c in &clients {
+			if printed[c.index] {
+				continue;
+			}
+
+			let resp = http
+				.get(format!("{}/account/{}", c.api_url, c.acc_address))
+				.send()
+				.await?;
+			let ast_bal = if resp.status().is_success() {
+				let body: serde_json::Value = resp.json().await?;
+				body.get("ast")
+					.map(|a| parse_ast_balance(a, &asset_key))
+					.unwrap_or(0)
+			} else {
+				0
+			};
+
+			let nb_resp = http
+				.get(format!("{}/notes_balance/{}", c.api_url, c.acc_address))
+				.send()
+				.await?;
+			let notes_bal = if nb_resp.status().is_success() {
+				let nb_body: serde_json::Value = nb_resp.json().await?;
+				parse_notes_balance(&nb_body)
+			} else {
+				0
 			};
 
 			let total = notes_bal;
-
-			let ast_check = if ast_bal == expected_ast[c.index] {
-				"OK"
+			if ast_bal == expected_ast[c.index] && total == expected_total[c.index] {
+				printed[c.index] = true;
+				println!(
+					"[client {}] subpool {} | asset {} | confirmed: {} (exp {}) [OK] | total: {} (exp {}) [OK]",
+					c.index + 1,
+					c.subpool_id,
+					asset_id_u64,
+					ast_bal,
+					expected_ast[c.index],
+					total,
+					expected_total[c.index],
+				);
 			} else {
-				"MISMATCH"
-			};
-			let total_check = if total == expected_total[c.index] {
-				"OK"
-			} else {
-				"MISMATCH"
-			};
-
-			println!(
-                "[client {}] subpool {} | asset {} | confirmed: {} (exp {}) [{}] | total: {} (exp {}) [{}]",
-                c.index + 1, c.subpool_id, asset_id_u64,
-                ast_bal, expected_ast[c.index], ast_check,
-                total, expected_total[c.index], total_check,
-            );
-		} else {
-			println!("[client {}] failed to fetch account", c.index + 1);
+				println!(
+					"[client {}] still waiting: confirmed={} / {} | total={} / {}",
+					c.index + 1,
+					ast_bal,
+					expected_ast[c.index],
+					total,
+					expected_total[c.index],
+				);
+				remaining += 1;
+				if attempt == 30 {
+					let ast_check = if ast_bal == expected_ast[c.index] {
+						"OK"
+					} else {
+						"MISMATCH"
+					};
+					let total_check = if total == expected_total[c.index] {
+						"OK"
+					} else {
+						"MISMATCH"
+					};
+					println!(
+						"[client {}] TIMEOUT -> subpool {} | asset {} | confirmed: {} (exp {}) [{}] | total: {} (exp {}) [{}]",
+						c.index + 1,
+						c.subpool_id,
+						asset_id_u64,
+						ast_bal,
+						expected_ast[c.index],
+						ast_check,
+						total,
+						expected_total[c.index],
+						total_check,
+					);
+					printed[c.index] = true;
+				}
+			}
+		}
+		if remaining == 0 {
+			break;
+		}
+		if attempt < 30 {
+			tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 		}
 	}
 
