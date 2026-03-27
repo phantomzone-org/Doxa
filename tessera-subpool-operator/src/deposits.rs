@@ -11,16 +11,14 @@ use primitive_types::U256;
 use serde::Serialize;
 use sqlx::PgPool;
 use tessera_client::{
-	derive_deposit_tx_hash,
-	schnorr::{schnorr_sign, PrivateKey, Scalar},
-	AccountAddress, AssetId, DepositNote, StandardAccount,
+	AccountAddress, AssetId, DepositNote, DepositNoteCommitment, StandardAccount, derive_deposit_tx_hash, schnorr::{PrivateKey, Scalar, schnorr_sign}
 };
 use tessera_subpool_database::{
 	convert::{
-		account_from_row, build_ast_json, bytes_to_f, bytes_to_u256, f_to_bytes, hash_to_hex,
-		parse_eth_address, u256_to_bytes,
+		account_from_row, bytes_to_f, bytes_to_u256, f_to_bytes,
+		hash_to_hex, parse_eth_address, u256_to_bytes,
 	},
-	db::{insert_pending_input_note, update_account_after_deposit},
+	db::{insert_pending_input_note, update_account, update_spend_tx_request_to_approved},
 	types::{account::AccountRow, deposit::DepositTxRow},
 };
 use tessera_utils::F;
@@ -42,11 +40,12 @@ struct DepositValidationRequest {
 // ── On-chain broadcast ──────────────────────────────────────────────────────
 
 /// Broadcast the depositor's pre-signed ETH tx and wait for confirmation.
+/// Returns the tx_hash
 async fn broadcast_deposit_tx<P: Provider + Clone>(
 	rpc_provider: &P,
 	raw_tx: &[u8],
 	id: i64,
-) -> Result<()> {
+) -> Result<B256> {
 	let pending = rpc_provider
 		.send_raw_transaction(raw_tx)
 		.await
@@ -65,7 +64,7 @@ async fn broadcast_deposit_tx<P: Provider + Clone>(
 		"deposit tx reverted on-chain (tx={tx_hash})"
 	);
 	info!(id, %tx_hash, "deposit tx confirmed on-chain");
-	Ok(())
+	Ok(tx_hash)
 }
 
 // ── Deposit note construction ───────────────────────────────────────────────
@@ -118,7 +117,7 @@ fn parse_deposit_fields(row: &DepositTxRow) -> Result<ParsedDeposit> {
 }
 
 /// Build the deposit note and compute its Poseidon commitment hash.
-fn build_deposit_note(accin: &StandardAccount, deposit: &ParsedDeposit) -> [F; 4] {
+fn get_deposit_commitment(accin: &StandardAccount, deposit: &ParsedDeposit) -> DepositNoteCommitment {
 	let recipient = AccountAddress::from_acc(accin);
 	let note = DepositNote {
 		identifier: deposit.note_identifier,
@@ -126,7 +125,7 @@ fn build_deposit_note(accin: &StandardAccount, deposit: &ParsedDeposit) -> [F; 4
 		amount: deposit.deposit_amount,
 		asset_id: deposit.asset_id,
 	};
-	note.commitment().0 .0
+	note.commitment()
 }
 
 /// Build accout from accin with the deposit applied (nonce+1, AST updated).
@@ -219,10 +218,23 @@ async fn process_one_deposit<P: Provider + Clone>(
 ) -> Result<()> {
 	// ── 1. Broadcast deposit tx on-chain ─────────────────────────────────────
 	info!(id = row.id, addr = %row.recipient_acc_address, "broadcasting deposit tx on-chain");
-	// TODO JP: get the tx_hash of the broadcasted tx and put in deposit_tx_request row
-	broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
 
-	// ── 2. Reconstruct accin from DB ─────────────────────────────────────────
+	// ── 2. Add tx_hash to deposit_tx_requests ────────────────────────────────
+	// TODO: add a helper function
+	let broadcast_tx_hash = broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
+	sqlx::query(
+		"UPDATE deposit_tx_requests \
+         SET deposit_tx_hash = $1, updated_at = NOW() \
+         WHERE id = $2",
+	)
+	.bind(broadcast_tx_hash.to_string())
+	.bind(row.id)
+	.execute(pool)
+	.await
+	.context("failed to persist broadcast deposit tx hash")?;
+
+	// ── 3. Reconstruct accin from DB ─────────────────────────────────────────
+	// TODO: add a helper function on row
 	let acc_row: AccountRow =
 		sqlx::query_as("SELECT * FROM accounts WHERE private_acc_address = $1")
 			.bind(&row.recipient_acc_address)
@@ -232,19 +244,14 @@ async fn process_one_deposit<P: Provider + Clone>(
 
 	let accin = account_from_row(&acc_row)?;
 
-	// ── 3. Parse deposit fields and build note commitment ────────────────────
+	// ── 4. Parse deposit fields and build note commitment ────────────────────
 	let deposit = parse_deposit_fields(row)?;
-	// TODO JP: use proper names (also use single purpose functions)
-	let nc_hash = build_deposit_note(&accin, &deposit);
+	let deposit_note_comm = get_deposit_commitment(&accin, &deposit);
 
 	// ── 4. Build accout with deposit applied ─────────────────────────────────
 	let accout = apply_deposit(&accin, &deposit);
 
 	// ── 5. Sign deposit tx_hash ──────────────────────────────────────────────
-	// TODO JP: don't redo wrappin gin DepositNOteCommitment. Have builde_deposit_note return
-	// DepositNoteCommitment
-	let deposit_note_comm =
-		tessera_client::DepositNoteCommitment(tessera_client::HashOutput(nc_hash));
 	let tx_hash = derive_deposit_tx_hash(
 		accin.nullifier(),
 		accout.commitment(),
@@ -258,36 +265,15 @@ async fn process_one_deposit<P: Provider + Clone>(
 	let sig_bytes = approval_sig.encode();
 
 	// ── 6. POST to sequencer ─────────────────────────────────────────────────
-	let nc_hex = hash_to_hex(&nc_hash);
+	let nc_hex = hash_to_hex(&deposit_note_comm.0.0);
 	post_deposit_to_sequencer(http, sequencer_url, &nc_hex).await?;
 	info!(id = row.id, addr = %row.recipient_acc_address, "deposit note submitted to sequencer");
 
 	// ── 7. Update deposit_tx_requests: APPROVED ──────────────────────────────
-	sqlx::query(
-		"UPDATE deposit_tx_requests \
-         SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
-         WHERE id = $2",
-	)
-	.bind(sig_bytes.as_ref())
-	.bind(row.id)
-	.execute(pool)
-	.await
-	.context("failed to update deposit_tx_requests")?;
+	update_spend_tx_request_to_approved(pool, sig_bytes.as_ref(), row.id).await?;
 
 	// ── 8. Update account in DB ──────────────────────────────────────────────
-
-	// TODO JP: accout is aready updated with the latest balance. Convert accout (an instance of
-	// StandardAccount) to AccountInsert using `account_to_insert` method in convert.rs and then
-	// update the account using private_acc_address
-	let new_asset_balance = accout
-		.ast
-		.amount_for(deposit.asset_id)
-		.map(|(_, b)| b)
-		.unwrap_or(U256::zero());
-	let ast_json = build_ast_json(&acc_row.ast, deposit.asset_id_u64, new_asset_balance);
-
-	update_account_after_deposit(pool, &row.recipient_acc_address, accout.nonce.0, ast_json)
-		.await?;
+	update_account(pool, &accout, acc_row.eth_address, row.recipient_acc_address.clone()).await?;
 
 	// ── 9. Create PENDING input note for the deposit recipient ────────────────
 	// The note stays PENDING until the deposit is confirmed on-chain (status = Validated).
@@ -296,7 +282,7 @@ async fn process_one_deposit<P: Provider + Clone>(
 	let amount_bytes = u256_to_bytes(deposit.deposit_amount);
 
 	// Encode note commitment as 32 bytes (4 × u64 BE) for on-chain lookup.
-	let nc_bytes: Vec<u8> = nc_hash
+	let nc_bytes: Vec<u8> = deposit_note_comm.0.0
 		.iter()
 		.flat_map(|f| f.to_canonical_u64().to_be_bytes())
 		.collect();
@@ -311,6 +297,12 @@ async fn process_one_deposit<P: Provider + Clone>(
 		&nc_bytes,
 	)
 	.await?;
+
+	let new_asset_balance = accout
+		.ast
+		.amount_for(deposit.asset_id)
+		.map(|(_, balance)| balance)
+		.unwrap_or(U256::zero());
 
 	info!(
 		id = row.id,

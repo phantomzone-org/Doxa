@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use sqlx::{postgres::PgPoolOptions, PgPool};
+use tessera_client::StandardAccount;
 
-use crate::convert::{f_to_bytes, AccountInsert};
+use crate::convert::{AccountInsert, account_to_insert};
 
 pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<sqlx::PgPool> {
 	Ok(PgPoolOptions::new()
@@ -178,23 +179,38 @@ pub async fn update_account_ast(
 	Ok(())
 }
 
-/// Update an account's nonce and AST after a deposit is processed.
-pub async fn update_account_after_deposit(
-	pool: &PgPool,
-	private_acc_address: &str,
-	new_nonce: tessera_utils::F,
-	ast_json: serde_json::Value,
-) -> Result<()> {
+pub async fn update_account(pool: &PgPool, account: &StandardAccount, eth_address: String, priv_acc_address: String) -> Result<()>{
+	let updated_account = account_to_insert(account, eth_address);
 	sqlx::query(
 		"UPDATE accounts \
-         SET nonce = $1, ast = $2, updated_at = NOW() \
-         WHERE private_acc_address = $3",
+         SET private_identifier = $1, subpool_id = $2, nonce = $3, spend_auth = $4, \
+             consume_auth = $5, ast = $6, updated_at = NOW() \
+         WHERE private_acc_address = $7",
 	)
-	.bind(f_to_bytes(new_nonce).as_ref())
-	.bind(&ast_json)
-	.bind(private_acc_address)
+	.bind(&updated_account.private_identifier)
+	.bind(&updated_account.subpool_id)
+	.bind(&updated_account.nonce)
+	.bind(&updated_account.spend_auth)
+	.bind(&updated_account.consume_auth)
+	.bind(&updated_account.ast)
+	.bind(&priv_acc_address)
 	.execute(pool)
-	.await
-	.context("failed to update account after deposit")?;
+		.await
+		.context("failed to update sender account after spend tx")?;
+
 	Ok(())
 }
+
+pub async fn update_spend_tx_request_to_approved(pool: &PgPool, sig_bytes: &[u8], id: i64) -> Result<()>{
+		sqlx::query(
+		"UPDATE spend_tx_requests \
+         SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
+         WHERE id = $2",
+	)
+	.bind(sig_bytes)
+	.bind(id)
+	.execute(pool)
+	.await
+	.context("failed to update spend_tx_requests")?;
+	Ok(())
+	}

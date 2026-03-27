@@ -11,6 +11,7 @@ use tessera_utils::{
 
 use crate::{AccountAddress, AssetId, account::NullifierKey, double_hash_native};
 
+#[derive(Debug, Clone, Copy)]
 /// Commitment to a [`DepositNote`], inserted into the Note Commitment Tree
 /// by the deposit transaction circuit.
 pub struct DepositNoteCommitment(pub HashOutput);

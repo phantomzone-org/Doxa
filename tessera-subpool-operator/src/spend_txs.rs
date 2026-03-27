@@ -4,16 +4,14 @@ use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tessera_client::{
-	derive_priv_tx_hash, double_hash_native,
-	schnorr::{schnorr_sign, PrivateKey, Scalar},
-	HashOutput, NoteCommitment, NoteNullifier, StandardNote, NOTE_BATCH,
+	HashOutput, NOTE_BATCH, NoteCommitment, NoteNullifier, StandardNote, derive_priv_tx_hash, double_hash_native, schnorr::{PrivateKey, Scalar, schnorr_sign}
 };
 use tessera_subpool_database::{
 	convert::{
-		account_from_row, account_to_insert, hash_to_hex,
+		account_from_row, hash_to_hex,
 		hex_to_hash_checked,
 	},
-	db::{insert_input_note, insert_input_note_with_commitment},
+	db::{insert_input_note, insert_input_note_with_commitment, update_account, update_spend_tx_request_to_approved},
 	types::{account::AccountRow, spend_tx::SpendTxRow},
 };
 use tracing::{error, info};
@@ -243,34 +241,10 @@ async fn process_one_spend_tx(
 	}
 
 	// ── 9. Update spend_tx_requests: APPROVED ──────────────────────────────────
-	sqlx::query(
-		"UPDATE spend_tx_requests \
-         SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
-         WHERE id = $2",
-	)
-	.bind(sig_bytes.as_ref())
-	.bind(row.id)
-	.execute(pool)
-	.await
-	.context("failed to update spend_tx_requests")?;
+	update_spend_tx_request_to_approved(pool, sig_bytes.as_ref(), row.id).await?;
 
-	let updated_account = account_to_insert(&accout, acc_row.eth_address);
-	sqlx::query(
-		"UPDATE accounts \
-         SET private_identifier = $1, subpool_id = $2, nonce = $3, spend_auth = $4, \
-             consume_auth = $5, ast = $6, updated_at = NOW() \
-         WHERE private_acc_address = $7",
-	)
-	.bind(&updated_account.private_identifier)
-	.bind(&updated_account.subpool_id)
-	.bind(&updated_account.nonce)
-	.bind(&updated_account.spend_auth)
-	.bind(&updated_account.consume_auth)
-	.bind(&updated_account.ast)
-	.bind(&row.priv_acc_address)
-	.execute(pool)
-		.await
-		.context("failed to update sender account after spend tx")?;
+	// ── 10. Update account state ───────────────────────────────────────────────
+	update_account(pool, &accout, acc_row.eth_address, row.priv_acc_address.clone()).await?;
 
 	// ── 11. Create input notes for local recipients ────────────────────────────
 	for (onote_idx, onote) in onotes.iter().enumerate() {
@@ -357,6 +331,8 @@ async fn process_one_spend_tx(
 
 	Ok(())
 }
+
+
 
 /// Extract the subpool ID from an account address.
 /// The first 8 bytes of the hex-encoded address are the LE-encoded subpool ID.
