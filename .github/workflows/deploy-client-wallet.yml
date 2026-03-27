@@ -2,7 +2,7 @@ name: Deploy client-wallet
 
 on:
   push:
-    branches: [fixes_tmp1]
+    branches: [jay/fixes_tmp1]
 
 jobs:
   deploy:
