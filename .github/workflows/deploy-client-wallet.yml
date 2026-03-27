@@ -35,19 +35,63 @@ jobs:
         working-directory: tessera-js
         run: npm install && npm run build:wasm
 
-      - name: Build client-wallet
+      - name: Install client-wallet deps
+        working-directory: demo/client-wallet
+        run: npm install
+
+      # ── Entity A ──────────────────────────────────────────────────────────────
+      - name: Build client-wallet A
         working-directory: demo/client-wallet
         env:
-          VITE_USDX_CONTRACT_ADDR: ${{ secrets.VITE_USDX_CONTRACT_ADDR }}
+          VITE_USDX_CONTRACT_ADDR: ${{ secrets.USDX_CONTRACT_ADDR }}
           VITE_SEPOLIA_RPC_URL: ${{ secrets.VITE_SEPOLIA_RPC_URL }}
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-        run: npm install && npm run build
+          VITE_TESSERA_CONTRACT_ADDR: ${{ secrets.TESSERA_CONTRACT_ADDR }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_A }}
+          VITE_SUBPOOL_ID_HEX: ${{ secrets.VITE_SUBPOOL_ID_HEX_A }}
+          VITE_ASSET_ID_HEX: ${{ secrets.VITE_ASSET_ID_HEX }}
+        run: npm run build
 
-      - name: Deploy client-wallet to Netlify
+      - name: Deploy client-wallet A to Netlify
         run: npx netlify-cli deploy --dir=demo/client-wallet/dist --prod
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_CLIENT_WALLET_A_SITE_ID }}
+
+      # ── Entity B ──────────────────────────────────────────────────────────────
+      - name: Build client-wallet B
+        working-directory: demo/client-wallet
+        env:
+          VITE_USDX_CONTRACT_ADDR: ${{ secrets.USDX_CONTRACT_ADDR }}
+          VITE_SEPOLIA_RPC_URL: ${{ secrets.VITE_SEPOLIA_RPC_URL }}
+          VITE_TESSERA_CONTRACT_ADDR: ${{ secrets.TESSERA_CONTRACT_ADDR }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_B }}
+          VITE_SUBPOOL_ID_HEX: ${{ secrets.VITE_SUBPOOL_ID_HEX_B }}
+          VITE_ASSET_ID_HEX: ${{ secrets.VITE_ASSET_ID_HEX }}
+        run: npm run build
+
+      - name: Deploy client-wallet B to Netlify
+        run: npx netlify-cli deploy --dir=demo/client-wallet/dist --prod
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_CLIENT_WALLET_B_SITE_ID }}
+
+      # ── Entity C ──────────────────────────────────────────────────────────────
+      - name: Build client-wallet C
+        working-directory: demo/client-wallet
+        env:
+          VITE_USDX_CONTRACT_ADDR: ${{ secrets.USDX_CONTRACT_ADDR }}
+          VITE_SEPOLIA_RPC_URL: ${{ secrets.VITE_SEPOLIA_RPC_URL }}
+          VITE_TESSERA_CONTRACT_ADDR: ${{ secrets.TESSERA_CONTRACT_ADDR }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_C }}
+          VITE_SUBPOOL_ID_HEX: ${{ secrets.VITE_SUBPOOL_ID_HEX_C }}
+          VITE_ASSET_ID_HEX: ${{ secrets.VITE_ASSET_ID_HEX }}
+        run: npm run build
+
+      - name: Deploy client-wallet C to Netlify
+        run: npx netlify-cli deploy --dir=demo/client-wallet/dist --prod
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_CLIENT_WALLET_C_SITE_ID }}
 
       - name: Deploy landing page to Netlify
         run: npx netlify-cli deploy --dir=demo/landing --prod

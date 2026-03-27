@@ -34,16 +34,33 @@ function log(msg: string) {
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
-const TESSERA_CONTRACT = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e";
+const TESSERA_CONTRACT = import.meta.env
+  .VITE_TESSERA_CONTRACT_ADDR as `0x${string}`;
 const USDX_CONTRACT_ADDR = import.meta.env
   .VITE_USDX_CONTRACT_ADDR as `0x${string}`;
 const SEPOLIA_RPC_URL = import.meta.env.VITE_SEPOLIA_RPC_URL as string;
-const API_BASE_URL = import.meta.env.API_BASE_URL ?? "http://localhost:8080";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 const PRF_INPUT = new TextEncoder().encode("tessera::account::seed");
-const SUBPOOL_ID = 1n;
-const SUBPOOL_ID_HEX = "0100000000000000";
-const ASSET_ID_HEX = "0100000000000000"; // u64(1) as 8-byte LE hex
-const ASSET_ID = 1n;
+const SUBPOOL_ID_HEX =
+  (import.meta.env.VITE_SUBPOOL_ID_HEX as string) ?? "0100000000000000";
+const ASSET_ID_HEX =
+  (import.meta.env.VITE_ASSET_ID_HEX as string) ?? "0100000000000000";
+
+function leHexToU64(hex: string): bigint {
+  const bytes = Uint8Array.from({ length: 8 }, (_, i) =>
+    parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+  );
+  bytes.reverse();
+  return BigInt(
+    "0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""),
+  );
+}
+
+const SUBPOOL_ID = leHexToU64(SUBPOOL_ID_HEX);
+const ASSET_ID = leHexToU64(ASSET_ID_HEX);
+
+console.log("Subpool ID =", SUBPOOL_ID);
 
 // ── API client ────────────────────────────────────────────────────────────────
 
@@ -145,7 +162,9 @@ function delay(ms: number) {
 }
 
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", data as BufferSource));
+  return new Uint8Array(
+    await crypto.subtle.digest("SHA-256", data as BufferSource),
+  );
 }
 
 async function deriveWalletAccount(
@@ -622,13 +641,8 @@ p2pBtn.addEventListener("click", async () => {
     const step4 = pStep(p2pSteps, "⏳ Submitting deposit request…", "active");
     p2pBar.style.width = "90%";
 
-<<<<<<< HEAD:tessera-js/main-demo/main.ts
-    await subpoolClient.submitDeposit({
-      recipient_address: privateAccAddressFull!,
-=======
     const { id: depositId } = await subpoolClient.submitDeposit({
-      recipient_acc_address: privateAccAddressFull!,
->>>>>>> jay/fixes_tmp1:demo/client-wallet/main.ts
+      recipient_address: privateAccAddressFull!,
       eth_address: ethAddressFull!,
       deposit_note_identifier: depositNote.identifierHex(),
       deposit_amount: u256LeHex(amountUnits),
