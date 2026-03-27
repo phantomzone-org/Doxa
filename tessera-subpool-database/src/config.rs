@@ -11,7 +11,7 @@ pub struct AppConfig {
 	pub api_bind_addr: String,
 	/// Max DB connections in pool. Env: DATABASE_MAX_CONNECTIONS (default 10).
 	pub db_max_connections: u32,
-	/// Faucet wallet private key (hex). Env: FAUCET_PRIVATE_KEY (required).
+	/// Faucet wallet private key (hex, with or without `0x`). Env: FAUCET_PRIVATE_KEY (required).
 	pub faucet_private_key: String,
 	/// Sepolia RPC URL. Env: SEPOLIA_RPC_URL (required).
 	pub sepolia_rpc_url: String,

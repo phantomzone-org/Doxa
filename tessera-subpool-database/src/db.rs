@@ -1,12 +1,42 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Postgres};
 use tessera_client::StandardAccount;
 
 use crate::convert::{account_to_insert, AccountInsert};
 
-pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<sqlx::PgPool> {
+pub async fn create_pool(
+	database_url: &str,
+	max_connections: u32,
+	schema_name: &str,
+) -> Result<sqlx::PgPool> {
+	let schema_name = Arc::<str>::from(schema_name.to_owned());
+
+	let bootstrap_pool = PgPoolOptions::new()
+		.max_connections(1)
+		.connect(database_url)
+		.await?;
+
+	let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}", schema_name);
+	sqlx::query(&create_schema_sql)
+		.execute(&bootstrap_pool)
+		.await?;
+	bootstrap_pool.close().await;
+
 	Ok(PgPoolOptions::new()
 		.max_connections(max_connections)
+		.after_connect({
+			let schema_name = Arc::clone(&schema_name);
+			move |conn, _meta| {
+				let schema_name = Arc::clone(&schema_name);
+				Box::pin(async move {
+					let set_search_path_sql = format!("SET search_path TO {}", schema_name);
+					sqlx::query(&set_search_path_sql).execute(conn).await?;
+					Ok(())
+				})
+			}
+		})
 		.connect(database_url)
 		.await?)
 }

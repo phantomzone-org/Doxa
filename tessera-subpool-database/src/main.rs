@@ -15,7 +15,14 @@ async fn main() -> Result<()> {
 		.init();
 
 	let config = AppConfig::from_env()?;
-	let pool = create_pool(&config.database_url, config.db_max_connections).await?;
+	let subpool_id = std::env::var("SUBPOOL_ID").unwrap_or_else(|_| "1".to_string());
+	let schema_name = format!("subpool_{subpool_id}");
+	let pool = create_pool(
+		&config.database_url,
+		config.db_max_connections,
+		&schema_name,
+	)
+	.await?;
 
 	sqlx::migrate!("./migrations").run(&pool).await?;
 

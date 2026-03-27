@@ -35,3 +35,5 @@ tessera-server/data/trees/
 tessera-server/data/trees_*/
 
 
+
+*.env

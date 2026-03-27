@@ -1,0 +1,147 @@
+[2m2026-03-27T17:07:06.869194Z[0m [32m INFO[0m [2msqlx::postgres::notice[0m[2m:[0m schema "subpool_3" already exists, skipping
+[2m2026-03-27T17:07:06.873498Z[0m [32m INFO[0m [2mtessera_subpool_operator[0m[2m:[0m subpool operator started [3msequencer[0m[2m=[0mhttp://127.0.0.1:3000 [3mrpc[0m[2m=[0mhttp://localhost:8545 [3mpoll_secs[0m[2m=[0m5 [3msubpool_id[0m[2m=[0m3
+[2m2026-03-27T17:07:06.876609Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:06.882543Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:06.884728Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:11.875241Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:11.875700Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:11.876430Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:16.875086Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:16.875675Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:16.876763Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:21.874960Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:21.875469Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:21.876475Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:26.993301Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:26.994098Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:26.995242Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:31.992809Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:31.993217Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:31.993850Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:36.992968Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:36.993589Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:36.994603Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:41.992855Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:41.993655Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:41.994719Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:46.993430Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:46.994073Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:46.995194Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:51.992691Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:51.993191Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:51.994247Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:57.110415Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:57.110946Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:07:57.112008Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:02.110206Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:02.110866Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:02.112100Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:07.110080Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:07.110678Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:07.111692Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:12.110507Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:12.110969Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:12.111819Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:17.110435Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:17.111189Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:17.118451Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:22.111049Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:22.113463Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:22.114956Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:27.224733Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:27.226207Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:27.227984Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:32.225280Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:32.225665Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:32.226446Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:37.225429Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:37.225958Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:37.226673Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:42.224536Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:42.224971Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:42.225738Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:47.225250Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:47.226125Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:47.228023Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:52.225167Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:52.226099Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:52.227829Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:57.338802Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:57.339497Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:08:57.340724Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:02.339292Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:02.340271Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:02.342186Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:07.339059Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:07.339581Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:07.340397Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:12.338705Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:12.340066Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:12.341245Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:17.340989Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:17.345689Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:17.346341Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:22.339150Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:22.339557Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:22.340364Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:27.459001Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:27.459773Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:27.461208Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:32.457798Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m1
+[2m2026-03-27T17:09:32.458575Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m FreshAcc transaction submitted to sequencer [3mid[0m[2m=[0m1 [3maddr[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:09:32.462769Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m FreshAcc request approved and account row created in DB [3mid[0m[2m=[0m1 [3maddr[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:09:32.463245Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:32.464221Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:37.457726Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:37.458181Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m1
+[2m2026-03-27T17:09:37.458212Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m broadcasting deposit tx on-chain [3mid[0m[2m=[0m1 [3maddr[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:09:37.459504Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m deposit tx broadcast, waiting for receipt [3mid[0m[2m=[0m1 [3mtx_hash[0m[2m=[0m0x7197c9141957a69b48bdecac9970398a1c47259e49a65ca6407e2d6c7f872933
+[2m2026-03-27T17:09:37.460249Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m deposit tx confirmed on-chain [3mid[0m[2m=[0m1 [3mtx_hash[0m[2m=[0m0x7197c9141957a69b48bdecac9970398a1c47259e49a65ca6407e2d6c7f872933
+[2m2026-03-27T17:09:37.465289Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m deposit note submitted to sequencer [3mid[0m[2m=[0m1 [3maddr[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:09:37.469038Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m deposit approved, PENDING input note created (awaiting on-chain confirmation) [3mid[0m[2m=[0m1 [3maddr[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356 [3masset_id[0m[2m=[0m1 [3mnew_balance[0m[2m=[0m3000
+[2m2026-03-27T17:09:37.470219Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:42.458436Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:42.459076Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:42.460591Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:47.458186Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:47.459056Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:47.460489Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:52.458169Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:52.458785Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:52.460942Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:57.585738Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:57.586286Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:09:57.587668Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:02.585547Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:02.586103Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:02.590186Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m input note confirmed on-chain (deposit Validated) [3mid[0m[2m=[0m1 [3mnote_id[0m[2m=[0m8f2125b805c38c9e711d7e9b7a09e63a
+[2m2026-03-27T17:10:02.590572Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:07.585396Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:07.585798Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:07.586510Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m1
+[2m2026-03-27T17:10:07.590086Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m spend tx submitted to sequencer [3mid[0m[2m=[0m1 [3maddr[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:10:07.592624Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m created input note for local recipient [3mid[0m[2m=[0m1 [3mnote_id[0m[2m=[0m8f69cd3d3c1afbeacfed2268a0b661fa [3mrecipient[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:10:07.596314Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m forwarded output note to sequencer [3mid[0m[2m=[0m1 [3mnote_id[0m[2m=[0m5246a17af6ee97f13e2037159e6f663a [3mtarget_subpool[0m[2m=[0m1 [3mrecipient[0m[2m=[0m0100000000000000980b4fe97fda25b1b28441f1ffb784ccf13ce34c978615e55301c9b2ab913446 [3msender[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:10:07.596360Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m spend tx approved and settled [3mid[0m[2m=[0m1 [3maddr[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:10:07.596613Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m received forwarded notes from sequencer [3mcount[0m[2m=[0m1 [3msubpool_id[0m[2m=[0m3
+[2m2026-03-27T17:10:07.596632Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m processing forwarded note from sequencer [3msubpool_id[0m[2m=[0m3 [3mnote_id[0m[2m=[0mf733dbbc0e7ffe0c05f663f3f6be7dc1 [3mrecipient[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356 [3msender[0m[2m=[0m0200000000000000a474969367c996dc24c2c8b9081dd431447d76d7a75ec8a5290f8bd92c80e654
+[2m2026-03-27T17:10:07.598253Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m inserted forwarded note as local input note [3msubpool_id[0m[2m=[0m3 [3mnote_id[0m[2m=[0mf733dbbc0e7ffe0c05f663f3f6be7dc1 [3mrecipient[0m[2m=[0m0300000000000000682671ac1a9d1e92d51c09fe92e8e36b3b2e50486837e8e6af9179e639932356
+[2m2026-03-27T17:10:07.598474Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m acknowledged forwarded notes [3msubpool_id[0m[2m=[0m3 [3mcount[0m[2m=[0m1
+[2m2026-03-27T17:10:12.585898Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:12.586470Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:12.587651Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:17.585551Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:17.586039Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:17.586754Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:22.587325Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:22.589501Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:22.593539Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:27.700120Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:27.701074Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:27.702136Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:32.701101Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:32.701753Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:32.703099Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:37.700264Z[0m [32m INFO[0m [2mtessera_subpool_operator::operator[0m[2m:[0m polled freshacc_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:37.701158Z[0m [32m INFO[0m [2mtessera_subpool_operator::deposits[0m[2m:[0m polled deposit_tx_requests [3mpending[0m[2m=[0m0
+[2m2026-03-27T17:10:37.702650Z[0m [32m INFO[0m [2mtessera_subpool_operator::spend_txs[0m[2m:[0m polled spend_tx_requests [3mpending[0m[2m=[0m0

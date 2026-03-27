@@ -23,11 +23,18 @@ async fn main() -> Result<()> {
 	let config = OperatorConfig::from_env()?;
 
 	// Parse approval private key from hex.
-	let key_bytes = hex::decode(&config.approval_private_key)
+	let approval_private_key = config.approval_private_key.trim_start_matches("0x");
+	let key_bytes = hex::decode(approval_private_key)
 		.map_err(|e| anyhow::anyhow!("APPROVAL_PRIVATE_KEY invalid hex: {e}"))?;
 	let approval_sk = PrivateKey::decode_reduce(&key_bytes);
 
-	let pool = create_pool(&config.database_url, config.db_max_connections).await?;
+	let schema_name = format!("subpool_{}", config.subpool_id);
+	let pool = create_pool(
+		&config.database_url,
+		config.db_max_connections,
+		&schema_name,
+	)
+	.await?;
 
 	// Alloy provider for broadcasting raw transactions on-chain.
 	let rpc_provider = ProviderBuilder::new().connect_http(config.rpc_url.parse()?);

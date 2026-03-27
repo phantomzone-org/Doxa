@@ -6,7 +6,7 @@ use alloy::primitives::Address;
 pub struct DemoSequencerConfig {
 	/// Ethereum JSON-RPC endpoint.
 	pub rpc_url: String,
-	/// Operator private key (hex-encoded).
+	/// Operator private key (hex-encoded, with or without `0x`).
 	pub operator_key: String,
 	/// EVM chain ID.
 	pub chain_id: u64,

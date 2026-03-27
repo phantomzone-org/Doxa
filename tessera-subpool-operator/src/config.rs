@@ -9,7 +9,8 @@ pub struct OperatorConfig {
 	pub db_max_connections: u32,
 	/// Sequencer HTTP URL. Env: SEQUENCER_URL (required).
 	pub sequencer_url: String,
-	/// Approval private key as 40-byte hex (5 × u64 LE). Env: APPROVAL_PRIVATE_KEY (required).
+	/// Approval private key as 40-byte hex, with or without `0x`. Env: APPROVAL_PRIVATE_KEY
+	/// (required).
 	pub approval_private_key: String,
 	/// Ethereum JSON-RPC URL for broadcasting deposit transactions. Env: RPC_URL (required).
 	pub rpc_url: String,
