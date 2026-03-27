@@ -9,7 +9,7 @@ import {
   maxUint256,
 } from "viem";
 import { sepolia } from "viem/chains";
-import { privateKeyToAccount } from "viem/accounts";
+import { PrivateKeyAccount, privateKeyToAccount } from "viem/accounts";
 import {
   Account,
   AccountAddress,
@@ -40,6 +40,7 @@ const USDX_CONTRACT_ADDR = import.meta.env
 const SEPOLIA_RPC_URL = import.meta.env.VITE_SEPOLIA_RPC_URL as string;
 const PRF_INPUT = new TextEncoder().encode("tessera::account::seed");
 const SUBPOOL_ID = 1n;
+const SUBPOOL_ID_HEX = "0100000000000000";
 const ASSET_ID_HEX = "0100000000000000"; // u64(1) as 8-byte LE hex
 const ASSET_ID = 1n;
 
@@ -54,6 +55,7 @@ let credentialId: Uint8Array | null = null;
 let ethAddressFull: string | null = null;
 let privateAccAddressFull: string | null = null;
 let privateAccount: Account | null = null;
+let publicAccount: PrivateKeyAccount | null = null;
 let currentSeed: Uint8Array | null = null;
 let privateBalance = 0;
 
@@ -146,7 +148,9 @@ async function sha256(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", data));
 }
 
-async function deriveWalletAccount(seed: Uint8Array) {
+async function deriveWalletAccount(
+  seed: Uint8Array,
+): Promise<PrivateKeyAccount> {
   const domain = new TextEncoder().encode("tessera::eth::privkey");
   const input = new Uint8Array(seed.length + domain.length);
   input.set(seed);
@@ -233,6 +237,15 @@ function pStep(
   return el;
 }
 
+// -- refresh -------------------------------------------------------------------
+
+async function refreshAccountStates() {
+  if (currentSeed) {
+    await showPublicWallet(currentSeed!);
+    await loadPrivateAccount(currentSeed!);
+  }
+}
+
 // ── Section 1: Public account ─────────────────────────────────────────────────
 
 const createWalletBtn = document.getElementById(
@@ -270,7 +283,8 @@ async function loadPublicBalance(address: string) {
 }
 
 async function showPublicWallet(seed: Uint8Array) {
-  ethAddressFull = await deriveEthAddress(seed);
+  publicAccount = await deriveWalletAccount(seed);
+  ethAddressFull = publicAccount.address;
   ethAddressEl.textContent =
     ethAddressFull.slice(0, 10) + "…" + ethAddressFull.slice(-8);
   ethAddressEl.title = ethAddressFull;
@@ -286,9 +300,8 @@ function renderVisiblePostSignIn() {
 async function loadPrivateAccount(seed: Uint8Array) {
   const privateId = derivePrivateIdentifier(seed);
   const publicId = derivePublicIdentifier(privateId);
-  const subpoolId = SubpoolId.fromHex("0100000000000000"); // subpool_id = 1
   const privateAccAddress = AccountAddress.fromParts(
-    subpoolId,
+    SubpoolId.fromHex(SUBPOOL_ID_HEX),
     publicId,
   ).toHex();
   privateAccAddressFull = privateAccAddress;
@@ -478,12 +491,15 @@ registerBtn.addEventListener("click", async () => {
       "active",
     );
     await pollFreshAccApproval(privateAccAddress);
+
     s2.className = "progress-line done";
     s2.textContent = "✓ Approval received";
 
     appendProgressLine("✓ Account registered", "done");
     tesseraAddrVal.textContent = privateAccAddress;
     tesseraAddrBox.classList.add("visible");
+
+    await refreshAccountStates();
   } catch (err) {
     registerError.textContent = `Error: ${err}`;
     registerBtn.disabled = false;
@@ -521,15 +537,15 @@ p2pBtn.addEventListener("click", async () => {
     return;
   }
 
-  p2pBtn.disabled = true;
-  p2pError.textContent = "";
-  p2pProgress.classList.add("visible");
-  p2pSteps.innerHTML = "";
-  p2pBar.style.width = "0%";
-
   try {
-    const seed = await evalPrf();
-    const account = await deriveWalletAccount(seed);
+    currentSeed = await evalPrf();
+    await refreshAccountStates();
+
+    p2pBtn.disabled = true;
+    p2pError.textContent = "";
+    p2pProgress.classList.add("visible");
+    p2pSteps.innerHTML = "";
+    p2pBar.style.width = "0%";
 
     const publicClient = createPublicClient({
       chain: sepolia,
@@ -541,11 +557,11 @@ p2pBtn.addEventListener("click", async () => {
       address: USDX_CONTRACT_ADDR,
       abi: erc20Abi,
       functionName: "allowance",
-      args: [account.address, TESSERA_CONTRACT as `0x${string}`],
+      args: [publicAccount!.address, TESSERA_CONTRACT as `0x${string}`],
     });
 
     const walletClient = createWalletClient({
-      account,
+      account: publicAccount!,
       chain: sepolia,
       transport: http(SEPOLIA_RPC_URL),
     });
@@ -607,7 +623,7 @@ p2pBtn.addEventListener("click", async () => {
     const step4 = pStep(p2pSteps, "⏳ Submitting deposit request…", "active");
     p2pBar.style.width = "90%";
 
-    await subpoolClient.submitDeposit({
+    const { id: depositId } = await subpoolClient.submitDeposit({
       recipient_acc_address: privateAccAddressFull!,
       eth_address: ethAddressFull!,
       deposit_note_identifier: depositNote.identifierHex(),
@@ -618,7 +634,44 @@ p2pBtn.addEventListener("click", async () => {
 
     step4.className = "p-step done";
     step4.textContent = "✓ Deposit submitted";
-    p2pBar.style.width = "100%";
+
+    // ── Poll for approval ─────────────────────────────────────────────────────
+    const step5 = pStep(p2pSteps, "⏳ Waiting for approval…", "active");
+    p2pBar.style.width = "95%";
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setInterval(async () => {
+        try {
+          const status = await subpoolClient.getDepositStatus(depositId);
+          if (!status || status.status === "PENDING") return;
+          clearInterval(timer);
+          if (status.status === "REJECTED") {
+            reject(new Error("Deposit rejected by operator"));
+            return;
+          }
+          // APPROVED
+          step5.className = "p-step done";
+          step5.textContent = "✓ Deposit approved";
+          if (status.deposit_tx_hash) {
+            const link = document.createElement("a");
+            link.href = `https://sepolia.etherscan.io/tx/${status.deposit_tx_hash}`;
+            link.target = "_blank";
+            link.rel = "noopener";
+            link.textContent = `View on Etherscan ↗`;
+            link.className = "tx-link";
+            p2pSteps.appendChild(link);
+          }
+          p2pBar.style.width = "100%";
+          // Refresh public + private balances
+          await refreshAccountStates();
+
+          resolve();
+        } catch (e) {
+          clearInterval(timer);
+          reject(e);
+        }
+      }, 5_000);
+    });
   } catch (err) {
     p2pError.textContent = `Error: ${err}`;
     p2pBtn.disabled = false;

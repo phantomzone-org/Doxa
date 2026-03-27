@@ -54,6 +54,15 @@ export interface DepositResponse {
   id: number;
 }
 
+export type DepositTxStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+/** Response body for GET /deposit/:id/status */
+export interface DepositStatusResponse {
+  id: number;
+  status: DepositTxStatus;
+  deposit_tx_hash: string | null;
+}
+
 /** Entry returned by GET /input_notes/:recipient_address */
 export interface InputNote {
   /** 32 hex chars — [F;2] identifier */

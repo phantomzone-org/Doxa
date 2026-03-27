@@ -1,5 +1,5 @@
 import type { PrivateIdentifier, SpendAuthPk } from "../account.js";
-import type { AccountResponse, ApiError, DepositRequest, DepositResponse, FaucetResponse, FreshAccStatusResponse, InputNote, RegisterRequest, RegisterResponse, SpendTxRequest, SpendTxResponse } from "./types.js";
+import type { AccountResponse, ApiError, DepositRequest, DepositResponse, DepositStatusResponse, FaucetResponse, FreshAccStatusResponse, InputNote, RegisterRequest, RegisterResponse, SpendTxRequest, SpendTxResponse } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
 export class SubpoolApiError extends Error {
@@ -128,6 +128,18 @@ export class SubpoolClient {
     const json = await res.json();
     if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
     return json as DepositResponse;
+  }
+
+  /**
+   * GET /deposit/:id/status
+   * Returns null on 404. Throws SubpoolApiError on other non-2xx responses.
+   */
+  async getDepositStatus(id: number): Promise<DepositStatusResponse | null> {
+    const res = await fetch(`${this.baseUrl}/deposit/${id}/status`);
+    if (res.status === 404) return null;
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as DepositStatusResponse;
   }
 
   /**
