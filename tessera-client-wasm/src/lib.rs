@@ -262,6 +262,17 @@ impl WasmAccount {
 		WasmAccountAddress(AccountAddress::from_acc(&self.0.borrow()))
 	}
 
+	/// Return the balance for `asset_id` as a 64-char LE hex string (U256, 32 bytes).
+	/// Returns the all-zeros hex string if the asset is not present in the AST.
+	#[wasm_bindgen(js_name = balanceFor)]
+	pub fn balance_for(&self, asset_id: &WasmAssetId) -> String {
+		let acc = self.0.borrow();
+		let aid = AssetId(F::from_canonical_u64(asset_id.0));
+		let amount = acc.ast.amount_for(aid).map(|(_, amt)| amt).unwrap_or(U256::zero());
+		let buf: [u8; 32] = amount.to_little_endian();
+		hex::encode(buf)
+	}
+
 	/// Returns the account nullifier.
 	pub fn nullifier(&self) -> WasmAccountNullifier {
 		let null: AccountNullifier = self.0.borrow().nullifier();

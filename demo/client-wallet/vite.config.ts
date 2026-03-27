@@ -9,4 +9,9 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ["tessera_client_wasm"],
   },
+  server: {
+    fs: {
+      allow: [".", "../../tessera-js"],
+    },
+  },
 });

@@ -319,6 +319,16 @@ export class Account {
     return AccountAddress.fromWasm(this.inner.address());
   }
 
+  /** Return the balance for `assetId` as a bigint (U256). Zero if not held. */
+  balanceFor(assetId: AssetId): bigint {
+    const leHex = this.inner.balanceFor(assetId.inner);
+    const bytes = Uint8Array.from({ length: 32 }, (_, i) =>
+      parseInt(leHex.slice(i * 2, i * 2 + 2), 16)
+    );
+    bytes.reverse();
+    return BigInt("0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""));
+  }
+
   /** Returns the private identifier as a typed `PrivateIdentifier`. */
   privateIdentifier(): PrivateIdentifier {
     return PrivateIdentifier.fromWasm(this.inner.privateIdentifier());
@@ -559,6 +569,7 @@ export class OutputNote {
   amountHex(): string     { return this.inner.amountHex(); }
   recipientHex(): string  { return this.inner.recipientHex(); }
   senderHex(): string     { return this.inner.senderHex(); }
+  memoHex(): string       { return this.inner.memoHex(); }
 }
 
 // ── DummyNote ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,3 @@
+[build]
+  publish = "dist"
+  ignore  = "exit 0"
