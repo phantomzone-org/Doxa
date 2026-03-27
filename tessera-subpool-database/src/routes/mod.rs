@@ -6,6 +6,7 @@ use axum::{
 use crate::state::AppState;
 
 pub mod account;
+pub mod admin;
 pub mod deposit;
 pub mod faucet;
 pub mod freshacc;
@@ -15,6 +16,7 @@ pub mod spend_tx;
 
 pub fn router(state: AppState) -> Router {
 	Router::new()
+		.route("/admin/freshacc", get(admin::list_freshacc_handler))
 		.route("/register", post(register::register_handler))
 		.route("/deposit", post(deposit::submit_deposit_handler))
 		.route("/deposit/{id}/status", get(deposit::get_deposit_status_handler))
