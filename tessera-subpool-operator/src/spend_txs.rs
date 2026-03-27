@@ -4,14 +4,16 @@ use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tessera_client::{
-	HashOutput, NOTE_BATCH, NoteCommitment, NoteNullifier, StandardNote, derive_priv_tx_hash, double_hash_native, schnorr::{PrivateKey, Scalar, schnorr_sign}
+	derive_priv_tx_hash, double_hash_native,
+	schnorr::{schnorr_sign, PrivateKey, Scalar},
+	HashOutput, NoteCommitment, NoteNullifier, StandardNote, NOTE_BATCH,
 };
 use tessera_subpool_database::{
-	convert::{
-		account_from_row, hash_to_hex,
-		hex_to_hash_checked,
+	convert::{account_from_row, hash_to_hex, hex_to_hash_checked},
+	db::{
+		insert_input_note, insert_input_note_with_commitment, update_account,
+		update_spend_tx_request_to_approved,
 	},
-	db::{insert_input_note, insert_input_note_with_commitment, update_account, update_spend_tx_request_to_approved},
 	types::{account::AccountRow, spend_tx::SpendTxRow},
 };
 use tracing::{error, info};
@@ -112,19 +114,25 @@ async fn process_one_spend_tx(
 	let inotes_len = inotes.len();
 	let onotes_len = onotes.len();
 
-	if inotes_len + row.dinotes.len() != NOTE_BATCH{
-		anyhow::bail!("inotes + dinotes len mismatch: {inotes_len} + {} != {NOTE_BATCH}", row.dinotes.len());
+	if inotes_len + row.dinotes.len() != NOTE_BATCH {
+		anyhow::bail!(
+			"inotes + dinotes len mismatch: {inotes_len} + {} != {NOTE_BATCH}",
+			row.dinotes.len()
+		);
 	}
 
-	if onotes_len + row.donotes.len() != NOTE_BATCH{
-		anyhow::bail!("onotes + donotes len mismatch: {onotes_len} + {} != {NOTE_BATCH}", row.donotes.len());
+	if onotes_len + row.donotes.len() != NOTE_BATCH {
+		anyhow::bail!(
+			"onotes + donotes len mismatch: {onotes_len} + {} != {NOTE_BATCH}",
+			row.donotes.len()
+		);
 	}
 
-    // Real nullifiers: [0..num_inotes]
+	// Real nullifiers: [0..num_inotes]
 	for (i, inote) in inotes.iter().enumerate() {
 		let note = inote.to_standard_note()?;
-		
-        let commitment = note.commitment();
+
+		let commitment = note.commitment();
 
 		let position = query_note_position(http, sequencer_url, &commitment)
 			.await
@@ -138,10 +146,10 @@ async fn process_one_spend_tx(
 		inotes_null[i] = StandardNote::nullifier(&commitment, position, &sender_nk);
 	}
 
-    // Dummy nullifiers: [num_inotes..NOTE_BATCH]
+	// Dummy nullifiers: [num_inotes..NOTE_BATCH]
 	for (i, dinote) in row.dinotes.iter().enumerate() {
-        let val = hex_to_hash_checked(dinote)?;
-        let dhash = HashOutput(double_hash_native(val.0));
+		let val = hex_to_hash_checked(dinote)?;
+		let dhash = HashOutput(double_hash_native(val.0));
 		inotes_null[i + inotes_len] = NoteNullifier(dhash);
 	}
 
@@ -152,7 +160,7 @@ async fn process_one_spend_tx(
 
 	for (i, donote) in row.donotes.iter().enumerate() {
 		let val = hex_to_hash_checked(donote)?;
-        let dhash = HashOutput(double_hash_native(val.0));
+		let dhash = HashOutput(double_hash_native(val.0));
 		onotes_comm[i + onotes_len] = NoteCommitment(dhash);
 	}
 
@@ -199,8 +207,7 @@ async fn process_one_spend_tx(
 	let an = hash_to_hex(&accin.nullifier().0 .0);
 	let ac = hash_to_hex(&accout.commitment().0 .0);
 
-	let input_note_hashes: Vec<String> =
-		inotes_null.iter().map(|n| hash_to_hex(&n.0 .0)).collect();
+	let input_note_hashes: Vec<String> = inotes_null.iter().map(|n| hash_to_hex(&n.0 .0)).collect();
 	let output_note_hashes: Vec<String> =
 		onotes_comm.iter().map(|c| hash_to_hex(&c.0 .0)).collect();
 
@@ -244,7 +251,13 @@ async fn process_one_spend_tx(
 	update_spend_tx_request_to_approved(pool, sig_bytes.as_ref(), row.id).await?;
 
 	// ── 10. Update account state ───────────────────────────────────────────────
-	update_account(pool, &accout, acc_row.eth_address, row.priv_acc_address.clone()).await?;
+	update_account(
+		pool,
+		&accout,
+		acc_row.eth_address,
+		row.priv_acc_address.clone(),
+	)
+	.await?;
 
 	// ── 11. Create input notes for local recipients ────────────────────────────
 	for (onote_idx, onote) in onotes.iter().enumerate() {
@@ -331,8 +344,6 @@ async fn process_one_spend_tx(
 
 	Ok(())
 }
-
-
 
 /// Extract the subpool ID from an account address.
 /// The first 8 bytes of the hex-encoded address are the LE-encoded subpool ID.

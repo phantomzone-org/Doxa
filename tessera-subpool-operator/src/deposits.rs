@@ -11,12 +11,14 @@ use primitive_types::U256;
 use serde::Serialize;
 use sqlx::PgPool;
 use tessera_client::{
-	AccountAddress, AssetId, DepositNote, DepositNoteCommitment, StandardAccount, derive_deposit_tx_hash, schnorr::{PrivateKey, Scalar, schnorr_sign}
+	derive_deposit_tx_hash,
+	schnorr::{schnorr_sign, PrivateKey, Scalar},
+	AccountAddress, AssetId, DepositNote, DepositNoteCommitment, StandardAccount,
 };
 use tessera_subpool_database::{
 	convert::{
-		account_from_row, bytes_to_f, bytes_to_u256, f_to_bytes,
-		hash_to_hex, parse_eth_address, u256_to_bytes,
+		account_from_row, bytes_to_f, bytes_to_u256, f_to_bytes, hash_to_hex, parse_eth_address,
+		u256_to_bytes,
 	},
 	db::{insert_pending_input_note, update_account, update_spend_tx_request_to_approved},
 	types::{account::AccountRow, deposit::DepositTxRow},
@@ -117,7 +119,10 @@ fn parse_deposit_fields(row: &DepositTxRow) -> Result<ParsedDeposit> {
 }
 
 /// Build the deposit note and compute its Poseidon commitment hash.
-fn get_deposit_commitment(accin: &StandardAccount, deposit: &ParsedDeposit) -> DepositNoteCommitment {
+fn get_deposit_commitment(
+	accin: &StandardAccount,
+	deposit: &ParsedDeposit,
+) -> DepositNoteCommitment {
 	let recipient = AccountAddress::from_acc(accin);
 	let note = DepositNote {
 		identifier: deposit.note_identifier,
@@ -221,7 +226,8 @@ async fn process_one_deposit<P: Provider + Clone>(
 
 	// ── 2. Add tx_hash to deposit_tx_requests ────────────────────────────────
 	// TODO: add a helper function
-	let broadcast_tx_hash = broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
+	let broadcast_tx_hash =
+		broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
 	sqlx::query(
 		"UPDATE deposit_tx_requests \
          SET deposit_tx_hash = $1, updated_at = NOW() \
@@ -265,7 +271,7 @@ async fn process_one_deposit<P: Provider + Clone>(
 	let sig_bytes = approval_sig.encode();
 
 	// ── 6. POST to sequencer ─────────────────────────────────────────────────
-	let nc_hex = hash_to_hex(&deposit_note_comm.0.0);
+	let nc_hex = hash_to_hex(&deposit_note_comm.0 .0);
 	post_deposit_to_sequencer(http, sequencer_url, &nc_hex).await?;
 	info!(id = row.id, addr = %row.recipient_acc_address, "deposit note submitted to sequencer");
 
@@ -273,7 +279,13 @@ async fn process_one_deposit<P: Provider + Clone>(
 	update_spend_tx_request_to_approved(pool, sig_bytes.as_ref(), row.id).await?;
 
 	// ── 8. Update account in DB ──────────────────────────────────────────────
-	update_account(pool, &accout, acc_row.eth_address, row.recipient_acc_address.clone()).await?;
+	update_account(
+		pool,
+		&accout,
+		acc_row.eth_address,
+		row.recipient_acc_address.clone(),
+	)
+	.await?;
 
 	// ── 9. Create PENDING input note for the deposit recipient ────────────────
 	// The note stays PENDING until the deposit is confirmed on-chain (status = Validated).
@@ -282,7 +294,9 @@ async fn process_one_deposit<P: Provider + Clone>(
 	let amount_bytes = u256_to_bytes(deposit.deposit_amount);
 
 	// Encode note commitment as 32 bytes (4 × u64 BE) for on-chain lookup.
-	let nc_bytes: Vec<u8> = deposit_note_comm.0.0
+	let nc_bytes: Vec<u8> = deposit_note_comm
+		.0
+		 .0
 		.iter()
 		.flat_map(|f| f.to_canonical_u64().to_be_bytes())
 		.collect();

@@ -82,8 +82,8 @@ impl NoteCommitment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteNullifier(pub HashOutput);
 
-impl NoteNullifier{
-	pub const fn zero() -> Self{
+impl NoteNullifier {
+	pub const fn zero() -> Self {
 		Self(HashOutput::ZERO)
 	}
 }
@@ -221,7 +221,7 @@ impl StandardNote {
 		))
 	}
 
-	pub fn dummy_nullifier(commitment: &NoteCommitment) -> NoteNullifier{
+	pub fn dummy_nullifier(commitment: &NoteCommitment) -> NoteNullifier {
 		NoteNullifier(HashOutput::new(double_hash_native(commitment.0.0)))
 	}
 }

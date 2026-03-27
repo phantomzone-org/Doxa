@@ -2,7 +2,8 @@ use anyhow::Context;
 use plonky2_field::types::{Field, Field64, PrimeField64};
 use primitive_types::U256;
 use tessera_client::{
-	AccountAddress, AccountStateTree, AssetId, HashOutput, Nonce, PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId, schnorr::CompressedPublicKey
+	schnorr::CompressedPublicKey, AccountAddress, AccountStateTree, AssetId, HashOutput, Nonce,
+	PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId,
 };
 use tessera_utils::F;
 

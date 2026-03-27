@@ -9,10 +9,7 @@ use tessera_client::{
 	schnorr::{schnorr_sign, CompressedPublicKey, PrivateKey, Scalar},
 	NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId, NOTE_BATCH,
 };
-use tessera_subpool_database::{
-	convert::{account_to_insert, bytes_to_private_id, hash_to_hex},
-	db::insert_account_and_user,
-};
+use tessera_subpool_database::convert::{account_to_insert, bytes_to_private_id, hash_to_hex};
 use tessera_utils::F;
 use tracing::{error, info};
 
@@ -23,11 +20,7 @@ struct PendingFreshAcc {
 	id: i64,
 	private_acc_address: String,
 	spend_auth: Vec<u8>,
-	private_identifier: Vec<u8>,
-	eth_address: String,
-	name: String,
-	physical_address: String,
-	dob: chrono::NaiveDate,
+	private_identifier: String,
 }
 
 // ── Sequencer request ───────────────────────────────────────────────────────
@@ -51,10 +44,9 @@ pub async fn process_pending(
 	http: &reqwest::Client,
 	subpool_id: u64,
 ) -> Result<()> {
-	// TODO JP: make this agree with freshacc structure in tessera-subpool-database
 	let rows: Vec<PendingFreshAcc> = sqlx::query_as(
 		"SELECT id, private_acc_address, spend_auth, \
-                private_identifier, eth_address, name, physical_address, dob \
+                private_identifier \
          FROM freshacc_requests \
          WHERE status = 'PENDING' \
          ORDER BY created_at ASC",
@@ -91,8 +83,9 @@ async fn process_one(
 	subpool_id: u64,
 ) -> Result<()> {
 	// ── 1. Reconstruct accin from freshacc_requests data ──────────────────────
-	let pi_arr: [u8; 16] = row
-		.private_identifier
+	let pi_bytes =
+		hex::decode(&row.private_identifier).context("private_identifier must be valid hex")?;
+	let pi_arr: [u8; 16] = pi_bytes
 		.as_slice()
 		.try_into()
 		.context("private_identifier must be 16 bytes")?;
@@ -189,15 +182,33 @@ async fn process_one(
 		"FreshAcc request approved in DB"
 	);
 
-	// ── 7. Create accounts + users rows (only after approval) ────────────────
-	let insert = account_to_insert(&accout, row.eth_address.clone());
-	// TODO JP: rmove user insetion. User is already insert at /register time
-	insert_account_and_user(pool, &insert, &row.name, &row.physical_address, row.dob).await?;
+	// ── 7. Create accounts row (only after approval) ─────────────────────────
+	let insert = account_to_insert(&accout, String::new());
+	sqlx::query(
+		r#"
+        INSERT INTO accounts
+            (private_acc_address, eth_address,
+             private_identifier, subpool_id, nonce,
+             spend_auth, consume_auth, ast)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+	)
+	.bind(&insert.private_acc_address)
+	.bind(&insert.eth_address)
+	.bind(&insert.private_identifier)
+	.bind(&insert.subpool_id)
+	.bind(&insert.nonce)
+	.bind(&insert.spend_auth)
+	.bind(&insert.consume_auth)
+	.bind(&insert.ast)
+	.execute(pool)
+	.await
+	.context("failed to insert account row")?;
 
 	info!(
 		id = row.id,
 		addr = %row.private_acc_address,
-		"account + user rows created in DB"
+		"account row created in DB"
 	);
 
 	Ok(())

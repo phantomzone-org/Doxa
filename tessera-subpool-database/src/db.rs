@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use tessera_client::StandardAccount;
 
-use crate::convert::{AccountInsert, account_to_insert};
+use crate::convert::{account_to_insert, AccountInsert};
 
 pub async fn create_pool(database_url: &str, max_connections: u32) -> Result<sqlx::PgPool> {
 	Ok(PgPoolOptions::new()
@@ -70,7 +70,7 @@ pub async fn insert_input_note(
 	recipient_address: &str,
 	sender_address: &str,
 ) -> Result<()> {
-	insert_input_note_opt(
+	insert_approved_input_note(
 		pool,
 		identifier,
 		asset_id,
@@ -92,7 +92,7 @@ pub async fn insert_input_note_with_commitment(
 	sender_address: &str,
 	note_commitment: &[u8],
 ) -> Result<()> {
-	insert_input_note_opt(
+	insert_approved_input_note(
 		pool,
 		identifier,
 		asset_id,
@@ -104,7 +104,7 @@ pub async fn insert_input_note_with_commitment(
 	.await
 }
 
-async fn insert_input_note_opt(
+async fn insert_approved_input_note(
 	pool: &PgPool,
 	identifier: &str,
 	asset_id: &[u8],
@@ -113,11 +113,10 @@ async fn insert_input_note_opt(
 	sender_address: &str,
 	note_commitment: Option<&[u8]>,
 ) -> Result<()> {
-	// TODO JP: what is the status of the input note at insertion?
 	sqlx::query(
 		r#"INSERT INTO input_notes
                (identifier, asset_id, amount, recipient_address, sender_address, note_commitment)
-           VALUES ($1, $2, $3, $4, $5, $6)"#,
+           VALUES ($1, $2, $3, $4, $5, 'APPROVED', $6)"#,
 	)
 	.bind(identifier)
 	.bind(asset_id)
@@ -160,26 +159,12 @@ pub async fn insert_pending_input_note(
 	Ok(())
 }
 
-/// Update only the AST column for an account (e.g. when receiving a note).
-pub async fn update_account_ast(
+pub async fn update_account(
 	pool: &PgPool,
-	private_acc_address: &str,
-	ast_json: serde_json::Value,
+	account: &StandardAccount,
+	eth_address: String,
+	priv_acc_address: String,
 ) -> Result<()> {
-	sqlx::query(
-		"UPDATE accounts \
-         SET ast = $1, updated_at = NOW() \
-         WHERE private_acc_address = $2",
-	)
-	.bind(&ast_json)
-	.bind(private_acc_address)
-	.execute(pool)
-	.await
-	.context("failed to update account AST")?;
-	Ok(())
-}
-
-pub async fn update_account(pool: &PgPool, account: &StandardAccount, eth_address: String, priv_acc_address: String) -> Result<()>{
 	let updated_account = account_to_insert(account, eth_address);
 	sqlx::query(
 		"UPDATE accounts \
@@ -195,14 +180,18 @@ pub async fn update_account(pool: &PgPool, account: &StandardAccount, eth_addres
 	.bind(&updated_account.ast)
 	.bind(&priv_acc_address)
 	.execute(pool)
-		.await
-		.context("failed to update sender account after spend tx")?;
+	.await
+	.context("failed to update sender account after spend tx")?;
 
 	Ok(())
 }
 
-pub async fn update_spend_tx_request_to_approved(pool: &PgPool, sig_bytes: &[u8], id: i64) -> Result<()>{
-		sqlx::query(
+pub async fn update_spend_tx_request_to_approved(
+	pool: &PgPool,
+	sig_bytes: &[u8],
+	id: i64,
+) -> Result<()> {
+	sqlx::query(
 		"UPDATE spend_tx_requests \
          SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
          WHERE id = $2",
@@ -213,4 +202,4 @@ pub async fn update_spend_tx_request_to_approved(pool: &PgPool, sig_bytes: &[u8]
 	.await
 	.context("failed to update spend_tx_requests")?;
 	Ok(())
-	}
+}
