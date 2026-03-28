@@ -105,7 +105,7 @@ async function registerAndGetSeed(): Promise<Uint8Array> {
           userVerification: "required",
         },
         extensions: {
-          prf: {},
+          prf: { eval: { first: PRF_INPUT } },
         },
       },
     })) as PublicKeyCredential;
@@ -114,15 +114,31 @@ async function registerAndGetSeed(): Promise<Uint8Array> {
     const ext = cred.getClientExtensionResults() as any;
     const prfEnabled = !!ext?.prf?.enabled;
 
-    log(`✓ Registered — credential ID: ${toHex(credentialId.slice(0, 8))}…`);
-    log(`  PRF extension enabled by authenticator: ${prfEnabled}`);
+    console.log(
+      `✓ Registered — credential ID: ${toHex(credentialId.slice(0, 8))}…`,
+    );
+    console.log(`  PRF extension enabled by authenticator: ${prfEnabled}`);
     if (!prfEnabled) {
-      log("⚠ Your authenticator does not support PRF. Derive will fail.");
+      throw new Error(
+        "⚠ Your authenticator does not support PRF. Derive will fail.",
+      );
+    }
+
+    // If the authenticator returned the PRF result during registration, use it directly.
+    const firstResult: ArrayBuffer | undefined = ext?.prf?.results?.first;
+    if (firstResult) {
+      const seed = new Uint8Array(firstResult);
+      if (seed.byteLength !== 32)
+        throw new Error(`PRF output must be 32 bytes, got ${seed.byteLength}`);
+      return seed;
+    } else {
+      console.log("credentials.create did not return prf = ", ext?.prf);
     }
   } catch (err) {
-    log(`✗ Registration failed: ${err}`);
+    console.log(`✗ Registration failed: ${err}`);
   }
 
+  // Fallback: older authenticators don't return PRF results during create().
   return evalPrf();
 }
 
@@ -267,10 +283,11 @@ function pStep(
 // -- refresh -------------------------------------------------------------------
 
 async function refreshAccountStates() {
-  if (currentSeed) {
-    await showPublicWallet(currentSeed!);
-    await loadPrivateAccount(currentSeed!);
+  if (publicAccount) {
+    await loadPublicBalance(publicAccount!.address);
   }
+
+  await loadPrivateBalance();
 }
 
 // ── Section 1: Public account ─────────────────────────────────────────────────
@@ -335,6 +352,8 @@ async function loadPrivateBalance(): Promise<boolean> {
     .getNotesBalance(privateAccAddressFull)
     .catch(() => null);
   console.log("Unconsumed asset notes balance =", notesBalance);
+
+  renderPrivateSection();
   return true;
 }
 
@@ -351,7 +370,12 @@ async function loadPrivateAccount(seed: Uint8Array) {
   await loadPrivateBalance()
     .then(() => enableP2pBtn())
     .catch((e) => console.log("loadPrivateBalance failed:", e));
-  renderPrivateSection();
+
+  setInterval(() => {
+    loadPrivateBalance().catch((e) =>
+      console.log("loadPrivateBalance interval failed:", e),
+    );
+  }, 5_000);
 }
 
 function renderVisiblePostSignIn() {
@@ -509,7 +533,7 @@ async function pollFreshAccApproval(privateAccAddress: string): Promise<void> {
     const res = await subpoolClient
       .getFreshAccStatus(privateAccAddress)
       .catch(() => null);
-    if (res?.status === "APPROVED") return;
+    if (res?.status === "Approved") return;
   }
 }
 
@@ -560,7 +584,7 @@ registerBtn.addEventListener("click", async () => {
     tesseraAddrVal.textContent = privateAccAddress;
     tesseraAddrBox.classList.add("visible");
 
-    await refreshAccountStates();
+    await loadPrivateAccount(seed);
   } catch (err) {
     registerError.textContent = `Error: ${err}`;
     registerBtn.disabled = false;
@@ -639,6 +663,12 @@ p2pBtn.addEventListener("click", async () => {
     });
 
     const depositAmountUnits = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
+
+    if (depositAmountUnits > publicBalanceRaw) {
+      p2pError.textContent = "Amount exceeds your public USDX balance.";
+      p2pBtn.disabled = false;
+      return;
+    }
 
     // Check current USDX allowance for TESSERA_CONTRACT
     const allowance = await publicClient.readContract({
@@ -907,6 +937,12 @@ xferBtn.addEventListener("click", async () => {
   const amount = parseFloat(xferAmtIn.value);
   const transferAmount = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
 
+  if (transferAmount > privateBalanceRaw) {
+    xferBtn.disabled = false;
+    xferError.textContent = "Amount exceeds your private USDX balance.";
+    return;
+  }
+
   try {
     const seed = await evalPrf();
     await loadPrivateAccount(seed);
@@ -995,7 +1031,7 @@ xferBtn.addEventListener("click", async () => {
     });
 
     step4.className = "p-step done";
-    step4.textContent = "✓ Transaction submitted";
+    step4.textContent = "✓ Transaction submitted for approval";
     xferBar.style.width = "95%";
 
     const step5 = pStep(xferSteps, "⏳ Waiting for approval…", "active");
@@ -1007,12 +1043,26 @@ xferBtn.addEventListener("click", async () => {
           if (!status || status.status === "Pending") return;
           clearInterval(timer);
           if (status.status === "Rejected") {
-            reject(new Error(`Spend tx rejected: ${status.rejection_reason ?? "unknown reason"}`));
+            reject(
+              new Error(
+                `Spend tx rejected: ${status.rejection_reason ?? "unknown reason"}`,
+              ),
+            );
             return;
           }
           step5.className = "p-step done";
-          step5.textContent = "✓ Transfer approved";
+          step5.textContent = "✓ Transfer approved and sent";
           xferBar.style.width = "100%";
+
+          const contractLink = document.createElement("a");
+          contractLink.style.marginTop = "6px";
+          contractLink.href = `https://sepolia.etherscan.io/address/${TESSERA_CONTRACT}`;
+          contractLink.target = "_blank";
+          contractLink.rel = "noopener";
+          contractLink.textContent = `View Tessera contract on Etherscan ↗`;
+          contractLink.className = "tx-link";
+          xferSteps.appendChild(contractLink);
+
           await refreshAccountStates();
           resolve();
         } catch (e) {

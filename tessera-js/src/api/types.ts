@@ -23,7 +23,7 @@ export interface ApiError {
   error: string;
 }
 
-export type FreshAccStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type FreshAccStatus = "Pending" | "Approved" | "Rejected";
 
 /** Response body for GET /freshacc/:private_acc_address/status */
 export interface FreshAccStatusResponse {
