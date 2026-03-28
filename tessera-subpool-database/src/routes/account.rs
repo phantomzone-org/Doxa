@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{error::AppError, state::AppState, types::account::AccountRow};
+use crate::{db, error::AppError, state::AppState, types::account::AccountRow};
 
 /// JSON response body for `GET /account/:private_acc_address`.
 ///
@@ -36,7 +36,7 @@ impl From<AccountRow> for AccountResponse {
 		AccountResponse {
 			private_acc_address: row.private_acc_address,
 			eth_address: row.eth_address,
-			private_identifier: hex::encode(&row.private_identifier),
+			private_identifier: row.private_identifier,
 			subpool_id: hex::encode(&row.subpool_id),
 			nonce: hex::encode(&row.nonce),
 			spend_auth: hex::encode(&row.spend_auth),

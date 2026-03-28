@@ -208,7 +208,7 @@ pub fn account_from_row(row: &AccountRow) -> anyhow::Result<StandardAccount> {
 pub fn hash_to_hex(h: &[F; 4]) -> String {
 	let mut out = [0u8; 32];
 	for (i, f) in h.iter().enumerate() {
-		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
 	}
 	hex::encode(out)
 }
@@ -224,7 +224,7 @@ pub fn hex_to_hash_checked(s: &str) -> anyhow::Result<HashOutput> {
 	let mut out = [F::ZERO; 4];
 	for i in 0..4 {
 		let chunk: [u8; 8] = bytes[i * 8..(i + 1) * 8].try_into().unwrap();
-		let val = u64::from_be_bytes(chunk);
+		let val = u64::from_le_bytes(chunk);
 		anyhow::ensure!(val <= F::ORDER, "val: {val} > F::ORDER");
 		out[i] = F::from_canonical_u64(val);
 	}

@@ -319,6 +319,11 @@ export class Account {
     return AccountAddress.fromWasm(this.inner.address());
   }
 
+  /** Returns the account nonce. */
+  nonce(): bigint {
+    return this.inner.nonce();
+  }
+
   /** Return the balance for `assetId` as a bigint (U256). Zero if not held. */
   balanceFor(assetId: AssetId): bigint {
     const leHex = this.inner.balanceFor(assetId.inner);

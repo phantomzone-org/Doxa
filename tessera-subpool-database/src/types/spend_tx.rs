@@ -1,12 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use plonky2_field::types::PrimeField64;
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Type};
-use tessera_client::{
-	AccountAddress, AssetId, DepositNote, NoteCommitment, NoteIdentifier, StandardNote,
-};
+use tessera_client::{AccountAddress, AssetId, NoteCommitment, NoteIdentifier, StandardNote};
 
 use crate::convert::{bytes_to_f, bytes_to_u256};
 
@@ -54,6 +51,7 @@ impl SpendTxRow {
 					.await
 					.with_context(|| format!("input note '{inote_id}' not found"))?;
 
+			// TODO: distinguish between error for "NOT APPROVED" and error "already consumed"
 			if !matches!(inote.status, InputNoteStatus::Approved) || inote.consume {
 				anyhow::bail!("input note '{inote_id}' is not in APPROVED status");
 			}
@@ -135,7 +133,7 @@ impl InputNoteRow {
 			.as_slice()
 			.try_into()
 			.context("input note asset_id must be 8 bytes")?;
-		let asset_id = AssetId::from_u64(bytes_to_f(&asset_id_arr).to_canonical_u64())?;
+		let asset_id = AssetId(bytes_to_f(&asset_id_arr));
 
 		Ok(asset_id)
 	}
@@ -182,28 +180,16 @@ impl InputNoteRow {
 		let asset_id = self.asset_id()?;
 		let amt = self.value()?;
 		let recipient = self.recipient()?;
-
-		match self.sender() {
-			Ok(sender) => Ok(StandardNote {
-				identifier,
-				asset_id,
-				amt,
-				recipient,
-				sender,
-				memo: self.memo()?,
-			}
-			.commitment()),
-			Err(_) => Ok(NoteCommitment(
-				DepositNote {
-					identifier,
-					recipient,
-					amount: amt,
-					asset_id,
-				}
-				.commitment()
-				.0,
-			)),
+		let sender = self.sender()?;
+		Ok(StandardNote {
+			identifier,
+			asset_id,
+			amt,
+			recipient,
+			sender,
+			memo: self.memo()?,
 		}
+		.commitment())
 	}
 }
 
@@ -250,8 +236,7 @@ impl OutputNoteRow {
 			.as_slice()
 			.try_into()
 			.context("input note asset_id must be 8 bytes")?;
-		let asset_id = AssetId::from_u64(bytes_to_f(&asset_id_arr).to_canonical_u64())?;
-
+		let asset_id = AssetId(bytes_to_f(&asset_id_arr));
 		Ok(asset_id)
 	}
 

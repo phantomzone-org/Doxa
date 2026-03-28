@@ -60,7 +60,8 @@ function leHexToU64(hex: string): bigint {
 const SUBPOOL_ID = leHexToU64(SUBPOOL_ID_HEX);
 const ASSET_ID = leHexToU64(ASSET_ID_HEX);
 
-console.log("Subpool ID =", SUBPOOL_ID);
+console.log("Subpool ID =", import.meta.env.VITE_SUBPOOL_ID_HEX);
+console.log("DB server BASE_APU_URL =", API_BASE_URL);
 
 // ── API client ────────────────────────────────────────────────────────────────
 
@@ -327,8 +328,10 @@ async function loadPrivateAccount(seed: Uint8Array) {
   const accountData = await subpoolClient
     .getAccount(privateAccAddress)
     .catch(() => null);
+
   if (accountData) {
     privateAccount = Account.fromAccountData(accountData);
+    console.log("Private Account: ", privateAccount);
     enableP2pBtn();
   } else {
     console.log("Private account is null");
@@ -438,7 +441,9 @@ function renderPrivateSection() {
     tesseraAddrVal.textContent = privateAccAddressFull;
     tesseraAddrBox.classList.add("visible");
     const balanceBigInt = privateAccount.balanceFor(AssetId.fromU64(ASSET_ID));
+    console.log("nonce = ", privateAccount.nonce());
     privateBalance = Number(balanceBigInt) / 1e6;
+    console.log("Private balance =", privateBalance);
     renderPrivateBalance();
   } else {
     kycForm.style.display = "block";
@@ -613,7 +618,7 @@ p2pBtn.addEventListener("click", async () => {
     );
     const commitmentHex = ("0x" +
       depositNote.commitment().toHex()) as `0x${string}`;
-
+    console.log("deposit note comm =", commitmentHex);
     step2.className = "p-step done";
     step2.textContent = "✓ Deposit note constructed";
 

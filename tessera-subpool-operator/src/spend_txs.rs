@@ -77,11 +77,24 @@ async fn process_one_spend_tx(
 			.await
 			.context("account not found for spend tx sender")?;
 
-	let accin = account_from_row(&acc_row)?;
-
 	// ── 2. Sanity check: fetch output notes and verify per-asset balance ────────
 	let inotes = row.get_inotes(pool).await?;
 	let onotes = row.get_onotes(pool).await?;
+
+	// Get asset ID (all in/out notes have the same asset ID in a given TX)
+	let asset_id = if let Some(inote) = onotes.first() {
+		inote.asset_id()?
+	} else {
+		anyhow::bail!("spend tx must contain at least one onput note");
+	};
+
+	let accin = account_from_row(&acc_row)?;
+	let accin_balance = accin
+		.ast
+		.assets
+		.get(&asset_id)
+		.map(|(_, amt)| *amt)
+		.unwrap_or(U256::zero());
 
 	let mut inotes_value = U256::zero();
 
@@ -95,12 +108,9 @@ async fn process_one_spend_tx(
 		onotes_value += onote.value()?;
 	}
 
-	if inotes_value != onotes_value {
-		anyhow::bail!("balance mismatch: inotes({inotes_value}) != onotes({onotes_value})");
+	if inotes_value + accin_balance < onotes_value {
+		anyhow::bail!("balance mismatch: inotes({inotes_value}) + accin.amounnt_for({:?}) < onotes({onotes_value})", asset_id.0);
 	}
-
-	// ── 3. Build accout with spend applied ─────────────────────────────────────
-	let mut accout = accin.clone_with_incremented_nonce();
 
 	// ── 5. Derive proper note commitments and nullifiers ────────────────────────
 	let sender_nk = accin.nk();
@@ -159,31 +169,13 @@ async fn process_one_spend_tx(
 		onotes_comm[i + onotes_len] = NoteCommitment(dhash);
 	}
 
-	// Get asset ID (all in/out notes have the same asset ID in a given TX)
-	let asset_id = if let Some(inote) = inotes.first() {
-		inote.asset_id()?
-	} else {
-		anyhow::bail!("spend tx must contain at least one input note");
-	};
+	// TODO: check that all inots/onotes share the asset id (although we've already done at
+	// submit_spend_tx_handler stage)
 
-	// Sums total outgoing amount (where out address != in address)
-	let mut sent_amount = U256::zero();
-	for onote in &onotes {
-		if onote.recipient_address != onote.sender_address {
-			sent_amount += onote.value()?;
-		}
-	}
-
-	let old_balance = accout
-		.ast
-		.amount_for(asset_id)
-		.map(|(_, balance)| balance)
-		.unwrap_or(U256::zero());
-
-	// Should be safe to use sub since we checked earlier that in tot value = out tot value
-	let new_balance = old_balance.saturating_sub(sent_amount);
-
-	accout.ast.insert_or_update_asset(asset_id, new_balance);
+	// ── derive account ─────────────────────────────────────
+	let mut accout = accin.clone_with_incremented_nonce();
+	let accout_balance = (accin_balance + inotes_value) - onotes_value;
+	accout.ast.insert_or_update_asset(asset_id, accout_balance);
 
 	let tx_hash = derive_priv_tx_hash(
 		accin.nullifier(),

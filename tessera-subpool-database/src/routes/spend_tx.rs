@@ -2,9 +2,14 @@ use axum::{extract::State, http::StatusCode, Json};
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use tessera_client::AssetId;
+use tracing::info;
 
 use crate::{
-	convert::bytes_to_u256, error::AppError, state::AppState, types::spend_tx::InputNoteStatus,
+	convert::{account_from_row, bytes_to_u256},
+	error::AppError,
+	state::AppState,
+	types::{account::AccountRow, spend_tx::InputNoteStatus},
 };
 
 #[derive(Deserialize)]
@@ -45,6 +50,19 @@ pub async fn submit_spend_tx_handler(
 	State(state): State<AppState>,
 	Json(req): Json<SpendTxRequest>,
 ) -> Result<(StatusCode, Json<SpendTxResponse>), AppError> {
+	// ── 0. Fetch and parse account ──────────────────────────────────────────────
+	let account_row: Option<AccountRow> =
+		sqlx::query_as("SELECT * FROM accounts WHERE private_acc_address = $1")
+			.bind(&req.priv_acc_address)
+			.fetch_optional(&state.pool)
+			.await
+			.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
+	let account_row = account_row.ok_or_else(|| {
+		AppError::NotFound(format!("account '{}' not found", req.priv_acc_address))
+	})?;
+	let account =
+		account_from_row(&account_row).map_err(|e| AppError::InvalidInput(e.to_string()))?;
+
 	// ── 1. Validate and fetch each input note ──────────────────────────────────
 	let mut inote_amounts: Vec<U256> = Vec::with_capacity(req.input_notes.len());
 
@@ -75,9 +93,16 @@ pub async fn submit_spend_tx_handler(
 			)));
 		}
 
+		if consume {
+			return Err(AppError::InvalidInput(format!(
+				"input note '{}' is consumed",
+				note.identifier
+			)));
+		}
+
 		if !matches!(status, InputNoteStatus::Approved) || consume {
 			return Err(AppError::InvalidInput(format!(
-				"input note '{}' is not approved",
+				"input note '{}' is either not approved",
 				note.identifier
 			)));
 		}
@@ -108,6 +133,23 @@ pub async fn submit_spend_tx_handler(
 			));
 		}
 	}
+
+	// ── 1c. Get account balance for this asset ────────────────────────────────
+	let asset_id_bytes_decoded = hex::decode(asset_id_hex)
+		.map_err(|_| AppError::InvalidInput("invalid asset_id hex".into()))?;
+	let asset_id_arr: [u8; 8] = asset_id_bytes_decoded
+		.as_slice()
+		.try_into()
+		.map_err(|_| AppError::InvalidInput("asset_id must be 8 bytes".into()))?;
+	let asset_id = AssetId::from_u64(u64::from_le_bytes(asset_id_arr))
+		.map_err(|e| AppError::InvalidInput(e.to_string()))?;
+	info!("Spend tx asset id = {:?}", asset_id);
+	let account_balance = account
+		.ast
+		.assets
+		.get(&asset_id)
+		.map(|(_, amt)| *amt)
+		.unwrap_or(U256::zero());
 
 	// ── 2. Validate and decode each output note ────────────────────────────────
 	struct DecodedOutput {
@@ -183,7 +225,7 @@ pub async fn submit_spend_tx_handler(
 		});
 	}
 
-	// ── 3. Balance check: sum(inotes) == sum(onotes) ──────────────────────────
+	// ── 3. Balance check: account_balance + sum(inotes) == sum(onotes) ──────────
 	let total_in = inote_amounts
 		.iter()
 		.fold(U256::zero(), |a, &v| u256_add(a, v));
@@ -191,9 +233,14 @@ pub async fn submit_spend_tx_handler(
 		.iter()
 		.fold(U256::zero(), |acc, d| u256_add(acc, d.amount));
 
-	if total_in != total_out {
+	let available = u256_add(account_balance, total_in);
+	info!(
+		"Balance check: total_in={} total_out={} available={}",
+		total_in, total_out, available
+	);
+	if available < total_out {
 		return Err(AppError::InvalidInput(
-			"balance mismatch: sum(inotes) != sum(onotes)".into(),
+			"balance mismatch: account_balance + sum(inotes) < sum(onotes)".into(),
 		));
 	}
 

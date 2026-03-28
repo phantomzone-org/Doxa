@@ -61,11 +61,25 @@ record_pid "postgres" "docker:$POSTGRES_CONTAINER_NAME"
 # ── 2. Build all binaries ────────────────────────────────────────────────────
 echo ""
 echo "=== Building binaries ==="
-cargo build --release \
-  -p tessera-demo \
-  -p tessera-subpool-database \
-  -p tessera-subpool-operator \
-  2>&1 | tail -5
+
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  # Running under sudo — invoke cargo as the original user so ~/.cargo/bin is available.
+  ORIGINAL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  sudo -u "$SUDO_USER" env \
+    HOME="$ORIGINAL_HOME" \
+    PATH="$ORIGINAL_HOME/.cargo/bin:$PATH" \
+    cargo build --release \
+      -p tessera-demo \
+      -p tessera-subpool-database \
+      -p tessera-subpool-operator \
+    2>&1 | tail -5
+else
+  cargo build --release \
+    -p tessera-demo \
+    -p tessera-subpool-database \
+    -p tessera-subpool-operator \
+    2>&1 | tail -5
+fi
 
 RELEASE_DIR="$ROOT_DIR/target/release"
 

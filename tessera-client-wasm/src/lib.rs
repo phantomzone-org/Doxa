@@ -257,6 +257,12 @@ impl WasmAccount {
 		self.0.borrow().is_fresh()
 	}
 
+	/// Returns the account nonce as a u64 (maps to `bigint` in JS).
+	#[wasm_bindgen(js_name = nonce)]
+	pub fn nonce(&self) -> u64 {
+		self.0.borrow().nonce.0.to_canonical_u64()
+	}
+
 	/// Returns the account address.
 	pub fn address(&self) -> WasmAccountAddress {
 		WasmAccountAddress(AccountAddress::from_acc(&self.0.borrow()))
@@ -268,7 +274,11 @@ impl WasmAccount {
 	pub fn balance_for(&self, asset_id: &WasmAssetId) -> String {
 		let acc = self.0.borrow();
 		let aid = AssetId(F::from_canonical_u64(asset_id.0));
-		let amount = acc.ast.amount_for(aid).map(|(_, amt)| amt).unwrap_or(U256::zero());
+		let amount = acc
+			.ast
+			.amount_for(aid)
+			.map(|(_, amt)| amt)
+			.unwrap_or(U256::zero());
 		let buf: [u8; 32] = amount.to_little_endian();
 		hex::encode(buf)
 	}

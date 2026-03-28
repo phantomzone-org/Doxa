@@ -223,6 +223,7 @@ async fn process_one_deposit<P: Provider + Clone>(
 
 	// ── 6. POST to sequencer ─────────────────────────────────────────────────
 	let nc_hex = hash_to_hex(&deposit_note_comm.0 .0);
+	info!(nc = nc_hex, "deposit note cm hex");
 	post_deposit_to_sequencer(http, sequencer_url, &nc_hex).await?;
 	info!(id = row.id, addr = %row.recipient_address, "deposit note submitted to sequencer");
 
