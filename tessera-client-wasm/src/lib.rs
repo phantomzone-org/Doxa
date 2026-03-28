@@ -637,6 +637,7 @@ impl WasmInputNote {
 		recipient: &WasmAccountAddress,
 		sender: &WasmAccountAddress,
 		position: u64,
+		memo: &[u8],
 	) -> Result<WasmInputNote, JsError> {
 		// Validate and parse identifier bytes into two Goldilocks field elements.
 		if identifier.len() != 16 {
@@ -654,6 +655,11 @@ impl WasmInputNote {
 				"identifier[8..16] value {id1_raw} is out of Goldilocks field range"
 			)));
 		}
+		if memo.len() > 512 {
+			return Err(JsError::new("memo must be at most 512 bytes"));
+		}
+		let mut memo_arr = [0u8; 512];
+		memo_arr[..memo.len()].copy_from_slice(memo);
 
 		let asset = parse_asset_id(asset_id)?;
 		let amt = bigint_to_u256(amount)?;
@@ -667,6 +673,7 @@ impl WasmInputNote {
 			amt,
 			recipient.0,
 			sender.0,
+			memo_arr,
 		);
 		Ok(WasmInputNote {
 			note,

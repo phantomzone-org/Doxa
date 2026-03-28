@@ -850,6 +850,7 @@ xferBtn.addEventListener("click", async () => {
           privateAccount!.address(),
           senderAddr,
           0n, // position placeholder (not stored in DB)
+          hexToBytes(n.memo),
         ),
       );
     }

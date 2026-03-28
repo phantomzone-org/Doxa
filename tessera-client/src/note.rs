@@ -160,6 +160,7 @@ impl StandardNote {
 		amt: U256,
 		recipient: AccountAddress,
 		sender: AccountAddress,
+		memo: [u8; 512],
 	) -> Self {
 		StandardNote {
 			identifier,
@@ -167,7 +168,7 @@ impl StandardNote {
 			amt,
 			recipient,
 			sender,
-			memo: [0u8; 512],
+			memo,
 		}
 	}
 

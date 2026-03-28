@@ -551,6 +551,7 @@ export class InputNote {
     recipient: AccountAddress,
     sender: AccountAddress,
     position: bigint,
+    memo: Uint8Array,
   ) {
     this.inner = new WasmInputNote(
       identifier,
@@ -559,6 +560,7 @@ export class InputNote {
       recipient.inner,
       sender.inner,
       position,
+      memo,
     );
   }
 }
