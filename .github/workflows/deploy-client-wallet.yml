@@ -2,7 +2,7 @@ name: Deploy demos
 
 on:
   push:
-    branches: [jay/fixes_tmp1]
+    branches: [demo]
 
 jobs:
   deploy:
@@ -44,7 +44,7 @@ jobs:
         working-directory: demo/client-wallet
         env:
           VITE_USDX_CONTRACT_ADDR: ${{ secrets.USDX_CONTRACT_ADDR }}
-          VITE_SEPOLIA_RPC_URL: ${{ secrets.VITE_SEPOLIA_RPC_URL }}
+          VITE_SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
           VITE_TESSERA_CONTRACT_ADDR: ${{ secrets.TESSERA_CONTRACT_ADDR }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_A }}
           VITE_SUBPOOL_ID_HEX: ${{ secrets.VITE_SUBPOOL_ID_HEX_A }}
@@ -62,7 +62,7 @@ jobs:
         working-directory: demo/client-wallet
         env:
           VITE_USDX_CONTRACT_ADDR: ${{ secrets.USDX_CONTRACT_ADDR }}
-          VITE_SEPOLIA_RPC_URL: ${{ secrets.VITE_SEPOLIA_RPC_URL }}
+          VITE_SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
           VITE_TESSERA_CONTRACT_ADDR: ${{ secrets.TESSERA_CONTRACT_ADDR }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_B }}
           VITE_SUBPOOL_ID_HEX: ${{ secrets.VITE_SUBPOOL_ID_HEX_B }}
@@ -80,7 +80,7 @@ jobs:
         working-directory: demo/client-wallet
         env:
           VITE_USDX_CONTRACT_ADDR: ${{ secrets.USDX_CONTRACT_ADDR }}
-          VITE_SEPOLIA_RPC_URL: ${{ secrets.VITE_SEPOLIA_RPC_URL }}
+          VITE_SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
           VITE_TESSERA_CONTRACT_ADDR: ${{ secrets.TESSERA_CONTRACT_ADDR }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL_C }}
           VITE_SUBPOOL_ID_HEX: ${{ secrets.VITE_SUBPOOL_ID_HEX_C }}
