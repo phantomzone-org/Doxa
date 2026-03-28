@@ -390,7 +390,7 @@ async fn prove_deposit_batch(
 fn hash_output_to_hex(h: &HashOutput) -> String {
 	let mut out = [0u8; 32];
 	for (i, f) in h.0.iter().enumerate() {
-		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
 	}
 	hex::encode(out)
 }

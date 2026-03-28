@@ -42,6 +42,7 @@ pub(crate) struct ForwardedNote {
 	pub amount: String,
 	pub recipient_address: String,
 	pub sender_address: String,
+	pub memo: String,
 }
 
 pub(crate) type SharedState = Arc<Mutex<SequencerState>>;

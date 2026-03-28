@@ -228,9 +228,6 @@ async fn process_one_deposit<P: Provider + Clone>(
 	info!(id = row.id, addr = %row.recipient_address, "deposit note submitted to sequencer");
 
 	// ── 7–9. Approve deposit, update account, and insert input note atomically
-	let note_id_hex = hex::encode(&row.deposit_note_identifier);
-	let asset_id_bytes = f_to_bytes(deposit.asset_id.0);
-	let amount_bytes = u256_to_bytes(deposit.amount);
 
 	let mut tx = pool
 		.begin()
@@ -244,17 +241,6 @@ async fn process_one_deposit<P: Provider + Clone>(
 		&accout,
 		acc_row.eth_address,
 		row.recipient_address.clone(),
-	)
-	.await?;
-
-	// The note stays PENDING until the deposit is confirmed on-chain (status = Validated).
-	insert_pending_input_note(
-		&mut *tx,
-		&note_id_hex,
-		&asset_id_bytes,
-		&amount_bytes,
-		&row.recipient_address,
-		&format!("{:?}", deposit_eth_address),
 	)
 	.await?;
 
@@ -377,7 +363,7 @@ pub async fn confirm_pending_notes<P: Provider + Clone>(
 				.0
 				 .0
 				.iter()
-				.flat_map(|f| f.to_canonical_u64().to_be_bytes())
+				.flat_map(|f| f.to_canonical_u64().to_le_bytes())
 				.collect::<Vec<_>>(),
 		);
 

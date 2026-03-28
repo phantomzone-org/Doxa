@@ -9,6 +9,7 @@ import {
   WasmDepositNoteCommitment,
   WasmDummyNote,
   WasmInputNote,
+  WasmNoteCommitment,
   WasmOutputNote,
   WasmPrivateIdentifier,
   WasmPublicIdentifier,
@@ -538,6 +539,24 @@ export function derivePublicIdentifier(
   return PublicIdentifier.fromWasm(wasmDerivePublicIdentifier(privateId.inner));
 }
 
+// ── NoteCommitment ────────────────────────────────────────────────────────────
+
+/** A note commitment (32 bytes / 64 hex chars). */
+export class NoteCommitment {
+  constructor(readonly inner: WasmNoteCommitment) {}
+
+  toHex(): string { return this.inner.toHex(); }
+  toBytes(): Uint8Array { return this.inner.toBytes(); }
+
+  static fromHex(hex: string): NoteCommitment {
+    return new NoteCommitment(WasmNoteCommitment.fromHex(hex));
+  }
+
+  static fromBytes(bytes: Uint8Array): NoteCommitment {
+    return new NoteCommitment(WasmNoteCommitment.fromBytes(bytes));
+  }
+}
+
 // ── InputNote ─────────────────────────────────────────────────────────────────
 
 /** A note positioned in the Note Commitment Tree — used as input to `SpendTxBuilder`. */
@@ -562,6 +581,10 @@ export class InputNote {
       position,
       memo,
     );
+  }
+
+  commitment(): NoteCommitment {
+    return new NoteCommitment(this.inner.commitment());
   }
 }
 

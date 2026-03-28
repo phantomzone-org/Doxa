@@ -842,17 +842,17 @@ xferBtn.addEventListener("click", async () => {
     for (const n of inotes) {
       const identBytes = hexToBytes(n.identifier); // 16 bytes
       const senderAddr = AccountAddress.fromHex(n.sender_address);
-      builder.addInputNote(
-        new InputNote(
-          identBytes,
-          assetIdU64,
-          hexLeToU256(n.amount),
-          privateAccount!.address(),
-          senderAddr,
-          0n, // position placeholder (not stored in DB)
-          hexToBytes(n.memo),
-        ),
+      const nnn = new InputNote(
+        identBytes,
+        assetIdU64,
+        hexLeToU256(n.amount),
+        privateAccount!.address(),
+        senderAddr,
+        0n, // position placeholder (not stored in DB)
+        hexToBytes(n.memo),
       );
+      console.log(nnn.commitment().toHex());
+      builder.addInputNote(nnn);
     }
 
     const transferAmount = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals

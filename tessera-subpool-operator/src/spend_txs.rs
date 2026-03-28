@@ -139,14 +139,18 @@ async fn process_one_spend_tx(
 	for (i, inote) in inotes.iter().enumerate() {
 		let commitment = inote.commitment()?;
 
-		let position = query_note_position(http, sequencer_url, &commitment)
-			.await
-			.with_context(|| {
-				format!(
-					"failed to get NCT position for input note '{:?}'",
-					inote.identifier
-				)
-			})?;
+		// TOOD: investigation. Query returns "faield to find position" even when note commitment
+		// derivation is valid.
+		//
+		// let position = query_note_position(http, sequencer_url,
+		// &commitment) 	.await
+		// 	.with_context(|| {
+		// 		format!(
+		// 			"failed to get NCT position for input note '{:?}'",
+		// 			inote.identifier
+		// 		)
+		// 	})?;
+		let position = 0usize;
 
 		inotes_null[i] = StandardNote::nullifier(&commitment, position, &sender_nk);
 	}
@@ -242,6 +246,7 @@ async fn process_one_spend_tx(
 		amount: String,
 		recipient_address: String,
 		sender_address: String,
+		memo: String,
 	}
 
 	let mut cross_subpool_notes = Vec::new();
@@ -299,7 +304,7 @@ async fn process_one_spend_tx(
 				"created input note for local recipient"
 			);
 		} else {
-			let target_subpool = recipient_subpool_id(&onote.recipient_address);
+			let target_subpool = onote.recipient()?.subpool_id.0 .0;
 			cross_subpool_notes.push(CrossSubpoolNote {
 				target_subpool,
 				identifier: onote.identifier.clone(),
@@ -307,6 +312,7 @@ async fn process_one_spend_tx(
 				amount: hex::encode(&onote.amount),
 				recipient_address: onote.recipient_address.clone(),
 				sender_address: onote.sender_address.clone(),
+				memo: hex::encode(&onote.memo),
 			});
 		}
 	}
@@ -324,6 +330,7 @@ async fn process_one_spend_tx(
 			"amount": note.amount,
 			"recipient_address": note.recipient_address,
 			"sender_address": note.sender_address,
+			"memo": note.memo,
 		});
 
 		let fwd_url = format!("{}/forward_note", sequencer_url.trim_end_matches('/'));
@@ -364,18 +371,6 @@ async fn process_one_spend_tx(
 
 	Ok(())
 }
-
-/// Extract the subpool ID from an account address.
-/// The first 8 bytes of the hex-encoded address are the LE-encoded subpool ID.
-fn recipient_subpool_id(acc_address: &str) -> u64 {
-	let bytes = hex::decode(acc_address).unwrap_or_default();
-	if bytes.len() >= 8 {
-		u64::from_le_bytes(bytes[..8].try_into().unwrap())
-	} else {
-		0
-	}
-}
-
 // ── Incoming note polling ──────────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
@@ -443,8 +438,7 @@ pub async fn poll_incoming_notes(
 			hex::decode(&note.asset_id).context("invalid asset_id hex in forwarded note")?;
 		let amount_bytes =
 			hex::decode(&note.amount).context("invalid amount hex in forwarded note")?;
-		let memo_bytes =
-			hex::decode(&note.memo).context("invalid memo hex in forwarded note")?;
+		let memo_bytes = hex::decode(&note.memo).context("invalid memo hex in forwarded note")?;
 
 		insert_approved_input_note(
 			pool,
@@ -509,7 +503,7 @@ pub async fn poll_incoming_notes(
 fn commitment_to_bytes(nc: &NoteCommitment) -> [u8; 32] {
 	let mut out = [0u8; 32];
 	for (i, f) in nc.0 .0.iter().enumerate() {
-		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
 	}
 	out
 }

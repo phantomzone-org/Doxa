@@ -681,6 +681,57 @@ impl WasmInputNote {
 			asset_id,
 		})
 	}
+
+	/// Returns the note commitment (4 Goldilocks field elements, 32 bytes).
+	#[wasm_bindgen(js_name = commitment)]
+	pub fn commitment(&self) -> WasmNoteCommitment {
+		WasmNoteCommitment(self.note.commitment())
+	}
+}
+
+// ── WasmNoteCommitment ────────────────────────────────────────────────────────
+
+/// A note commitment (4 Goldilocks field elements, 32 bytes / 64 hex chars).
+#[wasm_bindgen]
+pub struct WasmNoteCommitment(NoteCommitment);
+
+#[wasm_bindgen]
+impl WasmNoteCommitment {
+	/// 64 hex chars — 4 × u64 LE (32 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		hex::encode(hash_to_bytes(self.0.0))
+	}
+
+	/// 32 bytes (4 × u64 little-endian).
+	#[wasm_bindgen(js_name = toBytes)]
+	pub fn to_bytes(&self) -> Vec<u8> {
+		hash_to_bytes(self.0.0)
+	}
+
+	/// Parse from a 64-char hex string (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmNoteCommitment, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from a 32-byte Uint8Array (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmNoteCommitment, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmNoteCommitment, JsError> {
+		if bytes.len() != 32 {
+			return Err(JsError::new("note commitment must be 32 bytes (64 hex chars)"));
+		}
+		let mut elems = [F::ZERO; 4];
+		for (i, chunk) in bytes.chunks_exact(8).enumerate() {
+			elems[i] = F::from_canonical_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
+		}
+		Ok(WasmNoteCommitment(NoteCommitment(HashOutput(elems))))
+	}
 }
 
 // ── WasmOutputNote ────────────────────────────────────────────────────────────

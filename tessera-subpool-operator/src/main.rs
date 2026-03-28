@@ -84,10 +84,10 @@ async fn main() -> Result<()> {
 			tracing::error!("deposit tick failed: {e:#}");
 		}
 
-		if let Err(e) = deposits::confirm_pending_notes(&pool, &rpc_provider, rollup_address).await
-		{
-			tracing::error!("confirm_notes tick failed: {e:#}");
-		}
+		// if let Err(e) = deposits::confirm_pending_notes(&pool, &rpc_provider,
+		// rollup_address).await {
+		// 	tracing::error!("confirm_notes tick failed: {e:#}");
+		// }
 
 		if let Err(e) =
 			spend_txs::process_pending_spend_txs(&pool, &approval_sk, &config.sequencer_url, &http)
