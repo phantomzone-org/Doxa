@@ -1,9 +1,14 @@
 use axum::{
+	http::StatusCode,
 	routing::{get, post},
 	Router,
 };
 
 use crate::state::AppState;
+
+async fn health_handler() -> StatusCode {
+	StatusCode::OK
+}
 
 pub mod account;
 pub mod admin;
@@ -17,6 +22,7 @@ pub mod spend_tx;
 
 pub fn router(state: AppState) -> Router {
 	Router::new()
+		.route("/status", get(health_handler))
 		.route("/admin/freshacc", get(admin::list_freshacc_handler))
 		.route("/admin/accounts", get(admin::list_accounts_handler))
 		.route("/register", post(register::register_handler))
