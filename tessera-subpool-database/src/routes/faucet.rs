@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{error::AppError, state::AppState};
 
-/// 0.000000001 ETH in wei
-const FAUCET_AMOUNT_WEI: u128 = 300_000_000_000;
+/// Sufficient ETH for approx 50 deposits
+const FAUCET_AMOUNT_WEI: u128 = 4710000000000;
+
 /// 10 USDX (6 decimals)
 const USDX_MINT_AMOUNT: u64 = 10_000_000;
 

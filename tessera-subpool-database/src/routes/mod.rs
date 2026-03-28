@@ -21,7 +21,10 @@ pub fn router(state: AppState) -> Router {
 		.route("/admin/accounts", get(admin::list_accounts_handler))
 		.route("/register", post(register::register_handler))
 		.route("/deposit", post(deposit::submit_deposit_handler))
-		.route("/deposit/{id}/status", get(deposit::get_deposit_status_handler))
+		.route(
+			"/deposit/{id}/status",
+			get(deposit::get_deposit_status_handler),
+		)
 		.route("/faucet", post(faucet::faucet_handler))
 		.route("/spend_tx", post(spend_tx::submit_spend_tx_handler))
 		.route(
@@ -34,7 +37,7 @@ pub fn router(state: AppState) -> Router {
 		)
 		.route(
 			"/notes_balance/{private_acc_address}",
-			get(notes_balance::get_notes_balance_handler),
+			get(notes_balance::get_unconsumed_asset_notes_handler),
 		)
 		.route(
 			"/freshacc/{private_acc_address}/status",

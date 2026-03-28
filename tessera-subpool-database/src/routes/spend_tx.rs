@@ -234,10 +234,10 @@ pub async fn submit_spend_tx_handler(
 		.fold(U256::zero(), |acc, d| u256_add(acc, d.amount));
 
 	let available = u256_add(account_balance, total_in);
-	info!(
-		"Balance check: total_in={} total_out={} available={}",
-		total_in, total_out, available
-	);
+	// info!(
+	// 	"Balance check: total_in={} total_out={} available={}",
+	// 	total_in, total_out, available
+	// );
 	if available < total_out {
 		return Err(AppError::InvalidInput(
 			"balance mismatch: account_balance + sum(inotes) < sum(onotes)".into(),

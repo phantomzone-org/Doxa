@@ -54,7 +54,7 @@ export interface DepositResponse {
   id: number;
 }
 
-export type DepositTxStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type DepositTxStatus = "Pending" | "Approved" | "Rejected";
 
 /** Response body for GET /deposit/:id/status */
 export interface DepositStatusResponse {
@@ -107,6 +107,18 @@ export interface SpendTxRequest {
 /** Response body for a successful POST /spend_tx (HTTP 201) */
 export interface SpendTxResponse {
   id: number;
+}
+
+/** Per-asset entry in GET /notes_balance/:address */
+export interface AssetBalance {
+  /** hex-encoded U256 (big-endian, 64 chars) */
+  amount: string;
+}
+
+/** Response body for GET /notes_balance/:address */
+export interface NotesBalanceResponse {
+  /** Keys are decimal asset_id strings (u64). */
+  balances: Record<string, AssetBalance>;
 }
 
 /** Response body for GET /account/:private_acc_address */

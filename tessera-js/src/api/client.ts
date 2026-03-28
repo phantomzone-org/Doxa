@@ -8,6 +8,7 @@ import type {
   FaucetResponse,
   FreshAccStatusResponse,
   InputNote,
+  NotesBalanceResponse,
   RegisterRequest,
   RegisterResponse,
   SpendTxRequest,
@@ -158,6 +159,17 @@ export class SubpoolClient {
   /**
    * GET /input_notes/:recipientAddress — approved incoming notes for an account.
    */
+  /**
+   * GET /notes_balance/:privateAccAddress
+   * Returns the summed unconsumed approved note balances grouped by asset_id.
+   */
+  async getNotesBalance(privateAccAddress: string): Promise<NotesBalanceResponse> {
+    const res = await fetch(`${this.baseUrl}/notes_balance/${privateAccAddress}`);
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as NotesBalanceResponse;
+  }
+
   async getInputNotes(recipientAddress: string): Promise<InputNote[]> {
     const res = await fetch(`${this.baseUrl}/input_notes/${recipientAddress}`);
     const json = await res.json();

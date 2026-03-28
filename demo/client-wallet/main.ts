@@ -22,7 +22,11 @@ import {
   derivePrivateIdentifier,
   derivePublicIdentifier,
 } from "../../tessera-js/src/index";
-import type { AccountResponse, NotePayload } from "../../tessera-js/src/index";
+import type {
+  AccountResponse,
+  NotePayload,
+  NotesBalanceResponse,
+} from "../../tessera-js/src/index";
 
 await init();
 
@@ -73,9 +77,11 @@ let credentialId: Uint8Array | null = null;
 let ethAddressFull: string | null = null;
 let privateAccAddressFull: string | null = null;
 let privateAccount: Account | null = null;
+let notesBalance: NotesBalanceResponse | null = null;
 let publicAccount: PrivateKeyAccount | null = null;
 let currentSeed: Uint8Array | null = null;
-let privateBalance = 0;
+let privateBalanceRaw = 0n;
+let publicBalanceRaw = 0n;
 
 // ── passkey helpers ───────────────────────────────────────────────────────────
 
@@ -126,6 +132,7 @@ async function evalPrf(): Promise<Uint8Array> {
   const assertion = (await navigator.credentials.get({
     publicKey: {
       challenge,
+      userVerification: "required",
       extensions: {
         prf: { eval: { first: PRF_INPUT } },
       },
@@ -297,6 +304,7 @@ async function loadPublicBalance(address: string) {
     functionName: "balanceOf",
     args: [address as `0x${string}`],
   });
+  publicBalanceRaw = raw as bigint;
   const balance = Number(formatUnits(raw, 6));
   usdcBalanceEl.textContent =
     balance.toLocaleString("en-US", { minimumFractionDigits: 2 }) + " USDX";
@@ -304,17 +312,30 @@ async function loadPublicBalance(address: string) {
 
 async function showPublicWallet(seed: Uint8Array) {
   publicAccount = await deriveWalletAccount(seed);
+  updatePrivateAccountSectionState();
   ethAddressFull = publicAccount.address;
   ethAddressEl.textContent =
     ethAddressFull.slice(0, 10) + "…" + ethAddressFull.slice(-8);
   ethAddressEl.title = ethAddressFull;
   await loadPublicBalance(ethAddressFull);
-  setInterval(() => loadPublicBalance(ethAddressFull!), 10_000);
+  setInterval(() => {
+    console.log("loadPublicBalance called");
+    loadPublicBalance(ethAddressFull!);
+  }, 5_000);
 }
 
-function renderVisiblePostSignIn() {
-  walletInfo.classList.add("visible");
-  depositSection.classList.add("visible");
+async function loadPrivateBalance(): Promise<boolean> {
+  if (!privateAccAddressFull)
+    return Promise.reject(new Error("no private account address"));
+  const accountData = await subpoolClient.getAccount(privateAccAddressFull);
+  if (!accountData) return Promise.reject(new Error("account not found"));
+  privateAccount = Account.fromAccountData(accountData);
+  console.log("Private Account: ", privateAccount);
+  notesBalance = await subpoolClient
+    .getNotesBalance(privateAccAddressFull)
+    .catch(() => null);
+  console.log("Unconsumed asset notes balance =", notesBalance);
+  return true;
 }
 
 async function loadPrivateAccount(seed: Uint8Array) {
@@ -325,18 +346,17 @@ async function loadPrivateAccount(seed: Uint8Array) {
     publicId,
   ).toHex();
   privateAccAddressFull = privateAccAddress;
-  const accountData = await subpoolClient
-    .getAccount(privateAccAddress)
-    .catch(() => null);
+  updatePrivateAccountSectionState();
 
-  if (accountData) {
-    privateAccount = Account.fromAccountData(accountData);
-    console.log("Private Account: ", privateAccount);
-    enableP2pBtn();
-  } else {
-    console.log("Private account is null");
-  }
+  await loadPrivateBalance()
+    .then(() => enableP2pBtn())
+    .catch((e) => console.log("loadPrivateBalance failed:", e));
   renderPrivateSection();
+}
+
+function renderVisiblePostSignIn() {
+  walletInfo.classList.add("visible");
+  depositSection.classList.add("visible");
 }
 
 createWalletBtn.addEventListener("click", async () => {
@@ -348,8 +368,8 @@ createWalletBtn.addEventListener("click", async () => {
     const seed = await registerAndGetSeed();
     currentSeed = seed;
     await showPublicWallet(seed);
-    renderVisiblePostSignIn();
     await loadPrivateAccount(seed);
+    renderVisiblePostSignIn();
     createWalletBtn.textContent = "✓ Wallet created";
   } catch (err) {
     walletError.textContent = `Error: ${err}`;
@@ -366,7 +386,6 @@ signInBtn.addEventListener("click", async () => {
   signInBtn.textContent = "⏳ Signing in…";
   try {
     const seed = await evalPrf();
-
     currentSeed = seed;
     await showPublicWallet(seed);
     renderVisiblePostSignIn();
@@ -409,6 +428,16 @@ depositBtn.addEventListener("click", async () => {
 
 // ── Section 2: Private account ────────────────────────────────────────────────
 
+const privateAccountSection = document.getElementById(
+  "private-account-section",
+) as HTMLElement;
+
+function updatePrivateAccountSectionState() {
+  const active = publicAccount !== null && privateAccAddressFull !== null;
+  privateAccountSection.style.opacity = active ? "" : "0.4";
+  privateAccountSection.style.pointerEvents = active ? "" : "none";
+}
+
 const kycForm = document.getElementById("kyc-form")!;
 const kycDisplay = document.getElementById("kyc-display")!;
 const nameInput = document.getElementById("kyc-name") as HTMLInputElement;
@@ -428,6 +457,7 @@ const privBalanceRow = document.getElementById("priv-balance-row")!;
 const privBalanceEl = document.getElementById("priv-balance")!;
 
 function renderPrivateBalance() {
+  const privateBalance = Number(privateBalanceRaw) / 1e6;
   privBalanceEl.textContent =
     privateBalance.toLocaleString("en-US", { minimumFractionDigits: 2 }) +
     " USDX";
@@ -440,15 +470,23 @@ function renderPrivateSection() {
     kycDisplay.style.display = "block";
     tesseraAddrVal.textContent = privateAccAddressFull;
     tesseraAddrBox.classList.add("visible");
-    const balanceBigInt = privateAccount.balanceFor(AssetId.fromU64(ASSET_ID));
-    console.log("nonce = ", privateAccount.nonce());
-    privateBalance = Number(balanceBigInt) / 1e6;
-    console.log("Private balance =", privateBalance);
-    renderPrivateBalance();
+    const accountBalanceBigInt = privateAccount.balanceFor(
+      AssetId.fromU64(ASSET_ID),
+    );
+    const notesAmountHex = notesBalance?.balances[ASSET_ID.toString()]?.amount;
+    const notesBigInt = notesAmountHex ? BigInt("0x" + notesAmountHex) : 0n;
+    privateBalanceRaw = accountBalanceBigInt + notesBigInt;
+    console.log(
+      "Private totalbalanceBigInt =; accountBalanceBigInt =; unconsumedBalanceBigInt =",
+      privateBalanceRaw,
+      accountBalanceBigInt,
+      notesBigInt,
+    );
   } else {
     kycForm.style.display = "block";
     kycDisplay.style.display = "none";
   }
+  renderPrivateBalance();
 }
 
 for (const input of [nameInput, streetInput, dobInput]) {
@@ -531,6 +569,7 @@ registerBtn.addEventListener("click", async () => {
 
 // ── Section 3: Public → Private deposit ──────────────────────────────────────
 
+const p2pSection = document.getElementById("p2p-section") as HTMLElement;
 const p2pAmountInput = document.getElementById(
   "p2p-amount",
 ) as HTMLInputElement;
@@ -545,9 +584,33 @@ const p2pSteps = document.getElementById("p2p-steps")!;
 const p2pError = document.getElementById("p2p-error")!;
 
 function enableP2pBtn() {
+  p2pSection.style.opacity = "";
+  p2pSection.style.pointerEvents = "";
+  xferSection.style.opacity = "";
+  xferSection.style.pointerEvents = "";
   p2pBtn.disabled = false;
   p2pHint.textContent = "Enter an amount and click Deposit.";
 }
+
+function validateP2pAmount() {
+  const amount = parseFloat(p2pAmountInput.value);
+  if (!amount || amount <= 0) {
+    if (amount < 0) p2pAmountInput.value = "";
+    p2pBtn.disabled = false;
+    p2pError.textContent = "";
+    return;
+  }
+  const units = BigInt(Math.round(amount * 1_000_000));
+  if (units > publicBalanceRaw) {
+    p2pBtn.disabled = true;
+    p2pError.textContent = "Amount exceeds your public USDX balance.";
+  } else {
+    p2pBtn.disabled = false;
+    p2pError.textContent = "";
+  }
+}
+
+p2pAmountInput.addEventListener("input", validateP2pAmount);
 
 p2pBtn.addEventListener("click", async () => {
   const amount = parseFloat(p2pAmountInput.value);
@@ -575,6 +638,8 @@ p2pBtn.addEventListener("click", async () => {
       transport: http(SEPOLIA_RPC_URL),
     });
 
+    const depositAmountUnits = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
+
     // Check current USDX allowance for TESSERA_CONTRACT
     const allowance = await publicClient.readContract({
       address: USDX_CONTRACT_ADDR,
@@ -582,6 +647,7 @@ p2pBtn.addEventListener("click", async () => {
       functionName: "allowance",
       args: [publicAccount!.address, TESSERA_CONTRACT as `0x${string}`],
     });
+    // console.log(allowance, maxUint256, allowance < maxUint256);
 
     const walletClient = createWalletClient({
       account: publicAccount!,
@@ -589,8 +655,12 @@ p2pBtn.addEventListener("click", async () => {
       transport: http(SEPOLIA_RPC_URL),
     });
 
-    if (allowance < maxUint256) {
-      const step = pStep(p2pSteps, "⏳ Approving USDX transfer…", "active");
+    if (allowance < depositAmountUnits) {
+      const step = pStep(
+        p2pSteps,
+        "⏳ Awaiting USDX transfer approval…",
+        "active",
+      );
       p2pBar.style.width = "40%";
 
       const approveTxHash = await walletClient.writeContract({
@@ -603,22 +673,20 @@ p2pBtn.addEventListener("click", async () => {
       await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
 
       step.className = "p-step done";
-      step.textContent = "✓ USDX transfer approved";
+      step.textContent = "✓ USDX transfer approval given";
     }
 
     // ── Construct deposit note ────────────────────────────────────────────────
     const step2 = pStep(p2pSteps, "⏳ Constructing deposit note…", "active");
     p2pBar.style.width = "60%";
 
-    const amountUnits = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
     const depositNote = DepositNote.create(
       AccountAddress.fromHex(privateAccAddressFull!),
-      amountUnits,
+      depositAmountUnits,
       AssetId.fromU64(ASSET_ID),
     );
     const commitmentHex = ("0x" +
       depositNote.commitment().toHex()) as `0x${string}`;
-    console.log("deposit note comm =", commitmentHex);
     step2.className = "p-step done";
     step2.textContent = "✓ Deposit note constructed";
 
@@ -629,7 +697,7 @@ p2pBtn.addEventListener("click", async () => {
     const calldata = encodeFunctionData({
       abi: TESSERA_ABI,
       functionName: "depositAndRegister",
-      args: [commitmentHex, amountUnits],
+      args: [commitmentHex, depositAmountUnits],
     });
 
     const txRequest = await walletClient.prepareTransactionRequest({
@@ -650,7 +718,7 @@ p2pBtn.addEventListener("click", async () => {
       recipient_address: privateAccAddressFull!,
       eth_address: ethAddressFull!,
       deposit_note_identifier: depositNote.identifierHex(),
-      deposit_amount: u256LeHex(amountUnits),
+      deposit_amount: u256LeHex(depositAmountUnits),
       asset_id: ASSET_ID_HEX,
       signed_public_tx: signedTxHex,
     });
@@ -666,9 +734,11 @@ p2pBtn.addEventListener("click", async () => {
       const timer = setInterval(async () => {
         try {
           const status = await subpoolClient.getDepositStatus(depositId);
-          if (!status || status.status === "PENDING") return;
+          console.log("Deposit stats =", status);
+          if (!status || status.status === "Pending") return;
           clearInterval(timer);
-          if (status.status === "REJECTED") {
+          console.log("Here after clear");
+          if (status.status === "Rejected") {
             reject(new Error("Deposit rejected by operator"));
             return;
           }
@@ -676,14 +746,22 @@ p2pBtn.addEventListener("click", async () => {
           step5.className = "p-step done";
           step5.textContent = "✓ Deposit approved";
           if (status.deposit_tx_hash) {
-            const link = document.createElement("a");
-            link.href = `https://sepolia.etherscan.io/tx/${status.deposit_tx_hash}`;
-            link.target = "_blank";
-            link.rel = "noopener";
-            link.textContent = `View on Etherscan ↗`;
-            link.className = "tx-link";
-            p2pSteps.appendChild(link);
+            const txLink = document.createElement("a");
+            txLink.href = `https://sepolia.etherscan.io/tx/${status.deposit_tx_hash}`;
+            txLink.target = "_blank";
+            txLink.rel = "noopener";
+            txLink.textContent = `View deposit tx on Etherscan ↗`;
+            txLink.className = "tx-link";
+            p2pSteps.appendChild(txLink);
           }
+          const contractLink = document.createElement("a");
+          contractLink.style.marginTop = "6px";
+          contractLink.href = `https://sepolia.etherscan.io/address/${TESSERA_CONTRACT}`;
+          contractLink.target = "_blank";
+          contractLink.rel = "noopener";
+          contractLink.textContent = `View Tessera contract on Etherscan ↗`;
+          contractLink.className = "tx-link";
+          p2pSteps.appendChild(contractLink);
           p2pBar.style.width = "100%";
           // Refresh public + private balances
           await refreshAccountStates();
@@ -745,6 +823,7 @@ function validateTesseraAddr(hex: string): boolean {
 }
 
 // Render address book
+const xferSection = document.getElementById("xfer-section") as HTMLElement;
 const addrBook = document.getElementById("addr-book")!;
 const xferAddrIn = document.getElementById("xfer-addr") as HTMLInputElement;
 const xferAmtIn = document.getElementById("xfer-amount") as HTMLInputElement;
@@ -786,7 +865,17 @@ for (const { label, addr } of DEMO_ADDRESSES) {
 
 function updateXferBtn() {
   const addrOk = validateTesseraAddr(xferAddrIn.value.trim());
-  const amtOk = parseFloat(xferAmtIn.value) > 0;
+  const amount = parseFloat(xferAmtIn.value);
+  const amtOk = amount > 0;
+  if (amtOk) {
+    const units = BigInt(Math.round(amount * 1_000_000));
+    if (units > privateBalanceRaw) {
+      xferBtn.disabled = true;
+      xferError.textContent = "Amount exceeds your private USDX balance.";
+      return;
+    }
+  }
+  xferError.textContent = "";
   xferBtn.disabled = !(addrOk && amtOk);
 }
 
@@ -816,6 +905,7 @@ xferBtn.addEventListener("click", async () => {
   xferBar.style.width = "0%";
 
   const amount = parseFloat(xferAmtIn.value);
+  const transferAmount = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
 
   try {
     const seed = await evalPrf();
@@ -855,13 +945,12 @@ xferBtn.addEventListener("click", async () => {
       builder.addInputNote(nnn);
     }
 
-    const transferAmount = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
     const recipientAddr = AccountAddress.fromHex(xferAddrIn.value.trim());
     builder.addOutputNote(recipientAddr, transferAmount, new Uint8Array(0));
 
     const spendTx = builder.build();
     step2.className = "p-step done";
-    step2.textContent = "✓ Spend tx built";
+    step2.textContent = "✓ Spend transaction built";
 
     // ── Sign ─────────────────────────────────────────────────────────────────
     const step3 = pStep(xferSteps, "⏳ Signing…", "active");
@@ -906,7 +995,7 @@ xferBtn.addEventListener("click", async () => {
     });
 
     step4.className = "p-step done";
-    step4.textContent = `✓ Submitted (id=${resp.id})`;
+    step4.textContent = `✓ Transacion submitted`;
     xferBar.style.width = "100%";
 
     xferBtn.disabled = false;

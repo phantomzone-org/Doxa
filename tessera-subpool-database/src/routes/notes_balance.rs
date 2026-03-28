@@ -29,7 +29,7 @@ pub struct NotesBalanceResponse {
 }
 
 /// Sum all APPROVED input notes for a given recipient, grouped by asset.
-pub async fn get_notes_balance_handler(
+pub async fn get_unconsumed_asset_notes_handler(
 	State(state): State<AppState>,
 	Path(private_acc_address): Path<String>,
 ) -> Result<(StatusCode, Json<NotesBalanceResponse>), AppError> {
@@ -49,7 +49,8 @@ pub async fn get_notes_balance_handler(
 
 		let amount_arr: [u8; 32] = row.amount.as_slice().try_into().unwrap_or([0u8; 32]);
 		let amount = bytes_to_u256(&amount_arr);
-
+		// TODO: please never use arbitrary conversions like `to_string()`. Always hex-encode (in
+		// LE) when transmitting value across boundries
 		*balances
 			.entry(asset_id_u64.to_string())
 			.or_insert(primitive_types::U256::zero()) += amount;

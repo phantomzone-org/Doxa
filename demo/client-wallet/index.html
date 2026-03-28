@@ -474,6 +474,10 @@
                 font-size: 0.85rem;
                 margin-top: 0.75rem;
             }
+            .tx-link {
+                display: block;
+                margin-top: 6px;
+            }
         </style>
     </head>
     <body>
@@ -532,7 +536,7 @@
             </div>
 
             <!-- ── Private account ── -->
-            <div class="card">
+            <div class="card" id="private-account-section" style="opacity:0.4;pointer-events:none">
                 <h2>Private Account</h2>
 
                 <div id="kyc-form">
@@ -604,7 +608,7 @@
 
         <!-- ── Public → Private Deposit ── -->
         <div class="section-full">
-            <div class="card">
+            <div class="card" id="p2p-section" style="opacity:0.4;pointer-events:none">
                 <h2>Public → Private Deposit</h2>
 
                 <div class="amount-row">
@@ -643,7 +647,7 @@
 
         <!-- ── Private Transfer ── -->
         <div class="section-full">
-            <div class="card">
+            <div class="card" id="xfer-section" style="opacity:0.4;pointer-events:none">
                 <h2>Private Transfer</h2>
 
                 <div class="subsection-label">Demo addresses</div>
