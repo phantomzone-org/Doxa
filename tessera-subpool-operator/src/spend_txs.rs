@@ -288,6 +288,7 @@ async fn process_one_spend_tx(
 				&onote.amount,
 				&onote.recipient_address,
 				&onote.sender_address,
+				&onote.memo,
 			)
 			.await?;
 
@@ -384,6 +385,7 @@ struct IncomingNote {
 	amount: String,
 	recipient_address: String,
 	sender_address: String,
+	memo: String,
 }
 
 /// Poll the sequencer for notes forwarded to this subpool and insert them
@@ -441,6 +443,8 @@ pub async fn poll_incoming_notes(
 			hex::decode(&note.asset_id).context("invalid asset_id hex in forwarded note")?;
 		let amount_bytes =
 			hex::decode(&note.amount).context("invalid amount hex in forwarded note")?;
+		let memo_bytes =
+			hex::decode(&note.memo).context("invalid memo hex in forwarded note")?;
 
 		insert_approved_input_note(
 			pool,
@@ -449,6 +453,7 @@ pub async fn poll_incoming_notes(
 			&amount_bytes,
 			&note.recipient_address,
 			&note.sender_address,
+			&memo_bytes,
 		)
 		.await?;
 

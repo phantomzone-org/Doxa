@@ -97,11 +97,12 @@ pub async fn insert_approved_input_note<'e>(
 	amount: &[u8],
 	recipient_address: &str,
 	sender_address: &str,
+	memo: &[u8],
 ) -> Result<()> {
 	sqlx::query(
 		r#"INSERT INTO input_notes
-               (identifier, asset_id, amount, recipient_address, sender_address, status)
-           VALUES ($1, $2, $3, $4, $5, 'APPROVED')
+               (identifier, asset_id, amount, recipient_address, sender_address, memo, status)
+           VALUES ($1, $2, $3, $4, $5, $6, 'APPROVED')
            ON CONFLICT (identifier) DO NOTHING"#,
 	)
 	.bind(identifier)
@@ -109,6 +110,7 @@ pub async fn insert_approved_input_note<'e>(
 	.bind(amount)
 	.bind(recipient_address)
 	.bind(sender_address)
+	.bind(memo)
 	.execute(executor)
 	.await
 	.context("failed to insert input_note")?;
