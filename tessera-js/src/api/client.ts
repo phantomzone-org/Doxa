@@ -13,6 +13,7 @@ import type {
   RegisterResponse,
   SpendTxRequest,
   SpendTxResponse,
+  SpendTxStatusResponse,
 } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
@@ -190,6 +191,14 @@ export class SubpoolClient {
     const json = await res.json();
     if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
     return json as SpendTxResponse;
+  }
+
+  async getSpendTxStatus(id: number): Promise<SpendTxStatusResponse | null> {
+    const res = await fetch(`${this.baseUrl}/spend_tx/${id}/status`);
+    if (res.status === 404) return null;
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as SpendTxStatusResponse;
   }
 
   async registerAccount(

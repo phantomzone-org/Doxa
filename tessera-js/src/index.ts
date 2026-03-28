@@ -22,4 +22,4 @@ export {
 export type { HashBytes } from "./account.js";
 
 export { SubpoolClient, SubpoolApiError } from "./api/index.js";
-export type { RegisterRequest, RegisterResponse, AccountResponse, FreshAccStatus, FreshAccStatusResponse, ApiError, NotePayload, SpendTxRequest, SpendTxResponse, NotesBalanceResponse } from "./api/index.js";
+export type { RegisterRequest, RegisterResponse, AccountResponse, FreshAccStatus, FreshAccStatusResponse, ApiError, NotePayload, SpendTxRequest, SpendTxResponse, NotesBalanceResponse, SpendTxStatus, SpendTxStatusResponse } from "./api/index.js";

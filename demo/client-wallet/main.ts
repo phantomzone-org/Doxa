@@ -995,8 +995,32 @@ xferBtn.addEventListener("click", async () => {
     });
 
     step4.className = "p-step done";
-    step4.textContent = `✓ Transacion submitted`;
-    xferBar.style.width = "100%";
+    step4.textContent = "✓ Transaction submitted";
+    xferBar.style.width = "95%";
+
+    const step5 = pStep(xferSteps, "⏳ Waiting for approval…", "active");
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setInterval(async () => {
+        try {
+          const status = await subpoolClient.getSpendTxStatus(resp.id);
+          if (!status || status.status === "Pending") return;
+          clearInterval(timer);
+          if (status.status === "Rejected") {
+            reject(new Error(`Spend tx rejected: ${status.rejection_reason ?? "unknown reason"}`));
+            return;
+          }
+          step5.className = "p-step done";
+          step5.textContent = "✓ Transfer approved";
+          xferBar.style.width = "100%";
+          await refreshAccountStates();
+          resolve();
+        } catch (e) {
+          clearInterval(timer);
+          reject(e);
+        }
+      }, 5_000);
+    });
 
     xferBtn.disabled = false;
     xferAmtIn.value = "";

@@ -109,6 +109,15 @@ export interface SpendTxResponse {
   id: number;
 }
 
+export type SpendTxStatus = "Pending" | "Approved" | "Rejected";
+
+/** Response body for GET /spend_tx/:id/status */
+export interface SpendTxStatusResponse {
+  id: number;
+  status: SpendTxStatus;
+  rejection_reason: string | null;
+}
+
 /** Per-asset entry in GET /notes_balance/:address */
 export interface AssetBalance {
   /** hex-encoded U256 (big-endian, 64 chars) */

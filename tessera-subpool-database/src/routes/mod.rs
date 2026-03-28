@@ -28,6 +28,10 @@ pub fn router(state: AppState) -> Router {
 		.route("/faucet", post(faucet::faucet_handler))
 		.route("/spend_tx", post(spend_tx::submit_spend_tx_handler))
 		.route(
+			"/spend_tx/{id}/status",
+			get(spend_tx::get_spend_tx_status_handler),
+		)
+		.route(
 			"/account/{private_acc_address}",
 			get(account::get_account_handler),
 		)

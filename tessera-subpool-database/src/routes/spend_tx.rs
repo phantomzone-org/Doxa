@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::{Path, State}, http::StatusCode, Json};
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -9,7 +9,7 @@ use crate::{
 	convert::{account_from_row, bytes_to_u256},
 	error::AppError,
 	state::AppState,
-	types::{account::AccountRow, spend_tx::InputNoteStatus},
+	types::{account::AccountRow, spend_tx::{InputNoteStatus, SpendTxStatus}},
 };
 
 #[derive(Deserialize)]
@@ -312,4 +312,31 @@ pub async fn submit_spend_tx_handler(
 			id,
 		}),
 	))
+}
+
+#[derive(Serialize)]
+pub struct SpendTxStatusResponse {
+	pub id: i64,
+	pub status: SpendTxStatus,
+	pub rejection_reason: Option<String>,
+}
+
+pub async fn get_spend_tx_status_handler(
+	State(state): State<AppState>,
+	Path(id): Path<i64>,
+) -> Result<(StatusCode, Json<SpendTxStatusResponse>), AppError> {
+	let row: Option<(i64, SpendTxStatus, Option<String>)> = sqlx::query_as(
+		"SELECT id, status, rejection_reason FROM spend_tx_requests WHERE id = $1",
+	)
+	.bind(id)
+	.fetch_optional(&state.pool)
+	.await?;
+
+	match row {
+		None => Err(AppError::NotFound(format!("spend tx {id} not found"))),
+		Some((id, status, rejection_reason)) => Ok((
+			StatusCode::OK,
+			Json(SpendTxStatusResponse { id, status, rejection_reason }),
+		)),
+	}
 }
