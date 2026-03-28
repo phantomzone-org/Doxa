@@ -15,7 +15,7 @@ Internet → EC2 :80  (nginx — ACME challenge only)
            certbot  (renewal loop, runs every 12 h)
 ```
 
-Images are built locally and pushed to GitHub Container Registry (ghcr.io). The EC2 instance only runs `docker compose pull && up` — no Rust toolchain needed there.
+Images are built directly on the EC2 instance from the rsynced source — no image registry needed.
 
 ---
 
@@ -83,7 +83,6 @@ scp -i ~/.ssh/key.pem tessera-demo/ec2/.env ubuntu@<EC2_IP>:~/tessera/.env
 
 | Variable               | Description                                    |
 |------------------------|------------------------------------------------|
-| `IMAGE_REGISTRY`       | e.g. `ghcr.io/your-org/tessera`                |
 | `DOMAIN`               | e.g. `api.example.com`                         |
 | `RPC_URL`              | Sepolia Alchemy/Infura endpoint                |
 | `BRIDGE_ADDRESS`       | Deployed Tessera contract address              |
@@ -95,45 +94,23 @@ scp -i ~/.ssh/key.pem tessera-demo/ec2/.env ubuntu@<EC2_IP>:~/tessera/.env
 
 ---
 
-## 4. Authenticate with ghcr.io
-
-Run once locally (and once on the EC2 instance so it can pull images):
-
-```bash
-# Local — to push images
-echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-
-# EC2 — to pull images (SSH in first)
-echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-```
-
-Your GitHub token needs `write:packages` (push) / `read:packages` (pull) scope.
-
----
-
-## 5. Deploy (from your local machine)
+## 4. Deploy (from your local machine)
 
 ```bash
 EC2_HOST=api.example.com EC2_KEY=~/.ssh/key.pem ./tessera-demo/ec2/deploy.sh
 ```
 
 **What it does:**
-1. Builds all three Docker images from the repo root using `tessera-demo/ec2/docker/Dockerfile.*`
-2. Pushes them to `ghcr.io` with the configured tag
-3. Rsyncs `docker-compose.prod.yml`, `nginx/`, and `init-schemas.sql` to `~/tessera/`
-4. SSHs in and runs `docker compose pull && docker compose up -d`
+1. Rsyncs the entire repo source to `~/tessera/src/` on the EC2 instance (excludes `.git`, `target/`, `node_modules`, `wasm`)
+2. Rsyncs `docker-compose.prod.yml` and `nginx/` to `~/tessera/`
+3. Copies `.env.example` → `~/tessera/.env` only on the first run (never overwrites)
+4. SSHs in and runs `docker compose build && docker compose up -d` — images are built directly on EC2
 
 Subsequent deploys are the same command — postgres data is preserved in the `tessera_postgres-data` named volume.
 
-### To deploy a specific version tag
-
-```bash
-IMAGE_TAG=v1.2.3 EC2_HOST=api.example.com EC2_KEY=~/.ssh/key.pem ./tessera-demo/ec2/deploy.sh
-```
-
 ---
 
-## 6. Restart
+## 5. Restart
 
 ### Restart all services, keep existing database
 
@@ -143,10 +120,10 @@ cd ~/tessera
 docker compose -f docker-compose.prod.yml restart
 ```
 
-Or pull fresh images and recreate:
+Or rebuild and recreate (after a new `deploy.sh` run has rsynced updated source):
 
 ```bash
-docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
 ```
 
@@ -163,7 +140,7 @@ docker compose -f docker-compose.prod.yml up -d
 
 ---
 
-## 7. Stop
+## 6. Stop
 
 ```bash
 # On EC2 — stop all containers (data preserved in volumes)
@@ -176,7 +153,7 @@ docker compose -f docker-compose.prod.yml down -v
 
 ---
 
-## 8. Status
+## 7. Status
 
 ```bash
 # On EC2
@@ -185,22 +162,22 @@ docker compose -f ~/tessera/docker-compose.prod.yml ps
 
 Example output:
 ```
-NAME                  IMAGE                          STATUS          PORTS
-tessera-postgres-1    postgres:16                    Up (healthy)    5432/tcp
-tessera-sequencer-1   ghcr.io/.../tessera-sequencer  Up              3000/tcp
-tessera-subpool-db-1  ghcr.io/.../tessera-subpool-db Up              8080/tcp
-tessera-subpool-db-2  ghcr.io/.../tessera-subpool-db Up              8080/tcp
-tessera-subpool-db-3  ghcr.io/.../tessera-subpool-db Up              8080/tcp
-tessera-operator-1    ghcr.io/.../tessera-operator   Up
-tessera-operator-2    ghcr.io/.../tessera-operator   Up
-tessera-operator-3    ghcr.io/.../tessera-operator   Up
-tessera-nginx-1       nginx:alpine                   Up              0.0.0.0:80->80/tcp, ...
-tessera-certbot-1     certbot/certbot                Up
+NAME                  IMAGE                   STATUS          PORTS
+tessera-postgres-1    postgres:16             Up (healthy)    5432/tcp
+tessera-sequencer-1   tessera-sequencer       Up              3000/tcp
+tessera-subpool-db-1  tessera-subpool-db-1    Up              8080/tcp
+tessera-subpool-db-2  tessera-subpool-db-2    Up              8080/tcp
+tessera-subpool-db-3  tessera-subpool-db-3    Up              8080/tcp
+tessera-operator-1    tessera-operator-1      Up
+tessera-operator-2    tessera-operator-2      Up
+tessera-operator-3    tessera-operator-3      Up
+tessera-nginx-1       nginx:alpine            Up              0.0.0.0:80->80/tcp, ...
+tessera-certbot-1     certbot/certbot         Up
 ```
 
 ---
 
-## 9. Logs
+## 8. Logs
 
 ```bash
 # All containers
@@ -214,7 +191,7 @@ docker compose -f ~/tessera/docker-compose.prod.yml logs -f nginx
 
 ---
 
-## 10. Health Check
+## 9. Health Check
 
 ```bash
 curl https://api.example.com:8081/status   # → 200 OK
@@ -224,7 +201,7 @@ curl https://api.example.com:8083/status
 
 ---
 
-## 11. TLS Certificate Renewal
+## 10. TLS Certificate Renewal
 
 Renewal is automatic. The `certbot` container checks every 12 hours and renews when fewer than 30 days remain. After renewal, nginx picks up the updated cert on the next request (Let's Encrypt certs are read from disk on each TLS handshake by nginx).
 
@@ -248,7 +225,7 @@ docker compose -f ~/tessera/docker-compose.prod.yml run --rm certbot renew --dry
 
 | File | Purpose |
 |------|---------|
-| `deploy.sh` | Run locally — builds images, pushes to ghcr.io, deploys to EC2 |
+| `deploy.sh` | Run locally — rsyncs source to EC2, builds images there, restarts services |
 | `ec2_setup.sh` | Run once on EC2 — installs Docker, obtains Let's Encrypt cert |
 | `.env.example` | Environment variable template — copy to `.env` and fill in secrets |
 | `docker-compose.prod.yml` | Defines all services (postgres, sequencer, APIs, operators, nginx, certbot) |

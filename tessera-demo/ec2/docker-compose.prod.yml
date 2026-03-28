@@ -12,7 +12,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./init-schemas.sql:/docker-entrypoint-initdb.d/init-schemas.sql:ro
+      - ./src/docker/init-schemas.sql:/docker-entrypoint-initdb.d/init-schemas.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -21,7 +21,9 @@ services:
 
   # ── Sequencer ─────────────────────────────────────────────────────────────────
   sequencer:
-    image: ${IMAGE_REGISTRY}-sequencer:${IMAGE_TAG:-latest}
+    build:
+      context: ./src
+      dockerfile: tessera-demo/ec2/docker/Dockerfile.sequencer
     restart: unless-stopped
     environment:
       DEMO_RPC_URL: ${RPC_URL}
@@ -35,7 +37,9 @@ services:
 
   # ── Subpool Database APIs ─────────────────────────────────────────────────────
   subpool-db-1:
-    image: ${IMAGE_REGISTRY}-subpool-db:${IMAGE_TAG:-latest}
+    build:
+      context: ./src
+      dockerfile: tessera-demo/ec2/docker/Dockerfile.subpool-db
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?options=-c%20search_path%3Dsubpool_1"
@@ -50,7 +54,9 @@ services:
         condition: service_healthy
 
   subpool-db-2:
-    image: ${IMAGE_REGISTRY}-subpool-db:${IMAGE_TAG:-latest}
+    build:
+      context: ./src
+      dockerfile: tessera-demo/ec2/docker/Dockerfile.subpool-db
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?options=-c%20search_path%3Dsubpool_2"
@@ -65,7 +71,9 @@ services:
         condition: service_healthy
 
   subpool-db-3:
-    image: ${IMAGE_REGISTRY}-subpool-db:${IMAGE_TAG:-latest}
+    build:
+      context: ./src
+      dockerfile: tessera-demo/ec2/docker/Dockerfile.subpool-db
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?options=-c%20search_path%3Dsubpool_3"
@@ -81,7 +89,9 @@ services:
 
   # ── Subpool Operators ─────────────────────────────────────────────────────────
   operator-1:
-    image: ${IMAGE_REGISTRY}-operator:${IMAGE_TAG:-latest}
+    build:
+      context: ./src
+      dockerfile: tessera-demo/ec2/docker/Dockerfile.operator
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?options=-c%20search_path%3Dsubpool_1"
@@ -97,7 +107,9 @@ services:
       - subpool-db-1
 
   operator-2:
-    image: ${IMAGE_REGISTRY}-operator:${IMAGE_TAG:-latest}
+    build:
+      context: ./src
+      dockerfile: tessera-demo/ec2/docker/Dockerfile.operator
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?options=-c%20search_path%3Dsubpool_2"
@@ -113,7 +125,9 @@ services:
       - subpool-db-2
 
   operator-3:
-    image: ${IMAGE_REGISTRY}-operator:${IMAGE_TAG:-latest}
+    build:
+      context: ./src
+      dockerfile: tessera-demo/ec2/docker/Dockerfile.operator
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?options=-c%20search_path%3Dsubpool_3"
@@ -129,8 +143,6 @@ services:
       - subpool-db-3
 
   # ── nginx reverse proxy ───────────────────────────────────────────────────────
-  # Uses nginx's built-in envsubst support: tessera.conf.template is processed
-  # at container start and DOMAIN is substituted from the environment.
   nginx:
     image: nginx:alpine
     restart: unless-stopped
