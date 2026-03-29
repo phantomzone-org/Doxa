@@ -3,7 +3,7 @@
 End-to-end testing framework and artifact generation tooling for the Tessera
 proving stack.
 
-This crate provides:
+This crae provides:
 - **Artifact generation binaries** — build and serialize all Plonky2, BN128, and
   Groth16 proving keys needed by the sequencer and E2E tests.
 - **`InProcessProver`** — wraps `ProverRuntimeV2` so E2E tests can run the full
