@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sync source to EC2 and rebuild + restart all services there.
-# No image registry needed — images are built directly on the instance.
+# Sync source to EC2, build binaries there, install nginx config, restart services.
 #
 # Prerequisites:
-#   - ec2_setup.sh already run on the instance
-#   - .env present on the instance (copied from .env.example, secrets filled in)
+#   - ec2_setup.sh already run on the instance (installs Rust, nginx, certbot)
+#   - services.prod.env present on the instance (copied from services.prod.env.example)
 #
 # Usage:
 #   EC2_HOST=api.example.com EC2_KEY=~/.ssh/key.pem ./deploy.sh
@@ -31,27 +30,47 @@ rsync -avz --delete \
   "$ROOT/" \
   "$REMOTE:~/tessera/src/"
 
-echo ""
-echo "=== Syncing compose files ==="
-rsync -avz -e "$SSH" \
-  "$EC2_DIR/docker-compose.prod.yml" \
-  "$EC2_DIR/nginx/" \
-  "$REMOTE:~/tessera/"
-
-# Copy .env.example only if .env does not yet exist on the server.
-$SSH "$REMOTE" "test -f ~/tessera/.env" 2>/dev/null || \
-  rsync -avz -e "$SSH" "$EC2_DIR/.env.example" "$REMOTE:~/tessera/.env"
+# Copy services.prod.env.example only if services.prod.env does not yet exist.
+$SSH "$REMOTE" "test -f ~/tessera/services.prod.env" 2>/dev/null || \
+  rsync -avz -e "$SSH" "$EC2_DIR/services.prod.env.example" "$REMOTE:~/tessera/services.prod.env"
 
 echo ""
-echo "=== Building and restarting on EC2 ==="
+echo "=== Building binaries on EC2 ==="
 $SSH "$REMOTE" "
-  cd ~/tessera
-  docker compose -f docker-compose.prod.yml build --parallel 1
-  docker compose -f docker-compose.prod.yml up -d
+  cd ~/tessera/src
+  CARGO_BUILD_JOBS=2 cargo build --release \
+    -p tessera-demo \
+    -p tessera-subpool-database \
+    -p tessera-subpool-operator
+  mkdir -p ~/tessera/bin
+  cp target/release/demo-sequencer ~/tessera/bin/
+  cp target/release/tessera-subpool-database ~/tessera/bin/
+  cp target/release/tessera-subpool-operator ~/tessera/bin/
+"
+
+echo ""
+echo "=== Installing nginx config ==="
+$SSH "$REMOTE" "
+  sudo sed 's/DOMAIN/$EC2_HOST/g' ~/tessera/src/tessera-demo/ec2/nginx/tessera.conf \
+    | sudo tee /etc/nginx/sites-available/tessera > /dev/null
+  sudo ln -sf /etc/nginx/sites-available/tessera /etc/nginx/sites-enabled/tessera
+  sudo nginx -t
+  sudo systemctl reload nginx 2>/dev/null || sudo systemctl start nginx
+"
+
+echo ""
+echo "=== Restarting services ==="
+$SSH "$REMOTE" "
+  cd ~/tessera/src/tessera-demo/ec2
+  ./services_stop.sh 2>/dev/null || true
+  sleep 2
+  ./services_start.sh ~/tessera/services.prod.env
 "
 
 echo ""
 echo "=== Deploy complete ==="
 echo ""
-echo "Status:       $SSH $REMOTE 'docker compose -f ~/tessera/docker-compose.prod.yml ps'"
-echo "Health check: curl https://$EC2_HOST:8081/status"
+echo "Health check:"
+echo "  curl https://$EC2_HOST:8081/status"
+echo "  curl https://$EC2_HOST:8082/status"
+echo "  curl https://$EC2_HOST:8083/status"
