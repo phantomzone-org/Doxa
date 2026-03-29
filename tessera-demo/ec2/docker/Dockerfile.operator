@@ -1,9 +1,9 @@
-FROM rust:1.83-bookworm AS builder
+FROM rustlang/rust:nightly-bookworm AS builder
 
 WORKDIR /app
 COPY . .
 
-RUN cargo build --release -p tessera-subpool-operator
+RUN CARGO_BUILD_JOBS=2 cargo build --release -p tessera-subpool-operator
 
 FROM debian:bookworm-slim
 

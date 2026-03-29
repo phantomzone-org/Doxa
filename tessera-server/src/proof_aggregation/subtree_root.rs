@@ -32,10 +32,11 @@ use plonky2::{
 	util::serialization::DefaultGateSerializer,
 };
 use tessera_utils::{
-	groth::TesseraGeneratorSerializer,
 	hasher::{HashOutput, MerkleHash, MerkleHashCircuit, MerkleHashTarget},
 	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
+#[cfg(feature = "groth")]
+use tessera_utils::groth::TesseraGeneratorSerializer;
 
 // ---------------------------------------------------------------------------
 // Artifact path
@@ -194,6 +195,7 @@ impl SubtreeRootCircuit {
 	}
 
 	/// Persist the compiled circuit data to `path`.
+	#[cfg(feature = "groth")]
 	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
 		fs::create_dir_all(path)?;
 		let bytes = self
@@ -214,6 +216,7 @@ impl SubtreeRootCircuit {
 	///
 	/// Replays the builder (deterministic) to recover target wire indices,
 	/// then loads the compiled circuit data from disk.
+	#[cfg(feature = "groth")]
 	pub fn from_artifacts(path: &Path, batch_size: usize) -> Result<Self> {
 		// Replay builder to recover target wire indices.
 		let template = Self::build(batch_size)?;

@@ -46,7 +46,7 @@ echo ""
 echo "=== Building and restarting on EC2 ==="
 $SSH "$REMOTE" "
   cd ~/tessera
-  docker compose -f docker-compose.prod.yml build
+  docker compose -f docker-compose.prod.yml build --parallel 1
   docker compose -f docker-compose.prod.yml up -d
 "
 

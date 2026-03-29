@@ -10,7 +10,7 @@ set -euo pipefail
 # Must be run as root or with sudo.
 
 DOMAIN="${DOMAIN:?Set DOMAIN to your fully-qualified domain name, e.g. api.example.com}"
-EMAIL="${EMAIL:?Set EMAIL for Let's Encrypt renewal notices}"
+EMAIL="${EMAIL:?Set EMAIL for Lets Encrypt renewal notices}"
 
 echo "=== Installing Docker ==="
 apt-get update -q
@@ -20,11 +20,9 @@ install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 chmod a+r /etc/apt/keyrings/docker.asc
 
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-  https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-  > /etc/apt/sources.list.d/docker.list
+ARCH=$(dpkg --print-architecture)
+. /etc/os-release
+echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
 
 apt-get update -q
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -40,7 +38,7 @@ echo ""
 echo "=== Obtaining Let's Encrypt certificate for $DOMAIN ==="
 echo "  (Port 80 must be open in the EC2 security group.)"
 
-# Use certbot via Docker — no host install needed.
+# Use certbot via Docker - no host install needed.
 docker run --rm \
   -p 80:80 \
   -v /etc/letsencrypt:/etc/letsencrypt \
@@ -67,7 +65,7 @@ echo "  1. Open EC2 security group inbound: TCP 80, 8081, 8082, 8083"
 echo "  2. Run deploy.sh from your local machine:"
 echo "       EC2_HOST=$DOMAIN EC2_KEY=~/.ssh/key.pem ./tessera-demo/ec2/deploy.sh"
 echo "  3. Edit ~/tessera/.env on the instance with real secrets"
-echo "     (deploy.sh copies .env.example on first run — then edit it)"
+echo "     (deploy.sh copies .env.example on first run - then edit it)"
 echo "  4. Re-run deploy.sh to restart with the correct secrets:"
 echo "       EC2_HOST=$DOMAIN EC2_KEY=~/.ssh/key.pem ./tessera-demo/ec2/deploy.sh"
 echo ""
