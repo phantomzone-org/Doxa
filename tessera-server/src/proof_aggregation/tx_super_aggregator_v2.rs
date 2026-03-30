@@ -73,7 +73,6 @@ pub const IS_REAL_OFFSET: usize = 4;
 /// Offset of the first TX data field (account nullifier) within a TX leaf's public inputs.
 pub const TX_DATA_OFFSET: usize = 5;
 use tessera_utils::{
-	groth::TesseraGeneratorSerializer,
 	hasher::HashOutput,
 	plonky2_gadgets::{
 		keccak256::{
@@ -343,7 +342,9 @@ impl SuperAggregator {
 	}
 
 	/// Persist all artifacts to `path`.
+	#[cfg(feature = "groth")]
 	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
+		use tessera_utils::groth::TesseraGeneratorSerializer;
 		fs::create_dir_all(path)?;
 		let gate_ser = DefaultGateSerializer;
 		let gen_ser = TesseraGeneratorSerializer;
@@ -362,7 +363,9 @@ impl SuperAggregator {
 	}
 
 	/// Reconstruct the circuit from pre-generated artifacts without recompiling.
+	#[cfg(feature = "groth")]
 	pub fn from_artifacts(path: &Path) -> Result<Self> {
+		use tessera_utils::groth::TesseraGeneratorSerializer;
 		let gate_ser = DefaultGateSerializer;
 		let gen_ser = TesseraGeneratorSerializer;
 

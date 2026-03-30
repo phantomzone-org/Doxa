@@ -59,7 +59,6 @@ use plonky2::{
 	util::serialization::DefaultGateSerializer,
 };
 use tessera_utils::{
-	groth::TesseraGeneratorSerializer,
 	hasher::HashOutput,
 	plonky2_gadgets::{
 		keccak256::{
@@ -311,7 +310,9 @@ impl DepositSuperAggregatorV2 {
 	}
 
 	/// Persist all artifacts to `path`.
+	#[cfg(feature = "groth")]
 	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
+		use tessera_utils::groth::TesseraGeneratorSerializer;
 		fs::create_dir_all(path)?;
 		let gate_ser = DefaultGateSerializer;
 		let gen_ser = TesseraGeneratorSerializer;
@@ -337,7 +338,9 @@ impl DepositSuperAggregatorV2 {
 	}
 
 	/// Reconstruct the circuit from pre-generated artifacts without recompiling.
+	#[cfg(feature = "groth")]
 	pub fn from_artifacts(path: &Path) -> Result<Self> {
+		use tessera_utils::groth::TesseraGeneratorSerializer;
 		let gate_ser = DefaultGateSerializer;
 		let gen_ser = TesseraGeneratorSerializer;
 

@@ -22,6 +22,7 @@ use crate::{
 	types::ProveOutcome,
 };
 
+#[cfg(feature = "groth")]
 mod bn128_wrapper_service;
 mod deposits;
 mod handle;
@@ -30,6 +31,7 @@ mod recovery;
 pub mod revert;
 mod transactions;
 
+#[cfg(feature = "groth")]
 pub use bn128_wrapper_service::*;
 pub use handle::SequencerHandle;
 pub use transactions::*;
