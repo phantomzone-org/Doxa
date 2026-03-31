@@ -310,7 +310,7 @@ impl DepositSuperAggregatorV2 {
 	}
 
 	/// Persist all artifacts to `path`.
-	#[cfg(feature = "groth")]
+	
 	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
 		use tessera_utils::groth::TesseraGeneratorSerializer;
 		fs::create_dir_all(path)?;
@@ -338,7 +338,7 @@ impl DepositSuperAggregatorV2 {
 	}
 
 	/// Reconstruct the circuit from pre-generated artifacts without recompiling.
-	#[cfg(feature = "groth")]
+	
 	pub fn from_artifacts(path: &Path) -> Result<Self> {
 		use tessera_utils::groth::TesseraGeneratorSerializer;
 		let gate_ser = DefaultGateSerializer;

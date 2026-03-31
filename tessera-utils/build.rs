@@ -1,10 +1,24 @@
 fn main() {
-	#[cfg(feature = "groth")]
 	groth_build::build();
 }
 
+/// No-op stub used when the `groth` feature is disabled.
+///
+/// Satisfies the `groth_build::build()` call in `main()` without pulling in
+/// Go, CGo, or bindgen.
+#[cfg(not(feature = "groth"))]
+mod groth_build {
+	pub fn build() {}
+}
+
+/// Build script logic that is only active when the `groth` feature is enabled.
+///
+/// When `groth` is disabled (e.g. `default-features = false`), `build()` is a
+/// no-op and neither Go nor bindgen is invoked, keeping CI and lightweight
+/// builds fast.
 #[cfg(feature = "groth")]
 mod groth_build {
+
 	extern crate bindgen;
 
 	use std::{

@@ -4,11 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
-groth = ["bindgen"]
+# Enables the Groth16 Go FFI wrapper (requires Go toolchain and bindgen at build time).
+# Enabled by default so that existing dependents that do not opt out continue to work.
+# Disable with `default-features = false` to skip the heavy Go/CGo build.
+default = ["groth"]
+groth = ["dep:bindgen"]
 
 [build-dependencies]
-bindgen = { version = "*", optional = true }
+bindgen = { version = "0.72.1", optional = true }
 
 [dependencies]
 plonky2 = {workspace = true}
