@@ -40,9 +40,9 @@ pub(crate) struct DepositNoteTarget {
 impl DepositNoteTarget {
 	/// Fill all note targets from a concrete [`DepositNote`].
 	pub(crate) fn set_witness(&self, pw: &mut PartialWitness<F>, note: &DepositNote) {
-		pw.set_target(self.identifier[0], note.identifier[0])
+		pw.set_target(self.identifier[0], note.identifier.0[0])
 			.unwrap();
-		pw.set_target(self.identifier[1], note.identifier[1])
+		pw.set_target(self.identifier[1], note.identifier.0[1])
 			.unwrap();
 		pw.set_target(self.recipient_subpool_id.0, note.recipient.subpool_id.0)
 			.unwrap();

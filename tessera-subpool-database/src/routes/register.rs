@@ -1,14 +1,9 @@
 use axum::{extract::State, http::StatusCode, Json};
-use plonky2_field::types::Field;
 use serde::{Deserialize, Serialize};
-use tessera_client::{schnorr::CompressedPublicKey, AccountAddress, StandardAccount, SubpoolId};
+use tessera_client::{schnorr::CompressedPublicKey, AccountAddress, StandardAccount};
 use tessera_utils::F;
 
-use crate::{
-	convert::bytes_to_private_id,
-	error::AppError,
-	state::AppState,
-};
+use crate::{convert::bytes_to_private_id, error::AppError, state::AppState};
 
 /// JSON request body for `POST /register`.
 #[derive(Deserialize)]
@@ -53,27 +48,36 @@ pub async fn register_handler(
 	let private_identifier = bytes_to_private_id(pi_arr);
 
 	// ── 2. Build account and derive address ───────────────────────────────────
-	let subpool_id = SubpoolId(F::from_canonical_u64(state.subpool_id));
-	let mut acc = StandardAccount::new_with(private_identifier, subpool_id);
-	let private_acc_address = AccountAddress::from_acc(&acc).to_hex();
+	let subpool_id = state.subpool_id;
+	let private_acc_address =
+		AccountAddress::from_acc(&StandardAccount::new_with(private_identifier, subpool_id))
+			.to_hex();
 
 	// ── 3. Existence checks ───────────────────────────────────────────────────
 	let pool = &state.pool;
 
-	let already_exists: bool = sqlx::query_scalar(
-		"SELECT EXISTS(
-			SELECT 1 FROM freshacc_requests WHERE private_acc_address = $1
-			UNION ALL
-			SELECT 1 FROM accounts WHERE private_acc_address = $1
-		)",
+	let user_exists: bool =
+		sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE private_acc_address = $1)")
+			.bind(&private_acc_address)
+			.fetch_one(pool)
+			.await?;
+
+	if user_exists {
+		return Err(AppError::AlreadyExists(
+			"account address already registered".into(),
+		));
+	}
+
+	let freshacc_exists: bool = sqlx::query_scalar(
+		"SELECT EXISTS(SELECT 1 FROM freshacc_requests WHERE private_identifier = $1)",
 	)
-	.bind(&private_acc_address)
+	.bind(&body.private_identifier)
 	.fetch_one(pool)
 	.await?;
 
-	if already_exists {
+	if freshacc_exists {
 		return Err(AppError::AlreadyExists(
-			"account already registered or pending approval".into(),
+			"a pending freshacc request already exists for this account".into(),
 		));
 	}
 
@@ -87,7 +91,6 @@ pub async fn register_handler(
 	}
 	let pk_arr: &[u8; 40] = pk_bytes.as_slice().try_into().unwrap();
 	let spend_pk = CompressedPublicKey::<F>::decode(pk_arr);
-	acc.spend_auth.spend_pk = Some(spend_pk);
 
 	// ── 5. Validate eth_address ───────────────────────────────────────────────
 	if !body.eth_address.starts_with("0x") || body.eth_address.len() != 42 {
@@ -101,26 +104,34 @@ pub async fn register_handler(
 		.map_err(|_| AppError::InvalidInput("dob must be in YYYY-MM-DD format".into()))?;
 
 	// ── 7. Transactional insert ───────────────────────────────────────────────
-	let spend_auth_bytes = spend_pk.encode();
+	let mut tx = pool.begin().await?;
 
-	// Insert only into freshacc_requests. The operator will create both
-	// the accounts and users rows after approval.
 	sqlx::query(
 		r#"
-        INSERT INTO freshacc_requests
-            (private_acc_address, spend_auth, private_identifier, eth_address, name, physical_address, dob, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING')
+        INSERT INTO users (private_acc_address, name, physical_address, dob)
+        VALUES ($1, $2, $3, $4)
         "#,
 	)
 	.bind(&private_acc_address)
-	.bind(spend_auth_bytes.as_ref())
-	.bind(&pi_bytes)
-	.bind(&body.eth_address)
 	.bind(&body.name)
 	.bind(&body.physical_address)
 	.bind(dob)
-	.execute(pool)
+	.execute(&mut *tx)
 	.await?;
+
+	sqlx::query(
+		r#"
+        INSERT INTO freshacc_requests (private_acc_address, private_identifier, spend_auth, status)
+        VALUES ($1, $2, $3, 'PENDING')
+        "#,
+	)
+	.bind(&private_acc_address)
+	.bind(&body.private_identifier)
+	.bind(spend_pk.encode().as_ref())
+	.execute(&mut *tx)
+	.await?;
+
+	tx.commit().await?;
 
 	Ok((
 		StatusCode::CREATED,

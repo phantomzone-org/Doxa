@@ -27,7 +27,9 @@ pub(crate) fn random_proof() -> ITesseraRollupV2::Proof {
 		.as_nanos();
 	let rand_u256 = |i: u64| {
 		let mut bytes = [0u8; 32];
-		let v = seed.wrapping_mul(6364136223846793005).wrapping_add(i as u128);
+		let v = seed
+			.wrapping_mul(6364136223846793005)
+			.wrapping_add(i as u128);
 		bytes[..16].copy_from_slice(&v.to_le_bytes());
 		bytes[16..].copy_from_slice(&v.wrapping_mul(1442695040888963407).to_le_bytes());
 		U256::from_le_bytes(bytes)

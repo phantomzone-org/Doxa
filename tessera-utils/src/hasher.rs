@@ -5,7 +5,10 @@ use std::{
 
 use anyhow::Result;
 use plonky2::{
-	field::{extension::Extendable, types::Field},
+	field::{
+		extension::Extendable,
+		types::{Field, Field64},
+	},
 	hash::{
 		hash_types::{HashOut, HashOutTarget, RichField},
 		hashing::PlonkyPermutation,
@@ -419,10 +422,23 @@ impl HashOutput {
 	/// Use [`from_32bytes_digest`] instead when the bytes come from an
 	/// external hash (SHA-256, Keccak, …) whose values may exceed the
 	/// field order.
-	pub fn from_encoded_fields(bytes: [u8; 32]) -> Self {
+	pub fn from_encoded_fields_unchecked(bytes: [u8; 32]) -> Self {
 		let mut elems = [F::ZERO; HASH_SIZE];
 		for i in 0..HASH_SIZE {
 			let chunk = u64::from_be_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
+			elems[i] = F::from_canonical_u64(chunk);
+		}
+		Self::new(elems)
+	}
+
+	/// Convert 32 bytes back into a [`HashOutput`] **without** masking.
+	///
+	/// Function will panic if converted values are not in [0, F::ORDER];
+	pub fn from_encoded_fields_checked(bytes: [u8; 32]) -> Self {
+		let mut elems = [F::ZERO; HASH_SIZE];
+		for i in 0..HASH_SIZE {
+			let chunk = u64::from_be_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
+			assert!(chunk <= F::ORDER);
 			elems[i] = F::from_canonical_u64(chunk);
 		}
 		Self::new(elems)

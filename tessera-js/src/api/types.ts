@@ -23,7 +23,7 @@ export interface ApiError {
   error: string;
 }
 
-export type FreshAccStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type FreshAccStatus = "Pending" | "Approved" | "Rejected";
 
 /** Response body for GET /freshacc/:private_acc_address/status */
 export interface FreshAccStatusResponse {
@@ -37,7 +37,7 @@ export interface FaucetResponse {
 
 /** Request body for POST /deposit */
 export interface DepositRequest {
-  recipient_acc_address: string;
+  recipient_address: string;
   eth_address: string;
   /** 32 hex chars — [F;2] identifier, 2 × u64 LE */
   deposit_note_identifier: string;
@@ -54,6 +54,82 @@ export interface DepositResponse {
   id: number;
 }
 
+export type DepositTxStatus = "Pending" | "Approved" | "Rejected";
+
+/** Response body for GET /deposit/:id/status */
+export interface DepositStatusResponse {
+  id: number;
+  status: DepositTxStatus;
+  deposit_tx_hash: string | null;
+}
+
+/** Entry returned by GET /input_notes/:recipient_address */
+export interface InputNote {
+  /** 32 hex chars — [F;2] identifier */
+  identifier: string;
+  /** 16 hex chars — F asset_id, 8 bytes LE */
+  asset_id: string;
+  /** 64 hex chars — U256 amount, 32 bytes LE */
+  amount: string;
+  recipient_address: string;
+  sender_address: string;
+  /** hex-encoded memo (≤ 1024 hex chars = ≤ 512 bytes) */
+  memo: string;
+}
+
+/** A note payload for POST /spend_tx */
+export interface NotePayload {
+  /** 32 hex chars */
+  identifier: string;
+  /** 16 hex chars — F asset_id, 8 bytes LE */
+  asset_id: string;
+  /** 64 hex chars — U256 amount, 32 bytes LE */
+  amount: string;
+  recipient_address: string;
+  sender_address: string;
+  /** hex-encoded memo (≤ 1024 hex chars = ≤ 512 bytes) */
+  memo: string;
+}
+
+/** Request body for POST /spend_tx */
+export interface SpendTxRequest {
+  priv_acc_address: string;
+  input_notes: NotePayload[];
+  output_notes: NotePayload[];
+  /** Raw 32-byte dummy input note seeds as 64 hex chars each */
+  dinotes: string[];
+  /** Raw 32-byte dummy output note seeds as 64 hex chars each */
+  donotes: string[];
+  /** 80-byte Schnorr signature as hex */
+  spend_tx_signature: string;
+}
+
+/** Response body for a successful POST /spend_tx (HTTP 201) */
+export interface SpendTxResponse {
+  id: number;
+}
+
+export type SpendTxStatus = "Pending" | "Approved" | "Rejected";
+
+/** Response body for GET /spend_tx/:id/status */
+export interface SpendTxStatusResponse {
+  id: number;
+  status: SpendTxStatus;
+  rejection_reason: string | null;
+}
+
+/** Per-asset entry in GET /notes_balance/:address */
+export interface AssetBalance {
+  /** hex-encoded U256 (big-endian, 64 chars) */
+  amount: string;
+}
+
+/** Response body for GET /notes_balance/:address */
+export interface NotesBalanceResponse {
+  /** Keys are decimal asset_id strings (u64). */
+  balances: Record<string, AssetBalance>;
+}
+
 /** Response body for GET /account/:private_acc_address */
 export interface AccountResponse {
   private_acc_address: string;
@@ -62,8 +138,6 @@ export interface AccountResponse {
   private_identifier: string;
   /** 16 hex chars — SubpoolId */
   subpool_id: string;
-  /** 64 hex chars — U256 balance */
-  balance: string;
   /** 16 hex chars — Nonce */
   nonce: string;
   /** 80 hex chars — spend-auth CompressedPublicKey; all-zeros if absent */

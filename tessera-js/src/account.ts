@@ -1,3 +1,4 @@
+import type { AccountResponse } from "./api/index.js";
 import {
   WasmAccount,
   WasmAccountAddress,
@@ -6,7 +7,10 @@ import {
   WasmAssetId,
   WasmDepositNote,
   WasmDepositNoteCommitment,
+  WasmDummyNote,
   WasmInputNote,
+  WasmNoteCommitment,
+  WasmOutputNote,
   WasmPrivateIdentifier,
   WasmPublicIdentifier,
   WasmSpendAuthPk,
@@ -266,6 +270,17 @@ export class Account {
     return new Account(WasmAccount.newWithSeed(seed, subpoolId));
   }
 
+  /** Reconstruct an Account from a server AccountResponse. No seed required. */
+  static fromAccountData(accountData: AccountResponse): Account {
+    return new Account(WasmAccount.fromAccountData(
+      accountData.private_identifier,
+      accountData.subpool_id,
+      accountData.nonce,
+      accountData.spend_auth,
+      JSON.stringify(accountData.ast),
+    ));
+  }
+
   /**
    * The Poseidon commitment of the full account state.
    * This is what gets inserted into the Account Commitment Tree.
@@ -303,6 +318,21 @@ export class Account {
   /** Returns the account address. */
   address(): AccountAddress {
     return AccountAddress.fromWasm(this.inner.address());
+  }
+
+  /** Returns the account nonce. */
+  nonce(): bigint {
+    return this.inner.nonce();
+  }
+
+  /** Return the balance for `assetId` as a bigint (U256). Zero if not held. */
+  balanceFor(assetId: AssetId): bigint {
+    const leHex = this.inner.balanceFor(assetId.inner);
+    const bytes = Uint8Array.from({ length: 32 }, (_, i) =>
+      parseInt(leHex.slice(i * 2, i * 2 + 2), 16)
+    );
+    bytes.reverse();
+    return BigInt("0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""));
   }
 
   /** Returns the private identifier as a typed `PrivateIdentifier`. */
@@ -509,6 +539,24 @@ export function derivePublicIdentifier(
   return PublicIdentifier.fromWasm(wasmDerivePublicIdentifier(privateId.inner));
 }
 
+// ── NoteCommitment ────────────────────────────────────────────────────────────
+
+/** A note commitment (32 bytes / 64 hex chars). */
+export class NoteCommitment {
+  constructor(readonly inner: WasmNoteCommitment) {}
+
+  toHex(): string { return this.inner.toHex(); }
+  toBytes(): Uint8Array { return this.inner.toBytes(); }
+
+  static fromHex(hex: string): NoteCommitment {
+    return new NoteCommitment(WasmNoteCommitment.fromHex(hex));
+  }
+
+  static fromBytes(bytes: Uint8Array): NoteCommitment {
+    return new NoteCommitment(WasmNoteCommitment.fromBytes(bytes));
+  }
+}
+
 // ── InputNote ─────────────────────────────────────────────────────────────────
 
 /** A note positioned in the Note Commitment Tree — used as input to `SpendTxBuilder`. */
@@ -519,19 +567,47 @@ export class InputNote {
     identifier: Uint8Array, // 16 bytes
     assetId: bigint,
     amount: bigint,
-    recipient: Account,
-    sender: Account,
+    recipient: AccountAddress,
+    sender: AccountAddress,
     position: bigint,
+    memo: Uint8Array,
   ) {
     this.inner = new WasmInputNote(
       identifier,
       assetId,
       amount,
-      recipient.wasmInner,
-      sender.wasmInner,
+      recipient.inner,
+      sender.inner,
       position,
+      memo,
     );
   }
+
+  commitment(): NoteCommitment {
+    return new NoteCommitment(this.inner.commitment());
+  }
+}
+
+// ── OutputNote ────────────────────────────────────────────────────────────────
+
+/** An output note produced by a built spend transaction. */
+export class OutputNote {
+  constructor(private inner: WasmOutputNote) {}
+
+  identifierHex(): string { return this.inner.identifierHex(); }
+  assetId(): bigint       { return BigInt(this.inner.assetId()); }
+  amountHex(): string     { return this.inner.amountHex(); }
+  recipientHex(): string  { return this.inner.recipientHex(); }
+  senderHex(): string     { return this.inner.senderHex(); }
+  memoHex(): string       { return this.inner.memoHex(); }
+}
+
+// ── DummyNote ─────────────────────────────────────────────────────────────────
+
+/** A dummy note seed — its raw 32-byte value is sent to the server. */
+export class DummyNote {
+  constructor(private inner: WasmDummyNote) {}
+  toHex(): string { return this.inner.toHex(); }
 }
 
 // ── SpendTx ───────────────────────────────────────────────────────────────────
@@ -554,6 +630,21 @@ export class SpendTx {
   sign(seed: Uint8Array): Uint8Array {
     return this.inner.sign(seed);
   }
+
+  outputNotes(): OutputNote[] {
+    return Array.from({ length: this.inner.outputNoteCount() }, (_, i) =>
+      new OutputNote(this.inner.outputNoteAt(i)));
+  }
+
+  diNotes(): DummyNote[] {
+    return Array.from({ length: this.inner.diNoteCount() }, (_, i) =>
+      new DummyNote(this.inner.diNoteAt(i)));
+  }
+
+  doNotes(): DummyNote[] {
+    return Array.from({ length: this.inner.doNoteCount() }, (_, i) =>
+      new DummyNote(this.inner.doNoteAt(i)));
+  }
 }
 
 // ── SpendTxBuilder ────────────────────────────────────────────────────────────
@@ -573,8 +664,8 @@ export class SpendTxBuilder {
   }
 
   /** Add an output note to create, sending `amount` to `recipient`. */
-  addOutputNote(recipient: AccountAddress, amount: bigint): this {
-    this.builder.addOutputNote(recipient.inner, amount);
+  addOutputNote(recipient: AccountAddress, amount: bigint, memo: Uint8Array): this {
+    this.builder.addOutputNote(recipient.inner, amount, memo);
     return this;
   }
 

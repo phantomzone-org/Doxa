@@ -1,8 +1,8 @@
 use anyhow::Context;
-use plonky2_field::types::{Field, PrimeField64};
+use plonky2_field::types::{Field, Field64, PrimeField64};
 use primitive_types::U256;
 use tessera_client::{
-	schnorr::CompressedPublicKey, AccountAddress, AccountStateTree, AssetId, Nonce,
+	schnorr::CompressedPublicKey, AccountAddress, AccountStateTree, AssetId, HashOutput, Nonce,
 	PrivateIdentifier, SpendAuth, StandardAccount, SubpoolId,
 };
 use tessera_utils::F;
@@ -72,7 +72,7 @@ pub fn zero_40() -> [u8; 40] {
 pub struct AccountInsert {
 	pub private_acc_address: String,
 	pub eth_address: String,
-	pub private_identifier: Vec<u8>,
+	pub private_identifier: String,
 	pub subpool_id: Vec<u8>,
 	pub nonce: Vec<u8>,
 	pub spend_auth: Vec<u8>,
@@ -117,7 +117,7 @@ pub fn account_to_insert(acc: &StandardAccount, eth_address: String) -> AccountI
 	AccountInsert {
 		private_acc_address,
 		eth_address,
-		private_identifier: private_id_to_bytes(&acc.private_identifier).to_vec(),
+		private_identifier: hex::encode(private_id_to_bytes(&acc.private_identifier)),
 		subpool_id: f_to_bytes(acc.subpool_id.0).to_vec(),
 		nonce: f_to_bytes(acc.nonce.0).to_vec(),
 		spend_auth,
@@ -137,16 +137,21 @@ pub fn bytes_to_subpool_id(b: &[u8; 8]) -> SubpoolId {
 ///
 /// Restores private_identifier, nonce, spend_auth, and AST from the
 /// DB-stored byte representations.
-pub fn account_from_row(
-	row: &AccountRow,
-	subpool_id: SubpoolId,
-) -> anyhow::Result<StandardAccount> {
-	let pi_arr: [u8; 16] = row
-		.private_identifier
+pub fn account_from_row(row: &AccountRow) -> anyhow::Result<StandardAccount> {
+	let pi_bytes =
+		hex::decode(&row.private_identifier).context("private_identifier must be valid hex")?;
+	let pi_arr: [u8; 16] = pi_bytes
 		.as_slice()
 		.try_into()
 		.context("private_identifier must be 16 bytes")?;
 	let private_identifier = bytes_to_private_id(&pi_arr);
+
+	let subpool_id_arr: [u8; 8] = row
+		.subpool_id
+		.as_slice()
+		.try_into()
+		.context("subpool_id must be 8 bytes")?;
+	let subpool_id = bytes_to_subpool_id(&subpool_id_arr);
 
 	let mut acc = StandardAccount::new_with(private_identifier, subpool_id);
 
@@ -180,10 +185,12 @@ pub fn account_from_row(
 				.as_str()
 				.context("missing amount in AST entry")?;
 			let amount_bytes = hex::decode(amount_hex).context("invalid amount hex in AST")?;
-			let amount_arr: [u8; 32] = amount_bytes
-				.as_slice()
-				.try_into()
-				.with_context(|| format!("AST amount for asset_id '{aid}' must be 32 bytes, got {}", amount_bytes.len()))?;
+			let amount_arr: [u8; 32] = amount_bytes.as_slice().try_into().with_context(|| {
+				format!(
+					"AST amount for asset_id '{aid}' must be 32 bytes, got {}",
+					amount_bytes.len()
+				)
+			})?;
 			let amount = bytes_to_u256(&amount_arr);
 			let asset_id = AssetId::from_u64(aid)?;
 			asset_map.insert(asset_id, (leaf_index, amount));
@@ -201,9 +208,27 @@ pub fn account_from_row(
 pub fn hash_to_hex(h: &[F; 4]) -> String {
 	let mut out = [0u8; 32];
 	for (i, f) in h.iter().enumerate() {
-		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
 	}
 	hex::encode(out)
+}
+
+/// Decode a 64-char big-endian hex string back to `[F; 4]`.
+/// Inverse of `hash_to_hex`.
+pub fn hex_to_hash_checked(s: &str) -> anyhow::Result<HashOutput> {
+	let bytes = hex::decode(s).context("invalid hex string")?;
+	anyhow::ensure!(
+		bytes.len() == 32,
+		"hex_to_hash expects 32 bytes (64 hex chars)"
+	);
+	let mut out = [F::ZERO; 4];
+	for i in 0..4 {
+		let chunk: [u8; 8] = bytes[i * 8..(i + 1) * 8].try_into().unwrap();
+		let val = u64::from_le_bytes(chunk);
+		anyhow::ensure!(val <= F::ORDER, "val: {val} > F::ORDER");
+		out[i] = F::from_canonical_u64(val);
+	}
+	Ok(HashOutput(out))
 }
 
 /// Parse an Ethereum address string ("0x…") into a `primitive_types::H160`.

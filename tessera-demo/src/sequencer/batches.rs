@@ -11,8 +11,10 @@ use tessera_server::{
 use tessera_utils::hasher::HashOutput;
 use tracing::{error, info};
 
-use super::helpers::random_proof;
-use super::state::{DemoProvider, SharedState};
+use super::{
+	helpers::random_proof,
+	state::{DemoProvider, SharedState},
+};
 
 // ---------------------------------------------------------------------------
 // Transaction batches
@@ -69,9 +71,7 @@ pub(crate) async fn flush_tx_batch(
 				&finalized.nn_leaves[nn_base + j],
 			));
 		}
-		account_nullifiers.push(contract::bytes32_be_to_u256_le(
-			&finalized.an_leaves[s],
-		));
+		account_nullifiers.push(contract::bytes32_be_to_u256_le(&finalized.an_leaves[s]));
 	}
 
 	let batch_poseidon_root = hash_to_u256_le(&finalized.batch_poseidon_root);
@@ -101,7 +101,12 @@ pub(crate) async fn flush_tx_batch(
 	let receipt = call
 		.send()
 		.await
-		.map_err(|e| anyhow::anyhow!("submitTransactionBatch failed: {}", humanize_bridge_revert(&e)))?
+		.map_err(|e| {
+			anyhow::anyhow!(
+				"submitTransactionBatch failed: {}",
+				humanize_bridge_revert(&e)
+			)
+		})?
 		.get_receipt()
 		.await
 		.map_err(|e| anyhow::anyhow!("submitTransactionBatch receipt: {e}"))?;
@@ -123,7 +128,7 @@ pub(crate) async fn flush_tx_batch(
 	let batch_leaves: Vec<HashOutput> = finalized
 		.nc_leaves
 		.iter()
-		.map(|c| HashOutput::from_encoded_fields(*c))
+		.map(|c| HashOutput::from_encoded_fields_unchecked(*c))
 		.collect();
 
 	info!(
@@ -161,7 +166,12 @@ async fn prove_tx_batch(
 		.proveTransactionBatch(pi_commitment, random_proof())
 		.send()
 		.await
-		.map_err(|e| anyhow::anyhow!("proveTransactionBatch failed: {}", humanize_bridge_revert(&e)))?
+		.map_err(|e| {
+			anyhow::anyhow!(
+				"proveTransactionBatch failed: {}",
+				humanize_bridge_revert(&e)
+			)
+		})?
 		.get_receipt()
 		.await
 		.map_err(|e| anyhow::anyhow!("proveTransactionBatch receipt: {e}"))?;
@@ -237,12 +247,15 @@ pub(crate) async fn flush_deposit_batch(
 
 	let deposit_nc_hashes: Vec<HashOutput> = deposits
 		.iter()
-		.map(|nc| HashOutput::from_encoded_fields(nc.0))
+		.map(|nc| HashOutput::from_encoded_fields_unchecked(nc.0))
 		.collect();
 
 	const DEPOSIT_BATCH_SIZE: usize = 512;
 	let mut padded = deposit_nc_hashes;
-	padded.resize(DEPOSIT_BATCH_SIZE, HashOutput::new([tessera_utils::F::ZERO; 4]));
+	padded.resize(
+		DEPOSIT_BATCH_SIZE,
+		HashOutput::new([tessera_utils::F::ZERO; 4]),
+	);
 	let batch_poseidon_root = SubtreeRootCircuit::compute_root_native(&padded);
 	let batch_poseidon_root_u256 = hash_to_u256_le(&batch_poseidon_root);
 
@@ -377,8 +390,7 @@ async fn prove_deposit_batch(
 fn hash_output_to_hex(h: &HashOutput) -> String {
 	let mut out = [0u8; 32];
 	for (i, f) in h.0.iter().enumerate() {
-		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_be_bytes());
+		out[i * 8..(i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
 	}
 	hex::encode(out)
 }
-

@@ -1,4 +1,4 @@
-import init from "../wasm/tessera_client_wasm.js";
+import init from "../../tessera-js/wasm/tessera_client_wasm.js";
 import {
   createPublicClient,
   createWalletClient,
@@ -9,38 +9,66 @@ import {
   maxUint256,
 } from "viem";
 import { sepolia } from "viem/chains";
-import { privateKeyToAccount } from "viem/accounts";
+import { PrivateKeyAccount, privateKeyToAccount } from "viem/accounts";
 import {
   Account,
   AccountAddress,
   AssetId,
   DepositNote,
+  InputNote,
+  SpendTxBuilder,
   SubpoolId,
   SubpoolClient,
   derivePrivateIdentifier,
   derivePublicIdentifier,
-} from "../src/index";
-import type { AccountResponse } from "../src/index";
+} from "../../tessera-js/src/index";
+import type {
+  AccountResponse,
+  NotePayload,
+  NotesBalanceResponse,
+} from "../../tessera-js/src/index";
 
 await init();
 
 const status = document.getElementById("status") as HTMLPreElement;
 function log(msg: string) {
   // status.textContent += "\n" + msg;
-  // console.log(msg);
+  // console.log(msg)clone(e
 }
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
-const TESSERA_CONTRACT = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e";
+const TESSERA_CONTRACT = import.meta.env
+  .VITE_TESSERA_CONTRACT_ADDR as `0x${string}`;
 const USDX_CONTRACT_ADDR = import.meta.env
   .VITE_USDX_CONTRACT_ADDR as `0x${string}`;
 const SEPOLIA_RPC_URL = import.meta.env.VITE_SEPOLIA_RPC_URL as string;
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 const PRF_INPUT = new TextEncoder().encode("tessera::account::seed");
+const SUBPOOL_ID_HEX =
+  (import.meta.env.VITE_SUBPOOL_ID_HEX as string) ?? "0100000000000000";
+const ASSET_ID_HEX =
+  (import.meta.env.VITE_ASSET_ID_HEX as string) ?? "0100000000000000";
+
+function leHexToU64(hex: string): bigint {
+  const bytes = Uint8Array.from({ length: 8 }, (_, i) =>
+    parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+  );
+  bytes.reverse();
+  return BigInt(
+    "0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""),
+  );
+}
+
+const SUBPOOL_ID = leHexToU64(SUBPOOL_ID_HEX);
+const ASSET_ID = leHexToU64(ASSET_ID_HEX);
+
+console.log("Subpool ID =", import.meta.env.VITE_SUBPOOL_ID_HEX);
+console.log("DB server BASE_APU_URL =", API_BASE_URL);
 
 // ── API client ────────────────────────────────────────────────────────────────
 
-const API_BASE_URL = "http://localhost:8080";
 const subpoolClient = new SubpoolClient(API_BASE_URL);
 
 // ── shared state ──────────────────────────────────────────────────────────────
@@ -48,25 +76,12 @@ const subpoolClient = new SubpoolClient(API_BASE_URL);
 let credentialId: Uint8Array | null = null;
 let ethAddressFull: string | null = null;
 let privateAccAddressFull: string | null = null;
+let privateAccount: Account | null = null;
+let notesBalance: NotesBalanceResponse | null = null;
+let publicAccount: PrivateKeyAccount | null = null;
 let currentSeed: Uint8Array | null = null;
-let privateBalance = 0;
-
-// ── localStorage ─────────────────────────────────────────────────────────────
-
-interface KycRecord {
-  name: string;
-  street: string;
-  dob: string;
-  tesseraAddress: string;
-  registeredAt: string;
-}
-function loadKyc(): KycRecord | null {
-  const raw = localStorage.getItem("tessera::kyc");
-  return raw ? JSON.parse(raw) : null;
-}
-function saveKyc(r: KycRecord) {
-  localStorage.setItem("tessera::kyc", JSON.stringify(r));
-}
+let privateBalanceRaw = 0n;
+let publicBalanceRaw = 0n;
 
 // ── passkey helpers ───────────────────────────────────────────────────────────
 
@@ -90,7 +105,7 @@ async function registerAndGetSeed(): Promise<Uint8Array> {
           userVerification: "required",
         },
         extensions: {
-          prf: {},
+          prf: { eval: { first: PRF_INPUT } },
         },
       },
     })) as PublicKeyCredential;
@@ -99,15 +114,31 @@ async function registerAndGetSeed(): Promise<Uint8Array> {
     const ext = cred.getClientExtensionResults() as any;
     const prfEnabled = !!ext?.prf?.enabled;
 
-    log(`✓ Registered — credential ID: ${toHex(credentialId.slice(0, 8))}…`);
-    log(`  PRF extension enabled by authenticator: ${prfEnabled}`);
+    console.log(
+      `✓ Registered — credential ID: ${toHex(credentialId.slice(0, 8))}…`,
+    );
+    console.log(`  PRF extension enabled by authenticator: ${prfEnabled}`);
     if (!prfEnabled) {
-      log("⚠ Your authenticator does not support PRF. Derive will fail.");
+      throw new Error(
+        "⚠ Your authenticator does not support PRF. Derive will fail.",
+      );
+    }
+
+    // If the authenticator returned the PRF result during registration, use it directly.
+    const firstResult: ArrayBuffer | undefined = ext?.prf?.results?.first;
+    if (firstResult) {
+      const seed = new Uint8Array(firstResult);
+      if (seed.byteLength !== 32)
+        throw new Error(`PRF output must be 32 bytes, got ${seed.byteLength}`);
+      return seed;
+    } else {
+      console.log("credentials.create did not return prf = ", ext?.prf);
     }
   } catch (err) {
-    log(`✗ Registration failed: ${err}`);
+    console.log(`✗ Registration failed: ${err}`);
   }
 
+  // Fallback: older authenticators don't return PRF results during create().
   return evalPrf();
 }
 
@@ -117,6 +148,7 @@ async function evalPrf(): Promise<Uint8Array> {
   const assertion = (await navigator.credentials.get({
     publicKey: {
       challenge,
+      userVerification: "required",
       extensions: {
         prf: { eval: { first: PRF_INPUT } },
       },
@@ -149,19 +181,19 @@ function toHex(b: Uint8Array): string {
     .join("");
 }
 
-function fakeTxHash(): string {
-  return "0x" + toHex(crypto.getRandomValues(new Uint8Array(32)));
-}
-
 function delay(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+  return new Uint8Array(
+    await crypto.subtle.digest("SHA-256", data as BufferSource),
+  );
 }
 
-async function deriveWalletAccount(seed: Uint8Array) {
+async function deriveWalletAccount(
+  seed: Uint8Array,
+): Promise<PrivateKeyAccount> {
   const domain = new TextEncoder().encode("tessera::eth::privkey");
   const input = new Uint8Array(seed.length + domain.length);
   input.set(seed);
@@ -190,6 +222,33 @@ const TESSERA_ABI = [
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
+/** Decode a hex string (no 0x prefix) to a Uint8Array. */
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+/** Parse a little-endian hex string (32 bytes) as a BigInt (U256). */
+function hexLeToU256(hex: string): bigint {
+  const bytes = hexToBytes(hex);
+  let result = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    result = (result << 8n) | BigInt(bytes[i]);
+  }
+  return result;
+}
+
+/** Parse a little-endian hex string (8 bytes) as a BigInt (u64). */
+function hexLeToU64(hex: string): bigint {
+  const bytes = hexToBytes(hex);
+  let v = 0n;
+  for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i]);
+  return v;
+}
+
 /** Encode a BigInt as a 32-byte little-endian hex string (U256 LE, no 0x prefix). */
 function u256LeHex(v: bigint): string {
   const bytes = new Uint8Array(32);
@@ -207,31 +266,6 @@ function padLeft32(hex: string): string {
   return hex.replace("0x", "").padStart(64, "0");
 }
 
-function encodeDeposit(recipientAddr: string, amount: number): string {
-  // deposit(address recipient, uint256 amount) — fake selector 0x47e7ef24
-  const selector = "47e7ef24";
-  const addr = padLeft32(recipientAddr);
-  const amt = padLeft32(BigInt(amount * 1e6).toString(16)); // USDX uses 6 decimals
-  return "0x" + selector + addr + amt;
-}
-
-function craftTx(from: string, amount: number): object {
-  return {
-    type: "0x2",
-    chainId: "0x1",
-    from,
-    to: TESSERA_CONTRACT,
-    data: encodeDeposit(from, amount),
-    value: "0x0",
-    nonce: "0x" + Math.floor(Math.random() * 256).toString(16),
-    gas: "0x186a0",
-    maxFeePerGas: "0x77359400",
-    maxPriorityFeePerGas: "0x3b9aca00",
-    _usdxToken: USDX_CONTRACT_ADDR,
-    _depositAmount: amount + " USDX",
-  };
-}
-
 // ── p-step progress helper ────────────────────────────────────────────────────
 
 function pStep(
@@ -244,6 +278,16 @@ function pStep(
   el.textContent = text;
   container.appendChild(el);
   return el;
+}
+
+// -- refresh -------------------------------------------------------------------
+
+async function refreshAccountStates() {
+  if (publicAccount) {
+    await loadPublicBalance(publicAccount!.address);
+  }
+
+  await loadPrivateBalance();
 }
 
 // ── Section 1: Public account ─────────────────────────────────────────────────
@@ -277,39 +321,66 @@ async function loadPublicBalance(address: string) {
     functionName: "balanceOf",
     args: [address as `0x${string}`],
   });
+  publicBalanceRaw = raw as bigint;
   const balance = Number(formatUnits(raw, 6));
   usdcBalanceEl.textContent =
     balance.toLocaleString("en-US", { minimumFractionDigits: 2 }) + " USDX";
 }
 
 async function showPublicWallet(seed: Uint8Array) {
-  ethAddressFull = await deriveEthAddress(seed);
+  publicAccount = await deriveWalletAccount(seed);
+  updatePrivateAccountSectionState();
+  ethAddressFull = publicAccount.address;
   ethAddressEl.textContent =
     ethAddressFull.slice(0, 10) + "…" + ethAddressFull.slice(-8);
   ethAddressEl.title = ethAddressFull;
   await loadPublicBalance(ethAddressFull);
-  setInterval(() => loadPublicBalance(ethAddressFull!), 10_000);
+  setInterval(() => {
+    console.log("loadPublicBalance called");
+    loadPublicBalance(ethAddressFull!);
+  }, 5_000);
 }
 
-function renderVisiblePostSignIn() {
-  walletInfo.classList.add("visible");
-  depositSection.classList.add("visible");
-  enableP2pBtn();
+async function loadPrivateBalance(): Promise<boolean> {
+  if (!privateAccAddressFull)
+    return Promise.reject(new Error("no private account address"));
+  const accountData = await subpoolClient.getAccount(privateAccAddressFull);
+  if (!accountData) return Promise.reject(new Error("account not found"));
+  privateAccount = Account.fromAccountData(accountData);
+  console.log("Private Account: ", privateAccount);
+  notesBalance = await subpoolClient
+    .getNotesBalance(privateAccAddressFull)
+    .catch(() => null);
+  console.log("Unconsumed asset notes balance =", notesBalance);
+
+  renderPrivateSection();
+  return true;
 }
 
 async function loadPrivateAccount(seed: Uint8Array) {
   const privateId = derivePrivateIdentifier(seed);
   const publicId = derivePublicIdentifier(privateId);
-  const subpoolId = SubpoolId.fromHex("0100000000000000"); // subpool_id = 1
   const privateAccAddress = AccountAddress.fromParts(
-    subpoolId,
+    SubpoolId.fromHex(SUBPOOL_ID_HEX),
     publicId,
   ).toHex();
   privateAccAddressFull = privateAccAddress;
-  const accountData = await subpoolClient
-    .getAccount(privateAccAddress)
-    .catch(() => null);
-  renderPrivateSection(privateAccAddress, accountData);
+  updatePrivateAccountSectionState();
+
+  await loadPrivateBalance()
+    .then(() => enableP2pBtn())
+    .catch((e) => console.log("loadPrivateBalance failed:", e));
+
+  setInterval(() => {
+    loadPrivateBalance().catch((e) =>
+      console.log("loadPrivateBalance interval failed:", e),
+    );
+  }, 5_000);
+}
+
+function renderVisiblePostSignIn() {
+  walletInfo.classList.add("visible");
+  depositSection.classList.add("visible");
 }
 
 createWalletBtn.addEventListener("click", async () => {
@@ -321,8 +392,8 @@ createWalletBtn.addEventListener("click", async () => {
     const seed = await registerAndGetSeed();
     currentSeed = seed;
     await showPublicWallet(seed);
-    renderVisiblePostSignIn();
     await loadPrivateAccount(seed);
+    renderVisiblePostSignIn();
     createWalletBtn.textContent = "✓ Wallet created";
   } catch (err) {
     walletError.textContent = `Error: ${err}`;
@@ -339,7 +410,6 @@ signInBtn.addEventListener("click", async () => {
   signInBtn.textContent = "⏳ Signing in…";
   try {
     const seed = await evalPrf();
-
     currentSeed = seed;
     await showPublicWallet(seed);
     renderVisiblePostSignIn();
@@ -382,6 +452,16 @@ depositBtn.addEventListener("click", async () => {
 
 // ── Section 2: Private account ────────────────────────────────────────────────
 
+const privateAccountSection = document.getElementById(
+  "private-account-section",
+) as HTMLElement;
+
+function updatePrivateAccountSectionState() {
+  const active = publicAccount !== null && privateAccAddressFull !== null;
+  privateAccountSection.style.opacity = active ? "" : "0.4";
+  privateAccountSection.style.pointerEvents = active ? "" : "none";
+}
+
 const kycForm = document.getElementById("kyc-form")!;
 const kycDisplay = document.getElementById("kyc-display")!;
 const nameInput = document.getElementById("kyc-name") as HTMLInputElement;
@@ -401,30 +481,36 @@ const privBalanceRow = document.getElementById("priv-balance-row")!;
 const privBalanceEl = document.getElementById("priv-balance")!;
 
 function renderPrivateBalance() {
+  const privateBalance = Number(privateBalanceRaw) / 1e6;
   privBalanceEl.textContent =
     privateBalance.toLocaleString("en-US", { minimumFractionDigits: 2 }) +
     " USDX";
   privBalanceRow.style.display = privateBalance > 0 ? "" : "none";
 }
 
-function renderPrivateSection(
-  privateAccAddress: string,
-  accountData: AccountResponse | null,
-) {
-  if (accountData) {
+function renderPrivateSection() {
+  if (privateAccount) {
     kycForm.style.display = "none";
     kycDisplay.style.display = "block";
-    tesseraAddrVal.textContent = privateAccAddress;
+    tesseraAddrVal.textContent = privateAccAddressFull;
     tesseraAddrBox.classList.add("visible");
-    const balanceBigInt = BigInt(
-      "0x" + (accountData.balance || "0".repeat(64)),
+    const accountBalanceBigInt = privateAccount.balanceFor(
+      AssetId.fromU64(ASSET_ID),
     );
-    privateBalance = Number(balanceBigInt) / 1e6;
-    renderPrivateBalance();
+    const notesAmountHex = notesBalance?.balances[ASSET_ID.toString()]?.amount;
+    const notesBigInt = notesAmountHex ? BigInt("0x" + notesAmountHex) : 0n;
+    privateBalanceRaw = accountBalanceBigInt + notesBigInt;
+    console.log(
+      "Private totalbalanceBigInt =; accountBalanceBigInt =; unconsumedBalanceBigInt =",
+      privateBalanceRaw,
+      accountBalanceBigInt,
+      notesBigInt,
+    );
   } else {
     kycForm.style.display = "block";
     kycDisplay.style.display = "none";
   }
+  renderPrivateBalance();
 }
 
 for (const input of [nameInput, streetInput, dobInput]) {
@@ -447,7 +533,7 @@ async function pollFreshAccApproval(privateAccAddress: string): Promise<void> {
     const res = await subpoolClient
       .getFreshAccStatus(privateAccAddress)
       .catch(() => null);
-    if (res?.status === "APPROVED") return;
+    if (res?.status === "Approved") return;
   }
 }
 
@@ -469,9 +555,8 @@ registerBtn.addEventListener("click", async () => {
     const seed =
       currentSeed ??
       (credentialId ? await evalPrf() : await registerAndGetSeed());
-    const account = Account.createWithSeed(seed, 1n);
+    const account = Account.createWithSeed(seed, SUBPOOL_ID);
     const privateAccAddress = account.address().toHex();
-
     const s1 = appendProgressLine("⏳ Registering account…", "active");
     await subpoolClient.registerAccount(
       account.privateIdentifier(),
@@ -491,12 +576,15 @@ registerBtn.addEventListener("click", async () => {
       "active",
     );
     await pollFreshAccApproval(privateAccAddress);
+
     s2.className = "progress-line done";
     s2.textContent = "✓ Approval received";
 
     appendProgressLine("✓ Account registered", "done");
     tesseraAddrVal.textContent = privateAccAddress;
     tesseraAddrBox.classList.add("visible");
+
+    await loadPrivateAccount(seed);
   } catch (err) {
     registerError.textContent = `Error: ${err}`;
     registerBtn.disabled = false;
@@ -505,6 +593,7 @@ registerBtn.addEventListener("click", async () => {
 
 // ── Section 3: Public → Private deposit ──────────────────────────────────────
 
+const p2pSection = document.getElementById("p2p-section") as HTMLElement;
 const p2pAmountInput = document.getElementById(
   "p2p-amount",
 ) as HTMLInputElement;
@@ -519,9 +608,33 @@ const p2pSteps = document.getElementById("p2p-steps")!;
 const p2pError = document.getElementById("p2p-error")!;
 
 function enableP2pBtn() {
+  p2pSection.style.opacity = "";
+  p2pSection.style.pointerEvents = "";
+  xferSection.style.opacity = "";
+  xferSection.style.pointerEvents = "";
   p2pBtn.disabled = false;
   p2pHint.textContent = "Enter an amount and click Deposit.";
 }
+
+function validateP2pAmount() {
+  const amount = parseFloat(p2pAmountInput.value);
+  if (!amount || amount <= 0) {
+    if (amount < 0) p2pAmountInput.value = "";
+    p2pBtn.disabled = false;
+    p2pError.textContent = "";
+    return;
+  }
+  const units = BigInt(Math.round(amount * 1_000_000));
+  if (units > publicBalanceRaw) {
+    p2pBtn.disabled = true;
+    p2pError.textContent = "Amount exceeds your public USDX balance.";
+  } else {
+    p2pBtn.disabled = false;
+    p2pError.textContent = "";
+  }
+}
+
+p2pAmountInput.addEventListener("input", validateP2pAmount);
 
 p2pBtn.addEventListener("click", async () => {
   const amount = parseFloat(p2pAmountInput.value);
@@ -534,37 +647,50 @@ p2pBtn.addEventListener("click", async () => {
     return;
   }
 
-  p2pBtn.disabled = true;
-  p2pError.textContent = "";
-  p2pProgress.classList.add("visible");
-  p2pSteps.innerHTML = "";
-  p2pBar.style.width = "0%";
-
   try {
-    const seed = await evalPrf();
-    const account = await deriveWalletAccount(seed);
+    currentSeed = await evalPrf();
+    await refreshAccountStates();
+
+    p2pBtn.disabled = true;
+    p2pError.textContent = "";
+    p2pProgress.classList.add("visible");
+    p2pSteps.innerHTML = "";
+    p2pBar.style.width = "0%";
 
     const publicClient = createPublicClient({
       chain: sepolia,
       transport: http(SEPOLIA_RPC_URL),
     });
 
+    const depositAmountUnits = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
+
+    if (depositAmountUnits > publicBalanceRaw) {
+      p2pError.textContent = "Amount exceeds your public USDX balance.";
+      p2pBtn.disabled = false;
+      return;
+    }
+
     // Check current USDX allowance for TESSERA_CONTRACT
     const allowance = await publicClient.readContract({
       address: USDX_CONTRACT_ADDR,
       abi: erc20Abi,
       functionName: "allowance",
-      args: [account.address, TESSERA_CONTRACT as `0x${string}`],
+      args: [publicAccount!.address, TESSERA_CONTRACT as `0x${string}`],
     });
+    // console.log(allowance, maxUint256, allowance < maxUint256);
 
     const walletClient = createWalletClient({
-      account,
+      account: publicAccount!,
       chain: sepolia,
       transport: http(SEPOLIA_RPC_URL),
     });
 
-    if (allowance < maxUint256) {
-      const step = pStep(p2pSteps, "⏳ Approving USDX transfer…", "active");
+    if (allowance < depositAmountUnits) {
+      const step = pStep(
+        p2pSteps,
+        "⏳ Awaiting USDX transfer approval…",
+        "active",
+      );
       p2pBar.style.width = "40%";
 
       const approveTxHash = await walletClient.writeContract({
@@ -577,22 +703,20 @@ p2pBtn.addEventListener("click", async () => {
       await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
 
       step.className = "p-step done";
-      step.textContent = "✓ USDX transfer approved";
+      step.textContent = "✓ USDX transfer approval given";
     }
 
     // ── Construct deposit note ────────────────────────────────────────────────
     const step2 = pStep(p2pSteps, "⏳ Constructing deposit note…", "active");
     p2pBar.style.width = "60%";
 
-    const amountUnits = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
     const depositNote = DepositNote.create(
       AccountAddress.fromHex(privateAccAddressFull!),
-      amountUnits,
-      AssetId.fromU64(1n),
+      depositAmountUnits,
+      AssetId.fromU64(ASSET_ID),
     );
     const commitmentHex = ("0x" +
       depositNote.commitment().toHex()) as `0x${string}`;
-
     step2.className = "p-step done";
     step2.textContent = "✓ Deposit note constructed";
 
@@ -603,7 +727,7 @@ p2pBtn.addEventListener("click", async () => {
     const calldata = encodeFunctionData({
       abi: TESSERA_ABI,
       functionName: "depositAndRegister",
-      args: [commitmentHex, amountUnits],
+      args: [commitmentHex, depositAmountUnits],
     });
 
     const txRequest = await walletClient.prepareTransactionRequest({
@@ -620,18 +744,65 @@ p2pBtn.addEventListener("click", async () => {
     const step4 = pStep(p2pSteps, "⏳ Submitting deposit request…", "active");
     p2pBar.style.width = "90%";
 
-    await subpoolClient.submitDeposit({
-      recipient_acc_address: privateAccAddressFull!,
+    const { id: depositId } = await subpoolClient.submitDeposit({
+      recipient_address: privateAccAddressFull!,
       eth_address: ethAddressFull!,
       deposit_note_identifier: depositNote.identifierHex(),
-      deposit_amount: u256LeHex(amountUnits),
-      asset_id: "0100000000000000", // u64(1) as 8-byte LE hex
+      deposit_amount: u256LeHex(depositAmountUnits),
+      asset_id: ASSET_ID_HEX,
       signed_public_tx: signedTxHex,
     });
 
     step4.className = "p-step done";
     step4.textContent = "✓ Deposit submitted";
-    p2pBar.style.width = "100%";
+
+    // ── Poll for approval ─────────────────────────────────────────────────────
+    const step5 = pStep(p2pSteps, "⏳ Waiting for approval…", "active");
+    p2pBar.style.width = "95%";
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setInterval(async () => {
+        try {
+          const status = await subpoolClient.getDepositStatus(depositId);
+          console.log("Deposit stats =", status);
+          if (!status || status.status === "Pending") return;
+          clearInterval(timer);
+          console.log("Here after clear");
+          if (status.status === "Rejected") {
+            reject(new Error("Deposit rejected by operator"));
+            return;
+          }
+          // APPROVED
+          step5.className = "p-step done";
+          step5.textContent = "✓ Deposit approved";
+          if (status.deposit_tx_hash) {
+            const txLink = document.createElement("a");
+            txLink.href = `https://sepolia.etherscan.io/tx/${status.deposit_tx_hash}`;
+            txLink.target = "_blank";
+            txLink.rel = "noopener";
+            txLink.textContent = `View deposit tx on Etherscan ↗`;
+            txLink.className = "tx-link";
+            p2pSteps.appendChild(txLink);
+          }
+          const contractLink = document.createElement("a");
+          contractLink.style.marginTop = "6px";
+          contractLink.href = `https://sepolia.etherscan.io/address/${TESSERA_CONTRACT}`;
+          contractLink.target = "_blank";
+          contractLink.rel = "noopener";
+          contractLink.textContent = `View Tessera contract on Etherscan ↗`;
+          contractLink.className = "tx-link";
+          p2pSteps.appendChild(contractLink);
+          p2pBar.style.width = "100%";
+          // Refresh public + private balances
+          await refreshAccountStates();
+
+          resolve();
+        } catch (e) {
+          clearInterval(timer);
+          reject(e);
+        }
+      }, 5_000);
+    });
   } catch (err) {
     p2pError.textContent = `Error: ${err}`;
     p2pBtn.disabled = false;
@@ -682,6 +853,7 @@ function validateTesseraAddr(hex: string): boolean {
 }
 
 // Render address book
+const xferSection = document.getElementById("xfer-section") as HTMLElement;
 const addrBook = document.getElementById("addr-book")!;
 const xferAddrIn = document.getElementById("xfer-addr") as HTMLInputElement;
 const xferAmtIn = document.getElementById("xfer-amount") as HTMLInputElement;
@@ -723,7 +895,17 @@ for (const { label, addr } of DEMO_ADDRESSES) {
 
 function updateXferBtn() {
   const addrOk = validateTesseraAddr(xferAddrIn.value.trim());
-  const amtOk = parseFloat(xferAmtIn.value) > 0;
+  const amount = parseFloat(xferAmtIn.value);
+  const amtOk = amount > 0;
+  if (amtOk) {
+    const units = BigInt(Math.round(amount * 1_000_000));
+    if (units > privateBalanceRaw) {
+      xferBtn.disabled = true;
+      xferError.textContent = "Amount exceeds your private USDX balance.";
+      return;
+    }
+  }
+  xferError.textContent = "";
   xferBtn.disabled = !(addrOk && amtOk);
 }
 
@@ -753,41 +935,142 @@ xferBtn.addEventListener("click", async () => {
   xferBar.style.width = "0%";
 
   const amount = parseFloat(xferAmtIn.value);
+  const transferAmount = BigInt(Math.round(amount * 1_000_000)); // USDX 6 decimals
+
+  if (transferAmount > privateBalanceRaw) {
+    xferBtn.disabled = false;
+    xferError.textContent = "Amount exceeds your private USDX balance.";
+    return;
+  }
 
   try {
-    await evalPrf(); // prompt passkey — seed not needed for simulation
+    const seed = await evalPrf();
+    await loadPrivateAccount(seed);
 
     xferProgress.classList.add("visible");
+    const step1 = pStep(xferSteps, "⏳ Fetching incoming notes…", "active");
+    xferBar.style.width = "25%";
 
-    const steps = [
-      {
-        label: "⏳ Waiting for approval from subpool owner…",
-        pct: 33,
-        ms: 1800,
-      },
-      { label: "⚙️ Generating proof…", pct: 66, ms: 2200 },
-      { label: "✓ Send settled", pct: 100, ms: 0 },
-    ];
+    const inotes = (
+      await subpoolClient.getInputNotes(privateAccAddressFull!)
+    ).filter((n) => n.asset_id === ASSET_ID_HEX);
 
-    for (const step of steps) {
-      const el = pStep(
-        xferSteps,
-        step.label,
-        step.pct < 100 ? "active" : "done",
+    step1.className = "p-step done";
+    step1.textContent = `✓ Found ${inotes.length} incoming note(s)`;
+
+    // ── Build spend tx ────────────────────────────────────────────────────────
+    const step2 = pStep(xferSteps, "⏳ Building spend tx…", "active");
+    xferBar.style.width = "50%";
+
+    const assetIdU64 = hexLeToU64(ASSET_ID_HEX);
+    const builder = new SpendTxBuilder(privateAccount!, assetIdU64);
+
+    for (const n of inotes) {
+      const identBytes = hexToBytes(n.identifier); // 16 bytes
+      const senderAddr = AccountAddress.fromHex(n.sender_address);
+      const nnn = new InputNote(
+        identBytes,
+        assetIdU64,
+        hexLeToU256(n.amount),
+        privateAccount!.address(),
+        senderAddr,
+        0n, // position placeholder (not stored in DB)
+        hexToBytes(n.memo),
       );
-      xferBar.style.width = step.pct + "%";
-      if (step.ms > 0) {
-        await delay(step.ms);
-        el.className = "p-step done";
-        el.textContent = step.label
-          .replace("⏳ ", "✓ ")
-          .replace("⚙️ ", "✓ ")
-          .replace("…", "");
-      }
+      console.log(nnn.commitment().toHex());
+      builder.addInputNote(nnn);
     }
 
-    privateBalance -= amount;
-    renderPrivateBalance();
+    const recipientAddr = AccountAddress.fromHex(xferAddrIn.value.trim());
+    builder.addOutputNote(recipientAddr, transferAmount, new Uint8Array(0));
+
+    const spendTx = builder.build();
+    step2.className = "p-step done";
+    step2.textContent = "✓ Spend transaction built";
+
+    // ── Sign ─────────────────────────────────────────────────────────────────
+    const step3 = pStep(xferSteps, "⏳ Signing…", "active");
+    xferBar.style.width = "70%";
+
+    const sigHex = toHex(spendTx.sign(seed));
+    step3.className = "p-step done";
+    step3.textContent = "✓ Signed";
+
+    // ── Collect payloads ──────────────────────────────────────────────────────
+    const inputNotePayloads: NotePayload[] = inotes.map((n) => ({
+      identifier: n.identifier,
+      asset_id: n.asset_id,
+      amount: n.amount,
+      recipient_address: n.recipient_address,
+      sender_address: n.sender_address,
+      memo: n.memo,
+    }));
+
+    const outputNotePayloads: NotePayload[] = spendTx
+      .outputNotes()
+      .map((n) => ({
+        identifier: n.identifierHex(),
+        asset_id: ASSET_ID_HEX,
+        amount: n.amountHex(),
+        recipient_address: n.recipientHex(),
+        sender_address: n.senderHex(),
+        memo: n.memoHex(),
+      }));
+
+    // ── Submit ────────────────────────────────────────────────────────────────
+    const step4 = pStep(xferSteps, "⏳ Submitting spend tx…", "active");
+    xferBar.style.width = "90%";
+
+    const resp = await subpoolClient.submitSpendTx({
+      priv_acc_address: privateAccAddressFull!,
+      input_notes: inputNotePayloads,
+      output_notes: outputNotePayloads,
+      dinotes: spendTx.diNotes().map((d) => d.toHex()),
+      donotes: spendTx.doNotes().map((d) => d.toHex()),
+      spend_tx_signature: sigHex,
+    });
+
+    step4.className = "p-step done";
+    step4.textContent = "✓ Transaction submitted for approval";
+    xferBar.style.width = "95%";
+
+    const step5 = pStep(xferSteps, "⏳ Waiting for approval…", "active");
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setInterval(async () => {
+        try {
+          const status = await subpoolClient.getSpendTxStatus(resp.id);
+          if (!status || status.status === "Pending") return;
+          clearInterval(timer);
+          if (status.status === "Rejected") {
+            reject(
+              new Error(
+                `Spend tx rejected: ${status.rejection_reason ?? "unknown reason"}`,
+              ),
+            );
+            return;
+          }
+          step5.className = "p-step done";
+          step5.textContent = "✓ Transfer approved and sent";
+          xferBar.style.width = "100%";
+
+          const contractLink = document.createElement("a");
+          contractLink.style.marginTop = "6px";
+          contractLink.href = `https://sepolia.etherscan.io/address/${TESSERA_CONTRACT}`;
+          contractLink.target = "_blank";
+          contractLink.rel = "noopener";
+          contractLink.textContent = `View Tessera contract on Etherscan ↗`;
+          contractLink.className = "tx-link";
+          xferSteps.appendChild(contractLink);
+
+          await refreshAccountStates();
+          resolve();
+        } catch (e) {
+          clearInterval(timer);
+          reject(e);
+        }
+      }, 5_000);
+    });
 
     xferBtn.disabled = false;
     xferAmtIn.value = "";

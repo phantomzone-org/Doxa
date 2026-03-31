@@ -330,9 +330,9 @@ docker rm -f tessera-pg
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | yes | | PostgreSQL connection string |
 | `SEQUENCER_URL` | yes | | Sequencer HTTP endpoint |
-| `APPROVAL_PRIVATE_KEY` | yes | | Hex-encoded Schnorr private key |
+| `APPROVAL_PRIVATE_KEY` | yes | | Hex-encoded Schnorr private key, with or without `0x` |
 | `RPC_URL` | yes | | Ethereum JSON-RPC URL |
-| `ROLLUP_ADDRESS` | yes | | Deployed TesseraRollupV2 contract address |
+| `ROLLUP_ADDRESS` | yes | | Deployed TesseraRollupV2 contract address (`0x`-prefixed) |
 | `SUBPOOL_ID` | no | `1` | Subpool identifier for this operator |
 | `POLL_INTERVAL_SECS` | no | `5` | Polling interval in seconds |
 | `DATABASE_MAX_CONNECTIONS` | no | `5` | Max DB pool connections |
@@ -344,17 +344,17 @@ docker rm -f tessera-pg
 | `DATABASE_URL` | yes | | PostgreSQL connection string |
 | `TESSERA_SUBPOOL_API_ADDR` | no | `0.0.0.0:8080` | HTTP bind address |
 | `SUBPOOL_ID` | no | `1` | Subpool identifier (must match operator) |
-| `FAUCET_PRIVATE_KEY` | yes | | Faucet wallet private key (hex) |
+| `FAUCET_PRIVATE_KEY` | yes | | Faucet wallet private key (hex, with or without `0x`) |
 | `SEPOLIA_RPC_URL` | yes | | RPC URL for faucet |
-| `USDX_CONTRACT_ADDR` | yes | | Faucet token contract address |
+| `USDX_CONTRACT_ADDR` | yes | | Faucet token contract address (`0x`-prefixed) |
 | `DATABASE_MAX_CONNECTIONS` | no | `10` | Max DB pool connections |
 
 ### E2E test (`test-e2e`)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ROLLUP_ADDRESS` | yes | | Deployed TesseraContract address |
-| `TOKEN_ADDRESS` | yes | | Deployed ToyUSDT address |
+| `ROLLUP_ADDRESS` | yes | | Deployed TesseraContract address (`0x`-prefixed) |
+| `TOKEN_ADDRESS` | yes | | Deployed ToyUSDT address (`0x`-prefixed) |
 | `RPC_URL` | no | `http://localhost:8545` | Anvil RPC |
 | `DB_API_BASE` | no | `http://localhost` | Base URL (ports 8081-8083 appended) |
 | `DEPOSIT_AMOUNT` | no | `1000` | Deposit amount per client |

@@ -3,8 +3,12 @@ name = "tessera-utils"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+groth = ["bindgen"]
+
 [build-dependencies]
-bindgen = "*"
+bindgen = { version = "*", optional = true }
 
 [dependencies]
 plonky2 = {workspace = true}

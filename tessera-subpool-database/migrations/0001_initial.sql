@@ -3,7 +3,7 @@
 CREATE TYPE freshacc_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE deposit_tx_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE spend_tx_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
-CREATE TYPE input_note_status AS ENUM ('APPROVED', 'REJECTED');
+CREATE TYPE input_note_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 
 -- ── accounts ──────────────────────────────────────────────────────────────────
 -- All Goldilocks field elements stored as BYTEA via to_canonical_u64().to_le_bytes().
@@ -17,7 +17,7 @@ CREATE TABLE accounts (
     id                       BIGSERIAL   PRIMARY KEY,
     private_acc_address      TEXT        NOT NULL UNIQUE,
     eth_address              TEXT        NOT NULL,
-    private_identifier       BYTEA       NOT NULL,
+    private_identifier       TEXT        NOT NULL UNIQUE,
     subpool_id               BYTEA       NOT NULL,
     nonce                    BYTEA       NOT NULL,
     spend_auth               BYTEA       NOT NULL,
@@ -43,6 +43,7 @@ CREATE TABLE users (
 CREATE TABLE freshacc_requests (
     id                       BIGSERIAL       PRIMARY KEY,
     private_acc_address      TEXT            NOT NULL UNIQUE,
+    private_identifier       TEXT            NOT NULL UNIQUE,
     spend_auth               BYTEA           NOT NULL,
     approval_signature       BYTEA,
     rejection_msg            TEXT,
@@ -59,7 +60,7 @@ CREATE TABLE freshacc_requests (
 
 CREATE TABLE deposit_tx_requests (
     id                       BIGSERIAL         PRIMARY KEY,
-    recipient_acc_address    TEXT              NOT NULL,
+    recipient_address    TEXT              NOT NULL,
     eth_address              TEXT              NOT NULL,
     deposit_note_identifier  BYTEA             NOT NULL UNIQUE,
     deposit_amount           BYTEA             NOT NULL,
@@ -91,6 +92,7 @@ CREATE TABLE spend_tx_requests (
     onote_identifiers  TEXT[]          NOT NULL,
     dinotes            TEXT[]          NOT NULL,
     donotes            TEXT[]          NOT NULL,
+    spend_tx_signature BYTEA           NOT NULL,
     status             spend_tx_status NOT NULL DEFAULT 'PENDING',
     approval_signature BYTEA,
     rejection_reason   TEXT,
@@ -107,6 +109,8 @@ CREATE TABLE input_notes (
     amount            BYTEA             NOT NULL,
     recipient_address TEXT              NOT NULL,
     sender_address    TEXT              NOT NULL,
+    memo              BYTEA             NOT NULL DEFAULT '\x'::bytea,
+    consume           BOOLEAN           NOT NULL DEFAULT FALSE,
     status            input_note_status NOT NULL DEFAULT 'APPROVED',
     created_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW()
@@ -121,5 +125,6 @@ CREATE TABLE output_notes (
     amount            BYTEA       NOT NULL,
     recipient_address TEXT        NOT NULL,
     sender_address    TEXT        NOT NULL,
+    memo              BYTEA       NOT NULL DEFAULT '\x'::bytea,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

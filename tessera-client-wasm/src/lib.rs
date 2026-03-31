@@ -13,9 +13,9 @@ use sha2::{Digest, Sha256};
 use tessera_client::{
 	derive_priv_tx_hash, double_hash_native,
 	schnorr::{schnorr_sign, CompressedPublicKey, PrivateKey, Scalar},
-	AccountAddress, AccountNullifier, AssetId, DepositNote, HashOutput,
-	NodeIdentifier, NoteCommitment, NoteNullifier, PositionedStandardNode, PrivateIdentifier,
-	PublicIdentifier, SpendAuth, StandardAccount, StandardNote, SubpoolId,
+	AccountAddress, AccountNullifier, AccountStateTree, AssetId, DepositNote, HashOutput, Nonce,
+	NoteCommitment, NoteIdentifier, NoteNullifier, PrivateIdentifier, PublicIdentifier, SpendAuth,
+	StandardAccount, StandardNote, SubpoolId,
 };
 use wasm_bindgen::prelude::*;
 
@@ -62,7 +62,9 @@ fn random_hash<R: CryptoRng + Rng>(rng: &mut R) -> HashOutput {
 
 /// A random dummy note seed: 4 Goldilocks field elements sampled uniformly at random.
 /// Converted to a `NoteNullifier` or `NoteCommitment` via `double_hash_native` when building.
-struct WasmDummyNote([F; 4]);
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct WasmDummyNote([F; 4]);
 
 impl WasmDummyNote {
 	fn sample<R: CryptoRng + Rng>(rng: &mut R) -> Self {
@@ -75,6 +77,19 @@ impl WasmDummyNote {
 
 	fn to_commitment(&self) -> NoteCommitment {
 		NoteCommitment(HashOutput(double_hash_native(self.0)))
+	}
+}
+
+#[wasm_bindgen]
+impl WasmDummyNote {
+	/// Returns the raw 32-byte seed (4 × u64 LE) as a 64-char hex string.
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		let mut out = [0u8; 32];
+		for (i, f) in self.0.iter().enumerate() {
+			out[i * 8..i * 8 + 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
+		}
+		hex::encode(out)
 	}
 }
 
@@ -144,6 +159,81 @@ impl WasmAccount {
 		WasmAccount(Rc::new(RefCell::new(acc)))
 	}
 
+	/// Reconstruct a `WasmAccount` from server-returned account data.
+	/// No seed required — the spend-auth private key is not stored;
+	/// pass seed to `WasmSpendTx::sign(seed)` separately when signing.
+	#[wasm_bindgen(js_name = fromAccountData)]
+	pub fn from_account_data(
+		private_identifier_hex: &str,
+		subpool_id_hex: &str,
+		nonce_hex: &str,
+		spend_auth_pk_hex: &str,
+		ast_json: &str,
+	) -> Result<WasmAccount, JsError> {
+		// private identifier
+		let pi_bytes =
+			hex::decode(private_identifier_hex).map_err(|e| JsError::new(&e.to_string()))?;
+		let pi = WasmPrivateIdentifier::from_bytes_inner(&pi_bytes)?.0;
+
+		// subpool id
+		let sp_bytes = hex::decode(subpool_id_hex).map_err(|e| JsError::new(&e.to_string()))?;
+		let sp_arr: [u8; 8] = sp_bytes
+			.as_slice()
+			.try_into()
+			.map_err(|_| JsError::new("subpool_id must be 8 bytes"))?;
+		let subpool_id = SubpoolId(F::from_canonical_u64(u64::from_le_bytes(sp_arr)));
+
+		// nonce (8-byte LE)
+		let n_bytes = hex::decode(nonce_hex).map_err(|e| JsError::new(&e.to_string()))?;
+		let n_arr: [u8; 8] = n_bytes
+			.as_slice()
+			.try_into()
+			.map_err(|_| JsError::new("nonce must be 8 bytes"))?;
+		let nonce_val = u64::from_le_bytes(n_arr);
+
+		// spend auth public key (40 bytes)
+		let sa_bytes = hex::decode(spend_auth_pk_hex).map_err(|e| JsError::new(&e.to_string()))?;
+		let sa_arr: &[u8; 40] = sa_bytes
+			.as_slice()
+			.try_into()
+			.map_err(|_| JsError::new("spend_auth_pk must be 40 bytes"))?;
+		let spend_pk = CompressedPublicKey::<F>::decode(sa_arr);
+
+		// AST JSON: keys = decimal asset_id string, values = { leaf_index, amount (LE hex) }
+		let ast_val: serde_json::Value = serde_json::from_str(ast_json)
+			.map_err(|e| JsError::new(&format!("ast_json parse error: {e}")))?;
+		let mut asset_map = std::collections::HashMap::new();
+		if let Some(obj) = ast_val.as_object() {
+			for (k, v) in obj {
+				let asset_id_u64: u64 = k
+					.parse()
+					.map_err(|_| JsError::new(&format!("invalid asset_id key: {k}")))?;
+				let asset = parse_asset_id(asset_id_u64)?;
+				let leaf_index = v["leaf_index"]
+					.as_u64()
+					.ok_or_else(|| JsError::new("missing leaf_index"))? as usize;
+				let amount_hex = v["amount"]
+					.as_str()
+					.ok_or_else(|| JsError::new("missing amount"))?;
+				let amount_bytes =
+					hex::decode(amount_hex).map_err(|e| JsError::new(&e.to_string()))?;
+				let amount = primitive_types::U256::from_little_endian(&amount_bytes);
+				asset_map.insert(asset, (leaf_index, amount));
+			}
+		}
+		let ast = AccountStateTree::new_from_asset_map(asset_map)
+			.map_err(|e| JsError::new(&e.to_string()))?;
+
+		let mut acc = StandardAccount::new_with(pi, subpool_id);
+		acc.nonce = Nonce(F::from_canonical_u64(nonce_val));
+		acc.spend_auth = SpendAuth {
+			spend_pk: Some(spend_pk),
+		};
+		acc.ast = ast;
+
+		Ok(WasmAccount(Rc::new(RefCell::new(acc))))
+	}
+
 	/// Returns the account commitment.
 	pub fn commitment(&self) -> WasmAccountCommitment {
 		WasmAccountCommitment(self.0.borrow().commitment().0)
@@ -167,9 +257,30 @@ impl WasmAccount {
 		self.0.borrow().is_fresh()
 	}
 
+	/// Returns the account nonce as a u64 (maps to `bigint` in JS).
+	#[wasm_bindgen(js_name = nonce)]
+	pub fn nonce(&self) -> u64 {
+		self.0.borrow().nonce.0.to_canonical_u64()
+	}
+
 	/// Returns the account address.
 	pub fn address(&self) -> WasmAccountAddress {
 		WasmAccountAddress(AccountAddress::from_acc(&self.0.borrow()))
+	}
+
+	/// Return the balance for `asset_id` as a 64-char LE hex string (U256, 32 bytes).
+	/// Returns the all-zeros hex string if the asset is not present in the AST.
+	#[wasm_bindgen(js_name = balanceFor)]
+	pub fn balance_for(&self, asset_id: &WasmAssetId) -> String {
+		let acc = self.0.borrow();
+		let aid = AssetId(F::from_canonical_u64(asset_id.0));
+		let amount = acc
+			.ast
+			.amount_for(aid)
+			.map(|(_, amt)| amt)
+			.unwrap_or(U256::zero());
+		let buf: [u8; 32] = amount.to_little_endian();
+		hex::encode(buf)
 	}
 
 	/// Returns the account nullifier.
@@ -265,7 +376,9 @@ impl WasmPrivateIdentifier {
 
 	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmPrivateIdentifier, JsError> {
 		if bytes.len() != 16 {
-			return Err(JsError::new("private_identifier must be 16 bytes (32 hex chars)"));
+			return Err(JsError::new(
+				"private_identifier must be 16 bytes (32 hex chars)",
+			));
 		}
 		let f0 = F::from_noncanonical_u64(u64::from_le_bytes(bytes[..8].try_into().unwrap()));
 		let f1 = F::from_noncanonical_u64(u64::from_le_bytes(bytes[8..].try_into().unwrap()));
@@ -306,7 +419,9 @@ impl WasmPublicIdentifier {
 
 	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmPublicIdentifier, JsError> {
 		if bytes.len() != 32 {
-			return Err(JsError::new("public_identifier must be 32 bytes (64 hex chars)"));
+			return Err(JsError::new(
+				"public_identifier must be 32 bytes (64 hex chars)",
+			));
 		}
 		let mut elems = [F::ZERO; 4];
 		for (i, chunk) in bytes.chunks_exact(8).enumerate() {
@@ -464,7 +579,10 @@ impl WasmAccountAddress {
 
 	/// Construct an address from a `WasmSubpoolId` and a `WasmPublicIdentifier`.
 	#[wasm_bindgen(js_name = fromParts)]
-	pub fn from_parts(subpool_id: &WasmSubpoolId, public_id: &WasmPublicIdentifier) -> WasmAccountAddress {
+	pub fn from_parts(
+		subpool_id: &WasmSubpoolId,
+		public_id: &WasmPublicIdentifier,
+	) -> WasmAccountAddress {
 		WasmAccountAddress(AccountAddress::new(subpool_id.0, public_id.0))
 	}
 }
@@ -493,6 +611,7 @@ impl WasmHashOutput {
 
 /// A standard note together with its NCT position and asset_id.
 /// Add to a `WasmSpendTxBuilder` via `addInputNote`.
+/// TODO: remove asset_id field since note has asset_id
 #[wasm_bindgen]
 pub struct WasmInputNote {
 	note: StandardNote,
@@ -507,17 +626,18 @@ impl WasmInputNote {
 	/// - `identifier`: 16 bytes (2 × u64 little-endian, each < Goldilocks ORDER)
 	/// - `asset_id`: Goldilocks field element (< ORDER)
 	/// - `amount`: JS BigInt
-	/// - `recipient`: account that owns this note
-	/// - `sender`: account that sent this note
+	/// - `recipient`: address of the account that owns this note
+	/// - `sender`: address of the account that sent this note
 	/// - `position`: position in the NCT
 	#[wasm_bindgen(constructor)]
 	pub fn new(
 		identifier: &[u8],
 		asset_id: u64,
 		amount: BigInt,
-		recipient: &WasmAccount,
-		sender: &WasmAccount,
+		recipient: &WasmAccountAddress,
+		sender: &WasmAccountAddress,
 		position: u64,
+		memo: &[u8],
 	) -> Result<WasmInputNote, JsError> {
 		// Validate and parse identifier bytes into two Goldilocks field elements.
 		if identifier.len() != 16 {
@@ -535,25 +655,133 @@ impl WasmInputNote {
 				"identifier[8..16] value {id1_raw} is out of Goldilocks field range"
 			)));
 		}
+		if memo.len() > 512 {
+			return Err(JsError::new("memo must be at most 512 bytes"));
+		}
+		let mut memo_arr = [0u8; 512];
+		memo_arr[..memo.len()].copy_from_slice(memo);
 
 		let asset = parse_asset_id(asset_id)?;
 		let amt = bigint_to_u256(amount)?;
 
 		let note = StandardNote::new(
-			NodeIdentifier([
+			NoteIdentifier([
 				F::from_canonical_u64(id0_raw),
 				F::from_canonical_u64(id1_raw),
 			]),
 			asset,
 			amt,
-			AccountAddress::from_acc(&recipient.0.borrow()),
-			AccountAddress::from_acc(&sender.0.borrow()),
+			recipient.0,
+			sender.0,
+			memo_arr,
 		);
 		Ok(WasmInputNote {
 			note,
 			position,
 			asset_id,
 		})
+	}
+
+	/// Returns the note commitment (4 Goldilocks field elements, 32 bytes).
+	#[wasm_bindgen(js_name = commitment)]
+	pub fn commitment(&self) -> WasmNoteCommitment {
+		WasmNoteCommitment(self.note.commitment())
+	}
+}
+
+// ── WasmNoteCommitment ────────────────────────────────────────────────────────
+
+/// A note commitment (4 Goldilocks field elements, 32 bytes / 64 hex chars).
+#[wasm_bindgen]
+pub struct WasmNoteCommitment(NoteCommitment);
+
+#[wasm_bindgen]
+impl WasmNoteCommitment {
+	/// 64 hex chars — 4 × u64 LE (32 bytes).
+	#[wasm_bindgen(js_name = toHex)]
+	pub fn to_hex(&self) -> String {
+		hex::encode(hash_to_bytes(self.0 .0))
+	}
+
+	/// 32 bytes (4 × u64 little-endian).
+	#[wasm_bindgen(js_name = toBytes)]
+	pub fn to_bytes(&self) -> Vec<u8> {
+		hash_to_bytes(self.0 .0)
+	}
+
+	/// Parse from a 64-char hex string (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromHex)]
+	pub fn from_hex(s: &str) -> Result<WasmNoteCommitment, JsError> {
+		let bytes = hex::decode(s).map_err(|e| JsError::new(&e.to_string()))?;
+		Self::from_bytes_inner(&bytes)
+	}
+
+	/// Parse from a 32-byte Uint8Array (4 × u64 LE).
+	#[wasm_bindgen(js_name = fromBytes)]
+	pub fn from_bytes(bytes: &[u8]) -> Result<WasmNoteCommitment, JsError> {
+		Self::from_bytes_inner(bytes)
+	}
+
+	fn from_bytes_inner(bytes: &[u8]) -> Result<WasmNoteCommitment, JsError> {
+		if bytes.len() != 32 {
+			return Err(JsError::new(
+				"note commitment must be 32 bytes (64 hex chars)",
+			));
+		}
+		let mut elems = [F::ZERO; 4];
+		for (i, chunk) in bytes.chunks_exact(8).enumerate() {
+			elems[i] = F::from_canonical_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
+		}
+		Ok(WasmNoteCommitment(NoteCommitment(HashOutput(elems))))
+	}
+}
+
+// ── WasmOutputNote ────────────────────────────────────────────────────────────
+
+/// An output note produced by `WasmSpendTxBuilder::build`.
+#[wasm_bindgen]
+pub struct WasmOutputNote(StandardNote);
+
+#[wasm_bindgen]
+impl WasmOutputNote {
+	/// Identifier as 32 hex chars (2 × u64 LE).
+	#[wasm_bindgen(js_name = identifierHex)]
+	pub fn identifier_hex(&self) -> String {
+		let mut out = [0u8; 16];
+		out[..8].copy_from_slice(&self.0.identifier.0[0].to_canonical_u64().to_le_bytes());
+		out[8..].copy_from_slice(&self.0.identifier.0[1].to_canonical_u64().to_le_bytes());
+		hex::encode(out)
+	}
+
+	/// Asset id as a raw u64 Goldilocks field element.
+	#[wasm_bindgen(js_name = assetId)]
+	pub fn asset_id(&self) -> u64 {
+		self.0.asset_id.0.to_canonical_u64()
+	}
+
+	/// Amount as 64 hex chars (U256, 32 bytes LE).
+	#[wasm_bindgen(js_name = amountHex)]
+	pub fn amount_hex(&self) -> String {
+		let buf: [u8; 32] = self.0.amt.to_little_endian();
+		hex::encode(buf)
+	}
+
+	/// Recipient address as 80 hex chars.
+	#[wasm_bindgen(js_name = recipientHex)]
+	pub fn recipient_hex(&self) -> String {
+		self.0.recipient.to_hex()
+	}
+
+	/// Sender address as 80 hex chars.
+	#[wasm_bindgen(js_name = senderHex)]
+	pub fn sender_hex(&self) -> String {
+		self.0.sender.to_hex()
+	}
+
+	/// Memo as hex (full 512 bytes = 1024 hex chars).
+	#[wasm_bindgen(js_name = memoHex)]
+	pub fn memo_hex(&self) -> String {
+		hex::encode(self.0.memo)
 	}
 }
 
@@ -587,7 +815,7 @@ impl WasmSpendTx {
 		let inotes_null: [NoteNullifier; NOTE_BATCH] = std::array::from_fn(|i| {
 			if i < self.inotes.len() {
 				let (note, pos) = &self.inotes[i];
-				PositionedStandardNode::from_note(*note, F::from_canonical_u64(*pos)).nullifier(&nk)
+				StandardNote::nullifier(&note.commitment(), *pos as usize, &nk)
 			} else {
 				self.dummy_inotes[i - self.inotes.len()].to_nullifier()
 			}
@@ -626,6 +854,42 @@ impl WasmSpendTx {
 		let hash = self.compute_tx_hash();
 		let k = Scalar::sample(&mut rand::rng());
 		schnorr_sign(&sk, &hash.0, k).encode().to_vec()
+	}
+
+	/// Number of real output notes.
+	#[wasm_bindgen(js_name = outputNoteCount)]
+	pub fn output_note_count(&self) -> usize {
+		self.onotes.len()
+	}
+
+	/// Return the i-th real output note.
+	#[wasm_bindgen(js_name = outputNoteAt)]
+	pub fn output_note_at(&self, i: usize) -> WasmOutputNote {
+		WasmOutputNote(self.onotes[i])
+	}
+
+	/// Number of dummy input notes.
+	#[wasm_bindgen(js_name = diNoteCount)]
+	pub fn di_note_count(&self) -> usize {
+		self.dummy_inotes.len()
+	}
+
+	/// Return the i-th dummy input note seed.
+	#[wasm_bindgen(js_name = diNoteAt)]
+	pub fn di_note_at(&self, i: usize) -> WasmDummyNote {
+		self.dummy_inotes[i].clone()
+	}
+
+	/// Number of dummy output notes.
+	#[wasm_bindgen(js_name = doNoteCount)]
+	pub fn do_note_count(&self) -> usize {
+		self.dummy_onotes.len()
+	}
+
+	/// Return the i-th dummy output note seed.
+	#[wasm_bindgen(js_name = doNoteAt)]
+	pub fn do_note_at(&self, i: usize) -> WasmDummyNote {
+		self.dummy_onotes[i].clone()
 	}
 }
 
@@ -686,6 +950,7 @@ impl WasmSpendTxBuilder {
 		&mut self,
 		recipient: &WasmAccountAddress,
 		amount: BigInt,
+		memo: &[u8],
 	) -> Result<(), JsError> {
 		use tessera_client::NOTE_BATCH;
 		if self.onotes.len() >= NOTE_BATCH {
@@ -693,12 +958,18 @@ impl WasmSpendTxBuilder {
 				"output notes already full (max {NOTE_BATCH})"
 			)));
 		}
+		if memo.len() > 512 {
+			return Err(JsError::new("memo must be at most 512 bytes"));
+		}
+		let mut memo_arr = [0u8; 512];
+		memo_arr[..memo.len()].copy_from_slice(memo);
 		let amt = bigint_to_u256(amount)?;
 		let asset = parse_asset_id(self.asset_id).unwrap(); // validated at `new`
 		let sender_addr = AccountAddress::from_acc(&self.accin.borrow());
 		let recipient_addr = recipient.0;
 		let mut rng = rand::rng();
-		let note = StandardNote::create(&mut rng, recipient_addr, sender_addr, amt, asset);
+		let note =
+			StandardNote::create(&mut rng, recipient_addr, sender_addr, amt, asset, memo_arr);
 		self.onotes.push(note);
 		Ok(())
 	}
@@ -899,10 +1170,10 @@ impl WasmDepositNote {
 	) -> Result<WasmDepositNote, JsError> {
 		let mut rng = rand::rng();
 		let dist = Uniform::new(0, F::ORDER).unwrap();
-		let identifier = [
+		let identifier = NoteIdentifier([
 			F::from_canonical_u64(rng.sample(dist)),
 			F::from_canonical_u64(rng.sample(dist)),
-		];
+		]);
 		let amount = bigint_to_u256(amount)?;
 		let asset = parse_asset_id(asset_id.0)?;
 		Ok(WasmDepositNote {
@@ -931,16 +1202,15 @@ impl WasmDepositNote {
 	#[wasm_bindgen(js_name = identifierBytes)]
 	pub fn identifier_bytes(&self) -> Vec<u8> {
 		let mut bytes = vec![0u8; 16];
-		bytes[0..8].copy_from_slice(&self.note.identifier[0].to_canonical_u64().to_le_bytes());
-		bytes[8..16].copy_from_slice(&self.note.identifier[1].to_canonical_u64().to_le_bytes());
+		bytes[0..8].copy_from_slice(&self.note.identifier.0[0].to_canonical_u64().to_le_bytes());
+		bytes[8..16].copy_from_slice(&self.note.identifier.0[1].to_canonical_u64().to_le_bytes());
 		bytes
 	}
 
 	/// Deposit amount as a JS `BigInt`.
 	pub fn amount(&self) -> BigInt {
 		let hex = format!("{:x}", self.note.amount);
-		BigInt::new(&JsValue::from_str(&format!("0x{hex}")))
-			.unwrap_or_else(|_| BigInt::from(0u64))
+		BigInt::new(&JsValue::from_str(&format!("0x{hex}"))).unwrap_or_else(|_| BigInt::from(0u64))
 	}
 
 	/// Asset id.

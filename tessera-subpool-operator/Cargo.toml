@@ -9,10 +9,6 @@ name = "tessera-subpool-operator"
 path = "src/main.rs"
 
 [[bin]]
-name = "test-deposit"
-path = "src/bin/test_deposit.rs"
-
-[[bin]]
 name = "test-e2e"
 path = "src/bin/test_e2e.rs"
 

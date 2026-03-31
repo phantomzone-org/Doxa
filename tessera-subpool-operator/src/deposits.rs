@@ -1,27 +1,27 @@
-use alloy::primitives::{Address, B256, Bytes};
-use alloy::providers::Provider;
-use alloy::rpc::types::TransactionRequest;
-use alloy::sol;
-use alloy::sol_types::SolCall;
+use alloy::{
+	primitives::{Address, Bytes, B256},
+	providers::Provider,
+	rpc::types::TransactionRequest,
+	sol,
+	sol_types::SolCall,
+};
 use anyhow::{Context, Result};
-use plonky2_field::types::{Field, PrimeField64};
+use plonky2_field::types::PrimeField64;
 use primitive_types::U256;
 use serde::Serialize;
 use sqlx::PgPool;
 use tessera_client::{
 	derive_deposit_tx_hash,
 	schnorr::{schnorr_sign, PrivateKey, Scalar},
-	AccountAddress, AssetId, DepositNote, StandardAccount, SubpoolId,
+	AccountAddress, AssetId, DepositNote, NoteIdentifier, StandardAccount,
 };
 use tessera_subpool_database::{
 	convert::{
-		account_from_row, build_ast_json, bytes_to_f, bytes_to_u256, f_to_bytes, hash_to_hex,
-		parse_eth_address, u256_to_bytes,
+		account_from_row, bytes_to_f, bytes_to_u256, f_to_bytes, hash_to_hex, u256_to_bytes,
 	},
-	db::{insert_pending_input_note, update_account_after_deposit},
+	db::{insert_pending_input_note, update_account, update_deposit_tx_request_to_approved},
 	types::{account::AccountRow, deposit::DepositTxRow},
 };
-use tessera_utils::F;
 use tracing::{error, info};
 
 // ── On-chain contract interface (subset) ────────────────────────────────────
@@ -40,11 +40,12 @@ struct DepositValidationRequest {
 // ── On-chain broadcast ──────────────────────────────────────────────────────
 
 /// Broadcast the depositor's pre-signed ETH tx and wait for confirmation.
+/// Returns the tx_hash
 async fn broadcast_deposit_tx<P: Provider + Clone>(
 	rpc_provider: &P,
 	raw_tx: &[u8],
 	id: i64,
-) -> Result<()> {
+) -> Result<B256> {
 	let pending = rpc_provider
 		.send_raw_transaction(raw_tx)
 		.await
@@ -63,79 +64,18 @@ async fn broadcast_deposit_tx<P: Provider + Clone>(
 		"deposit tx reverted on-chain (tx={tx_hash})"
 	);
 	info!(id, %tx_hash, "deposit tx confirmed on-chain");
-	Ok(())
-}
-
-// ── Deposit note construction ───────────────────────────────────────────────
-
-struct ParsedDeposit {
-	note_identifier: [F; 2],
-	deposit_amount: U256,
-	asset_id: AssetId,
-	asset_id_u64: u64,
-	eth_address: primitive_types::H160,
-}
-
-/// Parse the raw DB fields into typed deposit values.
-fn parse_deposit_fields(row: &DepositTxRow) -> Result<ParsedDeposit> {
-	let note_id_arr: [u8; 16] = row
-		.deposit_note_identifier
-		.as_slice()
-		.try_into()
-		.context("deposit_note_identifier must be 16 bytes")?;
-	let note_identifier = [
-		bytes_to_f(&note_id_arr[..8].try_into().unwrap()),
-		bytes_to_f(&note_id_arr[8..].try_into().unwrap()),
-	];
-
-	let amount_arr: [u8; 32] = row
-		.deposit_amount
-		.as_slice()
-		.try_into()
-		.context("deposit_amount must be 32 bytes")?;
-	let deposit_amount = bytes_to_u256(&amount_arr);
-
-	let asset_id_arr: [u8; 8] = row
-		.asset_id
-		.as_slice()
-		.try_into()
-		.context("asset_id must be 8 bytes")?;
-	let asset_id_f = bytes_to_f(&asset_id_arr);
-	let asset_id_u64 = asset_id_f.to_canonical_u64();
-	let asset_id = AssetId::from_u64(asset_id_u64)?;
-
-	let eth_address = parse_eth_address(&row.eth_address)?;
-
-	Ok(ParsedDeposit {
-		note_identifier,
-		deposit_amount,
-		asset_id,
-		asset_id_u64,
-		eth_address,
-	})
-}
-
-/// Build the deposit note and compute its Poseidon commitment hash.
-fn build_deposit_note(accin: &StandardAccount, deposit: &ParsedDeposit) -> [F; 4] {
-	let recipient = AccountAddress::from_acc(accin);
-	let note = DepositNote {
-		identifier: deposit.note_identifier,
-		recipient,
-		amount: deposit.deposit_amount,
-		asset_id: deposit.asset_id,
-	};
-	note.commitment().0 .0
+	Ok(tx_hash)
 }
 
 /// Build accout from accin with the deposit applied (nonce+1, AST updated).
-fn apply_deposit(accin: &StandardAccount, deposit: &ParsedDeposit) -> StandardAccount {
+fn apply_deposit(accin: &StandardAccount, deposit: &DepositNote) -> StandardAccount {
 	let mut accout = accin.clone_with_incremented_nonce();
 	let old_balance = accout
 		.ast
 		.amount_for(deposit.asset_id)
 		.map(|(_, b)| b)
 		.unwrap_or(U256::zero());
-	let new_balance = old_balance + deposit.deposit_amount;
+	let new_balance = old_balance + deposit.amount;
 	accout
 		.ast
 		.insert_or_update_asset(deposit.asset_id, new_balance);
@@ -177,7 +117,6 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 	sequencer_url: &str,
 	http: &reqwest::Client,
 	rpc_provider: &P,
-	subpool_id: u64,
 ) -> Result<()> {
 	let rows: Vec<DepositTxRow> = sqlx::query_as(
 		"SELECT * FROM deposit_tx_requests \
@@ -195,11 +134,11 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 
 	for row in rows {
 		if let Err(e) =
-			process_one_deposit(pool, approval_sk, sequencer_url, http, rpc_provider, &row, subpool_id).await
+			process_one_deposit(pool, approval_sk, sequencer_url, http, rpc_provider, &row).await
 		{
 			error!(
 				id = row.id,
-				addr = row.recipient_acc_address,
+				addr = row.recipient_address,
 				"failed to process deposit request: {e:#}"
 			);
 		}
@@ -215,38 +154,66 @@ async fn process_one_deposit<P: Provider + Clone>(
 	http: &reqwest::Client,
 	rpc_provider: &P,
 	row: &DepositTxRow,
-	subpool_id: u64,
 ) -> Result<()> {
 	// ── 1. Broadcast deposit tx on-chain ─────────────────────────────────────
-	info!(id = row.id, addr = %row.recipient_acc_address, "broadcasting deposit tx on-chain");
-	broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
+	let _broadcast_tx_hash = if let Some(tx_hash) = &row.deposit_tx_hash {
+		let parsed = tx_hash
+			.parse::<B256>()
+			.with_context(|| format!("invalid persisted deposit_tx_hash '{tx_hash}'"))?;
+		info!(
+			id = row.id,
+			addr = %row.recipient_address,
+			tx_hash = %parsed,
+			"reusing previously broadcast deposit tx"
+		);
+		parsed
+	} else {
+		info!(
+			id = row.id,
+			addr = %row.recipient_address,
+			"broadcasting deposit tx on-chain"
+		);
+
+		let tx_hash = broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
+		sqlx::query(
+			"UPDATE deposit_tx_requests \
+	         SET deposit_tx_hash = $1, updated_at = NOW() \
+	         WHERE id = $2",
+		)
+		.bind(tx_hash.to_string())
+		.bind(row.id)
+		.execute(pool)
+		.await
+		.context("failed to persist broadcast deposit tx hash")?;
+		tx_hash
+	};
 
 	// ── 2. Reconstruct accin from DB ─────────────────────────────────────────
+	// TODO: add a helper function on row
 	let acc_row: AccountRow =
 		sqlx::query_as("SELECT * FROM accounts WHERE private_acc_address = $1")
-			.bind(&row.recipient_acc_address)
+			.bind(&row.recipient_address)
 			.fetch_one(pool)
 			.await
 			.context("account row not found for deposit recipient")?;
 
-	let sid = SubpoolId(F::from_canonical_u64(subpool_id));
-	let accin = account_from_row(&acc_row, sid)?;
+	let accin = account_from_row(&acc_row)?;
 
-	// ── 3. Parse deposit fields and build note commitment ────────────────────
-	let deposit = parse_deposit_fields(row)?;
-	let nc_hash = build_deposit_note(&accin, &deposit);
+	// ── 4. Parse deposit fields and build note commitment ────────────────────
+	let deposit = row.to_deposite_note()?;
+	let deposit_note_comm = deposit.commitment();
 
 	// ── 4. Build accout with deposit applied ─────────────────────────────────
 	let accout = apply_deposit(&accin, &deposit);
 
+	let deposit_eth_address = row.eth_address()?;
+
 	// ── 5. Sign deposit tx_hash ──────────────────────────────────────────────
-	let deposit_note_comm =
-		tessera_client::DepositNoteCommitment(tessera_client::HashOutput(nc_hash));
 	let tx_hash = derive_deposit_tx_hash(
 		accin.nullifier(),
 		accout.commitment(),
 		deposit_note_comm,
-		deposit.eth_address,
+		deposit_eth_address,
 	);
 
 	let mut rng = rand::rng();
@@ -255,60 +222,42 @@ async fn process_one_deposit<P: Provider + Clone>(
 	let sig_bytes = approval_sig.encode();
 
 	// ── 6. POST to sequencer ─────────────────────────────────────────────────
-	let nc_hex = hash_to_hex(&nc_hash);
+	let nc_hex = hash_to_hex(&deposit_note_comm.0 .0);
+	info!(nc = nc_hex, "deposit note cm hex");
 	post_deposit_to_sequencer(http, sequencer_url, &nc_hex).await?;
-	info!(id = row.id, addr = %row.recipient_acc_address, "deposit note submitted to sequencer");
+	info!(id = row.id, addr = %row.recipient_address, "deposit note submitted to sequencer");
 
-	// ── 7. Update deposit_tx_requests: APPROVED ──────────────────────────────
-	sqlx::query(
-		"UPDATE deposit_tx_requests \
-         SET status = 'APPROVED', approval_signature = $1, updated_at = NOW() \
-         WHERE id = $2",
-	)
-	.bind(sig_bytes.as_ref())
-	.bind(row.id)
-	.execute(pool)
-	.await
-	.context("failed to update deposit_tx_requests")?;
+	// ── 7–9. Approve deposit, update account, and insert input note atomically
 
-	// ── 8. Update account in DB ──────────────────────────────────────────────
-	let new_asset_balance = accout
-		.ast
-		.amount_for(deposit.asset_id)
-		.map(|(_, b)| b)
-		.unwrap_or(U256::zero());
-	let ast_json = build_ast_json(&acc_row.ast, deposit.asset_id_u64, new_asset_balance);
+	let mut tx = pool
+		.begin()
+		.await
+		.context("failed to begin deposit transaction")?;
 
-	update_account_after_deposit(pool, &row.recipient_acc_address, accout.nonce.0, ast_json)
-		.await?;
+	update_deposit_tx_request_to_approved(&mut *tx, sig_bytes.as_ref(), row.id).await?;
 
-	// ── 9. Create PENDING input note for the deposit recipient ────────────────
-	// The note stays PENDING until the deposit is confirmed on-chain (status = Validated).
-	let note_id_hex = hex::encode(&row.deposit_note_identifier);
-	let asset_id_bytes = f_to_bytes(F::from_canonical_u64(deposit.asset_id_u64));
-	let amount_bytes = u256_to_bytes(deposit.deposit_amount);
-
-	// Encode note commitment as 32 bytes (4 × u64 BE) for on-chain lookup.
-	let nc_bytes: Vec<u8> = nc_hash
-		.iter()
-		.flat_map(|f| f.to_canonical_u64().to_be_bytes())
-		.collect();
-
-	insert_pending_input_note(
-		pool,
-		&note_id_hex,
-		&asset_id_bytes,
-		&amount_bytes,
-		&row.recipient_acc_address,
-		&format!("{:?}", deposit.eth_address),
-		&nc_bytes,
+	update_account(
+		&mut *tx,
+		&accout,
+		acc_row.eth_address,
+		row.recipient_address.clone(),
 	)
 	.await?;
 
+	tx.commit()
+		.await
+		.context("failed to commit deposit transaction")?;
+
+	let new_asset_balance = accout
+		.ast
+		.amount_for(deposit.asset_id)
+		.map(|(_, balance)| balance)
+		.unwrap_or(U256::zero());
+
 	info!(
 		id = row.id,
-		addr = %row.recipient_acc_address,
-		asset_id = deposit.asset_id_u64,
+		addr = %row.recipient_address,
+		asset_id = deposit.asset_id.0.to_canonical_u64(),
 		new_balance = %new_asset_balance,
 		"deposit approved, PENDING input note created (awaiting on-chain confirmation)"
 	);
@@ -323,7 +272,68 @@ async fn process_one_deposit<P: Provider + Clone>(
 struct PendingNoteRow {
 	id: i64,
 	identifier: String,
-	note_commitment: Option<Vec<u8>>,
+	asset_id: Vec<u8>,
+	amount: Vec<u8>,
+	recipient_address: String,
+}
+
+impl PendingNoteRow {
+	pub fn amount(&self) -> Result<U256> {
+		let amount_arr: [u8; 32] = self
+			.amount
+			.as_slice()
+			.try_into()
+			.context("pending note amount must be 32 bytes")?;
+		let amount = bytes_to_u256(&amount_arr);
+		Ok(amount)
+	}
+
+	pub fn asset_id(&self) -> Result<AssetId> {
+		let asset_id_arr: [u8; 8] = self
+			.asset_id
+			.as_slice()
+			.try_into()
+			.context("pending note asset_id must be 8 bytes")?;
+		let asset_id = AssetId::from_u64(bytes_to_f(&asset_id_arr).to_canonical_u64())?;
+
+		Ok(asset_id)
+	}
+
+	pub fn identifier(&self) -> Result<NoteIdentifier> {
+		let id_bytes =
+			hex::decode(&self.identifier).context("invalid pending note identifier hex")?;
+		let id_arr: [u8; 16] = id_bytes
+			.as_slice()
+			.try_into()
+			.context("pending note identifier must be 16 bytes")?;
+		let identifier = [
+			bytes_to_f(&id_arr[..8].try_into().unwrap()),
+			bytes_to_f(&id_arr[8..].try_into().unwrap()),
+		];
+
+		Ok(NoteIdentifier(identifier))
+	}
+
+	pub fn recipient(&self) -> Result<AccountAddress> {
+		let recipient = AccountAddress::from_hex(&self.recipient_address)
+			.context("invalid pending note recipient address")?;
+
+		Ok(recipient)
+	}
+
+	pub fn note(&self) -> Result<DepositNote> {
+		let identifier = self.identifier()?;
+		let recipient = self.recipient()?;
+		let amount = self.amount()?;
+		let asset_id = self.asset_id()?;
+
+		Ok(DepositNote {
+			identifier,
+			recipient,
+			amount,
+			asset_id,
+		})
+	}
 }
 
 /// Poll for PENDING input notes with a note_commitment, check on-chain
@@ -334,8 +344,8 @@ pub async fn confirm_pending_notes<P: Provider + Clone>(
 	rollup_address: Address,
 ) -> Result<()> {
 	let rows: Vec<PendingNoteRow> = sqlx::query_as(
-		"SELECT id, identifier, note_commitment FROM input_notes \
-         WHERE status = 'PENDING' AND note_commitment IS NOT NULL",
+		"SELECT id, identifier, asset_id, amount, recipient_address FROM input_notes \
+         WHERE status = 'PENDING'",
 	)
 	.fetch_all(pool)
 	.await?;
@@ -345,15 +355,22 @@ pub async fn confirm_pending_notes<P: Provider + Clone>(
 	}
 
 	for row in &rows {
-		let nc_bytes = row.note_commitment.as_ref().unwrap();
-		if nc_bytes.len() != 32 {
-			error!(id = row.id, "note_commitment is not 32 bytes, skipping");
-			continue;
-		}
-		let nc: [u8; 32] = nc_bytes.as_slice().try_into().unwrap();
-		let nc_b256 = B256::from(nc);
+		let deposit_note = row.note()?;
+		let deposit_note_comm = deposit_note.commitment();
 
-		let calldata = getDepositCall { noteCommitment: nc_b256 }.abi_encode();
+		let nc_b256 = B256::from_slice(
+			&deposit_note_comm
+				.0
+				 .0
+				.iter()
+				.flat_map(|f| f.to_canonical_u64().to_le_bytes())
+				.collect::<Vec<_>>(),
+		);
+
+		let calldata = getDepositCall {
+			noteCommitment: nc_b256,
+		}
+		.abi_encode();
 		let tx = TransactionRequest::default()
 			.to(rollup_address)
 			.input(Bytes::from(calldata).into());
@@ -385,16 +402,19 @@ pub async fn confirm_pending_notes<P: Provider + Clone>(
 				}
 				// 0=None, 1=Pending, 3=Withdrawn → keep polling
 				if status > 3 {
-					error!(id = row.id, status, "unexpected deposit status from on-chain getDeposit");
+					error!(
+						id = row.id,
+						status, "unexpected deposit status from on-chain getDeposit"
+					);
 				}
-			}
+			},
 			Err(e) => {
 				error!(
 					id = row.id,
 					note_id = %row.identifier,
 					"failed to query on-chain deposit status: {e}"
 				);
-			}
+			},
 		}
 	}
 

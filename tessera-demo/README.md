@@ -123,10 +123,10 @@ All timing and address configuration is set via environment variables.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEMO_RPC_URL` | `http://localhost:8545` | Ethereum JSON-RPC endpoint |
-| `DEMO_OPERATOR_KEY` | Anvil key #0 | Operator private key (hex) |
+| `DEMO_OPERATOR_KEY` | Anvil key #0 | Operator private key (hex, with or without `0x`) |
 | `DEMO_CHAIN_ID` | `31337` | EVM chain ID |
-| `DEMO_BRIDGE_ADDRESS` | — | Deployed TesseraContract address |
-| `DEMO_TOKEN_ADDRESS` | — | Deployed ToyUSDT address |
+| `DEMO_BRIDGE_ADDRESS` | — | Deployed TesseraContract address (`0x`-prefixed) |
+| `DEMO_TOKEN_ADDRESS` | — | Deployed ToyUSDT address (`0x`-prefixed) |
 | `DEMO_BIND_ADDR` | `127.0.0.1:3000` | Sequencer HTTP listen address |
 | `DEMO_BATCH_TIMEOUT_SECS` | `10` | Seconds before flushing a partial batch |
 | `DEMO_PROVE_DELAY_SECS` | `10` | Seconds between batch submission and zero-proof confirmation |

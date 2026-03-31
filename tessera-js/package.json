@@ -5,7 +5,6 @@
   "scripts": {
     "build:wasm": "cd ../tessera-client-wasm && wasm-pack build --target web --out-dir ../tessera-js/wasm",
     "dev": "vite demo",
-    "main-demo": "vite main-demo",
     "test": "vitest run",
     "test:watch": "vitest"
   },

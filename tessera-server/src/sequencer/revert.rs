@@ -196,14 +196,21 @@ fn decode_bridge_custom_error(selector: &[u8; 4], data: &[u8]) -> Option<String>
 			))
 		},
 		// bytes32 arg errors
-		NOTE_NOT_FOUND | INVALID_DEPOSIT_STATE | DUPLICATE_NOTE
-		| BATCH_ALREADY_SUBMITTED | BATCH_NOT_FOUND | BATCH_ALREADY_CONFIRMED => {
+		NOTE_NOT_FOUND
+		| INVALID_DEPOSIT_STATE
+		| DUPLICATE_NOTE
+		| BATCH_ALREADY_SUBMITTED
+		| BATCH_NOT_FOUND
+		| BATCH_ALREADY_CONFIRMED => {
 			let arg = &data[4..36];
 			Some(format!("{name}: 0x{}", hex::encode(arg)))
 		},
 		// uint256 arg errors
-		ROOT_NOT_CONFIRMED | NULLIFIER_ALREADY_USED
-		| SLOT_CONFLICT | UNKNOWN_BATCH | INPUTS_PROOF_ALREADY_CONFIRMED => {
+		ROOT_NOT_CONFIRMED
+		| NULLIFIER_ALREADY_USED
+		| SLOT_CONFLICT
+		| UNKNOWN_BATCH
+		| INPUTS_PROOF_ALREADY_CONFIRMED => {
 			let a = alloy::primitives::U256::from_be_slice(&data[4..36]);
 			Some(format!("{name}: {a}"))
 		},

@@ -9,6 +9,9 @@ edition = "2021"
 insecure-stub-proof-verify = []
 # Enables heavy end-to-end integration tests that orchestrate local devnet scripts.
 integration-tests = []
+# Enables the Go FFI (Groth16/BN128 wrapper). Required for the full proving pipeline.
+# When disabled, store_artifacts/from_artifacts and the BN128WrapperService are unavailable.
+groth = ["tessera-utils/groth"]
 
 [dependencies]
 tessera-trees = {workspace = true}

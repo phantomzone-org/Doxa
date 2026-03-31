@@ -1,16 +1,20 @@
 use std::time::Instant;
 
 use alloy::primitives::B256;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+	extract::{Path, State},
+	http::StatusCode,
+	Json,
+};
 use serde::{Deserialize, Serialize};
 use tessera_client::NOTE_BATCH;
 use tessera_server::{contract::ITesseraRollupV2, sequencer::BatchBuilder};
 use tracing::info;
 
-use axum::extract::Path;
-
-use super::helpers::{parse_hex_bytes, parse_hex_bytes32};
-use super::state::{AppState, ForwardedNote};
+use super::{
+	helpers::{parse_hex_bytes, parse_hex_bytes32},
+	state::{AppState, ForwardedNote},
+};
 
 // ---------------------------------------------------------------------------
 // Request / response types
@@ -248,6 +252,14 @@ pub(crate) async fn handle_forward_note(
 	State((state, _)): State<AppState>,
 	Json(req): Json<ForwardNoteRequest>,
 ) -> Result<Json<ForwardNoteResponse>, (StatusCode, String)> {
+	info!(
+		target_subpool = req.target_subpool_id,
+		note_id = %req.note.identifier,
+		recipient = %req.note.recipient_address,
+		sender = %req.note.sender_address,
+		"received forward_note request"
+	);
+
 	let mut st = state.lock().await;
 	let queue = st.note_pool.entry(req.target_subpool_id).or_default();
 	queue.push(req.note);
@@ -255,8 +267,7 @@ pub(crate) async fn handle_forward_note(
 
 	info!(
 		target_subpool = req.target_subpool_id,
-		queue_size,
-		"forwarded note queued"
+		queue_size, "forwarded note queued"
 	);
 
 	Ok(Json(ForwardNoteResponse {
@@ -270,14 +281,42 @@ pub(crate) async fn handle_pending_notes(
 	State((state, _)): State<AppState>,
 	Path(subpool_id): Path<u64>,
 ) -> Json<Vec<ForwardedNote>> {
-	let mut st = state.lock().await;
-	let notes = st.note_pool.remove(&subpool_id).unwrap_or_default();
+	let st = state.lock().await;
+	let notes = st.note_pool.get(&subpool_id).cloned().unwrap_or_default();
 
 	if !notes.is_empty() {
-		info!(subpool_id, count = notes.len(), "drained pending notes");
+		let note_ids: Vec<&str> = notes.iter().map(|n| n.identifier.as_str()).collect();
+		info!(
+			subpool_id,
+			count = notes.len(),
+			note_ids = ?note_ids,
+			"peeked pending notes"
+		);
 	}
 
 	Json(notes)
+}
+
+pub(crate) async fn handle_ack_notes(
+	State((state, _)): State<AppState>,
+	Path(subpool_id): Path<u64>,
+	Json(ids): Json<Vec<String>>,
+) -> StatusCode {
+	let mut st = state.lock().await;
+	if let Some(queue) = st.note_pool.get_mut(&subpool_id) {
+		queue.retain(|n| !ids.contains(&n.identifier));
+		if queue.is_empty() {
+			st.note_pool.remove(&subpool_id);
+		}
+	}
+
+	info!(
+		subpool_id,
+		acked = ids.len(),
+		"acknowledged forwarded notes"
+	);
+
+	StatusCode::OK
 }
 
 // ---------------------------------------------------------------------------
@@ -295,12 +334,16 @@ pub(crate) async fn handle_note_position(
 	Path(commitment_hex): Path<String>,
 ) -> Result<Json<NotePositionResponse>, (StatusCode, String)> {
 	let st = state.lock().await;
-	let position = st.note_positions.get(&commitment_hex).copied().ok_or_else(|| {
-		(
-			StatusCode::NOT_FOUND,
-			format!("note commitment '{commitment_hex}' not found in NCT"),
-		)
-	})?;
+	let position = st
+		.note_positions
+		.get(&commitment_hex)
+		.copied()
+		.ok_or_else(|| {
+			(
+				StatusCode::NOT_FOUND,
+				format!("note commitment '{commitment_hex}' not found in NCT"),
+			)
+		})?;
 
 	Ok(Json(NotePositionResponse {
 		commitment: commitment_hex,

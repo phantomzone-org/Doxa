@@ -110,9 +110,7 @@ impl Sequencer {
 					&finalized.nn_leaves[nn_base + j],
 				));
 			}
-			account_nullifiers.push(contract::bytes32_be_to_u256_le(
-				&finalized.an_leaves[s],
-			));
+			account_nullifiers.push(contract::bytes32_be_to_u256_le(&finalized.an_leaves[s]));
 		}
 
 		let batch_poseidon_root = contract::hash_to_u256_le(&finalized.batch_poseidon_root);
