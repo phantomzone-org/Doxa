@@ -23,8 +23,9 @@
 //!
 //! `root` is the on-chain IMT root (private witness `act_root`).
 //! `batchPoseidonRoot` is the SubtreeRootCircuit output (SR proof PI[0..4]).
-//! `ethAddresses[i]` is `deposit_proof.PI[i*DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET .. ETH_ADDR_OFFSET+5]`,
-//! encoding the depositor's ETH address as 5 × u32 little-endian limbs (via `map_h160_to_f`).
+//! `ethAddresses[i]` is `deposit_proof.PI[i*DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET ..
+//! ETH_ADDR_OFFSET+5]`, encoding the depositor's ETH address as 5 × u32 little-endian limbs (via
+//! `map_h160_to_f`).
 //!
 //! # Deposit TX public inputs layout (37 total)
 //!
@@ -56,20 +57,17 @@ use plonky2::{
 		circuit_data::{
 			CircuitConfig, CommonCircuitData, VerifierCircuitTarget, VerifierOnlyCircuitData,
 		},
-		proof::{Proof, ProofWithPublicInputs, ProofWithPublicInputsTarget},
+		proof::ProofWithPublicInputsTarget,
 	},
 	util::serialization::DefaultGateSerializer,
 };
 use tessera_utils::{
 	hasher::HashOutput,
 	plonky2_gadgets::{
-		keccak256::{
-			builder::BuilderKeccak256, field_decompose::decompose_field_to_u32_pair,
-			utils::solidity_keccak256,
-		},
+		keccak256::{builder::BuilderKeccak256, field_decompose::decompose_field_to_u32_pair},
 		u32::gadgets::add_u8_range_check_lookup_table,
 	},
-	CircuitDataNative, ConfigNative, ProofNative, C, D, F,
+	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
 
 // ---------------------------------------------------------------------------

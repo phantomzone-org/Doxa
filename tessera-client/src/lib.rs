@@ -19,10 +19,26 @@ pub(crate) mod commitment;
 pub(crate) mod ecgfp5;
 pub(crate) mod note;
 pub(crate) mod plonky2_gadgets;
+use plonky2::plonk::proof::ProofWithPublicInputs;
 pub use plonky2_gadgets::serialization::TesseraGateSerializer;
 pub mod pool_config;
 pub mod schnorr;
 pub(crate) mod utils;
+
+pub use account::*;
+pub use note::*;
+pub use plonky2_gadgets::{
+	deposit_tx::{DepositProof, DepositTxCircuit, build_deposit_tx_circuit},
+	priv_tx::{
+		FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, PrivateTransactionProof,
+		RejectTxInputs, SpendTxInputs, build_circuit_and_dummy_proof, build_circuit_and_real_proof,
+		build_priv_tx_circuit, double_hash_native, prove_dummy_priv_tx, prove_real_priv_tx,
+		prove_real_priv_tx_seeded, sample_dummy_notes,
+	},
+	withdraw_tx::WithdrawProof,
+};
+pub use tessera_utils::hasher::HashOutput;
+use tessera_utils::{ConfigNative, D, F, HASH_SIZE};
 
 // ── Domain-separation tags ────────────────────────────────────────────────────
 // Each tag is prepended to a Poseidon hash input to prevent cross-domain
@@ -108,16 +124,26 @@ pub const SUBPOOL_CONFIG_DEPTH: usize = 2;
 /// Depth of the main pool configuration tree (supports 2^20 subpools).
 pub const MAIN_POOL_CONFIG_DEPTH: usize = 20;
 
-pub use account::*;
-pub use note::*;
-pub use plonky2_gadgets::{
-	deposit_tx::{DepositTxCircuit, build_deposit_tx_circuit},
-	priv_tx::{
-		FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, RejectTxInputs, SpendTxInputs,
-		build_circuit_and_dummy_proof, build_circuit_and_real_proof, build_priv_tx_circuit,
-		double_hash_native, prove_dummy_priv_tx, prove_real_priv_tx, prove_real_priv_tx_seeded,
-		sample_dummy_notes,
-	},
-};
-use tessera_utils::HASH_SIZE;
-pub use tessera_utils::hasher::HashOutput;
+pub trait PIHelper {
+	fn pis(&self) -> &[F] {
+		&self.proof().public_inputs
+	}
+	fn pi_len(&self) -> usize {
+		self.pis().len()
+	}
+	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D>;
+
+	fn act_root(&self) -> HashOutput;
+
+	fn mainpool_config_root(&self) -> HashOutput;
+
+	fn not_fake_tx(&self) -> bool;
+
+	fn accout_commitment(&self) -> HashOutput;
+
+	fn accin_nullifier(&self) -> HashOutput;
+
+	fn acc_out_subpool_id(&self) -> SubpoolId;
+
+	fn acc_in_subpool_id(&self) -> SubpoolId;
+}

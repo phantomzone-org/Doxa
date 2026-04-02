@@ -182,7 +182,7 @@ pub struct DepositTxPublicTargets {
 	/// PI[15..19]: Output account commitment.
 	pub accout_comm: AccountCommitmentTarget,
 	/// PI[19..23]: Derived commitment to `deposit_note`.
-	pub deposit_note_comm: DepositNoteCommitmentTarget,
+	pub note_comm: DepositNoteCommitmentTarget,
 	/// PI[23..28]: Ethereum address (5 × u32 LE limbs).
 	pub eth_address: [Target; 5],
 	/// PI[28..36]: Deposit amount.
@@ -203,7 +203,7 @@ impl DepositTxPublicTargets {
 		builder.register_public_inputs(&self.root.0.elements);
 		builder.register_public_inputs(&self.accin_null.0.elements);
 		builder.register_public_inputs(&self.accout_comm.0.elements);
-		builder.register_public_inputs(&self.deposit_note_comm.0.elements);
+		builder.register_public_inputs(&self.note_comm.0.elements);
 		builder.register_public_inputs(&self.eth_address);
 		builder.register_public_inputs(&self.amount.0.map(|v| v.0));
 		builder.register_public_input(self.asset_id.0);

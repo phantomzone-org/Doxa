@@ -1,18 +1,14 @@
 use anyhow::Result;
-use plonky2::{
-	field::types::{Field, PrimeField64},
-	plonk::proof::ProofWithPublicInputs,
-};
-use tessera_client::DEPOSIT_BATCH_SIZE;
+use plonky2::field::types::{Field, PrimeField64};
+use tessera_client::{DepositProof, PIHelper, DEPOSIT_BATCH_SIZE};
 use tessera_utils::{
 	hasher::{HashOutput, MerkleHash},
 	plonky2_gadgets::keccak256::utils::solidity_keccak256,
-	ConfigNative, D, F,
+	F,
 };
 
 use crate::proof_aggregation::{
-	SubtreeRootCircuit,
-	deposit_super_aggregator_v2::{DEPOSIT_LEAF_PI_SIZE, DEPOSIT_NOTE_COMM_OFFSET},
+	deposit_super_aggregator_v2::DEPOSIT_LEAF_PI_SIZE, SubtreeRootCircuit,
 };
 
 // ---------------------------------------------------------------------------
@@ -32,36 +28,12 @@ fn push_pis_as_u32(words: &mut Vec<u32>, pis: &[F]) {
 	}
 }
 
-/// All data the prover needs to queue a single deposit note into the next
-/// deposit batch.
-///
-/// Submit via [`ProverServiceHandle::submit_deposit`].
-pub struct Deposit {
-	/// See `DEPOSIT_LEAF_PI_SIZE` in `deposit_super_aggregator_v2` for the full layout.
-	pub proof: ProofWithPublicInputs<F, ConfigNative, D>,
-}
-
-impl Deposit {
-	pub fn act_root(&self) -> HashOutput {
-		const ACT_ROOT_OFFSET: usize = 7; // PI[7..11]
-		HashOutput(self.proof.public_inputs[ACT_ROOT_OFFSET..ACT_ROOT_OFFSET + 4].try_into().unwrap())
-	}
-
-	pub fn note_commitment(&self) -> HashOutput {
-		HashOutput(self.proof.public_inputs[DEPOSIT_NOTE_COMM_OFFSET..DEPOSIT_NOTE_COMM_OFFSET + 4].try_into().unwrap())
-	}
-
-	pub fn public_inputs(&self) -> &[F] {
-		&self.proof.public_inputs
-	}
-}
-
 /// Incrementally builds a deposit batch of up to [`DEPOSIT_BATCH_SIZE`] slots.
 pub struct DepositBatch {
 	/// Poseidon Merkle root over `note_commiment` in [Deposit].
 	pub batch_root: Option<HashOutput>,
 	/// Deposit entries, padded to [`DEPOSIT_BATCH_SIZE`]
-	pub deposits: Vec<Deposit>,
+	pub deposits: Vec<DepositProof>,
 }
 
 impl DepositBatch {
@@ -94,7 +66,7 @@ impl DepositBatch {
 	/// * if the batch is already full.
 	/// * if act_root differ from previous deposit
 	/// * if deposit has empty proof
-	pub fn add_deposit(&mut self, deposit: Deposit) -> anyhow::Result<bool> {
+	pub fn add_deposit(&mut self, deposit: DepositProof) -> anyhow::Result<bool> {
 		anyhow::ensure!(!self.is_full(), "deposit batch is already full");
 		anyhow::ensure!(
 			deposit.act_root() == self.deposits[0].act_root(),
@@ -140,7 +112,7 @@ impl DepositBatch {
 		push_pis_as_u32(&mut words, &self.batch_root.unwrap().0);
 
 		for deposit in &self.deposits {
-			push_pis_as_u32(&mut words, deposit.public_inputs());
+			push_pis_as_u32(&mut words, deposit.pis());
 		}
 
 		for _ in self.len()..DEPOSIT_BATCH_SIZE {

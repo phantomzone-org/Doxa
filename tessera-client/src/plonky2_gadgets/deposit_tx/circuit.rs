@@ -311,7 +311,7 @@ where
 		root,
 		accin_null,
 		accout_comm,
-		deposit_note_comm,
+		note_comm: deposit_note_comm,
 		eth_address,
 		amount: deposit_note.amount,
 		asset_id,
