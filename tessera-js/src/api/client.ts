@@ -14,6 +14,7 @@ import type {
   SpendTxRequest,
   SpendTxResponse,
   SpendTxStatusResponse,
+  UserResponse,
 } from "./types.js";
 
 /** Thrown when the server returns a non-2xx response. */
@@ -191,6 +192,18 @@ export class SubpoolClient {
     const json = await res.json();
     if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
     return json as SpendTxResponse;
+  }
+
+  /**
+   * GET /user/:privateAccAddress
+   * Returns null on 404. Throws SubpoolApiError on other non-2xx responses.
+   */
+  async getUser(privateAccAddress: string): Promise<UserResponse | null> {
+    const res = await fetch(`${this.baseUrl}/user/${privateAccAddress}`);
+    if (res.status === 404) return null;
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as UserResponse;
   }
 
   async getSpendTxStatus(id: number): Promise<SpendTxStatusResponse | null> {

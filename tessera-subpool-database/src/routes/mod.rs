@@ -19,6 +19,7 @@ pub mod input_notes;
 pub mod notes_balance;
 pub mod register;
 pub mod spend_tx;
+pub mod user;
 
 pub fn router(state: AppState) -> Router {
 	Router::new()
@@ -52,6 +53,10 @@ pub fn router(state: AppState) -> Router {
 		.route(
 			"/freshacc/{private_acc_address}/status",
 			get(freshacc::get_freshacc_status_handler),
+		)
+		.route(
+			"/user/{private_acc_address}",
+			get(user::get_user_handler),
 		)
 		.with_state(state)
 }

@@ -130,6 +130,17 @@ export interface NotesBalanceResponse {
   balances: Record<string, AssetBalance>;
 }
 
+/** Response body for GET /user/:private_acc_address */
+export interface UserResponse {
+  id: number;
+  private_acc_address: string;
+  name: string;
+  physical_address: string;
+  /** ISO date string "YYYY-MM-DD" */
+  dob: string;
+  created_at: string;
+}
+
 /** Response body for GET /account/:private_acc_address */
 export interface AccountResponse {
   private_acc_address: string;
