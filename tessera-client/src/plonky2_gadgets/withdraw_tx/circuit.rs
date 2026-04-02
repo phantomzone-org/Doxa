@@ -188,8 +188,7 @@ where
 
 	// ── Public inputs ─────────────────────────────────────────────────────────
 	let public = WithdrawTxPublicTargets {
-		acc_in_subpool_id: accin.subpool_id,
-		acc_out_subpool_id: accout.subpool_id,
+		
 		not_fake_tx,
 		root: act_root,
 		mainpool_config_root,
@@ -218,6 +217,8 @@ where
 			ast_merkles,
 			subpool_proof_targets,
 			approval_sig,
+			acc_in_subpool_id: accin.subpool_id,
+			acc_out_subpool_id: accout.subpool_id,
 		},
 	}
 }

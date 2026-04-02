@@ -98,7 +98,7 @@ pub(crate) fn set_reject_tx_witness(
 		.first()
 		.map(|n| n.asset_id)
 		.unwrap_or(AssetId(F::ZERO));
-	pw.set_target(t.public.asset_id.0, asset_id.0).unwrap();
+	pw.set_target(t.private.asset_id.0, asset_id.0).unwrap();
 
 	let (ast_index, accin_amt) = accin
 		.ast

@@ -272,8 +272,6 @@ where
 
 	// Step 14: Register public inputs.
 	let public_targets = TxCircuitPublicTargets {
-		accin_subpool_id: accin.subpool_id,
-		accout_subpool_id: accout.subpool_id,
 		not_fake_tx,
 		root,
 		mainpool_config_root,
@@ -281,7 +279,6 @@ where
 		accout_comm,
 		inotes_null: effective_inotes_null,
 		onotes_comm: donotes_comm,
-		asset_id,
 	};
 
 	public_targets.register(builder);
@@ -315,6 +312,9 @@ where
 			subpool_proof_targets,
 			sig_targets,
 			inotes_nct_merkle: inotes_mrkltrgt,
+			accin_subpool_id: accin.subpool_id,
+			accout_subpool_id: accout.subpool_id,
+			asset_id,
 		},
 	}
 }

@@ -384,26 +384,20 @@ impl TxCircuitTargets {
 }
 
 pub struct TxCircuitPublicTargets {
-	/// [0]: Input account subpool ID
-	pub(crate) accin_subpool_id: SubpoolIdTarget,
-	/// [1]: Output account subpool ID
-	pub(crate) accout_subpool_id: SubpoolIdTarget,
-	/// [2]: 1 for a real transaction, 0 for a dummy/padding proof.
-	pub(crate) not_fake_tx: BoolTarget,
-	/// [3..7]: Combined ACT / NCT Merkle root.
+	/// [0..4]: Combined ACT / NCT Merkle root.
 	pub(crate) root: RootTarget,
-	/// [7..11]: Main pool configuration tree root.
+	/// [4..8]: Main pool configuration tree root.
 	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
-	/// [11..15]: Account nullifier (public input; constrained == derived when `not_fake_tx=1`).
+	/// [8]: 1 for a real transaction, 0 for a dummy/padding proof.
+	pub(crate) not_fake_tx: BoolTarget,
+	/// [9..13]: Account nullifier (public input; constrained == derived when `not_fake_tx=1`).
 	pub(crate) accin_null: AccountNullifierTarget,
-	/// [15..19]: Account output commitment (public input; constrained == derived when `not_fake_tx=1`).
+	/// [13..17]: Account output commitment (public input; constrained == derived when `not_fake_tx=1`).
 	pub(crate) accout_comm: AccountCommitmentTarget,
-	/// [19..47]: Input notes nullifiers
+	/// [17..45]: Input notes nullifiers
 	pub(crate) inotes_null: [NoteNullifierTarget; NOTE_BATCH],
-	/// [47..75]: Output notes commitments
+	/// [45..73]: Output notes commitments
 	pub(crate) onotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
-	/// [75]: Asset ID
-	pub(crate) asset_id: AssetIdTarget,
 }
 
 impl TxCircuitPublicTargets {
@@ -411,11 +405,9 @@ impl TxCircuitPublicTargets {
 	where
 		F: RichField + Extendable<D>,
 	{
-		builder.register_public_input(self.accin_subpool_id.0);
-		builder.register_public_input(self.accout_subpool_id.0);
-		builder.register_public_input(self.not_fake_tx.target);
 		builder.register_public_inputs(&self.root.0.elements);
 		builder.register_public_inputs(&self.mainpool_config_root.0.elements);
+		builder.register_public_input(self.not_fake_tx.target);
 		builder.register_public_inputs(&self.accin_null.0.elements);
 		builder.register_public_inputs(&self.accout_comm.0.elements);
 		builder.register_public_inputs(
@@ -433,7 +425,6 @@ impl TxCircuitPublicTargets {
 				.flat_map(|c| c.0.elements)
 				.collect::<Vec<_>>(),
 		);
-		builder.register_public_input(self.asset_id.0);
 	}
 }
 
@@ -491,4 +482,10 @@ pub struct TxCircuitPrivateTargets {
 	/// Authority key membership proofs.
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	pub(crate) sig_targets: TxSignatureTargets,
+	/// Input account subpool ID
+	pub(crate) accin_subpool_id: SubpoolIdTarget,
+	/// Output account subpool ID
+	pub(crate) accout_subpool_id: SubpoolIdTarget,
+	/// Asset ID
+	pub(crate) asset_id: AssetIdTarget,
 }

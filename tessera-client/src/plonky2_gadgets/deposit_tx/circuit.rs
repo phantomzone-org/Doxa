@@ -159,14 +159,8 @@ pub fn build_deposit_tx_circuit() -> DepositTxCircuit {
 ///
 /// # Public inputs
 /// ```text
-/// not_fake_tx[1]
-/// act_root[4]
-/// accin_null[4]
-/// accout_comm[4]
-/// deposit_note_comm[4]
-/// eth_address[5]
-/// amount[8]
-/// asset_id[1]
+/// not_fake_tx[1] | mainpool_config_root[4] | act_root[4] | accin_null[4]
+/// | accout_comm[4] | note_comm[4] | eth_address[5] | amount[8] | asset_id[1]
 /// ```
 ///
 /// Returns all allocated targets; pass to [`set_deposit_tx_witness`] or
@@ -304,11 +298,9 @@ where
 	let approval = conditional_schnorr_verify_gadget(builder, tx_hash, approval_key, not_fake_tx);
 
 	let public_targets = DepositTxPublicTargets {
-		acc_in_subpool_id: accin.subpool_id,
-		acc_out_subpool_id: accout.subpool_id,
 		not_fake_tx,
 		mainpool_config_root,
-		root,
+		act_root: root,
 		accin_null,
 		accout_comm,
 		note_comm: deposit_note_comm,

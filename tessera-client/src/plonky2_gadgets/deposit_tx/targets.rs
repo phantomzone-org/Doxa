@@ -132,15 +132,12 @@ impl DepositTxTargets {
 	) {
 		self.public_targets.set_real(
 			pw,
-			accin.subpool_id,
-			accout.subpool_id,
 			true,
 			main_pool.root(),
 			act_root,
 			accin.nullifier(),
 			accout.commitment(),
 			eth_address,
-			subpool_id,
 			deposit_note.amount,
 			deposit_note.asset_id,
 		);
@@ -167,27 +164,23 @@ impl DepositTxTargets {
 }
 
 pub struct DepositTxPublicTargets {
-	/// PI[0]: Input account subpool ID
-	pub acc_in_subpool_id: SubpoolIdTarget,
-	/// PI[1]: Output account subpool ID
-	pub acc_out_subpool_id: SubpoolIdTarget,
-	/// PI[2]: 1 for a real transaction, 0 for a dummy/padding proof.
-	pub not_fake_tx: BoolTarget,
-	/// PI[3..7]: Main pool configuration tree root.
+	/// PI[0..4]: Account Commitment Tree root.
+	pub act_root: RootTarget,
+	/// PI[4..8]: Main pool configuration tree root.
 	pub mainpool_config_root: MainPoolConfigRootTarget,
-	/// PI[7..11]: Account Commitment Tree root.
-	pub root: RootTarget,
-	/// PI[11..15]: Input account nullifier.
+	/// PI[8]: 1 for a real transaction, 0 for a dummy/padding proof.
+	pub not_fake_tx: BoolTarget,
+	/// PI[9..13]: Input account nullifier.
 	pub accin_null: AccountNullifierTarget,
-	/// PI[15..19]: Output account commitment.
+	/// PI[13..17]: Output account commitment.
 	pub accout_comm: AccountCommitmentTarget,
-	/// PI[19..23]: Derived commitment to `deposit_note`.
+	/// PI[17..21]: Derived commitment to `deposit_note`.
 	pub note_comm: DepositNoteCommitmentTarget,
-	/// PI[23..28]: Ethereum address (5 × u32 LE limbs).
+	/// PI[21..26]: Ethereum address (5 × u32 LE limbs).
 	pub eth_address: [Target; 5],
-	/// PI[28..36]: Deposit amount.
+	/// PI[26..34]: Deposit amount.
 	pub amount: U256Target,
-	/// PI[36]: Asset being deposited.
+	/// PI[34]: Asset being deposited.
 	pub asset_id: AssetIdTarget,
 }
 
@@ -196,11 +189,9 @@ impl DepositTxPublicTargets {
 	where
 		F: RichField + Extendable<D> + Poseidon,
 	{
-		builder.register_public_input(self.acc_in_subpool_id.0);
-		builder.register_public_input(self.acc_out_subpool_id.0);
-		builder.register_public_input(self.not_fake_tx.target);
+		builder.register_public_inputs(&self.act_root.0.elements);
 		builder.register_public_inputs(&self.mainpool_config_root.0.elements);
-		builder.register_public_inputs(&self.root.0.elements);
+		builder.register_public_input(self.not_fake_tx.target);
 		builder.register_public_inputs(&self.accin_null.0.elements);
 		builder.register_public_inputs(&self.accout_comm.0.elements);
 		builder.register_public_inputs(&self.note_comm.0.elements);
@@ -214,29 +205,23 @@ impl DepositTxPublicTargets {
 	pub fn set_real(
 		&self,
 		pw: &mut PartialWitness<F>,
-		acc_in_subpool_id: SubpoolId,
-		acc_out_subpool_id: SubpoolId,
 		not_fake_tx: bool,
 		main_pool_root: HashOutput,
 		act_root: HashOutput,
 		accin_null: AccountNullifier,
 		accout_comm: AccountCommitment,
 		eth_address: H160,
-		subpool_id: SubpoolId,
 		amount: U256,
 		asset_id: AssetId,
 	) {
 		self.set_witnesses(
 			pw,
-			acc_in_subpool_id.0,
-			acc_out_subpool_id.0,
 			not_fake_tx,
 			main_pool_root,
 			act_root,
 			accin_null.0,
 			accout_comm.0,
 			eth_address,
-			subpool_id.0,
 			amount,
 			asset_id.0,
 		);
@@ -250,7 +235,7 @@ impl DepositTxPublicTargets {
 		pw.set_bool_target(self.not_fake_tx, false).unwrap();
 		pw.set_hash_target(self.mainpool_config_root.0, HashOutput::ZERO.to_hash_out())
 			.unwrap();
-		pw.set_hash_target(self.root.0, HashOutput::ZERO.to_hash_out())
+		pw.set_hash_target(self.act_root.0, HashOutput::ZERO.to_hash_out())
 			.unwrap();
 		pw.set_target_arr(&self.eth_address, &map_h160_to_f(H160::zero()))
 			.unwrap();
@@ -259,26 +244,19 @@ impl DepositTxPublicTargets {
 	fn set_witnesses(
 		&self,
 		pw: &mut PartialWitness<F>,
-		acc_in_subpool_id: F,
-		acc_out_subpool_id: F,
 		not_fake_tx: bool,
 		main_pool_root: HashOutput,
 		act_root: HashOutput,
 		accin_null: HashOutput,
 		accout_comm: HashOutput,
 		eth_address: H160,
-		subpool_id: F,
 		amount: U256,
 		asset_id: F,
 	) {
-		pw.set_target(self.acc_in_subpool_id.0, acc_in_subpool_id)
-			.unwrap();
-		pw.set_target(self.acc_out_subpool_id.0, acc_out_subpool_id)
-			.unwrap();
 		pw.set_bool_target(self.not_fake_tx, not_fake_tx).unwrap();
 		pw.set_hash_target(self.mainpool_config_root.0, main_pool_root.to_hash_out())
 			.unwrap();
-		pw.set_hash_target(self.root.0, act_root.to_hash_out())
+		pw.set_hash_target(self.act_root.0, act_root.to_hash_out())
 			.unwrap();
 		pw.set_hash_target(self.accin_null.0, accin_null.to_hash_out())
 			.unwrap();

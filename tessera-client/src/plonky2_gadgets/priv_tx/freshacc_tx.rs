@@ -88,7 +88,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	);
 
 	// ── Asset / amounts (all zeros for FreshAcc) ──────────────────────────────
-	pw.set_target(t.public.asset_id.0, F::ZERO).unwrap();
+	pw.set_target(t.private.asset_id.0, F::ZERO).unwrap();
 	set_u256_zero(pw, &t.private.accin_amt);
 	set_u256_zero(pw, &t.private.accout_amt);
 	pw.set_bool_target(t.private.asset_exists_in_accin, false)

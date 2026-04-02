@@ -74,7 +74,7 @@ pub fn set_fake_tx_witness(
 	set_hash(pw, t.public.accout_comm.0, accout_comm_override);
 
 	// ── Asset / amounts (all zeros) ───────────────────────────────────────────
-	pw.set_target(t.public.asset_id.0, F::ZERO).unwrap();
+	pw.set_target(t.private.asset_id.0, F::ZERO).unwrap();
 	set_u256_zero(pw, &t.private.accin_amt);
 	set_u256_zero(pw, &t.private.accout_amt);
 	pw.set_bool_target(t.private.asset_exists_in_accin, false)

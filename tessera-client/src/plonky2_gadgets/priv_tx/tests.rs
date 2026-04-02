@@ -20,7 +20,7 @@ use tessera_utils::{ConfigNative, D, F, hasher::HashOutput};
 
 use super::*;
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, DS_PUBLIC_IDENTIFIER, NOTE_BATCH, Nonce,
+	AccountAddress, AssetId, COM_TREE_DEPTH, DS_PUBLIC_IDENTIFIER, NOTE_BATCH, Nonce, PIHelper,
 	NoteCommitment, NoteIdentifier, NoteNullifier, PublicIdentifier, SpendAuth, StandardAccount,
 	StandardNote, SubpoolId, derive_priv_tx_hash,
 	plonky2_gadgets::{
@@ -217,6 +217,27 @@ fn test_prove_priv_tx() {
 			.expect("inner verification failed")
 	);
 
+	// ── PI accessor checks ─────────────────────────────────────────────────
+	let tp = crate::PrivateTransactionProof { proof: inner_proof.clone() };
+	assert_eq!(tp.act_root(), tree.root(), "act_root mismatch");
+	assert_eq!(tp.mainpool_config_root(), main_pool.root(), "mainpool_config_root mismatch");
+	assert_eq!(tp.not_fake_tx().to_canonical_u64(), 1, "not_fake_tx should be 1");
+	assert_eq!(tp.accin_nullifier(), accin_null.0, "accin_nullifier mismatch");
+	assert_eq!(tp.accout_commitment(), accout.commitment().0, "accout_commitment mismatch");
+
+	let inote_nulls = tp.input_note_nullifiers();
+	assert_eq!(inote_nulls[0], HashOutput(n0_null_arr), "inote_null[0] mismatch");
+	assert_eq!(inote_nulls[1], HashOutput(n1_null_arr), "inote_null[1] mismatch");
+
+	let onote_comms = tp.output_note_commitments();
+	for i in 0..NOTE_BATCH {
+		assert_eq!(
+			onote_comms[i],
+			HashOutput(double_hash_native(donotes[i])),
+			"onote_comm[{i}] mismatch"
+		);
+	}
+
 	// --- Recursive prove & verify ------------------------------------------
 
 	// Build the outer (recursive) circuit that verifies the inner proof.
@@ -372,7 +393,7 @@ fn test_prove_fresh_acc_tx() {
 /// Fix: dummy proofs use set_fake_tx_witness (is_fresh_acc=false).
 #[test]
 fn dummy_proof_has_not_fake_tx_zero() {
-	const IS_REAL_OFFSET: usize = 2;
+	const IS_REAL_OFFSET: usize = 8; // PI[8] = not_fake_tx
 
 	let (circuit, targets) = build_priv_tx_circuit();
 	let proof = prove_dummy_priv_tx(
@@ -400,9 +421,8 @@ fn dummy_proof_has_not_fake_tx_zero() {
 /// Dummy proofs' AN PIs must equal override_an at TX_DATA_OFFSET.
 #[test]
 fn dummy_proof_an_override_matches_pi() {
-	// PI layout: [0]=subpool_in [1]=subpool_out [2]=not_fake [3-6]=root
-	//            [7-10]=mpct_root [11-14]=AN ...
-	const TX_DATA_OFFSET: usize = 11;
+	// PI layout: [0]=not_fake [1-4]=root [5-8]=mpct_root [9-12]=AN ...
+	const TX_DATA_OFFSET: usize = 9; // PI[9..13] = accin_null (AN)
 
 	let (circuit, targets) = build_priv_tx_circuit();
 	let override_an = [

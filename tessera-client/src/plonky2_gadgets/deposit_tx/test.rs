@@ -7,6 +7,7 @@ use plonky2::{
 	},
 };
 use plonky2_field::types::{Field, PrimeField64};
+
 use primitive_types::{H160, U256};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -15,7 +16,7 @@ use tessera_utils::hasher::HashOutput;
 
 use super::*;
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, Nonce, StandardAccount, SubpoolId,
+	AccountAddress, AssetId, COM_TREE_DEPTH, Nonce, PIHelper, StandardAccount, SubpoolId,
 	account::AccountStateTreeLeaf,
 	derive_deposit_tx_hash,
 	note::DepositNote,
@@ -97,11 +98,15 @@ fn test_prove_deposit_tx() {
 	let data = builder.build::<C>();
 
 	// ── Fill witness ──────────────────────────────────────────────────────
+	let act_root = act.root();
+	let main_pool_root = main_pool.root();
+	let deposit_amount = deposit_note.amount;
+
 	let mut pw = PartialWitness::new();
 
 	t.set_real(
 		&mut pw,
-		act.root(),
+		act_root,
 		main_pool,
 		&accin,
 		&accout,
@@ -118,7 +123,20 @@ fn test_prove_deposit_tx() {
 
 	// ── Prove & verify ────────────────────────────────────────────────────
 	let proof = data.prove(pw).expect("prove failed");
-	data.verify(proof).expect("verify failed");
+	data.verify(proof.clone()).expect("verify failed");
+
+	// ── PI accessor checks ────────────────────────────────────────────────
+	let dp = crate::DepositProof { proof };
+
+	assert_eq!(dp.act_root(), act_root, "act_root mismatch");
+	assert_eq!(dp.mainpool_config_root(), main_pool_root, "mainpool_config_root mismatch");
+	assert_eq!(dp.not_fake_tx().to_canonical_u64(), 1, "not_fake_tx should be 1");
+	assert_eq!(dp.accin_nullifier(), accin_null.0, "accin_nullifier mismatch");
+	assert_eq!(dp.accout_commitment(), accout.commitment().0, "accout_commitment mismatch");
+	assert_eq!(dp.note_commitment(), deposit_note_comm.0, "note_commitment mismatch");
+	assert_eq!(dp.eth_address(), eth_address, "eth_address mismatch");
+	assert_eq!(dp.amount(), deposit_amount, "amount mismatch");
+	assert_eq!(dp.asset_id(), asset_id, "asset_id mismatch");
 }
 
 #[test]

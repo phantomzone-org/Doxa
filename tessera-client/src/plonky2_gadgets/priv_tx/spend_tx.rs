@@ -138,7 +138,7 @@ pub fn set_spend_tx_witness(
 	set_hash(pw, t.public.accout_comm.0, accout.commitment().0.0);
 
 	// ── Asset / amounts ───────────────────────────────────────────────────────
-	pw.set_target(t.public.asset_id.0, asset_id.0).unwrap();
+	pw.set_target(t.private.asset_id.0, asset_id.0).unwrap();
 	t.private.accin_amt.set_witness(pw, accin_amt);
 	t.private.accout_amt.set_witness(pw, accout_amt);
 

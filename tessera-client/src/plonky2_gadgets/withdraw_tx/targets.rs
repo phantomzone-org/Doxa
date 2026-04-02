@@ -35,40 +35,22 @@ use crate::{
 // ── Public targets ─────────────────────────────────────────────────────────────
 
 /// Public input targets for the withdrawal transaction circuit.
-///
-/// PI layout (with `NOTE_BATCH = 7`):
-/// ```text
-/// [0]:      acc_in_subpool_id
-/// [1]:      acc_out_subpool_id
-/// [2]:      not_fake_tx
-/// [3..7]:   root (ACT root, 4 elements)
-/// [7..11]:  mainpool_config_root (4 elements)
-/// [11..15]: accin_null (4 elements)
-/// [15..19]: accout_comm (4 elements)
-/// [19..26]: asset_ids (NOTE_BATCH elements)
-/// [26..82]: withdrawal_amts (8 × NOTE_BATCH elements)
-/// [82..87]: w_acc_addr (5 elements)
-/// ```
 pub(crate) struct WithdrawTxPublicTargets {
-	/// PI[0]: Input account subpool ID.
-	pub(crate) acc_in_subpool_id: SubpoolIdTarget,
-	/// PI[1]: Output account subpool ID.
-	pub(crate) acc_out_subpool_id: SubpoolIdTarget,
-	/// PI[2]: 1 for a real withdrawal, 0 for a dummy/padding proof.
-	pub(crate) not_fake_tx: BoolTarget,
-	/// PI[3..7]: Account Commitment Tree root.
+	/// PI[0..4]: Account Commitment Tree root.
 	pub(crate) root: RootTarget,
-	/// PI[7..11]: Main pool configuration tree root.
+	/// PI[4..8]: Main pool configuration tree root.
 	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
-	/// PI[11..15]: Input account nullifier (derived from private `accin` witness).
+	/// PI[8]: 1 for a real withdrawal, 0 for a dummy/padding proof.
+	pub(crate) not_fake_tx: BoolTarget,
+	/// PI[9..13]: Input account nullifier (derived from private `accin` witness).
 	pub(crate) accin_null: AccountNullifierTarget,
-	/// PI[15..19]: Output account commitment (derived from private `accout` witness).
+	/// PI[13..17]: Output account commitment (derived from private `accout` witness).
 	pub(crate) accout_comm: AccountCommitmentTarget,
-	/// PI[19..26]: Asset IDs for each withdrawal slot (zero for padding slots).
+	/// PI[17..24]: Asset IDs for each withdrawal slot (zero for padding slots).
 	pub(crate) asset_ids: [AssetIdTarget; NOTE_BATCH],
-	/// PI[26..82]: Withdrawal amounts per slot (8 limbs × NOTE_BATCH slots).
+	/// PI[24..80]: Withdrawal amounts per slot (8 limbs × NOTE_BATCH slots).
 	pub(crate) withdrawal_amts: [U256Target; NOTE_BATCH],
-	/// PI[82..87]: Ethereum destination address (5 × u32 field elements).
+	/// PI[80..85]: Ethereum destination address (5 × u32 field elements).
 	pub(crate) w_acc_addr: [Target; 5],
 }
 
@@ -78,11 +60,10 @@ impl WithdrawTxPublicTargets {
 		&self,
 		builder: &mut CircuitBuilder<F, D>,
 	) {
-		builder.register_public_input(self.acc_in_subpool_id.0);
-		builder.register_public_input(self.acc_out_subpool_id.0);
-		builder.register_public_input(self.not_fake_tx.target);
+
 		builder.register_public_inputs(&self.root.0.elements);
 		builder.register_public_inputs(&self.mainpool_config_root.0.elements);
+		builder.register_public_input(self.not_fake_tx.target);
 		builder.register_public_inputs(&self.accin_null.0.elements);
 		builder.register_public_inputs(&self.accout_comm.0.elements);
 		for id in &self.asset_ids {
@@ -110,18 +91,12 @@ impl WithdrawTxPublicTargets {
 	pub(crate) fn set_real(
 		&self,
 		pw: &mut PartialWitness<F>,
-		acc_in_subpool_id: SubpoolId,
-		acc_out_subpool_id: SubpoolId,
 		act_root: HashOutput,
 		main_pool_root: HashOutput,
 		slot_asset_ids: [AssetId; NOTE_BATCH],
 		slot_withdrawal_amts: [U256; NOTE_BATCH],
 		w_acc_addr: H160,
 	) {
-		pw.set_target(self.acc_in_subpool_id.0, acc_in_subpool_id.0)
-			.unwrap();
-		pw.set_target(self.acc_out_subpool_id.0, acc_out_subpool_id.0)
-			.unwrap();
 		pw.set_bool_target(self.not_fake_tx, true).unwrap();
 		set_hash(pw, self.root.0, act_root.0);
 		set_hash(pw, self.mainpool_config_root.0, main_pool_root.0);
@@ -157,6 +132,10 @@ impl WithdrawTxPublicTargets {
 
 /// Private (non-public-input) targets for the withdrawal transaction circuit.
 pub(crate) struct WithdrawTxPrivateTargets {
+	/// Input account subpool ID.
+	pub(crate) acc_in_subpool_id: SubpoolIdTarget,
+	/// Output account subpool ID.
+	pub(crate) acc_out_subpool_id: SubpoolIdTarget,
 	/// Subpool approval authority public key.
 	pub(crate) approval_key: PubkeyTarget,
 	/// Subpool rejection authority public key.
@@ -398,8 +377,6 @@ impl WithdrawTxTargets {
 
 		self.public.set_real(
 			pw,
-			accin.subpool_id,
-			accout.subpool_id,
 			act_root,
 			main_pool.root(),
 			slot_asset_ids,

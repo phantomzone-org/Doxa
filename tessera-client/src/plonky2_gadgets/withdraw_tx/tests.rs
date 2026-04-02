@@ -1,5 +1,5 @@
 use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
-use plonky2_field::types::Field;
+use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::{H160, U256};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -10,7 +10,7 @@ use tessera_utils::{
 };
 
 use crate::{
-	AssetId, COM_TREE_DEPTH, NOTE_BATCH, Nonce, SpendAuth, StandardAccount, SubpoolId,
+	AssetId, COM_TREE_DEPTH, NOTE_BATCH, Nonce, PIHelper, SpendAuth, StandardAccount, SubpoolId,
 	account::AccountStateTreeLeaf,
 	derive_withdraw_tx_hash,
 	plonky2_gadgets::withdraw_tx::{
@@ -118,5 +118,30 @@ fn test_prove_withdraw_tx() {
 
 	// ── Prove & verify ────────────────────────────────────────────────
 	let proof = data.prove(pw).expect("prove failed");
-	data.verify(proof).expect("verify failed");
+	data.verify(proof.clone()).expect("verify failed");
+
+	// ── PI accessor checks ────────────────────────────────────────────
+	let wp = crate::WithdrawProof { proof };
+
+	assert_eq!(wp.act_root(), act_root, "act_root mismatch");
+	assert_eq!(wp.mainpool_config_root(), main_pool.root(), "mainpool_config_root mismatch");
+	assert_eq!(wp.not_fake_tx().to_canonical_u64(), 1, "not_fake_tx should be 1");
+	assert_eq!(wp.accin_nullifier(), accin.nullifier().0, "accin_nullifier mismatch");
+	assert_eq!(wp.accout_commitment(), accout.commitment().0, "accout_commitment mismatch");
+
+	let asset_ids = wp.asset_ids();
+	assert_eq!(asset_ids[0], withdrawals[0].0, "asset_ids[0] mismatch");
+	assert_eq!(asset_ids[1], withdrawals[1].0, "asset_ids[1] mismatch");
+	for i in 2..NOTE_BATCH {
+		assert_eq!(asset_ids[i], AssetId(F::ZERO), "asset_ids[{i}] padding should be zero");
+	}
+
+	let amts = wp.withdrawal_amts();
+	assert_eq!(amts[0], withdrawals[0].1, "withdrawal_amts[0] mismatch");
+	assert_eq!(amts[1], withdrawals[1].1, "withdrawal_amts[1] mismatch");
+	for i in 2..NOTE_BATCH {
+		assert_eq!(amts[i], U256::zero(), "withdrawal_amts[{i}] padding should be zero");
+	}
+
+	assert_eq!(wp.withdrawal_address(), H160::zero(), "withdrawal_address mismatch");
 }

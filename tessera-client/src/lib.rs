@@ -124,6 +124,17 @@ pub const SUBPOOL_CONFIG_DEPTH: usize = 2;
 /// Depth of the main pool configuration tree (supports 2^20 subpools).
 pub const MAIN_POOL_CONFIG_DEPTH: usize = 20;
 
+/// Shared interface for all three transaction proof types.
+///
+/// # Uniform PI prefix (first 17 elements, all types)
+/// ```text
+/// [0..4]  act_root            (ACT Merkle root, 4 field elements)
+/// [4..8]  mainpool_config_root (main pool config root, 4 field elements)
+/// [8]     not_fake_tx          (F::ONE = real, F::ZERO = dummy/padding)
+/// [9..13] accin_nullifier      (input account nullifier, 4 field elements)
+/// [13..17] accout_commitment   (output account commitment, 4 field elements)
+/// ```
+/// Elements beyond [17] are type-specific (see each concrete proof type).
 pub trait PIHelper {
 	fn pis(&self) -> &[F] {
 		&self.proof().public_inputs
@@ -133,17 +144,40 @@ pub trait PIHelper {
 	}
 	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D>;
 
-	fn act_root(&self) -> HashOutput;
+	/// PI[0..4]: Account Commitment Tree root.
+	fn act_root(&self) -> HashOutput {
+		HashOutput(self.pis()[0..4].try_into().unwrap())
+	}
 
-	fn mainpool_config_root(&self) -> HashOutput;
+	/// PI[4..8]: Main pool configuration tree root.
+	fn mainpool_config_root(&self) -> HashOutput {
+		HashOutput(self.pis()[4..8].try_into().unwrap())
+	}
 
-	fn not_fake_tx(&self) -> bool;
+	/// PI[8]: `F::ONE` for a real transaction, `F::ZERO` for a dummy/padding proof.
+	fn not_fake_tx(&self) -> F {
+		self.pis()[8]
+	}
 
-	fn accout_commitment(&self) -> HashOutput;
+	/// PI[9..13]: Input account nullifier.
+	fn accin_nullifier(&self) -> HashOutput {
+		HashOutput(self.pis()[9..13].try_into().unwrap())
+	}
 
-	fn accin_nullifier(&self) -> HashOutput;
+	/// PI[13..17]: Output account commitment.
+	fn accout_commitment(&self) -> HashOutput {
+		HashOutput(self.pis()[13..17].try_into().unwrap())
+	}
 
-	fn acc_out_subpool_id(&self) -> SubpoolId;
+	/// PIs shared across every TX of the same kind in a batch:
+	/// `act_root[0..4] | mainpool_config_root[4..8]`.
+	fn batch_common_pis(&self) -> Vec<F> {
+		self.pis()[0..8].to_vec()
+	}
 
-	fn acc_in_subpool_id(&self) -> SubpoolId;
+	/// PIs that are unique per TX in a batch: everything from PI[8] onward
+	/// (`not_fake_tx`, nullifiers, commitments, and type-specific fields).
+	fn batch_unique_pis(&self) -> Vec<F> {
+		self.pis()[8..].to_vec()
+	}
 }
