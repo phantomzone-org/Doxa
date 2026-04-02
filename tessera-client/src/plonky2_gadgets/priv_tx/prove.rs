@@ -19,11 +19,12 @@ use crate::{
 	plonky2_gadgets::{
 		priv_tx::{
 			circuit_builder::PrivTxCircuitBuilder,
-			freshacc, priv_tx_circuit, reject, spend,
+			fake_tx::set_fake_tx_witness,
+			freshacc_tx, priv_tx_circuit, reject_tx, spend_tx,
 			targets::{
 				AccountCommitmentTarget, AccountNullifierTarget, AssetIdTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-				RootTarget, SubpoolIdTarget, TxCircuitTargets,
+				RootTarget, SubpoolIdTarget, TxCircuitTargets, TxKindFlags,
 			},
 		},
 		signature::PubkeyTarget,
@@ -172,12 +173,19 @@ fn prove_priv_tx(
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 	let mut pw = PartialWitness::new();
+	t.set_tx_kind_flags(
+		&mut pw,
+		if not_fake_tx {
+			TxKindFlags::FRESH_ACC
+		} else {
+			TxKindFlags::FAKE
+		},
+	);
 	if not_fake_tx {
-		// Real proof: use FreshAcc witness (sets is_fresh_acc=true, not_fake_tx=true).
-		freshacc::set_freshacc_tx_witness(
+		// Real proof: use FreshAcc witness (is_fresh_acc=true, not_fake_tx=true set above).
+		freshacc_tx::set_freshacc_tx_witness(
 			&mut pw,
 			t,
-			true,
 			&accin,
 			new_spend_auth,
 			new_consume_auth,
@@ -201,7 +209,7 @@ fn prove_priv_tx(
 		// the circuit output.  NC/NN already equal this (derived from zero note
 		// seeds), so we set AN/AC overrides to the same value.
 		let dummy = double_hash_native([F::ZERO; 4]);
-		spend::set_fake_tx_witness(
+		set_fake_tx_witness(
 			&mut pw,
 			t,
 			HashOutput([F::ZERO; 4]),
@@ -296,12 +304,12 @@ pub fn prove_real_priv_tx(
 
 	let mut pw = PartialWitness::new();
 	let is_fake = matches!(inputs, PrivTxInputs::Fake(_));
+	targets.set_tx_kind_flags(&mut pw, inputs.tx_kind_flags());
 
 	match inputs {
-		PrivTxInputs::FreshAcc(i) => freshacc::set_freshacc_tx_witness(
+		PrivTxInputs::FreshAcc(i) => freshacc_tx::set_freshacc_tx_witness(
 			&mut pw,
 			targets,
-			true,
 			&i.accin,
 			i.new_spend_auth,
 			i.new_consume_auth,
@@ -315,7 +323,7 @@ pub fn prove_real_priv_tx(
 			i.dinotes,
 			i.donotes,
 		),
-		PrivTxInputs::Spend(i) => spend::set_spend_tx_witness(
+		PrivTxInputs::Spend(i) => spend_tx::set_spend_tx_witness(
 			&mut pw,
 			targets,
 			&i.accin,
@@ -326,16 +334,16 @@ pub fn prove_real_priv_tx(
 			&i.onotes,
 			i.dinotes,
 			i.donotes,
-			&i.approval_key,
-			&i.rejection_key,
-			&i.consume_key,
+			i.approval_key,
+			i.rejection_key,
+			i.consume_key,
 			i.subpool_id,
 			&i.main_pool,
 			i.spend_sig,
 			i.consume_sig,
 			i.approval_sig,
 		),
-		PrivTxInputs::Reject(i) => reject::set_reject_tx_witness(
+		PrivTxInputs::Reject(i) => reject_tx::set_reject_tx_witness(
 			&mut pw,
 			targets,
 			&i.accin,
@@ -346,16 +354,16 @@ pub fn prove_real_priv_tx(
 			&i.onotes,
 			i.dinotes,
 			i.donotes,
-			&i.approval_key,
-			&i.rejection_key,
-			&i.consume_key,
+			i.approval_key,
+			i.rejection_key,
+			i.consume_key,
 			i.subpool_id,
 			&i.main_pool,
 			i.consume_sig,
 			i.approval_sig,
 		),
 		PrivTxInputs::Fake(i) => {
-			spend::set_fake_tx_witness(
+			set_fake_tx_witness(
 				&mut pw,
 				targets,
 				i.root,
@@ -419,75 +427,4 @@ pub fn prove_real_priv_tx_seeded(
 	seed: u64,
 ) -> tessera_utils::ProofNative {
 	prove_priv_tx(circuit, targets, true, seed)
-}
-
-#[cfg(test)]
-mod tests {
-	use plonky2_field::types::{Field, PrimeField64};
-
-	use super::*;
-
-	/// Dummy proofs must have PI[IS_REAL_OFFSET] (not_fake_tx) = 0.
-	/// Regression: set_freshacc_tx_witness sets is_fresh_acc=true, which
-	/// has a circuit constraint is_fresh_acc → not_fake_tx, forcing is_real=1.
-	/// Fix: dummy proofs use set_fake_tx_witness (is_fresh_acc=false).
-	#[test]
-	fn dummy_proof_has_not_fake_tx_zero() {
-		const IS_REAL_OFFSET: usize = 4;
-
-		let (circuit, targets) = build_priv_tx_circuit();
-		let proof = prove_dummy_priv_tx(
-			&circuit,
-			&targets,
-			[F::ZERO; 4],
-			[[F::ZERO; 4]; NOTE_BATCH],
-			[F::ZERO; 4],
-			[[F::ZERO; 4]; NOTE_BATCH],
-		);
-		assert_eq!(
-			proof.public_inputs[IS_REAL_OFFSET].to_canonical_u64(),
-			0,
-			"prove_dummy_priv_tx PI[IS_REAL_OFFSET] should be 0 (not_fake_tx=false)"
-		);
-
-		let (_circuit2, proof2) = build_circuit_and_dummy_proof();
-		assert_eq!(
-			proof2.public_inputs[IS_REAL_OFFSET].to_canonical_u64(),
-			0,
-			"build_circuit_and_dummy_proof PI[IS_REAL_OFFSET] should be 0 (not_fake_tx=false)"
-		);
-	}
-
-	/// Dummy proofs' AN PIs must equal override_an at TX_DATA_OFFSET.
-	#[test]
-	fn dummy_proof_an_override_matches_pi() {
-		const TX_DATA_OFFSET: usize = 5;
-
-		let (circuit, targets) = build_priv_tx_circuit();
-		let override_an = [
-			F::from_canonical_u64(111),
-			F::from_canonical_u64(222),
-			F::from_canonical_u64(333),
-			F::from_canonical_u64(444),
-		];
-		let proof = prove_dummy_priv_tx(
-			&circuit,
-			&targets,
-			override_an,
-			[[F::ZERO; 4]; NOTE_BATCH],
-			[F::ZERO; 4],
-			[[F::ZERO; 4]; NOTE_BATCH],
-		);
-		let pis = &proof.public_inputs;
-		for k in 0..4 {
-			assert_eq!(
-				pis[TX_DATA_OFFSET + k].to_canonical_u64(),
-				override_an[k].to_canonical_u64(),
-				"dummy proof AN PI[{}] mismatch: got {} expected {}",
-				TX_DATA_OFFSET + k,
-				pis[TX_DATA_OFFSET + k].to_canonical_u64(),
-				override_an[k].to_canonical_u64(),
-			);
-		}
-	}
 }

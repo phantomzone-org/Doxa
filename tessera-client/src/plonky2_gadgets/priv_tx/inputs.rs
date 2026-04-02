@@ -1,6 +1,7 @@
 use tessera_trees::MerkleProof;
 use tessera_utils::{F, hasher::HashOutput};
 
+use super::targets::TxKindFlags;
 use crate::{
 	ConsumeAuth, NOTE_BATCH, SpendAuth, StandardAccount, SubpoolId,
 	note::StandardNote,
@@ -110,4 +111,19 @@ pub enum PrivTxInputs {
 	Spend(SpendTxInputs),
 	Reject(RejectTxInputs),
 	Fake(FakeTxInputs),
+}
+
+impl PrivTxInputs {
+	/// Return the [`TxKindFlags`] implied by this variant.
+	///
+	/// Each variant maps to exactly one set of flags; callers must not construct
+	/// flags independently to avoid mismatches with the inputs type.
+	pub(crate) fn tx_kind_flags(&self) -> TxKindFlags {
+		match self {
+			Self::FreshAcc(_) => TxKindFlags::FRESH_ACC,
+			Self::Spend(_) => TxKindFlags::SPEND,
+			Self::Reject(_) => TxKindFlags::REJECT,
+			Self::Fake(_) => TxKindFlags::FAKE,
+		}
+	}
 }

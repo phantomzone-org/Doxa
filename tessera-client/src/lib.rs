@@ -92,6 +92,9 @@ pub const NOTE_BATCH: usize = 7;
 /// Maximum number of private transactions aggregated into a single rollup batch.
 pub const PRIV_TX_BATCH_SIZE: usize = 64;
 
+/// Maximum number of deposit note commitments aggregated into a single deposit batch.
+pub const DEPOSIT_BATCH_SIZE: usize = 512;
+
 /// Depth of the per-account Asset State Tree (supports 2^10 = 1024 assets).
 pub const ACC_AST_DEPTH: usize = 10;
 

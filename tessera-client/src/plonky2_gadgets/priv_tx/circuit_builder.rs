@@ -20,13 +20,17 @@ use crate::{
 	SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
 		merkle::{MerkleRootTarget, compute_merkle_root_gadget, conditional_merkle_verify_gadget},
-		priv_tx::targets::{
-			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
-			ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment, DummyAccountNullifier,
-			DummyAccountTarget, DummyNoteTarget, MainPoolConfigRootTarget, NoteCommitmentTarget,
-			NoteNullifierTarget, NoteTarget, NullifierKeyTarget, PrivateIdentifierTarget,
-			PublicIdentifierTaregt, RejectCondTarget, RootTarget, SubpoolConfigRootTarget,
-			SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
+		priv_tx::{
+			targets::{
+				AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
+				ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment,
+				DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
+				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
+				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt,
+				RejectCondTarget, RootTarget, SubpoolConfigRootTarget, SubpoolFullProofTargets,
+				SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
+			},
+			utils::double_hash,
 		},
 		signature::{LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget},
 		u256::{CircuitBuilderU256, U256Target},
@@ -54,7 +58,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
 	/// Allocate a single dummy account target (an opaque 4-element hash).
 	fn add_virtual_dummy_account_target(&mut self) -> DummyAccountTarget;
-	/// Allocate all targets for a full account, registering `subpool_id` as a PI.
+	/// Allocate all targets for a full account. `subpool_id` is a plain target;
+	/// callers must register it as a public input explicitly via their circuit's PI block.
 	fn add_virtual_account_target(&mut self) -> AccountTarget;
 	/// Allocate a note spend-condition target (recipient address).
 	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget;
@@ -280,19 +285,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	) -> TxSignatureTargets;
 }
 
-/// Apply Poseidon twice: `H(H(input))`.
-///
-/// Used for dummy note and account commitments / nullifiers so they are
-/// deterministic, collision-resistant values that cannot be predicted from the
-/// raw dummy seed.
-fn double_hash<F: RichField + Extendable<D>, const D: usize>(
-	builder: &mut CircuitBuilder<F, D>,
-	input: HashOutTarget,
-) -> HashOutTarget {
-	let out0 = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input.elements.to_vec());
-	builder.hash_n_to_hash_no_pad::<PoseidonHash>(out0.elements.to_vec())
-}
-
 // TODO: rearrange this as per the trait declaration
 impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 	for CircuitBuilder<F, D>
@@ -318,7 +310,7 @@ where
 		AccountTarget {
 			private_identifier: PrivateIdentifierTarget(self.add_virtual_target_arr()),
 			nonce: self.add_virtual_target(),
-			subpool_id: SubpoolIdTarget(self.add_virtual_public_input()),
+			subpool_id: SubpoolIdTarget(self.add_virtual_target()),
 			acc_ast_root: self.add_virtual_hash(),
 			spend_auth: PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr())),
 			consume_auth: ConsumeAuthTarget {

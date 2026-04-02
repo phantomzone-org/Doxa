@@ -64,14 +64,22 @@ use plonky2::{
 };
 
 /// Number of public inputs per TX leaf in the aggregated TX proof.
-/// Layout (NOTE_BATCH=7): [0-1] subpool_id auto, [2-3] subpool_id explicit,
-/// [4] is_real, [5-8] AN, [9-12] AC, [13-40] NN (7×4), [41-68] NC (7×4),
-/// [69-72] root (merged ACT+NCT root).
-pub const TX_LEAF_PI_SIZE: usize = 73;
-/// Offset of the `is_real` flag within a TX leaf's public inputs.
-pub const IS_REAL_OFFSET: usize = 4;
-/// Offset of the first TX data field (account nullifier) within a TX leaf's public inputs.
-pub const TX_DATA_OFFSET: usize = 5;
+/// Layout (NOTE_BATCH=7):
+///   [0]     subpool_id_in
+///   [1]     subpool_id_out
+///   [2]     not_fake_tx        ← IS_REAL_OFFSET
+///   [3-6]   root (4 elements)
+///   [7-10]  mainpool_config_root (4 elements)
+///   [11-14] accin_null (AN)    ← TX_DATA_OFFSET
+///   [15-18] accout_comm (AC)
+///   [19-46] inote nullifiers (7×4)
+///   [47-74] onote commitments (7×4)
+///   [75]    asset_id
+pub const TX_LEAF_PI_SIZE: usize = 76;
+/// Offset of the `not_fake_tx` flag within a TX leaf's public inputs.
+pub const IS_REAL_OFFSET: usize = 2;
+/// Offset of the account nullifier (AN) within a TX leaf's public inputs.
+pub const TX_DATA_OFFSET: usize = 11;
 use tessera_utils::{
 	hasher::HashOutput,
 	plonky2_gadgets::{
@@ -342,7 +350,7 @@ impl SuperAggregator {
 	}
 
 	/// Persist all artifacts to `path`.
-	
+
 	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
 		use tessera_utils::groth::TesseraGeneratorSerializer;
 		fs::create_dir_all(path)?;
@@ -363,7 +371,7 @@ impl SuperAggregator {
 	}
 
 	/// Reconstruct the circuit from pre-generated artifacts without recompiling.
-	
+
 	pub fn from_artifacts(path: &Path) -> Result<Self> {
 		use tessera_utils::groth::TesseraGeneratorSerializer;
 		let gate_ser = DefaultGateSerializer;

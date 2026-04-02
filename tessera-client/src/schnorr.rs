@@ -1,4 +1,7 @@
-use std::ops::{Add, Mul, Neg};
+use std::{
+	mem::zeroed,
+	ops::{Add, Mul, Neg},
+};
 
 use plonky2::hash::hashing::hash_n_to_m_no_pad;
 use plonky2_field::{
@@ -347,6 +350,11 @@ pub struct Signature {
 }
 
 impl Signature {
+	pub(crate) const ZERO: Self = Self {
+		r: PointEw::NEUTRAL,
+		s: Scalar::ZERO,
+	};
+
 	/// Serialize to 80 bytes: 40 bytes for `r` (5 × u64 LE) + 40 bytes for `s` (5 × u64 LE).
 	pub fn encode(&self) -> [u8; 80] {
 		let mut out = [0u8; 80];

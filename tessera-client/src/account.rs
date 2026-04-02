@@ -76,6 +76,10 @@ impl PublicIdentifier {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SubpoolId(pub F);
 
+impl SubpoolId {
+	pub(crate) const ZERO: Self = Self(F::ZERO);
+}
+
 /// Monotonically-increasing counter included in every account commitment.
 ///
 /// Each valid account transition increments the nonce by exactly 1, preventing
@@ -120,6 +124,8 @@ pub struct ConsumeAuth {
 pub struct AssetId(pub F);
 
 impl AssetId {
+	pub(crate) const ZERO: Self = Self(F::ZERO);
+
 	/// Construct an `AssetId` from a `u64`, returning an error if the value
 	/// exceeds the Goldilocks field order.
 	pub fn from_u64(v: u64) -> anyhow::Result<Self> {
@@ -336,6 +342,13 @@ pub struct StandardAccount {
 }
 
 impl StandardAccount {
+	pub fn fake() -> Self {
+		Self::new_with(
+			crate::PrivateIdentifier([F::from_canonical_u64(1), F::from_noncanonical_u64(2)]),
+			SubpoolId(F::ZERO),
+		)
+	}
+
 	/// Sample a fresh account with a random private identifier and zero balances.
 	/// The returned account is in the pre-activation state (`nonce=0`).
 	pub fn sample<R: CryptoRng + Rng>(rng: &mut R, subpool_id: SubpoolId) -> Self {
@@ -475,13 +488,18 @@ impl StandardAccount {
 /// Contains only public fields (`subpool_id` + `public_id`); the private
 /// identifier is never included.  Encoded as an 80-character hex string for
 /// transport.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct AccountAddress {
 	pub subpool_id: SubpoolId,
 	pub(crate) public_id: PublicIdentifier,
 }
 
 impl AccountAddress {
+	pub(crate) const ZERO: Self = Self {
+		subpool_id: SubpoolId::ZERO,
+		public_id: PublicIdentifier::ZERO,
+	};
+
 	/// Construct an address from its components.
 	pub fn new(subpool_id: SubpoolId, public_id: PublicIdentifier) -> Self {
 		Self {
@@ -495,14 +513,6 @@ impl AccountAddress {
 		Self {
 			subpool_id: acc.subpool_id,
 			public_id: acc.public_id(),
-		}
-	}
-
-	/// All-zero address used as a padding value in dummy notes.
-	pub(crate) fn zero() -> Self {
-		Self {
-			subpool_id: SubpoolId(F::ZERO),
-			public_id: PublicIdentifier::ZERO,
 		}
 	}
 
@@ -582,7 +592,7 @@ pub fn derive_deposit_tx_hash(
 	tx_hash_inp.extend_from_slice(&accin_null.0.0);
 	tx_hash_inp.extend_from_slice(&accout_comm.0.0);
 	tx_hash_inp.extend_from_slice(&deposit_note_comm.0.0);
-	tx_hash_inp.extend_from_slice(&map_h160_to_f(&eth_adrs));
+	tx_hash_inp.extend_from_slice(&map_h160_to_f(eth_adrs));
 	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&tx_hash_inp).elements)
 }
 
@@ -619,7 +629,7 @@ pub fn derive_withdraw_tx_hash(
 			inp.push(F::from_canonical_u32((*limb64 >> 32) as u32));
 		}
 	}
-	inp.extend_from_slice(&map_h160_to_f(&w_acc_addr));
+	inp.extend_from_slice(&map_h160_to_f(w_acc_addr));
 	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements)
 }
 

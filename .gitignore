@@ -37,3 +37,5 @@ tessera-server/data/trees_*/
 
 
 *.env
+
+.codex

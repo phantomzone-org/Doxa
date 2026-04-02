@@ -32,11 +32,10 @@ use plonky2::{
 	util::serialization::DefaultGateSerializer,
 };
 use tessera_utils::{
+	groth::TesseraGeneratorSerializer,
 	hasher::{HashOutput, MerkleHash, MerkleHashCircuit, MerkleHashTarget},
 	CircuitDataNative, ConfigNative, ProofNative, D, F,
 };
-
-use tessera_utils::groth::TesseraGeneratorSerializer;
 
 // ---------------------------------------------------------------------------
 // Artifact path
@@ -143,7 +142,7 @@ impl SubtreeRootCircuit {
 			leaves.len()
 		);
 
-		let root = Self::compute_root_native(leaves);
+		let root = Self::compute_root_native(leaves.to_vec());
 		let mut pw = PartialWitness::new();
 
 		HashOutput::set_hash_witness(&mut pw, &self.targets.root, &root)
@@ -163,7 +162,7 @@ impl SubtreeRootCircuit {
 	///
 	/// Matches the in-circuit computation exactly:
 	/// `inner_node = Poseidon(left || right)` (direction bit = false).
-	pub fn compute_root_native(leaves: &[HashOutput]) -> HashOutput {
+	pub fn compute_root_native(mut leaves: Vec<HashOutput>) -> HashOutput {
 		assert!(!leaves.is_empty(), "leaves must not be empty");
 		assert!(
 			leaves.len().is_power_of_two(),
@@ -171,15 +170,15 @@ impl SubtreeRootCircuit {
 			leaves.len()
 		);
 
-		let mut nodes = leaves.to_vec();
-		while nodes.len() > 1 {
-			let parent_len = nodes.len() >> 1;
+		while leaves.len() > 1 {
+			let parent_len = leaves.len() >> 1;
 			for i in 0..parent_len {
-				nodes[i] = HashOutput::hash_2_to_1_swapped(&nodes[2 * i], &nodes[2 * i + 1], false);
+				leaves[i] =
+					HashOutput::hash_2_to_1_swapped(&leaves[2 * i], &leaves[2 * i + 1], false);
 			}
-			nodes.truncate(parent_len);
+			leaves.truncate(parent_len);
 		}
-		nodes[0]
+		leaves[0]
 	}
 
 	/// Extract the Merkle root from a proof's public inputs.
@@ -195,7 +194,7 @@ impl SubtreeRootCircuit {
 	}
 
 	/// Persist the compiled circuit data to `path`.
-	
+
 	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
 		fs::create_dir_all(path)?;
 		let bytes = self
@@ -216,7 +215,7 @@ impl SubtreeRootCircuit {
 	///
 	/// Replays the builder (deterministic) to recover target wire indices,
 	/// then loads the compiled circuit data from disk.
-	
+
 	pub fn from_artifacts(path: &Path, batch_size: usize) -> Result<Self> {
 		// Replay builder to recover target wire indices.
 		let template = Self::build(batch_size)?;
@@ -281,7 +280,7 @@ mod tests {
 		let leaves = [leaf0, leaf1];
 
 		// Cross-check native root against direct hash (direction = false).
-		let native_root = SubtreeRootCircuit::compute_root_native(&leaves);
+		let native_root = SubtreeRootCircuit::compute_root_native(leaves.to_vec());
 		let expected_root = HashOutput::hash_2_to_1_swapped(&leaf0, &leaf1, false);
 		let swapped_root = HashOutput::hash_2_to_1_swapped(&leaf1, &leaf0, false);
 		assert_eq!(native_root, expected_root, "native root mismatch");
@@ -308,7 +307,7 @@ mod tests {
 		let leaves: Vec<HashOutput> = (0..4).map(|_| HashOutput::new_random(&mut rng)).collect();
 
 		let circuit = SubtreeRootCircuit::build(4)?;
-		let native_root = SubtreeRootCircuit::compute_root_native(&leaves);
+		let native_root = SubtreeRootCircuit::compute_root_native(leaves.to_vec());
 		let proof = circuit.prove(&leaves)?;
 
 		assert_eq!(
@@ -329,7 +328,7 @@ mod tests {
 		let circuit = SubtreeRootCircuit::build(128)?;
 		assert_eq!(circuit.circuit_data.common.num_public_inputs, (1 + 128) * 4);
 
-		let native_root = SubtreeRootCircuit::compute_root_native(&leaves);
+		let native_root = SubtreeRootCircuit::compute_root_native(leaves.to_vec());
 		let proof = circuit.prove(&leaves)?;
 
 		assert_eq!(
@@ -361,6 +360,9 @@ mod tests {
 		let h23 = HashOutput::hash_2_to_1_swapped(&leaves[2], &leaves[3], false);
 		let root = HashOutput::hash_2_to_1_swapped(&h01, &h23, false);
 
-		assert_eq!(SubtreeRootCircuit::compute_root_native(&leaves), root);
+		assert_eq!(
+			SubtreeRootCircuit::compute_root_native(leaves.to_vec()),
+			root
+		);
 	}
 }

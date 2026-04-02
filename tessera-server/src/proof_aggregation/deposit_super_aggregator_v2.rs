@@ -23,21 +23,23 @@
 //!
 //! `root` is the on-chain IMT root (private witness `act_root`).
 //! `batchPoseidonRoot` is the SubtreeRootCircuit output (SR proof PI[0..4]).
-//! `ethAddresses[i]` is `deposit_proof.PI[i*DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET .. +5]`,
+//! `ethAddresses[i]` is `deposit_proof.PI[i*DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET .. ETH_ADDR_OFFSET+5]`,
 //! encoding the depositor's ETH address as 5 × u32 little-endian limbs (via `map_h160_to_f`).
 //!
-//! # Deposit TX public inputs layout (33 total)
+//! # Deposit TX public inputs layout (37 total)
 //!
 //! ```text
-//! PI[0]       not_fake_tx         (1 field)
-//! PI[1..5]    act_root            (4 fields)
-//! PI[5..9]    accin_null          (4 fields)
-//! PI[9..13]   accout_comm         (4 fields)
-//! PI[13..17]  deposit_note_comm   (4 fields)   ← cross-checked against SR
-//! PI[17..22]  eth_address         (5 fields)
-//! PI[22..30]  amount              (8 fields)
-//! PI[30]      asset_id            (1 field)
-//! PI[31..33]  LUT evaluation PIs  (2 fields, internal to Plonky2 lookup arg)
+//! PI[0]       subpool_id_in
+//! PI[1]       subpool_id_out
+//! PI[2]       not_fake_tx
+//! PI[3..7]    mainpool_config_root (4 fields)
+//! PI[7..11]   act_root             (4 fields)
+//! PI[11..15]  accin_null           (4 fields)
+//! PI[15..19]  accout_comm          (4 fields)
+//! PI[19..23]  deposit_note_comm    (4 fields)   ← cross-checked against SR
+//! PI[23..28]  eth_address          (5 fields)
+//! PI[28..36]  amount               (8 fields)
+//! PI[36]      asset_id             (1 field)
 //! ```
 
 use std::{fs, path::Path};
@@ -54,7 +56,7 @@ use plonky2::{
 		circuit_data::{
 			CircuitConfig, CommonCircuitData, VerifierCircuitTarget, VerifierOnlyCircuitData,
 		},
-		proof::ProofWithPublicInputsTarget,
+		proof::{Proof, ProofWithPublicInputs, ProofWithPublicInputsTarget},
 	},
 	util::serialization::DefaultGateSerializer,
 };
@@ -67,34 +69,34 @@ use tessera_utils::{
 		},
 		u32::gadgets::add_u8_range_check_lookup_table,
 	},
-	CircuitDataNative, ConfigNative, ProofNative, D, F,
+	CircuitDataNative, ConfigNative, ProofNative, C, D, F,
 };
 
 // ---------------------------------------------------------------------------
 // PI layout constants
 // ---------------------------------------------------------------------------
 
-/// Number of public inputs per deposit_tx leaf in the aggregated proof.
-///
-/// Layout (33 total):
-///   PI[0]      accin.subpool_id  (auto-registered by `add_virtual_account_target`)
-///   PI[1]      accout.subpool_id (auto-registered by `add_virtual_account_target`)
-///   PI[2]      not_fake_tx       ← DEPOSIT_IS_REAL_OFFSET
-///   PI[3..7]   act_root[4]
-///   PI[7..11]  accin_null[4]
-///   PI[11..15] accout_comm[4]
-///   PI[15..19] deposit_note_comm[4] ← DEPOSIT_NOTE_COMM_OFFSET
-///   PI[19..24] eth_address[5]
-///   PI[24..32] amount[8]
-///   PI[32]     asset_id
-pub const DEPOSIT_LEAF_PI_SIZE: usize = 33;
+/// Number of public inputs per deposit_tx leaf.
+/// Layout (37 total):
+///   [0]     subpool_id_in
+///   [1]     subpool_id_out
+///   [2]     not_fake_tx          ← DEPOSIT_IS_REAL_OFFSET
+///   [3-6]   mainpool_config_root (4 fields)
+///   [7-10]  act_root             (4 fields)
+///   [11-14] accin_null           (4 fields)
+///   [15-18] accout_comm          (4 fields)
+///   [19-22] deposit_note_comm    (4 fields) ← DEPOSIT_NOTE_COMM_OFFSET
+///   [23-27] eth_address          (5 fields) ← ETH_ADDR_OFFSET
+///   [28-35] amount               (8 fields)
+///   [36]    asset_id
+pub const DEPOSIT_LEAF_PI_SIZE: usize = 37;
 /// Offset of `not_fake_tx` within a deposit leaf's public inputs.
 pub const DEPOSIT_IS_REAL_OFFSET: usize = 2;
-/// Offset of `deposit_note_comm[4]` within a deposit leaf's public inputs.
-pub const DEPOSIT_NOTE_COMM_OFFSET: usize = 15;
-/// Offset of `eth_address[5]` within a deposit leaf's public inputs.
-pub const ETH_ADDR_OFFSET: usize = 19;
-/// Number of Goldilocks field elements encoding the ETH address (5 × u32 LE limbs).
+/// Offset of `deposit_note_comm` within a deposit leaf's public inputs.
+pub const DEPOSIT_NOTE_COMM_OFFSET: usize = 19;
+/// Offset of `eth_address` within a deposit leaf's public inputs.
+pub const ETH_ADDR_OFFSET: usize = 23;
+/// Number of field elements in an Ethereum address (5 × u32 LE limbs).
 pub const ETH_ADDR_LEN: usize = 5;
 
 // ---------------------------------------------------------------------------
@@ -210,107 +212,8 @@ impl DepositSuperAggregatorV2 {
 			.map_err(|e| anyhow!("DepositSuperAggregatorV2::prove: {e}"))
 	}
 
-	/// Compute the deposit piCommitment natively, matching `_computeDepositPiCommitment`
-	/// in Solidity.
-	///
-	/// `deposit_pis` is the flat public-input slice from the aggregated deposit proof
-	/// (`deposit_agg_proof.public_inputs`). `n_deposit_slots` is the number of slots.
-	///
-	/// Returns 8 big-endian `u32` words.
-	pub fn compute_deposit_pi_commitment_native(
-		act_root: HashOutput,
-		main_pool_cfg_root: [u8; 32],
-		batch_poseidon_root: HashOutput,
-		deposit_pis: &[F],
-		n_deposit_slots: usize,
-	) -> [u32; 8] {
-		use plonky2::field::types::PrimeField64;
-
-		let mut words: Vec<u32> = Vec::new();
-
-		let push_hash = |w: &mut Vec<u32>, h: &HashOutput| {
-			for &field in &[h.0[3], h.0[2], h.0[1], h.0[0]] {
-				let v = field.to_canonical_u64();
-				w.push((v >> 32) as u32);
-				w.push(v as u32);
-			}
-		};
-
-		push_hash(&mut words, &act_root);
-		eprintln!(
-			"[NATIVE] root              bytes: {}",
-			words
-				.iter()
-				.map(|w| format!("{:08x}", w))
-				.collect::<Vec<_>>()
-				.join("")
-		);
-
-		// mainPoolConfigRoot: raw bytes32 big-endian.
-		let pcr_start = words.len();
-		for i in 0..8 {
-			words.push(u32::from_be_bytes(
-				main_pool_cfg_root[i * 4..i * 4 + 4].try_into().unwrap(),
-			));
-		}
-		eprintln!(
-			"[NATIVE] mainPoolCfgRoot   bytes: {}",
-			words[pcr_start..]
-				.iter()
-				.map(|w| format!("{:08x}", w))
-				.collect::<Vec<_>>()
-				.join("")
-		);
-
-		// batchPoseidonRoot commits to all NC leaves via Poseidon.
-		let bpr_start = words.len();
-		push_hash(&mut words, &batch_poseidon_root);
-		eprintln!(
-			"[NATIVE] batchPoseidonRoot bytes: {}",
-			words[bpr_start..]
-				.iter()
-				.map(|w| format!("{:08x}", w))
-				.collect::<Vec<_>>()
-				.join("")
-		);
-
-		// ethAddresses[0..N]: 5 u32 LE limbs per slot, mirroring the circuit.
-		for s in 0..n_deposit_slots {
-			let base = s * DEPOSIT_LEAF_PI_SIZE + ETH_ADDR_OFFSET;
-			let addr_start = words.len();
-			for k in 0..ETH_ADDR_LEN {
-				words.push(deposit_pis[base + k].to_canonical_u64() as u32);
-			}
-			if s < 3 || s == n_deposit_slots - 1 {
-				eprintln!(
-					"[NATIVE] ethAddr[{:>3}]      bytes: {}",
-					s,
-					words[addr_start..]
-						.iter()
-						.map(|w| format!("{:08x}", w))
-						.collect::<Vec<_>>()
-						.join("")
-				);
-			}
-		}
-
-		eprintln!(
-			"[NATIVE] total u32 words: {}, total bytes: {}",
-			words.len(),
-			words.len() * 4
-		);
-		let result = solidity_keccak256(&words);
-		let hash_hex: String = result
-			.iter()
-			.map(|w| format!("{:08x}", w))
-			.collect::<Vec<_>>()
-			.join("");
-		eprintln!("[NATIVE] keccak result: {}", hash_hex);
-		result
-	}
-
 	/// Persist all artifacts to `path`.
-	
+
 	pub fn store_artifacts(&self, path: &Path) -> Result<()> {
 		use tessera_utils::groth::TesseraGeneratorSerializer;
 		fs::create_dir_all(path)?;
@@ -338,7 +241,7 @@ impl DepositSuperAggregatorV2 {
 	}
 
 	/// Reconstruct the circuit from pre-generated artifacts without recompiling.
-	
+
 	pub fn from_artifacts(path: &Path) -> Result<Self> {
 		use tessera_utils::groth::TesseraGeneratorSerializer;
 		let gate_ser = DefaultGateSerializer;

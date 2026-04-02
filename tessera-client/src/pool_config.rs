@@ -15,7 +15,8 @@ use tessera_utils::{
 };
 
 use crate::{
-	MAIN_POOL_CONFIG_DEPTH, SUBPOOL_CONFIG_DEPTH, SubpoolId, schnorr::CompressedPublicKey,
+	MAIN_POOL_CONFIG_DEPTH, SUBPOOL_CONFIG_DEPTH, SubpoolId, ecgfp5::CompressedPoint,
+	plonky2_gadgets::witness::fake_authority_key, schnorr::CompressedPublicKey,
 };
 
 // ── CompressedPublicKey ───────────────────────────────────────────────────────
@@ -85,6 +86,21 @@ where
 
 	pub fn consume_key_proof(&self) -> MerkleTreeResult<MerkleProof<H>> {
 		self.inner.merkle_proof(CONSUME_KEY_INDEX)
+	}
+}
+
+impl SubpoolConfigTree<HashOutput> {
+	pub fn fake_instance() -> (SubpoolConfigTree<HashOutput>, SubpoolFullProof<HashOutput>) {
+		let key = fake_authority_key();
+		let mut main_pool = MainPoolConfigTree::<HashOutput>::new();
+		let subpool = SubpoolConfigTree::new(key, key, key);
+		main_pool
+			.insert_subpool(SubpoolId::ZERO, subpool.root())
+			.unwrap();
+		let subpool_proof = main_pool
+			.full_subpool_proof(&subpool, SubpoolId::ZERO)
+			.unwrap();
+		(subpool, subpool_proof)
 	}
 }
 

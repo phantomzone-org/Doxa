@@ -23,7 +23,6 @@ use plonky2::{
 	util::serialization::{DefaultGateSerializer, GateSerializer},
 };
 use serde::{Deserialize, Serialize};
-
 use tessera_utils::groth::TesseraGeneratorSerializer;
 
 use super::artifacts::{
@@ -335,7 +334,7 @@ impl GenericAggregator<tessera_utils::F, tessera_utils::ConfigNative, 2> {
 	/// Pass `&DefaultGateSerializer` when the leaf circuit uses only standard
 	/// plonky2 gates, or a custom serializer (e.g. `TesseraGateSerializer`)
 	/// when the leaf circuit contains custom gates.
-	
+
 	pub fn store_artifacts(
 		&self,
 		path: &Path,
@@ -394,7 +393,7 @@ impl GenericAggregator<tessera_utils::F, tessera_utils::ConfigNative, 2> {
 	///
 	/// `leaf_gate_ser` is the gate serializer used for `leaf_common.bin`.
 	/// Must match the serializer used in [`store_artifacts`].
-	
+
 	pub fn from_artifacts(
 		path: &Path,
 		leaf_gate_ser: &dyn GateSerializer<crate::F, 2>,

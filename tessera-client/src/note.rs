@@ -16,6 +16,7 @@ use crate::{AccountAddress, AssetId, account::NullifierKey, double_hash_native};
 /// by the deposit transaction circuit.
 pub struct DepositNoteCommitment(pub HashOutput);
 
+#[derive(Debug, Clone, Copy)]
 /// An external deposit intent created by a sender (e.g. an Ethereum user).
 ///
 /// The deposit note specifies which Tessera account should receive the funds
@@ -34,6 +35,13 @@ pub struct DepositNote {
 }
 
 impl DepositNote {
+	pub(crate) const ZERO: Self = Self {
+		identifier: NoteIdentifier::ZERO,
+		recipient: AccountAddress::ZERO,
+		amount: U256::zero(),
+		asset_id: AssetId::ZERO,
+	};
+
 	/// Compute the Poseidon commitment to this deposit note.
 	///
 	/// Hash input (16 field elements):

@@ -21,7 +21,8 @@ use crate::{
 			targets::{
 				AccountCommitmentTarget, AccountNullifierTarget, AssetIdTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-				RootTarget, SubpoolIdTarget, TxCircuitTargets,
+				RootTarget, SubpoolIdTarget, TxCircuitPrivateTargets, TxCircuitPublicTargets,
+				TxCircuitTargets,
 			},
 		},
 		u256::CircuitBuilderU256,
@@ -51,16 +52,18 @@ use crate::{
 /// 8. **Subpool membership** — three key proofs + main pool proof.
 /// 9. **Signatures** — spend / consume / approval Schnorr signatures.
 ///
-/// # Public inputs (77 elements for NOTE_BATCH=7)
+/// # Public inputs (76 elements for NOTE_BATCH=7)
 /// ```text
-/// [0]    subpool_id_in   (auto-PI from add_virtual_account_target)
-/// [1]    subpool_id_out
-/// [2]    not_fake_tx
-/// [3-6]  accin_null  (AN)
-/// [7-10] accout_comm (AC)
-/// [11-38] effective inote nullifiers (7×4)
-/// [39-66] effective onote commitments (7×4, donote_comm when slot inactive)
-/// [67-70] act_root
+/// [0]     subpool_id_in
+/// [1]     subpool_id_out
+/// [2]     not_fake_tx
+/// [3-6]   root (4 elements)
+/// [7-10]  mainpool_config_root (4 elements)
+/// [11-14] accin_null  (AN, 4 elements)
+/// [15-18] accout_comm (AC, 4 elements)
+/// [19-46] effective inote nullifiers (7×4)
+/// [47-74] effective onote commitments (7×4, donote_comm when slot inactive)
+/// [75]    asset_id
 /// ```
 pub fn priv_tx_circuit<
 	H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
@@ -268,67 +271,50 @@ where
 	);
 
 	// Step 14: Register public inputs.
-	// PI layout (77 total for NOTE_BATCH=7):
-	//   [0-1]  = subpool_id_in/out  (auto-registered by add_virtual_account_target)
-	//   [2]    = not_fake_tx
-	//   [3-6]  = AN (accin nullifier)
-	//   [7-10] = AC (accout commitment)
-	//   [11-38]= effective inote nullifiers (NOTE_BATCH×4)
-	//   [39-66]= effective onote commitments (NOTE_BATCH×4, donote_comm when inactive)
-	//   [67-70]= act_root
-	builder.register_public_input(accin.subpool_id.0);
-	builder.register_public_input(accout.subpool_id.0);
-	builder.register_public_input(not_fake_tx.target);
-	builder.register_public_inputs(&accin_null.0.elements);
-	builder.register_public_inputs(&accout_comm.0.elements);
-	builder.register_public_inputs(
-		effective_inotes_null
-			.iter()
-			.flat_map(|v| v.0.elements.iter().copied())
-			.collect_vec()
-			.as_slice(),
-	);
-	builder.register_public_inputs(
-		donotes_comm
-			.iter()
-			.flat_map(|v| v.0.elements.iter().copied())
-			.collect_vec()
-			.as_slice(),
-	);
-	builder.register_public_inputs(&root.0.elements);
-
-	TxCircuitTargets {
+	let public_targets = TxCircuitPublicTargets {
+		accin_subpool_id: accin.subpool_id,
+		accout_subpool_id: accout.subpool_id,
 		not_fake_tx,
-		is_rjct,
-		is_fresh_acc,
-		is_update_auth,
-		is_priv_tx,
 		root,
 		mainpool_config_root,
-		approval_key,
-		rejection_key,
-		subpool_consume_key,
-		accin,
-		accout,
-		accin_amt,
-		accout_amt,
-		asset_id,
-		asset_exists_in_accin,
-		asset_exists_in_accout,
-		accin_pos,
-		accin_act_merkle: accin_merkletrgts,
-		accin_ast_merkle,
-		inotes,
-		inotes_pos,
-		inotes_isactive,
-		onotes,
-		onotes_isactive,
-		dinotes,
-		donotes,
-		subpool_proof_targets,
-		sig_targets,
-		inotes_nct_merkle: inotes_mrkltrgt,
 		accin_null,
 		accout_comm,
+		inotes_null: effective_inotes_null,
+		onotes_comm: donotes_comm,
+		asset_id,
+	};
+
+	public_targets.register(builder);
+
+	TxCircuitTargets {
+		public: public_targets,
+		private: TxCircuitPrivateTargets {
+			is_rjct,
+			is_fresh_acc,
+			is_update_auth,
+			is_priv_tx,
+			approval_key,
+			rejection_key,
+			subpool_consume_key,
+			accin,
+			accout,
+			accin_amt,
+			accout_amt,
+			asset_exists_in_accin,
+			asset_exists_in_accout,
+			accin_pos,
+			accin_act_merkle: accin_merkletrgts,
+			accin_ast_merkle,
+			inotes,
+			inotes_pos,
+			inotes_isactive,
+			onotes,
+			onotes_isactive,
+			dinotes,
+			donotes,
+			subpool_proof_targets,
+			sig_targets,
+			inotes_nct_merkle: inotes_mrkltrgt,
+		},
 	}
 }
