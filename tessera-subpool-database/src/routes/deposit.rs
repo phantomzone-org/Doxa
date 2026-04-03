@@ -77,6 +77,12 @@ pub async fn submit_deposit_handler(
 		));
 	}
 
+	let mut tx = state
+		.pool
+		.begin()
+		.await
+		.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
+
 	let row = sqlx::query(
 		r#"INSERT INTO deposit_tx_requests
                (recipient_address, eth_address, deposit_note_identifier,
@@ -90,7 +96,7 @@ pub async fn submit_deposit_handler(
 	.bind(&amount_bytes)
 	.bind(&asset_id_bytes)
 	.bind(&signed_tx_bytes)
-	.fetch_one(&state.pool)
+	.fetch_one(&mut *tx)
 	.await
 	.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
 
@@ -98,10 +104,19 @@ pub async fn submit_deposit_handler(
 		.try_get("id")
 		.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
 
-	Ok((
-		StatusCode::CREATED,
-		Json(DepositResponse {
-			id,
-		}),
-	))
+	sqlx::query(
+		r#"INSERT INTO deposit_checks (deposit_tx_request_id, eth_address)
+		   VALUES ($1, $2)"#,
+	)
+	.bind(id)
+	.bind(&req.eth_address)
+	.execute(&mut *tx)
+	.await
+	.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
+
+	tx.commit()
+		.await
+		.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
+
+	Ok((StatusCode::CREATED, Json(DepositResponse { id })))
 }

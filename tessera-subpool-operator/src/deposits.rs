@@ -111,6 +111,11 @@ async fn post_deposit_to_sequencer(
 
 // ── Core loop ───────────────────────────────────────────────────────────────
 
+// TODO:
+//  - add a separate operation to process deposit_checks entry
+//  - do the same for withdrawal
+//
+//
 pub async fn process_pending_deposits<P: Provider + Clone>(
 	pool: &PgPool,
 	approval_sk: &PrivateKey,
@@ -119,9 +124,11 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 	rpc_provider: &P,
 ) -> Result<()> {
 	let rows: Vec<DepositTxRow> = sqlx::query_as(
-		"SELECT * FROM deposit_tx_requests \
-         WHERE status = 'PENDING' \
-         ORDER BY created_at ASC",
+		"SELECT dtr.* FROM deposit_tx_requests dtr \
+         INNER JOIN deposit_checks dc ON dc.deposit_tx_request_id = dtr.id \
+         WHERE dtr.status = 'PENDING' \
+           AND dc.status = 'APPROVED' \
+         ORDER BY dtr.created_at ASC",
 	)
 	.fetch_all(pool)
 	.await?;
@@ -146,6 +153,11 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 
 	Ok(())
 }
+
+// 1. retrieve all pending deposits
+// 2. retrieve correspodning AML check
+//  - if check is success: then process the tx. Mark it approved
+//  - if check is fail: then reject the tx
 
 async fn process_one_deposit<P: Provider + Clone>(
 	pool: &PgPool,

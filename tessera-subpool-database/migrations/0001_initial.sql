@@ -2,6 +2,7 @@
 
 CREATE TYPE freshacc_status        AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE deposit_tx_status      AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE deposit_check_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE spend_tx_status        AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE input_note_status      AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE withdrawal_tx_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
@@ -73,6 +74,18 @@ CREATE TABLE deposit_tx_requests (
     rejection_reason         TEXT,
     created_at               TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
     updated_at               TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+);
+
+-- ── deposit_checks ────────────────────────────────────────────────────────────
+
+CREATE TABLE deposit_checks (
+    id                     BIGSERIAL            PRIMARY KEY,
+    deposit_tx_request_id  BIGINT               NOT NULL REFERENCES deposit_tx_requests(id),
+    eth_address            TEXT                 NOT NULL,
+    check_response         TEXT,
+    status                 deposit_check_status NOT NULL DEFAULT 'PENDING',
+    created_at             TIMESTAMPTZ          NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ          NOT NULL DEFAULT NOW()
 );
 
 -- ── faucet_requests ───────────────────────────────────────────────────────────
