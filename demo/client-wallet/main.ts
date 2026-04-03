@@ -250,17 +250,25 @@ const pub2privAddress = document.getElementById("pub2priv-address")!;
 const pub2privNetwork = document.getElementById("pub2priv-network")!;
 const pub2privEthBalance = document.getElementById("pub2priv-eth-balance")!;
 const pub2privUsdxBalance = document.getElementById("pub2priv-usdx-balance")!;
-const pub2privFaucetEthWrap = document.getElementById("pub2priv-fauceteth-wrap")!;
+const pub2privFaucetEthWrap = document.getElementById(
+  "pub2priv-fauceteth-wrap",
+)!;
 const pub2privFaucetEthBtn = document.getElementById(
   "pub2priv-fauceteth-btn",
 ) as HTMLButtonElement;
-const pub2privFaucetEthSteps = document.getElementById("pub2priv-fauceteth-steps")!;
+const pub2privFaucetEthSteps = document.getElementById(
+  "pub2priv-fauceteth-steps",
+)!;
 const pub2privFaucetUsdxBtn = document.getElementById(
   "pub2priv-faucetusdx-btn",
 ) as HTMLButtonElement;
-const pub2privFaucetUsdxSteps = document.getElementById("pub2priv-faucetusdx-steps")!;
-const pub2privAmountIn = document.getElementById("pub2priv-amount") as HTMLInputElement;
-const pub2privDepositBtn = document.getElementById(
+const pub2privFaucetUsdxSteps = document.getElementById(
+  "pub2priv-faucetusdx-steps",
+)!;
+const pub2privAmountIn = document.getElementById(
+  "pub2priv-amount",
+) as HTMLInputElement;
+const pub2privTransferBtn = document.getElementById(
   "pub2priv-deposit-btn",
 ) as HTMLButtonElement;
 const pub2privHint = document.getElementById("pub2priv-hint")!;
@@ -502,7 +510,7 @@ faucetBtn.addEventListener("click", async () => {
   const step = pStep(faucetSteps, "⏳ Submitting faucet request…", "active");
   faucetBar.style.width = "50%";
   try {
-    const { tx_hash } = await subpoolClient.requestFaucet(ethAddressFull!);
+    const { tx_hash } = await subpoolClient.requestFaucetUsdx(ethAddressFull!);
     step.className = "p-step done";
     step.textContent = "✓ Faucet transaction submitted";
     faucetBar.style.width = "100%";
@@ -540,30 +548,31 @@ async function loadPubBalances() {
     }) + " USDX";
 
   pub2privFaucetEthWrap.style.display = pubEthBalanceRaw < 10n ? "" : "none";
-  updatePub2PrivDepositBtn();
+  updatePub2PrivTransferBtn();
 }
 
-function updatePub2PrivDepositBtn() {
+function updatePub2PrivTransferBtn() {
   if (!privateAccAddressFull) {
     pub2privHint.textContent =
       "Sign into your private account above to enable deposits.";
-    pub2privDepositBtn.disabled = true;
+    pub2privTransferBtn.disabled = true;
     pub2privError.textContent = "";
     return;
   }
   pub2privHint.textContent = "Enter an amount and click Deposit.";
   const amount = parseFloat(pub2privAmountIn.value);
   if (!amount || amount <= 0) {
-    pub2privDepositBtn.disabled = false;
+    pub2privTransferBtn.disabled = false;
     pub2privError.textContent = "";
     return;
   }
   const units = BigInt(Math.round(amount * 1_000_000));
   if (units > pubUsdxBalanceRaw) {
-    pub2privDepositBtn.disabled = true;
-    pub2privError.textContent = "Amount exceeds your USDX balance.";
+    pub2privTransferBtn.disabled = true;
+    pub2privError.textContent =
+      "Amount exceeds USDX balance of connected public account.";
   } else {
-    pub2privDepositBtn.disabled = false;
+    pub2privTransferBtn.disabled = false;
     pub2privError.textContent = "";
   }
 }
@@ -574,21 +583,45 @@ pub2privMetamaskBtn.addEventListener("click", async () => {
   try {
     const eth = (window as any).ethereum;
     if (!eth) throw new Error("MetaMask not detected.");
-    const [addr]: string[] = await eth.request({ method: "eth_requestAccounts" });
+    const [addr]: string[] = await eth.request({
+      method: "eth_requestAccounts",
+    });
+
+    // Switch to Sepolia (chain 0xaa36a7 = 11155111); add it if not present.
+    try {
+      await eth.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0xaa36a7" }],
+      });
+    } catch (switchErr: any) {
+      if (switchErr?.code === 4902) {
+        await eth.request({
+          method: "wallet_addEthereumChain",
+          params: [
+            {
+              chainId: "0xaa36a7",
+              chainName: "Sepolia Testnet",
+              nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+              rpcUrls: [SEPOLIA_RPC_URL],
+              blockExplorerUrls: ["https://sepolia.etherscan.io"],
+            },
+          ],
+        });
+      } else {
+        throw switchErr;
+      }
+    }
+
     pubConnectedAddress = addr;
     pubWalletClient = createWalletClient({
       account: addr as `0x${string}`,
       chain: sepolia,
       transport: custom(eth),
     });
-    pub2privMetamaskBtn.textContent =
-      addr.slice(0, 8) + "…" + addr.slice(-6);
+    pub2privMetamaskBtn.textContent = addr.slice(0, 8) + "…" + addr.slice(-6);
     pub2privAddress.textContent = addr.slice(0, 10) + "…" + addr.slice(-8);
     pub2privAddress.title = addr;
-    const chainId: string = await eth.request({ method: "eth_chainId" });
-    const chainIdNum = parseInt(chainId, 16);
-    pub2privNetwork.textContent =
-      chainIdNum === 11155111 ? "Sepolia Testnet" : `Chain ${chainIdNum}`;
+    pub2privNetwork.textContent = "Sepolia Testnet";
     pub2privConnectView.style.display = "none";
     pub2privWalletView.style.display = "";
     await loadPubBalances();
@@ -599,14 +632,20 @@ pub2privMetamaskBtn.addEventListener("click", async () => {
   }
 });
 
-pub2privAmountIn.addEventListener("input", updatePub2PrivDepositBtn);
+pub2privAmountIn.addEventListener("input", updatePub2PrivTransferBtn);
 
 pub2privFaucetEthBtn.addEventListener("click", async () => {
   pub2privFaucetEthBtn.disabled = true;
   pub2privFaucetEthSteps.innerHTML = "";
-  const step = pStep(pub2privFaucetEthSteps, "⏳ Requesting testnet ETH…", "active");
+  const step = pStep(
+    pub2privFaucetEthSteps,
+    "⏳ Requesting testnet ETH…",
+    "active",
+  );
   try {
-    const { tx_hash } = await subpoolClient.requestFaucet(pubConnectedAddress!);
+    const { tx_hash } = await subpoolClient.requestFaucetEth(
+      pubConnectedAddress!,
+    );
     step.className = "p-step done";
     step.textContent = "✓ ETH sent";
     const a = document.createElement("a");
@@ -629,7 +668,9 @@ pub2privFaucetUsdxBtn.addEventListener("click", async () => {
   pub2privFaucetUsdxSteps.innerHTML = "";
   const step = pStep(pub2privFaucetUsdxSteps, "⏳ Requesting USDX…", "active");
   try {
-    const { tx_hash } = await subpoolClient.requestFaucet(pubConnectedAddress!);
+    const { tx_hash } = await subpoolClient.requestFaucetUsdx(
+      pubConnectedAddress!,
+    );
     step.className = "p-step done";
     step.textContent = "✓ 10 USDX sent";
     const a = document.createElement("a");
@@ -647,14 +688,14 @@ pub2privFaucetUsdxBtn.addEventListener("click", async () => {
   }
 });
 
-pub2privDepositBtn.addEventListener("click", async () => {
+pub2privTransferBtn.addEventListener("click", async () => {
   const amount = parseFloat(pub2privAmountIn.value);
   if (!amount || amount <= 0) {
     pub2privError.textContent = "Enter a valid amount.";
     return;
   }
   try {
-    pub2privDepositBtn.disabled = true;
+    pub2privTransferBtn.disabled = true;
     pub2privError.textContent = "";
     pub2privProgress.classList.add("visible");
     pub2privSteps.innerHTML = "";
@@ -664,8 +705,9 @@ pub2privDepositBtn.addEventListener("click", async () => {
 
     const depositAmountUnits = BigInt(Math.round(amount * 1_000_000));
     if (depositAmountUnits > pubUsdxBalanceRaw) {
-      pub2privError.textContent = "Amount exceeds your USDX balance.";
-      pub2privDepositBtn.disabled = false;
+      pub2privError.textContent =
+        "Amount exceeds USDX balance of connected public account.";
+      pub2privTransferBtn.disabled = false;
       return;
     }
 
@@ -692,7 +734,11 @@ pub2privDepositBtn.addEventListener("click", async () => {
       step.textContent = "✓ USDX approval given";
     }
 
-    const step2 = pStep(pub2privSteps, "⏳ Constructing deposit note…", "active");
+    const step2 = pStep(
+      pub2privSteps,
+      "⏳ Constructing deposit note…",
+      "active",
+    );
     pub2privBar.style.width = "55%";
     const depositNote = DepositNote.create(
       AccountAddress.fromHex(privateAccAddressFull!),
@@ -704,7 +750,11 @@ pub2privDepositBtn.addEventListener("click", async () => {
     step2.className = "p-step done";
     step2.textContent = "✓ Deposit note constructed";
 
-    const step3 = pStep(pub2privSteps, "⏳ Signing deposit transaction…", "active");
+    const step3 = pStep(
+      pub2privSteps,
+      "⏳ Signing deposit transaction…",
+      "active",
+    );
     pub2privBar.style.width = "75%";
     const calldata = encodeFunctionData({
       abi: TESSERA_ABI,
@@ -720,7 +770,11 @@ pub2privDepositBtn.addEventListener("click", async () => {
     step3.className = "p-step done";
     step3.textContent = "✓ Transaction signed";
 
-    const step4 = pStep(pub2privSteps, "⏳ Submitting deposit request…", "active");
+    const step4 = pStep(
+      pub2privSteps,
+      "⏳ Submitting deposit request…",
+      "active",
+    );
     pub2privBar.style.width = "88%";
     const { id: depositId } = await subpoolClient.submitDeposit({
       recipient_address: privateAccAddressFull!,
@@ -768,12 +822,12 @@ pub2privDepositBtn.addEventListener("click", async () => {
       }, 5_000);
     });
 
-    pub2privDepositBtn.disabled = false;
+    pub2privTransferBtn.disabled = false;
     pub2privAmountIn.value = "";
-    updatePub2PrivDepositBtn();
+    updatePub2PrivTransferBtn();
   } catch (err) {
     pub2privError.textContent = `${err}`;
-    pub2privDepositBtn.disabled = false;
+    pub2privTransferBtn.disabled = false;
   }
 });
 
@@ -809,7 +863,7 @@ function enableTransactSections() {
   xferSection.style.pointerEvents = "";
   p2pBtn.disabled = false;
   p2pHint.textContent = "Enter an amount and click Deposit.";
-  updatePub2PrivDepositBtn();
+  updatePub2PrivTransferBtn();
 }
 
 // ── p2p deposit ───────────────────────────────────────────────────────────────

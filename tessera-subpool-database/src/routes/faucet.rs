@@ -34,7 +34,60 @@ pub struct FaucetResponse {
 	pub tx_hash: String,
 }
 
-pub async fn faucet_handler(
+pub async fn faucet_eth_handler(
+	State(state): State<AppState>,
+	Json(req): Json<FaucetRequest>,
+) -> Result<(StatusCode, Json<FaucetResponse>), AppError> {
+	let to: Address = req
+		.eth_address
+		.parse()
+		.map_err(|_| AppError::InvalidInput("invalid eth_address".into()))?;
+
+	let already_funded: bool =
+		sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM faucet_requests WHERE eth_address = $1)")
+			.bind(&req.eth_address)
+			.fetch_one(&state.pool)
+			.await
+			.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
+
+	if already_funded {
+		return Err(AppError::AlreadyExists(
+			"address has already received testnet ETH".into(),
+		));
+	}
+
+	let signer: PrivateKeySigner = state
+		.faucet_private_key
+		.parse()
+		.map_err(|_| AppError::Internal(anyhow::anyhow!("invalid FAUCET_PRIVATE_KEY")))?;
+	let wallet = EthereumWallet::from(signer);
+	let provider = ProviderBuilder::new()
+		.wallet(wallet)
+		.connect(&state.sepolia_rpc_url)
+		.await
+		.map_err(|e| AppError::Internal(anyhow::anyhow!("provider connect: {e}")))?;
+
+	let eth_tx = TransactionRequest::default()
+		.to(to)
+		.value(U256::from(FAUCET_AMOUNT_WEI));
+
+	let pending: PendingTransactionBuilder<_> = provider
+		.send_transaction(eth_tx)
+		.await
+		.map_err(|e| AppError::Internal(anyhow::anyhow!("eth transfer: {e}")))?;
+	let tx_hash = format!("{:#x}", pending.tx_hash());
+
+	sqlx::query("INSERT INTO faucet_requests (eth_address, tx_hash) VALUES ($1, $2)")
+		.bind(&req.eth_address)
+		.bind(&tx_hash)
+		.execute(&state.pool)
+		.await
+		.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
+
+	Ok((StatusCode::CREATED, Json(FaucetResponse { tx_hash })))
+}
+
+pub async fn faucet_usdx_handler(
 	State(state): State<AppState>,
 	Json(req): Json<FaucetRequest>,
 ) -> Result<(StatusCode, Json<FaucetResponse>), AppError> {
@@ -48,7 +101,6 @@ pub async fn faucet_handler(
 		.parse()
 		.map_err(|_| AppError::Internal(anyhow::anyhow!("invalid USDX_CONTRACT_ADDR")))?;
 
-	// Build signer + provider
 	let signer: PrivateKeySigner = state
 		.faucet_private_key
 		.parse()
@@ -60,34 +112,6 @@ pub async fn faucet_handler(
 		.await
 		.map_err(|e| AppError::Internal(anyhow::anyhow!("provider connect: {e}")))?;
 
-	// Send ETH only if this address hasn't been funded before
-	let already_funded: bool =
-		sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM faucet_requests WHERE eth_address = $1)")
-			.bind(&req.eth_address)
-			.fetch_one(&state.pool)
-			.await
-			.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
-
-	if !already_funded {
-		let eth_tx = TransactionRequest::default()
-			.to(to)
-			.value(U256::from(FAUCET_AMOUNT_WEI));
-
-		let pending_eth: PendingTransactionBuilder<_> = provider
-			.send_transaction(eth_tx)
-			.await
-			.map_err(|e| AppError::Internal(anyhow::anyhow!("eth transfer: {e}")))?;
-		let eth_tx_hash = format!("{:#x}", pending_eth.tx_hash());
-
-		sqlx::query("INSERT INTO faucet_requests (eth_address, tx_hash) VALUES ($1, $2)")
-			.bind(&req.eth_address)
-			.bind(&eth_tx_hash)
-			.execute(&state.pool)
-			.await
-			.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
-	}
-
-	// Always mint 10 USDX — encode mint(to, value) calldata
 	let calldata = IUSDX::mintCall {
 		to,
 		value: U256::from(USDX_MINT_AMOUNT),
@@ -98,16 +122,11 @@ pub async fn faucet_handler(
 		.to(contract_addr)
 		.input(calldata.into());
 
-	let pending_mint: PendingTransactionBuilder<_> = provider
+	let pending: PendingTransactionBuilder<_> = provider
 		.send_transaction(mint_tx)
 		.await
 		.map_err(|e| AppError::Internal(anyhow::anyhow!("mint: {e}")))?;
-	let mint_tx_hash = format!("{:#x}", pending_mint.tx_hash());
+	let tx_hash = format!("{:#x}", pending.tx_hash());
 
-	Ok((
-		StatusCode::CREATED,
-		Json(FaucetResponse {
-			tx_hash: mint_tx_hash,
-		}),
-	))
+	Ok((StatusCode::CREATED, Json(FaucetResponse { tx_hash })))
 }

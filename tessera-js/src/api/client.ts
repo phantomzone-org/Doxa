@@ -117,11 +117,26 @@ export class SubpoolClient {
   }
 
   /**
-   * POST /faucet — request a small ETH transfer on Sepolia.
+   * POST /faucet/eth — transfer testnet ETH to the address (once per address).
    * Throws `SubpoolApiError` on non-2xx (e.g. 409 if address already funded).
    */
-  async requestFaucet(ethAddress: string): Promise<FaucetResponse> {
-    const res = await fetch(`${this.baseUrl}/faucet`, {
+  async requestFaucetEth(ethAddress: string): Promise<FaucetResponse> {
+    const res = await fetch(`${this.baseUrl}/faucet/eth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eth_address: ethAddress }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as FaucetResponse;
+  }
+
+  /**
+   * POST /faucet/usdx — mint USDX to the address.
+   * Throws `SubpoolApiError` on non-2xx.
+   */
+  async requestFaucetUsdx(ethAddress: string): Promise<FaucetResponse> {
+    const res = await fetch(`${this.baseUrl}/faucet/usdx`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ eth_address: ethAddress }),

@@ -33,7 +33,8 @@ pub fn router(state: AppState) -> Router {
 			"/deposit/{id}/status",
 			get(deposit::get_deposit_status_handler),
 		)
-		.route("/faucet", post(faucet::faucet_handler))
+		.route("/faucet/eth", post(faucet::faucet_eth_handler))
+		.route("/faucet/usdx", post(faucet::faucet_usdx_handler))
 		.route("/spend_tx", post(spend_tx::submit_spend_tx_handler))
 		.route(
 			"/spend_tx/{id}/status",
