@@ -20,6 +20,7 @@ pub mod notes_balance;
 pub mod register;
 pub mod spend_tx;
 pub mod user;
+pub mod withdrawal_tx;
 
 pub fn router(state: AppState) -> Router {
 	Router::new()
@@ -58,5 +59,6 @@ pub fn router(state: AppState) -> Router {
 			"/user/{private_acc_address}",
 			get(user::get_user_handler),
 		)
+		.route("/withdrawal", post(withdrawal_tx::submit_withdrawal_tx_handler))
 		.with_state(state)
 }

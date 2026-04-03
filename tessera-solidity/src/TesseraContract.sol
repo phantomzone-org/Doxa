@@ -4,8 +4,14 @@ pragma solidity ^0.8.20;
 interface IERC20MonitoredToken {
     /// @notice Returns token balance for `account`.
     function balanceOf(address account) external view returns (uint256);
+
     /// @notice Moves `value` tokens from `from` to `to` using allowance.
-    function transferFrom(address from, address to, uint256 value) external returns (bool);
+    function transferFrom(
+        address from,
+        address to,
+        uint256 value
+    ) external returns (bool);
+
     /// @notice Moves `value` tokens from caller to `to`.
     function transfer(address to, uint256 value) external returns (bool);
 }
@@ -26,7 +32,10 @@ interface IPoseidonGoldilocks {
     /// @notice Compress two packed Goldilocks HashOut values into one.
     /// @param left  4 Goldilocks elements packed LE: el0|(el1<<64)|(el2<<128)|(el3<<192)
     /// @param right Same packing.
-    function compress(uint256 left, uint256 right) external pure returns (uint256);
+    function compress(
+        uint256 left,
+        uint256 right
+    ) external pure returns (uint256);
 }
 
 /// @title TesseraContract
@@ -41,12 +50,17 @@ contract TesseraContract {
     // -------------------------------------------------------------------------
 
     /// @notice Current lifecycle state of a deposit note.
-    enum DepositStatus { None, Pending, Validated, Withdrawn }
+    enum DepositStatus {
+        None,
+        Pending,
+        Validated,
+        Withdrawn
+    }
 
     /// @notice Canonical deposit metadata stored by note commitment.
     struct Deposit {
-        uint256      value;
-        address      recipient;
+        uint256 value;
+        address recipient;
         DepositStatus status;
     }
 
@@ -59,23 +73,41 @@ contract TesseraContract {
 
     /// @notice On-chain record for a pending private-transaction batch.
     struct TransactionBatch {
-        uint256   root;                  // single IMT root — must be in confirmedRoots
-        bytes32   mainPoolConfigRoot;
-        uint256[] noteCommitments;       // 7 per slot (row-major, NC only — no AC)
-        uint256[] noteNullifiers;        // 7 per slot (row-major, NN only — no AN)
-        uint256[] accountCommitments;    // 1 per slot (64 total)
-        uint256[] accountNullifiers;     // 1 per slot (64 total)
-        uint256   batchPoseidonRoot;     // Poseidon root of subtree leaves; inserted as leaf on prove
-        bool      confirmed;
+        uint256 root; // single IMT root — must be in confirmedRoots
+        bytes32 mainPoolConfigRoot;
+        uint256[] noteCommitments; // 7 per slot (row-major, NC only — no AC)
+        uint256[] noteNullifiers; // 7 per slot (row-major, NN only — no AN)
+        uint256[] accountCommitments; // 1 per slot (64 total)
+        uint256[] accountNullifiers; // 1 per slot (64 total)
+        uint256 batchPoseidonRoot; // Poseidon root of subtree leaves; inserted as leaf on prove
+        bool confirmed;
     }
 
     /// @notice On-chain record for a pending deposit batch.
     struct DepositBatch {
-        uint256   root;                // single IMT root — must be in confirmedRoots
-        bytes32   mainPoolConfigRoot;
+        uint256 root; // single IMT root — must be in confirmedRoots
+        bytes32 mainPoolConfigRoot;
         bytes32[] depositNoteCommitments; // note commitments consumed from pending deposits
-        uint256   batchPoseidonRoot;
-        bool      confirmed;
+        uint256 batchPoseidonRoot;
+        bool confirmed;
+    }
+
+    /// @notice On-chain record for a pending withdrawal batch.
+    struct WithdrawalBatch {
+        bytes32 act_root;
+        bytes32 mainPoolConfigRoot;
+        bytes32[] account_comms;
+        bytes32[] accin_nulls;
+        uint256[] amounts;
+        address[] addresses;
+        uint256 batchPoseidonRoot;
+        bool confirmed;
+    }
+
+    /// @notice A single pending withdrawal entry queued for flushing.
+    struct UnclaimedWithdrawal {
+        address recipient;
+        uint256 amount;
     }
 
     // -------------------------------------------------------------------------
@@ -95,11 +127,12 @@ contract TesseraContract {
 
     // --- access control ---
     address public operator;
-    bool    public paused;
+    bool public paused;
 
     // --- verifiers ---
     IGroth16Verifier public immutable txVerifier;
     IGroth16Verifier public immutable depositVerifier;
+    IGroth16Verifier public immutable withdrawalVerifier;
 
     // --- token ---
     address public immutable monitoredToken;
@@ -113,7 +146,7 @@ contract TesseraContract {
     uint256 public leafCount;
     uint256 public currentRoot;
     mapping(uint256 => uint256) public filledSubtrees; // level => current left-sibling hash
-    mapping(uint256 => uint256) public zeros;           // level => zero-hash at that level
+    mapping(uint256 => uint256) public zeros; // level => zero-hash at that level
 
     // --- root history (all previously confirmed tree roots) ---
     mapping(uint256 => bool) public confirmedRoots;
@@ -126,21 +159,53 @@ contract TesseraContract {
 
     // --- pending batches ---
     mapping(bytes32 => TransactionBatch) public pendingTxBatches;
-    mapping(bytes32 => DepositBatch)     public pendingDepositBatches;
+    mapping(bytes32 => DepositBatch) public pendingDepositBatches;
+    mapping(bytes32 => WithdrawalBatch) public pendingWithdrawalBatches;
+
+    // --- unclaimed withdrawals (flushed permissionlessly) ---
+    UnclaimedWithdrawal[] public unclaimedWithdrawals;
 
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
 
-    event TransactionBatchSubmitted(bytes32 indexed piCommitment, uint256 batchPoseidonRoot);
-    event TransactionBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
-    event DepositBatchSubmitted(bytes32 indexed piCommitment, uint256 batchPoseidonRoot);
-    event DepositBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
-    event DepositAvailable(bytes32 indexed noteCommitment, uint256 value, address recipient);
-    event DepositWithdrawn(bytes32 indexed noteCommitment, uint256 value, address recipient);
+    event TransactionBatchSubmitted(
+        bytes32 indexed piCommitment,
+        uint256 batchPoseidonRoot
+    );
+    event TransactionBatchProven(
+        bytes32 indexed piCommitment,
+        uint256 newTreeRoot,
+        uint256 leafIndex
+    );
+    event DepositBatchSubmitted(
+        bytes32 indexed piCommitment,
+        uint256 batchPoseidonRoot
+    );
+    event DepositBatchProven(
+        bytes32 indexed piCommitment,
+        uint256 newTreeRoot,
+        uint256 leafIndex
+    );
+    event DepositAvailable(
+        bytes32 indexed noteCommitment,
+        uint256 value,
+        address recipient
+    );
+    event DepositWithdrawn(
+        bytes32 indexed noteCommitment,
+        uint256 value,
+        address recipient
+    );
     event DepositValidated(bytes32 indexed noteCommitment);
+    event WithdrawalBatchSubmitted(bytes32 indexed commitment);
+    event WithdrawalBatchProven(bytes32 indexed commitment);
+    event WithdrawalFlushed(address indexed recipient, uint256 amount);
     event OperatorChanged(address indexed oldOp, address indexed newOp);
-    event PoolConfigRootUpdated(bytes32 indexed oldRoot, bytes32 indexed newRoot);
+    event PoolConfigRootUpdated(
+        bytes32 indexed oldRoot,
+        bytes32 indexed newRoot
+    );
     event PausedChanged(bool isPaused);
     event DebugDepositPreimage(bytes preimage, bytes32 result);
     event DebugTxPreimage(bytes preimage, bytes32 result);
@@ -168,47 +233,57 @@ contract TesseraContract {
     error NotDepositRecipient();
     error TokenTransferFailed();
     error TreeFull();
+    error WithdrawalBatchAlreadySubmitted(bytes32 commitment);
+    error WithdrawalBatchAlreadyConfirmed(bytes32 commitment);
 
     // -------------------------------------------------------------------------
     // Constructor
     // -------------------------------------------------------------------------
 
-    /// @param _txVerifier      Groth16 verifier for transaction batches.
-    /// @param _depositVerifier Groth16 verifier for deposit batches.
-    /// @param _poseidon        Deployed PoseidonGoldilocks contract address.
-    /// @param _operator        Initial operator address.
-    /// @param _monitoredToken  ERC20 token escrowed by this bridge.
-    /// @param _poolConfigRoot  Initial pool configuration root.
-    /// @param _treeDepth       Depth of the on-chain Poseidon Merkle tree (e.g. 20).
+    /// @param _txVerifier         Groth16 verifier for transaction batches.
+    /// @param _depositVerifier    Groth16 verifier for deposit batches.
+    /// @param _withdrawalVerifier Groth16 verifier for withdrawal batches.
+    /// @param _poseidon           Deployed PoseidonGoldilocks contract address.
+    /// @param _operator           Initial operator address.
+    /// @param _monitoredToken     ERC20 token escrowed by this bridge.
+    /// @param _poolConfigRoot     Initial pool configuration root.
+    /// @param _treeDepth          Depth of the on-chain Poseidon Merkle tree (e.g. 20).
     constructor(
         address _txVerifier,
         address _depositVerifier,
+        address _withdrawalVerifier,
         address _poseidon,
         address _operator,
         address _monitoredToken,
         bytes32 _poolConfigRoot,
         uint256 _treeDepth
     ) {
-        if (_txVerifier == address(0))      revert ZeroAddress();
+        if (_txVerifier == address(0)) revert ZeroAddress();
         if (_depositVerifier == address(0)) revert ZeroAddress();
-        if (_poseidon == address(0))        revert ZeroAddress();
-        if (_operator == address(0))        revert ZeroAddress();
-        if (_monitoredToken == address(0))  revert ZeroAddress();
-        if (_treeDepth == 0 || _treeDepth > MAX_TREE_DEPTH) revert InvalidTreeDepth();
+        if (_withdrawalVerifier == address(0)) revert ZeroAddress();
+        if (_poseidon == address(0)) revert ZeroAddress();
+        if (_operator == address(0)) revert ZeroAddress();
+        if (_monitoredToken == address(0)) revert ZeroAddress();
+        if (_treeDepth == 0 || _treeDepth > MAX_TREE_DEPTH)
+            revert InvalidTreeDepth();
 
-        txVerifier      = IGroth16Verifier(_txVerifier);
+        txVerifier = IGroth16Verifier(_txVerifier);
         depositVerifier = IGroth16Verifier(_depositVerifier);
-        poseidon        = IPoseidonGoldilocks(_poseidon);
-        operator        = _operator;
-        monitoredToken  = _monitoredToken;
-        poolConfigRoot  = _poolConfigRoot;
-        treeDepth       = _treeDepth;
+        withdrawalVerifier = IGroth16Verifier(_withdrawalVerifier);
+        poseidon = IPoseidonGoldilocks(_poseidon);
+        operator = _operator;
+        monitoredToken = _monitoredToken;
+        poolConfigRoot = _poolConfigRoot;
+        treeDepth = _treeDepth;
 
         // Build zeros chain: zeros[0] = 0, zeros[i] = compress(zeros[i-1], zeros[i-1])
         // TODO: HARDODE
         zeros[0] = 0;
         for (uint256 i = 1; i <= _treeDepth; i++) {
-            zeros[i] = IPoseidonGoldilocks(_poseidon).compress(zeros[i - 1], zeros[i - 1]);
+            zeros[i] = IPoseidonGoldilocks(_poseidon).compress(
+                zeros[i - 1],
+                zeros[i - 1]
+            );
         }
 
         // Initialise filledSubtrees to the zero-hash at each level.
@@ -272,33 +347,26 @@ contract TesseraContract {
     // -------------------------------------------------------------------------
 
     /// @notice Pulls ERC20 from caller and creates a `Pending` deposit.
-    function depositAndRegister(bytes32 noteCommitment, uint256 maxAmount)
-        external
-        whenNotPaused
-        returns (bytes32)
-    {
-        return _depositAndRegister(noteCommitment, msg.sender, msg.sender, maxAmount);
+    function depositAndRegister(
+        bytes32 noteCommitment,
+        uint256 maxAmount
+    ) external whenNotPaused returns (bytes32) {
+        return
+            _depositAndRegister(
+                noteCommitment,
+                msg.sender,
+                msg.sender,
+                maxAmount
+            );
     }
 
     /// @notice Delegated variant: pulls from `payer`, records their `Pending` deposit.
-    function depositAndRegisterFor(bytes32 noteCommitment, address payer, uint256 maxAmount)
-        external
-        whenNotPaused
-        returns (bytes32)
-    {
+    function depositAndRegisterFor(
+        bytes32 noteCommitment,
+        address payer,
+        uint256 maxAmount
+    ) external whenNotPaused returns (bytes32) {
         return _depositAndRegister(noteCommitment, payer, payer, maxAmount);
-    }
-
-    /// @notice Transfers `amount` of monitoredToken from caller to this contract,
-    ///         then creates a `Pending` deposit for `noteCommitment`.
-    function transferDepositAndRegister(bytes32 noteCommitment, uint256 amount)
-        external
-        whenNotPaused
-        returns (bytes32)
-    {
-        bool ok = IERC20MonitoredToken(monitoredToken).transferFrom(msg.sender, address(this), amount);
-        if (!ok) revert TokenTransferFailed();
-        return _depositAndRegister(noteCommitment, msg.sender, msg.sender, amount);
     }
 
     function _depositAndRegister(
@@ -307,35 +375,56 @@ contract TesseraContract {
         address recipient,
         uint256 maxAmount
     ) internal returns (bytes32) {
-        if (deposits[noteCommitment].status != DepositStatus.None) revert DuplicateNoteCommitment(noteCommitment);
-        if (payer == address(0) || recipient == address(0)) revert ZeroAddress();
+        if (deposits[noteCommitment].status != DepositStatus.None)
+            revert DuplicateNoteCommitment(noteCommitment);
+        if (payer == address(0) || recipient == address(0))
+            revert ZeroAddress();
         if (maxAmount == 0) revert InvalidAmount();
 
         // Measure received amount via in-call balance delta (handles fee-on-transfer tokens).
-        uint256 before = IERC20MonitoredToken(monitoredToken).balanceOf(address(this));
-        bool ok = IERC20MonitoredToken(monitoredToken).transferFrom(payer, address(this), maxAmount);
+        uint256 before = IERC20MonitoredToken(monitoredToken).balanceOf(
+            address(this)
+        );
+        bool ok = IERC20MonitoredToken(monitoredToken).transferFrom(
+            payer,
+            address(this),
+            maxAmount
+        );
         if (!ok) revert TokenTransferFailed();
-        uint256 after_ = IERC20MonitoredToken(monitoredToken).balanceOf(address(this));
+        uint256 after_ = IERC20MonitoredToken(monitoredToken).balanceOf(
+            address(this)
+        );
         if (after_ <= before) revert NoTokenReceived();
 
         uint256 value = after_ - before;
-        deposits[noteCommitment] = Deposit({value: value, recipient: recipient, status: DepositStatus.Pending});
+        deposits[noteCommitment] = Deposit({
+            value: value,
+            recipient: recipient,
+            status: DepositStatus.Pending
+        });
 
         emit DepositAvailable(noteCommitment, value, recipient);
         return noteCommitment;
     }
 
     /// @notice Withdraws a `Pending` deposit back to its recipient.
-    function withdrawPendingDeposit(bytes32 noteCommitment) external whenNotPaused {
+    function withdrawPendingDeposit(
+        bytes32 noteCommitment
+    ) external whenNotPaused {
         Deposit storage dep = deposits[noteCommitment];
-        if (dep.status == DepositStatus.None)    revert NoteNotFound(noteCommitment);
-        if (dep.status != DepositStatus.Pending)  revert InvalidDepositState(noteCommitment);
-        if (msg.sender != dep.recipient)           revert NotDepositRecipient();
+        if (dep.status == DepositStatus.None)
+            revert NoteNotFound(noteCommitment);
+        if (dep.status != DepositStatus.Pending)
+            revert InvalidDepositState(noteCommitment);
+        if (msg.sender != dep.recipient) revert NotDepositRecipient();
 
         uint256 value = dep.value;
         dep.status = DepositStatus.Withdrawn; // effects before interaction
 
-        bool ok = IERC20MonitoredToken(monitoredToken).transfer(dep.recipient, value);
+        bool ok = IERC20MonitoredToken(monitoredToken).transfer(
+            dep.recipient,
+            value
+        );
         if (!ok) revert TokenTransferFailed();
 
         emit DepositWithdrawn(noteCommitment, value, dep.recipient);
@@ -348,16 +437,16 @@ contract TesseraContract {
     /// @notice Registers a private-transaction batch for later proof verification.
     /// @dev Phase 1 of the two-phase model. Validates roots and pre-checks nullifiers,
     ///      then stores the batch keyed by its piCommitment.
-    function submitTransactionBatch(TransactionBatch calldata batch)
-        external
-        onlyOperator
-        whenNotPaused
-    {
+    function submitTransactionBatch(
+        TransactionBatch calldata batch
+    ) external onlyOperator whenNotPaused {
         if (!confirmedRoots[batch.root]) revert RootNotConfirmed(batch.root);
-        if (batch.mainPoolConfigRoot != poolConfigRoot) revert PoolConfigMismatch();
+        if (batch.mainPoolConfigRoot != poolConfigRoot)
+            revert PoolConfigMismatch();
 
         bytes32 piCommitment = _computeTxPiCommitment(batch);
-        if (pendingTxBatches[piCommitment].batchPoseidonRoot != 0) revert BatchAlreadySubmitted(piCommitment);
+        if (pendingTxBatches[piCommitment].batchPoseidonRoot != 0)
+            revert BatchAlreadySubmitted(piCommitment);
 
         // Deep-copy calldata to storage; always set confirmed = false.
         pendingTxBatches[piCommitment] = batch;
@@ -373,16 +462,23 @@ contract TesseraContract {
     /// @notice Verifies the Groth16 proof for a submitted transaction batch and finalises it.
     /// @dev Phase 2 of the two-phase model. Anyone may call.
     ///      On success: nullifiers inserted, batchPoseidonRoot appended to the on-chain tree.
-    function proveTransactionBatch(bytes32 piCommitment, Proof calldata proof)
-        external
-        whenNotPaused
-    {
+    function proveTransactionBatch(
+        bytes32 piCommitment,
+        Proof calldata proof
+    ) external whenNotPaused {
         TransactionBatch storage batch = pendingTxBatches[piCommitment];
         if (batch.batchPoseidonRoot == 0) revert BatchNotFound(piCommitment);
-        if (batch.confirmed)              revert BatchAlreadyConfirmed(piCommitment);
+        if (batch.confirmed) revert BatchAlreadyConfirmed(piCommitment);
 
         uint256[8] memory pubInputs = keccakToPublicInputs(piCommitment);
-        try txVerifier.verifyProof(proof.proof, proof.commitments, proof.commitmentPok, pubInputs) {
+        try
+            txVerifier.verifyProof(
+                proof.proof,
+                proof.commitments,
+                proof.commitmentPok,
+                pubInputs
+            )
+        {
             // success — fall through
         } catch {
             revert ProofVerificationFailed(piCommitment, pubInputs);
@@ -390,11 +486,13 @@ contract TesseraContract {
 
         uint256 nnLen = batch.noteNullifiers.length;
         for (uint256 i = 0; i < nnLen; i++) {
-            if (nullifiers[batch.noteNullifiers[i]]) revert NullifierAlreadyUsed(batch.noteNullifiers[i]);
+            if (nullifiers[batch.noteNullifiers[i]])
+                revert NullifierAlreadyUsed(batch.noteNullifiers[i]);
         }
         uint256 anLen = batch.accountNullifiers.length;
         for (uint256 i = 0; i < anLen; i++) {
-            if (nullifiers[batch.accountNullifiers[i]]) revert NullifierAlreadyUsed(batch.accountNullifiers[i]);
+            if (nullifiers[batch.accountNullifiers[i]])
+                revert NullifierAlreadyUsed(batch.accountNullifiers[i]);
         }
 
         batch.confirmed = true;
@@ -419,25 +517,25 @@ contract TesseraContract {
 
     /// @notice Registers a deposit batch for later proof verification.
     ///         All referenced deposit notes must be `Pending`.
-    function submitDepositBatch(DepositBatch calldata batch)
-        external
-        onlyOperator
-        whenNotPaused
-    {
+    function submitDepositBatch(
+        DepositBatch calldata batch
+    ) external onlyOperator whenNotPaused {
         if (!confirmedRoots[batch.root]) revert RootNotConfirmed(batch.root);
-        if (batch.mainPoolConfigRoot != poolConfigRoot) revert PoolConfigMismatch();
+        if (batch.mainPoolConfigRoot != poolConfigRoot)
+            revert PoolConfigMismatch();
 
         // Validate each deposit note exists and is Pending.
         uint256 len = batch.depositNoteCommitments.length;
         for (uint256 i = 0; i < len; i++) {
             bytes32 nc = batch.depositNoteCommitments[i];
             DepositStatus s = deposits[nc].status;
-            if (s == DepositStatus.None)    revert NoteNotFound(nc);
-            if (s != DepositStatus.Pending)  revert InvalidDepositState(nc);
+            if (s == DepositStatus.None) revert NoteNotFound(nc);
+            if (s != DepositStatus.Pending) revert InvalidDepositState(nc);
         }
 
         bytes32 piCommitment = _computeDepositPiCommitment(batch);
-        if (pendingDepositBatches[piCommitment].batchPoseidonRoot != 0) revert BatchAlreadySubmitted(piCommitment);
+        if (pendingDepositBatches[piCommitment].batchPoseidonRoot != 0)
+            revert BatchAlreadySubmitted(piCommitment);
 
         pendingDepositBatches[piCommitment] = batch;
         pendingDepositBatches[piCommitment].confirmed = false;
@@ -451,16 +549,23 @@ contract TesseraContract {
 
     /// @notice Verifies the Groth16 proof for a submitted deposit batch and finalises it.
     ///         On success: deposit notes advanced to `Validated`, batchPoseidonRoot appended.
-    function proveDepositBatch(bytes32 piCommitment, Proof calldata proof)
-        external
-        whenNotPaused
-    {
+    function proveDepositBatch(
+        bytes32 piCommitment,
+        Proof calldata proof
+    ) external whenNotPaused {
         DepositBatch storage batch = pendingDepositBatches[piCommitment];
         if (batch.batchPoseidonRoot == 0) revert BatchNotFound(piCommitment);
-        if (batch.confirmed)              revert BatchAlreadyConfirmed(piCommitment);
+        if (batch.confirmed) revert BatchAlreadyConfirmed(piCommitment);
 
         uint256[8] memory pubInputs = keccakToPublicInputs(piCommitment);
-        try depositVerifier.verifyProof(proof.proof, proof.commitments, proof.commitmentPok, pubInputs) {
+        try
+            depositVerifier.verifyProof(
+                proof.proof,
+                proof.commitments,
+                proof.commitmentPok,
+                pubInputs
+            )
+        {
             // success — fall through
         } catch {
             revert ProofVerificationFailed(piCommitment, pubInputs);
@@ -480,6 +585,98 @@ contract TesseraContract {
         _appendLeaf(batch.batchPoseidonRoot);
 
         emit DepositBatchProven(piCommitment, currentRoot, leafIndex);
+    }
+
+    // -------------------------------------------------------------------------
+    // Withdrawal batch — submit phase (operator only)
+    // -------------------------------------------------------------------------
+
+    /// @notice Registers a withdrawal batch for later proof verification.
+    function submitWithdrawalBatch(
+        WithdrawalBatch calldata batch
+    ) external onlyOperator whenNotPaused {
+        bytes32 commitment = _computeWithdrawalCommitment(batch);
+        if (pendingWithdrawalBatches[commitment].batchPoseidonRoot != 0)
+            revert WithdrawalBatchAlreadySubmitted(commitment);
+
+        pendingWithdrawalBatches[commitment] = batch;
+        pendingWithdrawalBatches[commitment].confirmed = false;
+
+        emit WithdrawalBatchSubmitted(commitment);
+    }
+
+    // -------------------------------------------------------------------------
+    // Withdrawal batch — prove phase (permissionless)
+    // -------------------------------------------------------------------------
+
+    /// @notice Verifies the Groth16 proof for a submitted withdrawal batch and finalises it.
+    ///         On success: all (address, amount) pairs are appended to unclaimedWithdrawals.
+    ///         Returns silently if the batch is not found, already confirmed, or the commitment
+    ///         does not match. Reverts if proof verification fails.
+    function proveWithdrawalBatch(
+        bytes32 withdrawalBatchCommitment,
+        Proof calldata proof
+    ) external whenNotPaused {
+        WithdrawalBatch storage batch = pendingWithdrawalBatches[
+            withdrawalBatchCommitment
+        ];
+        if (batch.batchPoseidonRoot == 0) return;
+        if (batch.confirmed) return;
+
+        uint256[8] memory pubInputs = keccakToPublicInputs(
+            withdrawalBatchCommitment
+        );
+        try
+            withdrawalVerifier.verifyProof(
+                proof.proof,
+                proof.commitments,
+                proof.commitmentPok,
+                pubInputs
+            )
+        {
+            // success — fall through
+        } catch {
+            revert ProofVerificationFailed(
+                withdrawalBatchCommitment,
+                pubInputs
+            );
+        }
+
+        batch.confirmed = true;
+
+        uint256 len = batch.addresses.length;
+        for (uint256 i = 0; i < len; i++) {
+            unclaimedWithdrawals.push(
+                UnclaimedWithdrawal({
+                    recipient: batch.addresses[i],
+                    amount: batch.amounts[i]
+                })
+            );
+        }
+
+        _appendLeaf(batch.batchPoseidonRoot);
+
+        emit WithdrawalBatchProven(withdrawalBatchCommitment);
+    }
+
+    // -------------------------------------------------------------------------
+    // Flush unclaimed withdrawals (permissionless)
+    // -------------------------------------------------------------------------
+
+    /// @notice Transfers all accumulated unclaimed withdrawals from the contract to recipients.
+    ///         Anyone may call this; the full list is flushed in one transaction.
+    function flushUnclaimedWithdrawals() external whenNotPaused {
+        uint256 len = unclaimedWithdrawals.length;
+        for (uint256 i = 0; i < len; i++) {
+            UnclaimedWithdrawal memory w = unclaimedWithdrawals[i];
+            bool ok = IERC20MonitoredToken(monitoredToken).transfer(
+                w.recipient,
+                w.amount
+            );
+            if (!ok) revert TokenTransferFailed();
+            emit WithdrawalFlushed(w.recipient, w.amount);
+        }
+        delete unclaimedWithdrawals;
     }
 
     // -------------------------------------------------------------------------
@@ -517,10 +714,9 @@ contract TesseraContract {
     ///        root | mainPoolConfigRoot | batchPoseidonRoot |
     ///        accountCommitments[0..S] | accountNullifiers[0..S] |
     ///        noteCommitments[0..7*S] | noteNullifiers[0..7*S]
-    function _computeTxPiCommitment(TransactionBatch calldata batch)
-        internal
-        returns (bytes32)
-    {
+    function _computeTxPiCommitment(
+        TransactionBatch calldata batch
+    ) internal returns (bytes32) {
         bytes memory preimage = abi.encodePacked(
             batch.root,
             batch.mainPoolConfigRoot,
@@ -541,10 +737,9 @@ contract TesseraContract {
     ///      Real deposit slots carry the depositor address; dummy slots carry address(0).
     ///      Each address is serialised as 5 × 4-byte little-endian u32 limbs, matching
     ///      the `map_h160_to_f` encoding used by the deposit-TX circuit.
-    function _computeDepositPiCommitment(DepositBatch calldata batch)
-        internal
-        returns (bytes32)
-    {
+    function _computeDepositPiCommitment(
+        DepositBatch calldata batch
+    ) internal returns (bytes32) {
         bytes memory preimage = abi.encodePacked(
             batch.root,
             batch.mainPoolConfigRoot,
@@ -552,7 +747,8 @@ contract TesseraContract {
         );
         uint256 realLen = batch.depositNoteCommitments.length;
         for (uint256 i = 0; i < realLen; i++) {
-            address depositor = deposits[batch.depositNoteCommitments[i]].recipient;
+            address depositor = deposits[batch.depositNoteCommitments[i]]
+                .recipient;
             preimage = bytes.concat(preimage, _addressToLE20(depositor));
         }
         // Pad remaining slots with address(0) to match the circuit's fixed DEPOSIT_BATCH_SIZE.
@@ -565,6 +761,46 @@ contract TesseraContract {
         return result;
     }
 
+    /// @dev Computes the Keccak-256 commitment over all withdrawal batch public inputs.
+    ///      Preimage (packed, no length prefixes):
+    ///        act_root | mainPoolConfigRoot | batchPoseidonRoot |
+    ///        account_comms[0..N] | accin_nulls[0..N] | amounts[0..N] | addresses[0..N]
+    function _computeWithdrawalCommitment(
+        WithdrawalBatch memory batch
+    ) internal pure returns (bytes32) {
+        bytes memory preimage = abi.encodePacked(
+            batch.act_root,
+            batch.mainPoolConfigRoot,
+            batch.batchPoseidonRoot
+        );
+        //TODO: append zeros uptill BATCH size
+        for (uint256 i = 0; i < batch.account_comms.length; i++) {
+            preimage = bytes.concat(
+                preimage,
+                abi.encodePacked(batch.account_comms[i])
+            );
+        }
+        for (uint256 i = 0; i < batch.accin_nulls.length; i++) {
+            preimage = bytes.concat(
+                preimage,
+                abi.encodePacked(batch.accin_nulls[i])
+            );
+        }
+        for (uint256 i = 0; i < batch.amounts.length; i++) {
+            preimage = bytes.concat(
+                preimage,
+                abi.encodePacked(batch.amounts[i])
+            );
+        }
+        for (uint256 i = 0; i < batch.addresses.length; i++) {
+            preimage = bytes.concat(
+                preimage,
+                abi.encodePacked(batch.addresses[i])
+            );
+        }
+        return keccak256(preimage);
+    }
+
     /// @dev Serialises an Ethereum address as 5 × 4-byte little-endian u32 limbs.
     ///
     /// The EVM stores `address` as 20 bytes in big-endian order. The deposit-TX
@@ -573,11 +809,13 @@ contract TesseraContract {
     /// interpreted in little-endian (byte 0 is the LSB of that limb). The Keccak
     /// gadget then emits each u32 as 4 big-endian bytes, effectively byte-reversing
     /// each chunk. This helper reproduces that transformation on-chain.
-    function _addressToLE20(address a) internal pure returns (bytes memory out) {
+    function _addressToLE20(
+        address a
+    ) internal pure returns (bytes memory out) {
         bytes20 be = bytes20(a); // big-endian: be[0] is the most-significant byte
         out = new bytes(20);
         for (uint256 i = 0; i < 5; i++) {
-            out[4 * i]     = be[4 * i + 3];
+            out[4 * i] = be[4 * i + 3];
             out[4 * i + 1] = be[4 * i + 2];
             out[4 * i + 2] = be[4 * i + 1];
             out[4 * i + 3] = be[4 * i];
@@ -589,9 +827,12 @@ contract TesseraContract {
     // -------------------------------------------------------------------------
 
     /// @notice Returns the deposit record for `noteCommitment`; reverts if absent.
-    function getDeposit(bytes32 noteCommitment) external view returns (Deposit memory) {
+    function getDeposit(
+        bytes32 noteCommitment
+    ) external view returns (Deposit memory) {
         Deposit memory dep = deposits[noteCommitment];
-        if (dep.status == DepositStatus.None) revert NoteNotFound(noteCommitment);
+        if (dep.status == DepositStatus.None)
+            revert NoteNotFound(noteCommitment);
         return dep;
     }
 
@@ -607,15 +848,17 @@ contract TesseraContract {
 
     /// @notice Converts a bytes32 Keccak-256 digest to the 8 uint32 public inputs
     ///         expected by the gnark Groth16 verifier (big-endian 32-bit words).
-    function keccakToPublicInputs(bytes32 hash) public pure returns (uint256[8] memory inputs) {
+    function keccakToPublicInputs(
+        bytes32 hash
+    ) public pure returns (uint256[8] memory inputs) {
         uint256 h = uint256(hash);
         inputs[0] = (h >> 224) & 0xFFFFFFFF;
         inputs[1] = (h >> 192) & 0xFFFFFFFF;
         inputs[2] = (h >> 160) & 0xFFFFFFFF;
         inputs[3] = (h >> 128) & 0xFFFFFFFF;
-        inputs[4] = (h >> 96)  & 0xFFFFFFFF;
-        inputs[5] = (h >> 64)  & 0xFFFFFFFF;
-        inputs[6] = (h >> 32)  & 0xFFFFFFFF;
-        inputs[7] =  h         & 0xFFFFFFFF;
+        inputs[4] = (h >> 96) & 0xFFFFFFFF;
+        inputs[5] = (h >> 64) & 0xFFFFFFFF;
+        inputs[6] = (h >> 32) & 0xFFFFFFFF;
+        inputs[7] = h & 0xFFFFFFFF;
     }
 }

@@ -1,9 +1,10 @@
 -- ── Enum types ────────────────────────────────────────────────────────────────
 
-CREATE TYPE freshacc_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
-CREATE TYPE deposit_tx_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
-CREATE TYPE spend_tx_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
-CREATE TYPE input_note_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE freshacc_status        AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE deposit_tx_status      AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE spend_tx_status        AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE input_note_status      AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE withdrawal_tx_status   AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 
 -- ── accounts ──────────────────────────────────────────────────────────────────
 -- All Goldilocks field elements stored as BYTEA via to_canonical_u64().to_le_bytes().
@@ -114,6 +115,22 @@ CREATE TABLE input_notes (
     status            input_note_status NOT NULL DEFAULT 'APPROVED',
     created_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+);
+
+-- ── withdrawal_tx_requests ────────────────────────────────────────────────────
+-- amount:   U256 = 32 bytes LE
+-- asset_id: F    =  8 bytes LE
+
+CREATE TABLE withdrawal_tx_requests (
+    id                     BIGSERIAL            PRIMARY KEY,
+    priv_acc_address       TEXT                 NOT NULL,
+    withdrawal_eth_address TEXT                 NOT NULL,
+    amount                 BYTEA                NOT NULL,
+    asset_id               BYTEA                NOT NULL,
+    status                 withdrawal_tx_status NOT NULL DEFAULT 'PENDING',
+    rejection_reason       TEXT,
+    created_at             TIMESTAMPTZ          NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ          NOT NULL DEFAULT NOW()
 );
 
 -- ── output_notes ──────────────────────────────────────────────────────────────
