@@ -16,58 +16,58 @@
             body {
                 font-family:
                     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                background: #0f0f13;
-                color: #e8e8f0;
+                background: #f4f5f7;
+                color: #1a1a2e;
                 min-height: 100vh;
                 padding: 2rem 1rem 4rem;
             }
 
-            header {
-                text-align: center;
-                margin-bottom: 3rem;
+            /* ── header ── */
+            .app-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                max-width: 560px;
+                margin: 0 auto 2rem;
             }
-            header h1 {
-                font-size: 2rem;
-                font-weight: 700;
-                letter-spacing: -0.5px;
+            .header-left {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
             }
-            header p {
-                color: #888;
-                margin-top: 0.4rem;
-                font-size: 0.95rem;
+            .header-right {
+                display: flex;
+                align-items: center;
+            }
+            .header-logo {
+                height: 32px;
+                width: auto;
+            }
+            .header-title {
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #1a1a2e;
             }
 
             /* ── layout ── */
-            .sections {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 1.5rem;
-                max-width: 900px;
-                margin: 0 auto;
-            }
-            @media (max-width: 680px) {
-                .sections {
-                    grid-template-columns: 1fr;
-                }
-            }
-
             .section-full {
-                max-width: 900px;
-                margin: 1.5rem auto 0;
+                max-width: 560px;
+                margin: 0 auto 1.5rem;
             }
 
             .card {
-                background: #1a1a24;
-                border: 1px solid #2a2a3a;
+                background: #ffffff;
+                border: 1px solid #e0e0e8;
                 border-radius: 12px;
                 padding: 1.75rem;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.06);
             }
             .card h2 {
                 font-size: 1.05rem;
                 font-weight: 600;
                 text-transform: uppercase;
                 letter-spacing: 0.08em;
-                color: #aaa;
+                color: #888;
                 margin-bottom: 1.25rem;
             }
 
@@ -82,97 +82,64 @@
                 font-size: 0.95rem;
                 font-weight: 600;
                 cursor: pointer;
-                transition:
-                    opacity 0.15s,
-                    transform 0.1s;
+                transition: opacity 0.15s, transform 0.1s;
                 width: 100%;
                 justify-content: center;
             }
-            .btn:active {
-                transform: scale(0.98);
-            }
-            .btn:disabled {
-                opacity: 0.4;
-                cursor: not-allowed;
-            }
-            .btn-primary {
-                background: #4f6ef7;
-                color: #fff;
-            }
-            .btn-primary:hover:not(:disabled) {
-                background: #3d5ce0;
-            }
-            .btn-secondary {
-                background: #2e2e42;
-                color: #c8c8e0;
-            }
-            .btn-secondary:hover:not(:disabled) {
-                background: #38384e;
-            }
+            .btn:active { transform: scale(0.98); }
+            .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+            .btn-primary { background: #4f6ef7; color: #fff; }
+            .btn-primary:hover:not(:disabled) { background: #3d5ce0; }
+            .btn-secondary { background: #eef0fb; color: #3d5ce0; }
+            .btn-secondary:hover:not(:disabled) { background: #dfe3f9; }
             .btn-ghost {
                 background: transparent;
-                color: #888;
-                border: 1px solid #2a2a3a;
+                color: #666;
+                border: 1px solid #d8d8e4;
                 margin-top: 0.6rem;
                 font-size: 0.88rem;
             }
-            .btn-ghost:hover:not(:disabled) {
-                background: #1e1e2e;
-                color: #c8c8e0;
-            }
+            .btn-ghost:hover:not(:disabled) { background: #f0f0f8; color: #333; }
 
             /* ── info rows ── */
             .info-box {
-                display: none;
                 margin-top: 1.25rem;
-                background: #12121a;
-                border: 1px solid #2a2a3a;
+                background: #f8f8fc;
+                border: 1px solid #e0e0e8;
                 border-radius: 8px;
                 padding: 1rem 1.1rem;
-            }
-            .info-box.visible {
-                display: block;
             }
             .info-row {
                 display: flex;
                 justify-content: space-between;
                 align-items: baseline;
                 padding: 0.35rem 0;
-                border-bottom: 1px solid #1e1e2e;
+                border-bottom: 1px solid #ebebf2;
                 font-size: 0.88rem;
                 gap: 0.75rem;
             }
-            .info-row:last-child {
-                border-bottom: none;
-            }
-            .info-row .label {
-                color: #666;
-                white-space: nowrap;
-            }
+            .info-row:last-child { border-bottom: none; }
+            .info-row .label { color: #888; white-space: nowrap; }
             .info-row .value {
-                color: #c8c8e0;
+                color: #2a2a40;
                 font-family: monospace;
                 word-break: break-all;
                 text-align: right;
             }
             .info-row .value.balance {
-                color: #5af0a0;
+                color: #1a9e60;
                 font-size: 1rem;
                 font-weight: 600;
                 font-family: inherit;
             }
-            .info-row .value.plain {
-                font-family: inherit;
-            }
+            .info-row .value.plain { font-family: inherit; }
 
             /* ── KYC form ── */
-            .form-group {
-                margin-bottom: 1rem;
-            }
+            .form-group { margin-bottom: 1rem; }
             .form-group label {
                 display: block;
                 font-size: 0.8rem;
-                color: #777;
+                color: #888;
                 text-transform: uppercase;
                 letter-spacing: 0.06em;
                 margin-bottom: 0.35rem;
@@ -180,10 +147,10 @@
             .form-group input,
             .form-group textarea {
                 width: 100%;
-                background: #12121a;
-                border: 1px solid #2a2a3a;
+                background: #f8f8fc;
+                border: 1px solid #d8d8e8;
                 border-radius: 6px;
-                color: #e8e8f0;
+                color: #1a1a2e;
                 padding: 0.6rem 0.75rem;
                 font-size: 0.95rem;
                 outline: none;
@@ -192,35 +159,22 @@
                 resize: vertical;
             }
             .form-group input:focus,
-            .form-group textarea:focus {
-                border-color: #4f6ef7;
-            }
+            .form-group textarea:focus { border-color: #4f6ef7; }
 
-            /* ── deposit on public account card ── */
-            #deposit-section {
-                display: none;
-                margin-top: 1rem;
-            }
-            #deposit-section.visible {
-                display: block;
-            }
-
-            /* ── progress bar (reused in both deposit flows) ── */
+            /* ── progress bar ── */
             .progress-bar-wrap {
                 display: none;
                 margin-top: 0.9rem;
-                background: #12121a;
-                border: 1px solid #2a2a3a;
+                background: #f8f8fc;
+                border: 1px solid #e0e0e8;
                 border-radius: 8px;
                 padding: 0.9rem 1rem;
                 font-size: 0.85rem;
             }
-            .progress-bar-wrap.visible {
-                display: block;
-            }
+            .progress-bar-wrap.visible { display: block; }
             .progress-bar-track {
                 height: 6px;
-                background: #2a2a3a;
+                background: #e0e0e8;
                 border-radius: 3px;
                 overflow: hidden;
                 margin-bottom: 0.75rem;
@@ -228,102 +182,73 @@
             .progress-bar-fill {
                 height: 100%;
                 width: 0%;
-                background: linear-gradient(90deg, #4f6ef7, #5af0a0);
+                background: linear-gradient(90deg, #4f6ef7, #1a9e60);
                 border-radius: 3px;
                 transition: width 0.6s ease;
             }
-            .p-step {
-                color: #888;
-                line-height: 1.9;
-                animation: fadein 0.3s ease;
-            }
-            .p-step.active {
-                color: #e8e8f0;
-            }
-            .p-step.done {
-                color: #5af0a0;
-            }
+            .p-step { color: #aaa; line-height: 1.9; animation: fadein 0.3s ease; }
+            .p-step.active { color: #1a1a2e; }
+            .p-step.done { color: #1a9e60; }
             .p-step a {
                 color: #4f6ef7;
                 text-decoration: none;
                 font-family: monospace;
                 font-size: 0.8rem;
             }
-            .p-step a:hover {
-                text-decoration: underline;
+            .p-step a:hover { text-decoration: underline; }
+
+            /* ── registration progress log ── */
+            #register-progress {
+                display: none;
+                margin-top: 1.25rem;
+                background: #f8f8fc;
+                border: 1px solid #e0e0e8;
+                border-radius: 8px;
+                padding: 1rem 1.1rem;
+                font-size: 0.88rem;
+                line-height: 1.8;
+            }
+            #register-progress.visible { display: block; }
+            .progress-line { color: #aaa; animation: fadein 0.3s ease; }
+            .progress-line.done { color: #1a9e60; }
+            .progress-line.active { color: #1a1a2e; }
+
+            @keyframes fadein {
+                from { opacity: 0; transform: translateY(4px); }
+                to { opacity: 1; }
             }
 
+            /* ── tessera address box ── */
+            .tessera-addr-box {
+                margin-top: 1rem;
+                background: #f8f8fc;
+                border: 1px solid #e0e0e8;
+                border-radius: 8px;
+                padding: 0.75rem 1rem;
+                font-size: 0.8rem;
+                color: #888;
+            }
+            .tessera-addr-box span {
+                color: #2a2a40;
+                font-family: monospace;
+                word-break: break-all;
+            }
+
+            /* ── etherscan link ── */
             .etherscan-link {
                 display: none;
                 margin-top: 0.75rem;
                 font-size: 0.82rem;
-                color: #666;
+                color: #888;
             }
-            .etherscan-link.visible {
-                display: block;
-            }
+            .etherscan-link.visible { display: block; }
             .etherscan-link a {
                 color: #4f6ef7;
                 text-decoration: none;
                 font-family: monospace;
                 font-size: 0.8rem;
             }
-            .etherscan-link a:hover {
-                text-decoration: underline;
-            }
-
-            /* ── progress log (private registration) ── */
-            #progress {
-                display: none;
-                margin-top: 1.25rem;
-                background: #12121a;
-                border: 1px solid #2a2a3a;
-                border-radius: 8px;
-                padding: 1rem 1.1rem;
-                font-size: 0.88rem;
-                line-height: 1.8;
-            }
-            #progress.visible {
-                display: block;
-            }
-            .progress-line {
-                color: #888;
-                animation: fadein 0.3s ease;
-            }
-            .progress-line.done {
-                color: #5af0a0;
-            }
-            .progress-line.active {
-                color: #e8e8f0;
-            }
-            @keyframes fadein {
-                from {
-                    opacity: 0;
-                    transform: translateY(4px);
-                }
-                to {
-                    opacity: 1;
-                }
-            }
-
-            #tessera-address {
-                display: none;
-                margin-top: 1rem;
-                background: #12121a;
-                border: 1px solid #2a2a3a;
-                border-radius: 8px;
-                padding: 0.75rem 1rem;
-                font-size: 0.8rem;
-                color: #666;
-            }
-            #tessera-address.visible {
-                display: block;
-            }
-            #tessera-address span {
-                color: #c8c8e0;
-                font-family: monospace;
-                word-break: break-all;
-            }
+            .etherscan-link a:hover { text-decoration: underline; }
 
             /* ── p2p deposit section ── */
             .amount-row {
@@ -333,48 +258,27 @@
             }
             .amount-row input {
                 flex: 1;
-                background: #12121a;
-                border: 1px solid #2a2a3a;
+                background: #f8f8fc;
+                border: 1px solid #d8d8e8;
                 border-radius: 6px;
-                color: #e8e8f0;
+                color: #1a1a2e;
                 padding: 0.6rem 0.75rem;
                 font-size: 0.95rem;
                 outline: none;
                 transition: border-color 0.15s;
             }
-            .amount-row input:focus {
-                border-color: #4f6ef7;
-            }
-            .amount-row .btn {
-                width: auto;
-                flex-shrink: 0;
-            }
+            .amount-row input:focus { border-color: #4f6ef7; }
+            .amount-row .btn { width: auto; flex-shrink: 0; }
 
             .subsection-label {
                 font-size: 0.75rem;
                 text-transform: uppercase;
                 letter-spacing: 0.07em;
-                color: #555;
+                color: #aaa;
                 margin: 1.1rem 0 0.4rem;
             }
-            pre.code-block {
-                background: #0c0c14;
-                border: 1px solid #1e1e2e;
-                border-radius: 6px;
-                padding: 0.75rem 0.9rem;
-                font-size: 0.76rem;
-                line-height: 1.55;
-                color: #b0c4de;
-                overflow-x: auto;
-                white-space: pre-wrap;
-                word-break: break-all;
-            }
 
-            .hint {
-                font-size: 0.82rem;
-                color: #555;
-                margin-top: 0.6rem;
-            }
+            .hint { font-size: 0.82rem; color: #aaa; margin-top: 0.6rem; }
 
             /* ── privacy info boxes ── */
             .info-boxes {
@@ -384,13 +288,11 @@
                 margin: 1.25rem 0;
             }
             @media (max-width: 680px) {
-                .info-boxes {
-                    grid-template-columns: 1fr;
-                }
+                .info-boxes { grid-template-columns: 1fr; }
             }
             .info-card {
-                background: #12121a;
-                border: 1px solid #2a2a3a;
+                background: #f8f8fc;
+                border: 1px solid #e0e0e8;
                 border-radius: 8px;
                 padding: 1rem;
             }
@@ -406,43 +308,34 @@
                 list-style: none;
                 padding: 0;
                 font-size: 0.82rem;
-                color: #666;
+                color: #888;
                 line-height: 1.75;
             }
-            .info-card ul li::before {
-                content: "· ";
-                color: #3a3a52;
-            }
+            .info-card ul li::before { content: "· "; color: #ccc; }
 
-            /* ── address book & transfer form ── */
+            /* ── address book ── */
             .addr-book-row {
                 display: flex;
                 align-items: center;
                 gap: 0.5rem;
                 padding: 0.3rem 0;
-                border-bottom: 1px solid #1a1a28;
+                border-bottom: 1px solid #ebebf2;
                 font-size: 0.82rem;
             }
-            .addr-book-row:last-child {
-                border-bottom: none;
-            }
-            .addr-book-row .addr-label {
-                color: #555;
-                width: 4.5rem;
-                flex-shrink: 0;
-            }
+            .addr-book-row:last-child { border-bottom: none; }
+            .addr-book-row .addr-label { color: #888; width: 4.5rem; flex-shrink: 0; }
             .addr-book-row .addr-val {
                 font-family: monospace;
-                color: #777;
+                color: #555;
                 flex: 1;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
             .copy-btn {
-                background: #1e1e2e;
-                border: 1px solid #2a2a3a;
-                color: #555;
+                background: #f0f0f8;
+                border: 1px solid #d8d8e8;
+                color: #888;
                 border-radius: 4px;
                 padding: 0.15rem 0.55rem;
                 font-size: 0.72rem;
@@ -450,159 +343,103 @@
                 flex-shrink: 0;
                 transition: color 0.15s;
             }
-            .copy-btn:hover {
-                color: #c8c8e0;
-            }
+            .copy-btn:hover { color: #333; }
 
-            .tick {
-                color: #5af0a0;
-                margin-left: 0.4rem;
-                font-size: 0.85rem;
-            }
-            .tick.hidden {
-                visibility: hidden;
-            }
-            .field-hint {
-                font-size: 0.75rem;
-                color: #f07070;
-                margin-top: 0.25rem;
-                min-height: 1em;
-            }
+            /* ── transfer form ── */
+            .tick { color: #1a9e60; margin-left: 0.4rem; font-size: 0.85rem; }
+            .tick.hidden { visibility: hidden; }
+            .field-hint { font-size: 0.75rem; color: #e05050; margin-top: 0.25rem; min-height: 1em; }
 
-            .error {
-                color: #f07070;
-                font-size: 0.85rem;
-                margin-top: 0.75rem;
-            }
-            .tx-link {
-                display: block;
-                margin-top: 6px;
-            }
+            /* ── errors ── */
+            .error { color: #e05050; font-size: 0.85rem; margin-top: 0.75rem; }
+
+            .tx-link { display: block; margin-top: 6px; }
         </style>
     </head>
     <body>
-        <header>
-            <h1>Tessera</h1>
-            <p>Privacy-preserving accounts powered by WebAuthn passkeys</p>
+        <header class="app-header">
+            <div class="header-left">
+                <img src="./images/logo-client.svg" alt="Client logo" class="header-logo" onerror="this.style.display='none'" />
+                <span class="header-title">Client wallet</span>
+            </div>
+            <div class="header-right">
+                <img src="./images/logo-partner.svg" alt="Partner logo" class="header-logo" onerror="this.style.display='none'" />
+            </div>
         </header>
 
-        <div class="sections">
-            <!-- ── Public account ── -->
-            <div class="card">
-                <h2>Public Account</h2>
-                <button class="btn btn-primary" id="create-wallet-btn">
-                    🔑 Create Wallet
-                </button>
-                <button class="btn btn-ghost" id="sign-in-btn">
-                    Sign in with existing passkey
-                </button>
+        <!-- ── Private account card ── -->
+        <div class="section-full">
+            <div class="card" id="private-account-card">
 
-                <div class="info-box" id="wallet-info">
-                    <div class="info-row">
-                        <span class="label">Address</span>
-                        <span class="value" id="eth-address">—</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="label">USDX Balance</span>
-                        <span class="value balance" id="usdc-balance">—</span>
-                    </div>
+                <!-- ── Login view ── -->
+                <div id="login-priv-view">
+                    <button class="btn btn-primary" id="createpasskeys-btn">Create with passkeys</button>
+                    <button class="btn btn-ghost" id="signinpasskeys-btn">Sign in with passkeys</button>
+                    <button class="btn btn-ghost" id="signinmetamask-btn">Sign in with MetaMask</button>
+                    <div class="error" id="login-error"></div>
                 </div>
 
-                <div id="deposit-section">
-                    <button class="btn btn-secondary" id="deposit-btn">
-                        ⬇ Deposit 10 USDX
-                    </button>
-                    <div class="progress-bar-wrap" id="deposit-progress">
-                        <div class="progress-bar-track">
-                            <div
-                                class="progress-bar-fill"
-                                id="deposit-bar"
-                            ></div>
-                        </div>
-                        <div id="deposit-steps"></div>
-                    </div>
-                    <div class="etherscan-link" id="etherscan-link">
-                        View on Etherscan:
-                        <a
-                            id="etherscan-anchor"
-                            href="#"
-                            target="_blank"
-                            rel="noopener"
-                        ></a>
-                    </div>
-                </div>
-
-                <div class="error" id="wallet-error"></div>
-            </div>
-
-            <!-- ── Private account ── -->
-            <div class="card" id="private-account-section" style="opacity:0.4;pointer-events:none">
-                <h2>Private Account</h2>
-
-                <div id="kyc-form">
+                <!-- ── Register view ── -->
+                <div id="register-priv-view" style="display:none">
                     <div class="form-group">
                         <label>Full name</label>
-                        <input
-                            type="text"
-                            id="kyc-name"
-                            placeholder="Alice Smith"
-                        />
+                        <input type="text" id="kyc-name" placeholder="Alice Smith" />
                     </div>
                     <div class="form-group">
                         <label>Street address</label>
-                        <input
-                            type="text"
-                            id="kyc-street"
-                            placeholder="123 Main St, Springfield"
-                        />
+                        <input type="text" id="kyc-street" placeholder="123 Main St" />
                     </div>
                     <div class="form-group">
                         <label>Date of birth</label>
                         <input type="date" id="kyc-dob" />
                     </div>
-                    <button
-                        class="btn btn-secondary"
-                        id="register-btn"
-                        disabled
-                    >
+                    <button class="btn btn-secondary" id="register-btn" disabled>
                         🛡 Register Private Account
                     </button>
+                    <div id="register-progress"></div>
+                    <div class="error" id="register-error"></div>
                 </div>
 
-                <div id="kyc-display" style="display: none">
-                    <div class="info-box visible">
+                <!-- ── Display view ── -->
+                <div id="display-priv-view" style="display:none">
+                    <div class="info-box">
                         <div class="info-row">
                             <span class="label">Full name</span>
                             <span class="value plain" id="disp-name">—</span>
                         </div>
                         <div class="info-row">
-                            <span class="label">Street address</span>
+                            <span class="label">Address</span>
                             <span class="value plain" id="disp-street">—</span>
                         </div>
                         <div class="info-row">
                             <span class="label">Date of birth</span>
                             <span class="value plain" id="disp-dob">—</span>
                         </div>
-                        <div
-                            class="info-row"
-                            id="priv-balance-row"
-                            style="display: none"
-                        >
-                            <span class="label">USDX Balance</span>
-                            <span class="value balance" id="priv-balance"
-                                >0.00 USDX</span
-                            >
+                        <div class="info-row" id="disp-priv-balance-row" style="display:none">
+                            <span class="label">Private Balance</span>
+                            <span class="value balance" id="disp-priv-balance">0.00 USDX</span>
                         </div>
+                    </div>
+
+                    <div class="tessera-addr-box">
+                        Tessera address: <span id="disp-tessera-addr">—</span>
+                    </div>
+
+                    <div style="margin-top:1rem">
+                        <button class="btn btn-secondary" id="faucet-btn">⬇ Get 10 USDX from faucet</button>
+                    </div>
+                    <div class="progress-bar-wrap" id="faucet-progress">
+                        <div class="progress-bar-track">
+                            <div class="progress-bar-fill" id="faucet-bar"></div>
+                        </div>
+                        <div id="faucet-steps"></div>
+                    </div>
+                    <div class="etherscan-link" id="faucet-etherscan-link">
+                        View on Etherscan:
+                        <a id="faucet-etherscan-anchor" href="#" target="_blank" rel="noopener"></a>
                     </div>
                 </div>
 
-                <div id="progress"></div>
-
-                <div id="tessera-address">
-                    Tessera address: <span id="tessera-addr-value">—</span>
-                </div>
-
-                <div class="error" id="register-error"></div>
             </div>
         </div>
 
@@ -612,27 +449,10 @@
                 <h2>Public → Private Deposit</h2>
 
                 <div class="amount-row">
-                    <input
-                        type="number"
-                        id="p2p-amount"
-                        min="1"
-                        placeholder="Amount (USDX)"
-                    />
-                    <button class="btn btn-primary" id="p2p-btn" disabled>
-                        Deposit
-                    </button>
+                    <input type="number" id="p2p-amount" min="1" placeholder="Amount (USDX)" />
+                    <button class="btn btn-primary" id="p2p-btn" disabled>Deposit</button>
                 </div>
-                <p class="hint" id="p2p-hint">
-                    Connect a wallet above to enable deposits.
-                </p>
-
-                <div id="p2p-tx-wrap" style="display: none">
-                    <div class="subsection-label">Crafted transaction</div>
-                    <pre class="code-block" id="p2p-tx-display"></pre>
-
-                    <div class="subsection-label">Raw signature</div>
-                    <pre class="code-block" id="p2p-sig-display"></pre>
-                </div>
+                <p class="hint" id="p2p-hint">Sign in above to enable deposits.</p>
 
                 <div class="progress-bar-wrap" id="p2p-progress">
                     <div class="progress-bar-track">
@@ -679,40 +499,23 @@
                     </div>
                 </div>
 
-                <div class="form-group" style="margin-top: 1.1rem">
-                    <label
-                        >Receiving address
-                        <span id="addr-tick" class="tick hidden">✓</span></label
-                    >
-                    <input
-                        type="text"
-                        id="xfer-addr"
-                        placeholder="80-char Tessera hex address"
-                    />
+                <div class="form-group" style="margin-top:1.1rem">
+                    <label>
+                        Receiving address
+                        <span id="addr-tick" class="tick hidden">✓</span>
+                    </label>
+                    <input type="text" id="xfer-addr" placeholder="80-char Tessera hex address" />
                     <div class="field-hint" id="addr-hint"></div>
                 </div>
                 <div class="form-group">
                     <label>Amount (USDX)</label>
-                    <input
-                        type="number"
-                        id="xfer-amount"
-                        min="1"
-                        placeholder="0"
-                    />
+                    <input type="number" id="xfer-amount" min="1" placeholder="0" />
                 </div>
                 <div class="form-group">
-                    <label
-                        >Memo
-                        <span
-                            style="
-                                color: #444;
-                                font-size: 0.75em;
-                                text-transform: none;
-                                letter-spacing: 0;
-                            "
-                            >(optional)</span
-                        ></label
-                    >
+                    <label>
+                        Memo
+                        <span style="color:#444;font-size:0.75em;text-transform:none;letter-spacing:0">(optional)</span>
+                    </label>
                     <textarea
                         id="xfer-memo"
                         rows="3"
@@ -720,9 +523,7 @@
                     ></textarea>
                 </div>
 
-                <button class="btn btn-primary" id="xfer-btn" disabled>
-                    Transfer
-                </button>
+                <button class="btn btn-primary" id="xfer-btn" disabled>Transfer</button>
 
                 <div class="progress-bar-wrap" id="xfer-progress">
                     <div class="progress-bar-track">
