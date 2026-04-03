@@ -97,6 +97,7 @@ let pubConnectedAddress: string | null = null;
 let pubWalletClient: ReturnType<typeof createWalletClient> | null = null;
 let pubEthBalanceRaw = 0n;
 let pubUsdxBalanceRaw = 0n;
+let pubAllowanceRaw = 0n;
 
 // ── Passkey helpers ───────────────────────────────────────────────────────────
 
@@ -265,10 +266,18 @@ const pub2privFaucetUsdxBtn = document.getElementById(
 const pub2privFaucetUsdxSteps = document.getElementById(
   "pub2priv-faucetusdx-steps",
 )!;
+const pub2privApprovalWrap = document.getElementById("pub2priv-approval-wrap")!;
+const pub2privApprovalBtn = document.getElementById(
+  "pub2priv-approval-btn",
+) as HTMLButtonElement;
+const pub2privApprovalSteps = document.getElementById(
+  "pub2priv-approval-steps",
+)!;
+const pub2privDepositWrap = document.getElementById("pub2priv-deposit-wrap")!;
 const pub2privAmountIn = document.getElementById(
   "pub2priv-amount",
 ) as HTMLInputElement;
-const pub2privTransferBtn = document.getElementById(
+const pub2privDepositBtn = document.getElementById(
   "pub2priv-deposit-btn",
 ) as HTMLButtonElement;
 const pub2privHint = document.getElementById("pub2priv-hint")!;
@@ -547,32 +556,47 @@ async function loadPubBalances() {
       minimumFractionDigits: 2,
     }) + " USDX";
 
-  pub2privFaucetEthWrap.style.display = pubEthBalanceRaw < 10n ? "" : "none";
+  pub2privFaucetEthWrap.style.display =
+    pubEthBalanceRaw < 69927000000000n ? "" : "none";
+
+  pubAllowanceRaw = (await publicClient.readContract({
+    address: USDX_CONTRACT_ADDR,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [pubConnectedAddress as `0x${string}`, TESSERA_CONTRACT],
+  })) as bigint;
+  updatePub2PrivVisibility();
   updatePub2PrivTransferBtn();
+}
+
+function updatePub2PrivVisibility() {
+  const approved = pubAllowanceRaw >= maxUint256;
+  pub2privApprovalWrap.style.display = approved ? "none" : "";
+  pub2privDepositWrap.style.display = approved ? "" : "none";
 }
 
 function updatePub2PrivTransferBtn() {
   if (!privateAccAddressFull) {
     pub2privHint.textContent =
       "Sign into your private account above to enable deposits.";
-    pub2privTransferBtn.disabled = true;
+    pub2privDepositBtn.disabled = true;
     pub2privError.textContent = "";
     return;
   }
   pub2privHint.textContent = "Enter an amount and click Deposit.";
   const amount = parseFloat(pub2privAmountIn.value);
   if (!amount || amount <= 0) {
-    pub2privTransferBtn.disabled = false;
+    pub2privDepositBtn.disabled = false;
     pub2privError.textContent = "";
     return;
   }
   const units = BigInt(Math.round(amount * 1_000_000));
   if (units > pubUsdxBalanceRaw) {
-    pub2privTransferBtn.disabled = true;
+    pub2privDepositBtn.disabled = true;
     pub2privError.textContent =
       "Amount exceeds USDX balance of connected public account.";
   } else {
-    pub2privTransferBtn.disabled = false;
+    pub2privDepositBtn.disabled = false;
     pub2privError.textContent = "";
   }
 }
@@ -688,14 +712,42 @@ pub2privFaucetUsdxBtn.addEventListener("click", async () => {
   }
 });
 
-pub2privTransferBtn.addEventListener("click", async () => {
+pub2privApprovalBtn.addEventListener("click", async () => {
+  pub2privApprovalBtn.disabled = true;
+  pub2privApprovalSteps.innerHTML = "";
+  const step = pStep(
+    pub2privApprovalSteps,
+    "⏳ Awaiting USDX approval…",
+    "active",
+  );
+  try {
+    const txHash = await pubWalletClient!.writeContract({
+      address: USDX_CONTRACT_ADDR,
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [TESSERA_CONTRACT, maxUint256],
+    });
+    await publicClient.waitForTransactionReceipt({
+      hash: txHash as `0x${string}`,
+    });
+    step.className = "p-step done";
+    step.textContent = "✓ USDX approval given";
+    await loadPubBalances();
+  } catch (err) {
+    step.className = "p-step done";
+    step.textContent = `Error: ${err}`;
+    pub2privApprovalBtn.disabled = false;
+  }
+});
+
+pub2privDepositBtn.addEventListener("click", async () => {
   const amount = parseFloat(pub2privAmountIn.value);
   if (!amount || amount <= 0) {
     pub2privError.textContent = "Enter a valid amount.";
     return;
   }
   try {
-    pub2privTransferBtn.disabled = true;
+    pub2privDepositBtn.disabled = true;
     pub2privError.textContent = "";
     pub2privProgress.classList.add("visible");
     pub2privSteps.innerHTML = "";
@@ -707,31 +759,8 @@ pub2privTransferBtn.addEventListener("click", async () => {
     if (depositAmountUnits > pubUsdxBalanceRaw) {
       pub2privError.textContent =
         "Amount exceeds USDX balance of connected public account.";
-      pub2privTransferBtn.disabled = false;
+      pub2privDepositBtn.disabled = false;
       return;
-    }
-
-    const allowance = await publicClient.readContract({
-      address: USDX_CONTRACT_ADDR,
-      abi: erc20Abi,
-      functionName: "allowance",
-      args: [pubConnectedAddress as `0x${string}`, TESSERA_CONTRACT],
-    });
-
-    if (allowance < depositAmountUnits) {
-      const step = pStep(pub2privSteps, "⏳ Awaiting USDX approval…", "active");
-      pub2privBar.style.width = "30%";
-      const approveTxHash = await pubWalletClient!.writeContract({
-        address: USDX_CONTRACT_ADDR,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [TESSERA_CONTRACT, maxUint256],
-      });
-      await publicClient.waitForTransactionReceipt({
-        hash: approveTxHash as `0x${string}`,
-      });
-      step.className = "p-step done";
-      step.textContent = "✓ USDX approval given";
     }
 
     const step2 = pStep(
@@ -822,12 +851,12 @@ pub2privTransferBtn.addEventListener("click", async () => {
       }, 5_000);
     });
 
-    pub2privTransferBtn.disabled = false;
+    pub2privDepositBtn.disabled = false;
     pub2privAmountIn.value = "";
     updatePub2PrivTransferBtn();
   } catch (err) {
     pub2privError.textContent = `${err}`;
-    pub2privTransferBtn.disabled = false;
+    pub2privDepositBtn.disabled = false;
   }
 });
 

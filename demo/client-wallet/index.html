@@ -501,11 +501,20 @@
                         </div>
                     </div>
 
-                    <div class="amount-row" style="margin-top:1.2rem">
-                        <input type="number" id="pub2priv-amount" min="1" placeholder="Amount (USDX)" />
-                        <button class="btn btn-primary" id="pub2priv-deposit-btn" disabled>Deposit</button>
+                    <!-- shown when allowance < maxUint256 -->
+                    <div id="pub2priv-approval-wrap" style="display:none; margin-top:1.2rem">
+                        <button class="btn btn-secondary" id="pub2priv-approval-btn">Approve USDX</button>
+                        <div id="pub2priv-approval-steps"></div>
                     </div>
-                    <p class="hint" id="pub2priv-hint">Sign into your private account above to enable deposits.</p>
+
+                    <!-- shown when allowance == maxUint256 -->
+                    <div id="pub2priv-deposit-wrap" style="display:none; margin-top:1.2rem">
+                        <div class="amount-row">
+                            <input type="number" id="pub2priv-amount" min="1" placeholder="Amount (USDX)" />
+                            <button class="btn btn-primary" id="pub2priv-deposit-btn" disabled>Deposit</button>
+                        </div>
+                        <p class="hint" id="pub2priv-hint">Sign into your private account above to enable deposits.</p>
+                    </div>
 
                     <div class="progress-bar-wrap" id="pub2priv-progress">
                         <div class="progress-bar-track">
