@@ -60,7 +60,6 @@ impl WithdrawTxPublicTargets {
 		&self,
 		builder: &mut CircuitBuilder<F, D>,
 	) {
-
 		builder.register_public_inputs(&self.root.0.elements);
 		builder.register_public_inputs(&self.mainpool_config_root.0.elements);
 		builder.register_public_input(self.not_fake_tx.target);
@@ -116,9 +115,21 @@ impl WithdrawTxPublicTargets {
 	/// are **not** set here — they are computed from the private witnesses in
 	/// [`WithdrawTxPrivateTargets::set_fake`].
 	pub(crate) fn set_fake(&self, pw: &mut PartialWitness<F>) {
+		self.set_fake_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
+	}
+
+	/// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
+	/// `mainpool_config_root`, so that padding proofs share the same common PIs
+	/// as the real proofs in their batch.
+	pub(crate) fn set_fake_with_roots(
+		&self,
+		pw: &mut PartialWitness<F>,
+		act_root: HashOutput,
+		mainpool_config_root: HashOutput,
+	) {
 		pw.set_bool_target(self.not_fake_tx, false).unwrap();
-		set_hash(pw, self.root.0, HashOutput::ZERO.0);
-		set_hash(pw, self.mainpool_config_root.0, HashOutput::ZERO.0);
+		set_hash(pw, self.root.0, act_root.0);
+		set_hash(pw, self.mainpool_config_root.0, mainpool_config_root.0);
 		for i in 0..NOTE_BATCH {
 			pw.set_target(self.asset_ids[i].0, F::ZERO).unwrap();
 			self.withdrawal_amts[i].set_witness(pw, U256::zero());
@@ -409,6 +420,20 @@ impl WithdrawTxTargets {
 	/// Fill the complete witness for a fake (dummy) withdrawal (`not_fake_tx = 0`).
 	pub(crate) fn set_fake(&self, pw: &mut PartialWitness<F>) {
 		self.public.set_fake(pw);
+		self.private.set_fake(pw);
+	}
+
+	/// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
+	/// `mainpool_config_root`, so that padding proofs share the same common PIs
+	/// as the real proofs in their batch.
+	pub(crate) fn set_fake_with_roots(
+		&self,
+		pw: &mut PartialWitness<F>,
+		act_root: HashOutput,
+		mainpool_config_root: HashOutput,
+	) {
+		self.public
+			.set_fake_with_roots(pw, act_root, mainpool_config_root);
 		self.private.set_fake(pw);
 	}
 }

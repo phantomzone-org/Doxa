@@ -38,7 +38,7 @@ use tessera_e2e::contract_bytecodes::{
 use tessera_server::{
 	contract::{self, ITesseraRollupV2},
 	prover_service::{
-		Deposit, MockDepositAggregator, MockTxAggregator, ProverService, ProverServiceConfig,
+		Deposit, MockBridgeTxAggregator, MockTxAggregator, ProverService, ProverServiceConfig,
 		ProverServiceHandle, SubmitTxRequest,
 	},
 	state_service::{StateService, StateServiceConfig, StateServiceHandle},
@@ -176,7 +176,7 @@ mod helpers {
 			config,
 			state_handle,
 			MockTxAggregator,
-			MockDepositAggregator,
+			MockBridgeTxAggregator,
 		);
 		let jh = tokio::spawn(async move {
 			if let Err(e) = svc.run().await {

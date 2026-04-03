@@ -65,7 +65,7 @@ struct SubtreeRootTargets {
 ///
 /// # Artifact lifecycle
 ///
-/// ```ignore
+/// ```text
 /// let circuit = SubtreeRootCircuit::build(128)?;
 /// circuit.store_artifacts(Path::new("artifacts/subtree-root"))?;
 ///

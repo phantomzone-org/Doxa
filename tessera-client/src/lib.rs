@@ -32,10 +32,10 @@ pub use plonky2_gadgets::{
 	priv_tx::{
 		FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, PrivateTransactionProof,
 		RejectTxInputs, SpendTxInputs, build_circuit_and_dummy_proof, build_circuit_and_real_proof,
-		build_priv_tx_circuit, double_hash_native, prove_dummy_priv_tx, prove_real_priv_tx,
-		prove_real_priv_tx_seeded, sample_dummy_notes,
+		build_priv_tx_circuit, double_hash_native, prove_dummy_priv_tx, prove_priv_tx,
+		prove_priv_tx_seeded, sample_dummy_notes,
 	},
-	withdraw_tx::WithdrawProof,
+	withdraw_tx::{WithdrawProof, WithdrawTxCircuit, build_withdraw_tx_circuit},
 };
 pub use tessera_utils::hasher::HashOutput;
 use tessera_utils::{ConfigNative, D, F, HASH_SIZE};
@@ -105,11 +105,19 @@ pub const DEFAULT_SPEND_AUTH_PK: [u64; 5] = [
 /// All note arrays are padded to this length with dummy entries.
 pub const NOTE_BATCH: usize = 7;
 
-/// Maximum number of private transactions aggregated into a single rollup batch.
+/// Number of proof slots per batch, shared across all BatchHelper implementations
+/// (private TX, mixed deposit/withdraw).  Drives the Poseidon subtree size:
+/// each proof contributes `output_commitments().len()` leaves, and the total
+/// must be a power of two for `SubtreeRootCircuit`.
 pub const PRIV_TX_BATCH_SIZE: usize = 64;
 
-/// Maximum number of deposit note commitments aggregated into a single deposit batch.
-pub const DEPOSIT_BATCH_SIZE: usize = 512;
+/// Number of proof slots per bridge batch (deposit + withdraw combined).
+/// Each half holds 256 proofs; each proof contributes 1 output commitment
+/// (account commitment only), giving 512 leaves = SUBTREE_BATCHSIZE.
+pub const BRIDGE_TX_BATCH_SIZE: usize = 512;
+
+/// Size of the subtree to be inserted on chain.
+pub const SUBTREE_BATCHSIZE: usize = 512;
 
 /// Depth of the per-account Asset State Tree (supports 2^10 = 1024 assets).
 pub const ACC_AST_DEPTH: usize = 10;
@@ -180,4 +188,15 @@ pub trait PIHelper {
 	fn batch_unique_pis(&self) -> Vec<F> {
 		self.pis()[8..].to_vec()
 	}
+
+	/// All output commitments produced by this transaction, in order.
+	///
+	/// Used to build the Poseidon subtree root over a batch.
+	/// Only account commitments (and private note commitments) are inserted into
+	/// the commitment tree — deposit note commitments are not:
+	///
+	/// - [`PrivateTransactionProof`]: `[accout_comm, nc0, .., nc6]`  (8 leaves)
+	/// - [`DepositProof`]:            `[accout_comm]`                  (1 leaf)
+	/// - [`WithdrawProof`]:           `[accout_comm]`                  (1 leaf)
+	fn output_commitments(&self) -> Vec<HashOutput>;
 }

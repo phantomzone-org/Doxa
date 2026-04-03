@@ -27,6 +27,7 @@ mod test;
 /// [26..34] amount (8 × u32 limbs)
 /// [34]    asset_id
 /// ```
+#[derive(Clone)]
 pub struct DepositProof {
 	pub proof: ProofWithPublicInputs<F, ConfigNative, D>,
 }
@@ -34,6 +35,10 @@ pub struct DepositProof {
 impl PIHelper for DepositProof {
 	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
 		&self.proof
+	}
+
+	fn output_commitments(&self) -> Vec<tessera_utils::hasher::HashOutput> {
+		vec![self.accout_commitment()]
 	}
 }
 

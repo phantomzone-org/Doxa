@@ -34,7 +34,7 @@ use crate::{
 };
 
 /// Public alias for the PrivTx circuit targets, used with [`build_priv_tx_circuit`]
-/// and [`prove_real_priv_tx`].
+/// and [`prove_priv_tx`].
 pub type PrivTxTargets<const D: usize> = TxCircuitTargets;
 
 /// Apply Poseidon twice natively: `H(H(elems))`.
@@ -91,7 +91,7 @@ fn build_circuit_and_proof_seeded(
 	let mut builder = CircuitBuilder::<F, D>::new(config);
 	let t = priv_tx_circuit::<HashOutput, F, D>(&mut builder);
 	let circuit = builder.build::<tessera_utils::ConfigNative>();
-	let proof = prove_priv_tx(&circuit, &t, not_fake_tx, seed);
+	let proof = prove_priv_tx_inner(&circuit, &t, not_fake_tx, seed);
 	(circuit, proof)
 }
 
@@ -99,7 +99,7 @@ fn build_circuit_and_proof_seeded(
 ///
 /// Different seeds produce different accounts, notes, nullifiers, and commitments,
 /// ensuring each proof is unique.
-fn prove_priv_tx(
+fn prove_priv_tx_inner(
 	circuit: &tessera_utils::CircuitDataNative,
 	t: &PrivTxTargets<{ tessera_utils::D }>,
 	not_fake_tx: bool,
@@ -257,7 +257,7 @@ pub fn build_circuit_and_real_proof()
 ///
 /// Different seeds produce unique accounts, notes, nullifiers, and commitments.
 /// The circuit is rebuilt each time; if generating many proofs, prefer
-/// [`build_priv_tx_circuit`] + [`prove_real_priv_tx`] to reuse the circuit.
+/// [`build_priv_tx_circuit`] + [`prove_priv_tx`] to reuse the circuit.
 pub fn build_circuit_and_real_proof_seeded(
 	seed: u64,
 ) -> (tessera_utils::CircuitDataNative, tessera_utils::ProofNative) {
@@ -266,7 +266,7 @@ pub fn build_circuit_and_real_proof_seeded(
 
 /// Build the PrivTx plonky2 circuit without generating a proof.
 ///
-/// Returns `(circuit_data, targets)` for use with [`prove_real_priv_tx`].
+/// Returns `(circuit_data, targets)` for use with [`prove_priv_tx`].
 pub fn build_priv_tx_circuit() -> (
 	tessera_utils::CircuitDataNative,
 	PrivTxTargets<{ tessera_utils::D }>,
@@ -294,7 +294,7 @@ pub fn build_priv_tx_circuit() -> (
 /// For real variants the `root` field in the input struct is registered as both
 /// PI[77-80] and PI[81-84] (V2 uses a single on-chain IMT) and must match the
 /// Merkle proofs supplied (the circuit enforces this when `not_fake_tx=1`).
-pub fn prove_real_priv_tx(
+pub fn prove_priv_tx(
 	circuit: &tessera_utils::CircuitDataNative,
 	targets: &PrivTxTargets<{ tessera_utils::D }>,
 	inputs: PrivTxInputs,
@@ -387,7 +387,7 @@ pub fn prove_real_priv_tx(
 
 /// Generate a dummy PrivTx proof (`not_fake_tx=0`) with specific AN/AC/NN/NC
 /// override values. Convenience wrapper around
-/// [`prove_real_priv_tx`] with [`PrivTxInputs::Fake`].
+/// [`prove_priv_tx`] with [`PrivTxInputs::Fake`].
 ///
 /// The override fields become the proof's public inputs, allowing the sequencer
 /// to align each padding slot with nullifier- and commitment-tree padding leaves.
@@ -401,7 +401,7 @@ pub fn prove_dummy_priv_tx(
 ) -> tessera_utils::ProofNative {
 	use tessera_utils::hasher::HashOutput;
 
-	prove_real_priv_tx(
+	prove_priv_tx(
 		circuit,
 		targets,
 		PrivTxInputs::Fake(FakeTxInputs {
@@ -420,11 +420,11 @@ pub fn prove_dummy_priv_tx(
 /// are zero (valid because the underlying TX is FreshAcc, which has no ACT/NCT
 /// membership constraints).
 ///
-/// For production proofs provide a proper [`PrivTxInputs`] to [`prove_real_priv_tx`].
-pub fn prove_real_priv_tx_seeded(
+/// For production proofs provide a proper [`PrivTxInputs`] to [`prove_priv_tx`].
+pub fn prove_priv_tx_seeded(
 	circuit: &tessera_utils::CircuitDataNative,
 	targets: &PrivTxTargets<{ tessera_utils::D }>,
 	seed: u64,
 ) -> tessera_utils::ProofNative {
-	prove_priv_tx(circuit, targets, true, seed)
+	prove_priv_tx_inner(circuit, targets, true, seed)
 }

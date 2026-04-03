@@ -1,11 +1,11 @@
+mod aggregator;
+pub mod bridge_tx;
 mod config;
-pub mod deposit;
-mod handle;
-mod service;
-pub mod tx;
+pub mod priv_tx;
+mod subtree_root;
 
+pub use aggregator::*;
+pub use bridge_tx::MockBridgeTxAggregator;
 pub use config::ProverServiceConfig;
-pub use deposit::{Deposit, DepositAggregator, MockDepositAggregator};
-pub use handle::{ProverServiceHandle, SubmitTxRequest};
-pub use service::ProverService;
-pub use tx::{MockTxAggregator, TxAggregator};
+pub use priv_tx::MockTxAggregator;
+pub use subtree_root::*;

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use alloy::providers::{Provider, ProviderBuilder};
 use anyhow::Context;
+use tessera_client::COM_TREE_DEPTH;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -50,7 +51,7 @@ impl StateService {
 			tx,
 		};
 		let service = Self {
-			state: StateSnapshot::new(crate::TREE_DEPTH),
+			state: StateSnapshot::new(COM_TREE_DEPTH),
 			config,
 			rx,
 			last_synced_block: 0,

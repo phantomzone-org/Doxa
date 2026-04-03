@@ -66,7 +66,7 @@ pub struct DepositTxCircuit {
 }
 
 impl DepositTxCircuit {
-	/// Generate a dummy deposit_tx proof (`not_fake_tx=0`).
+	/// Generate a dummy deposit_tx proof (`not_fake_tx=0`) with zero roots.
 	///
 	/// Used to seed the `GenericAggregator` for artifact generation
 	/// (O(log N) doubling) and as the padding proof at runtime.
@@ -79,6 +79,24 @@ impl DepositTxCircuit {
 		self.circuit_data
 			.prove(pw)
 			.expect("dummy deposit_tx proof generation failed")
+	}
+
+	/// Generate a padding deposit_tx proof (`not_fake_tx=0`) with the specified
+	/// `act_root` and `mainpool_config_root`, so that padding proofs share the
+	/// same common PIs as the real proofs in their batch.
+	pub fn prove_padding(
+		&self,
+		act_root: HashOutput,
+		mainpool_config_root: HashOutput,
+	) -> tessera_utils::ProofNative {
+		use plonky2::iop::witness::PartialWitness;
+
+		let mut pw = PartialWitness::new();
+		self.targets
+			.set_fake_with_roots(&mut pw, act_root, mainpool_config_root);
+		self.circuit_data
+			.prove(pw)
+			.expect("padding deposit_tx proof generation failed")
 	}
 
 	/// Generate a real deposit_tx proof (`not_fake_tx=1`).
@@ -300,7 +318,7 @@ where
 	let public_targets = DepositTxPublicTargets {
 		not_fake_tx,
 		mainpool_config_root,
-		act_root: root,
+		comm_root: root,
 		accin_null,
 		accout_comm,
 		note_comm: deposit_note_comm,

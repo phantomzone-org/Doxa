@@ -103,7 +103,7 @@ pub struct FakeTxInputs {
 
 /// Discriminated union of all possible PrivTx witness inputs.
 ///
-/// Pass to [`prove_real_priv_tx`] to generate a proof. The `Fake` variant
+/// Pass to [`prove_priv_tx`] to generate a proof. The `Fake` variant
 /// produces a dummy proof (`not_fake_tx = 0`); all other variants produce real
 /// proofs (`not_fake_tx = 1`) with fully enforced circuit constraints.
 pub enum PrivTxInputs {

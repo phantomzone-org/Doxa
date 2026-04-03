@@ -33,7 +33,7 @@ pub enum ProveOutcome {
 		/// Poseidon Merkle root of the note-commitment batch (= SubtreeRoot).
 		batch_poseidon_root: HashOutput,
 		/// Groth16 proof ready for `proveTransactionBatch()`.
-		solidity_proof: Box<SolidityProof>,
+		solidity_proof: SolidityProof,
 		/// `keccak256(piCommitment preimage)` encoded as 8 × u32 big-endian.
 		super_pi_commitment: [u8; 32],
 	},

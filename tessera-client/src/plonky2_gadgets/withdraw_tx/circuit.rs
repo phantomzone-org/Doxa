@@ -3,7 +3,10 @@ use plonky2::{
 		hash_types::{HashOutTarget, RichField},
 		poseidon::Poseidon,
 	},
-	iop::target::{BoolTarget, Target},
+	iop::{
+		target::{BoolTarget, Target},
+		witness::PartialWitness,
+	},
 	plonk::circuit_builder::CircuitBuilder,
 };
 use plonky2_field::extension::Extendable;
@@ -188,7 +191,6 @@ where
 
 	// ── Public inputs ─────────────────────────────────────────────────────────
 	let public = WithdrawTxPublicTargets {
-		
 		not_fake_tx,
 		root: act_root,
 		mainpool_config_root,
@@ -220,5 +222,59 @@ where
 			acc_in_subpool_id: accin.subpool_id,
 			acc_out_subpool_id: accout.subpool_id,
 		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithdrawTxCircuit
+// ---------------------------------------------------------------------------
+
+/// Pre-built withdrawal transaction circuit, analogous to [`DepositTxCircuit`].
+pub struct WithdrawTxCircuit {
+	/// Compiled circuit data — exposes `common` and `verifier_only` to external
+	/// callers (e.g. for constructing a `GenericAggregator`).
+	pub circuit_data: tessera_utils::CircuitDataNative,
+	targets: WithdrawTxTargets,
+}
+
+impl WithdrawTxCircuit {
+	/// Generate a dummy withdrawal proof (`not_fake_tx=0`) with zero roots.
+	pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
+		let mut pw = PartialWitness::new();
+		self.targets.set_fake(&mut pw);
+		self.circuit_data
+			.prove(pw)
+			.expect("dummy withdraw_tx proof generation failed")
+	}
+
+	/// Generate a padding withdrawal proof (`not_fake_tx=0`) with the specified
+	/// `act_root` and `mainpool_config_root`, so that padding proofs share the
+	/// same common PIs as the real proofs in their batch.
+	pub fn prove_padding(
+		&self,
+		act_root: HashOutput,
+		mainpool_config_root: HashOutput,
+	) -> tessera_utils::ProofNative {
+		let mut pw = PartialWitness::new();
+		self.targets
+			.set_fake_with_roots(&mut pw, act_root, mainpool_config_root);
+		self.circuit_data
+			.prove(pw)
+			.expect("padding withdraw_tx proof generation failed")
+	}
+}
+
+/// Build the withdraw_tx circuit using `HashOutput` as the Merkle hasher.
+pub fn build_withdraw_tx_circuit() -> WithdrawTxCircuit {
+	use plonky2::plonk::circuit_data::CircuitConfig;
+
+	let config = CircuitConfig::standard_recursion_config();
+	let mut builder = CircuitBuilder::<tessera_utils::F, { tessera_utils::D }>::new(config);
+	let targets =
+		withdraw_tx_circuit::<HashOutput, tessera_utils::F, { tessera_utils::D }>(&mut builder);
+	let circuit_data = builder.build::<tessera_utils::ConfigNative>();
+	WithdrawTxCircuit {
+		circuit_data,
+		targets,
 	}
 }

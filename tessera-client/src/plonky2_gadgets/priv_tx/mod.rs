@@ -33,13 +33,18 @@ mod tests;
 /// [17..45] inote nullifiers (7×4)
 /// [45..73] onote commitments (7×4)
 /// ```
-pub struct PrivateTransactionProof {
-	pub proof: ProofWithPublicInputs<F, ConfigNative, D>,
-}
+#[derive(Clone)]
+pub struct PrivateTransactionProof(pub ProofWithPublicInputs<F, ConfigNative, D>);
 
 impl PIHelper for PrivateTransactionProof {
 	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
-		&self.proof
+		&self.0
+	}
+
+	fn output_commitments(&self) -> Vec<tessera_utils::hasher::HashOutput> {
+		let mut v = vec![self.accout_commitment()];
+		v.extend(self.output_note_commitments());
+		v
 	}
 }
 

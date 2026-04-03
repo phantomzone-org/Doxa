@@ -161,11 +161,22 @@ impl DepositTxTargets {
 		self.public_targets.set_fake(pw);
 		self.private_targets.set_fake(pw);
 	}
+
+	pub(crate) fn set_fake_with_roots(
+		&self,
+		pw: &mut PartialWitness<F>,
+		act_root: HashOutput,
+		mainpool_config_root: HashOutput,
+	) {
+		self.public_targets
+			.set_fake_with_roots(pw, act_root, mainpool_config_root);
+		self.private_targets.set_fake(pw);
+	}
 }
 
 pub struct DepositTxPublicTargets {
 	/// PI[0..4]: Account Commitment Tree root.
-	pub act_root: RootTarget,
+	pub comm_root: RootTarget,
 	/// PI[4..8]: Main pool configuration tree root.
 	pub mainpool_config_root: MainPoolConfigRootTarget,
 	/// PI[8]: 1 for a real transaction, 0 for a dummy/padding proof.
@@ -175,13 +186,13 @@ pub struct DepositTxPublicTargets {
 	/// PI[13..17]: Output account commitment.
 	pub accout_comm: AccountCommitmentTarget,
 	/// PI[17..21]: Derived commitment to `deposit_note`.
-	pub note_comm: DepositNoteCommitmentTarget,
+	pub note_comm: DepositNoteCommitmentTarget, //<- optimistic update
 	/// PI[21..26]: Ethereum address (5 × u32 LE limbs).
-	pub eth_address: [Target; 5],
+	pub eth_address: [Target; 5], //<- optimistic update
 	/// PI[26..34]: Deposit amount.
-	pub amount: U256Target,
+	pub amount: U256Target, //<- optimistic update
 	/// PI[34]: Asset being deposited.
-	pub asset_id: AssetIdTarget,
+	pub asset_id: AssetIdTarget, //<- optimistic update
 }
 
 impl DepositTxPublicTargets {
@@ -189,7 +200,7 @@ impl DepositTxPublicTargets {
 	where
 		F: RichField + Extendable<D> + Poseidon,
 	{
-		builder.register_public_inputs(&self.act_root.0.elements);
+		builder.register_public_inputs(&self.comm_root.0.elements);
 		builder.register_public_inputs(&self.mainpool_config_root.0.elements);
 		builder.register_public_input(self.not_fake_tx.target);
 		builder.register_public_inputs(&self.accin_null.0.elements);
@@ -228,14 +239,29 @@ impl DepositTxPublicTargets {
 	}
 
 	pub fn set_fake(&self, pw: &mut PartialWitness<F>) {
+		self.set_fake_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
+	}
+
+	/// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
+	/// `mainpool_config_root`, so that padding proofs share the same common PIs
+	/// as the real proofs in their batch.
+	pub fn set_fake_with_roots(
+		&self,
+		pw: &mut PartialWitness<F>,
+		act_root: HashOutput,
+		mainpool_config_root: HashOutput,
+	) {
 		// Only set truly free variables. Derived targets (accin_null, accout_comm,
 		// deposit_note_comm) are computed automatically by circuit generators from
 		// the private witness set in DepositTxPrivateTargets::set_fake, so they
 		// must NOT be set here to avoid "wire set twice" conflicts.
 		pw.set_bool_target(self.not_fake_tx, false).unwrap();
-		pw.set_hash_target(self.mainpool_config_root.0, HashOutput::ZERO.to_hash_out())
-			.unwrap();
-		pw.set_hash_target(self.act_root.0, HashOutput::ZERO.to_hash_out())
+		pw.set_hash_target(
+			self.mainpool_config_root.0,
+			mainpool_config_root.to_hash_out(),
+		)
+		.unwrap();
+		pw.set_hash_target(self.comm_root.0, act_root.to_hash_out())
 			.unwrap();
 		pw.set_target_arr(&self.eth_address, &map_h160_to_f(H160::zero()))
 			.unwrap();
@@ -256,7 +282,7 @@ impl DepositTxPublicTargets {
 		pw.set_bool_target(self.not_fake_tx, not_fake_tx).unwrap();
 		pw.set_hash_target(self.mainpool_config_root.0, main_pool_root.to_hash_out())
 			.unwrap();
-		pw.set_hash_target(self.act_root.0, act_root.to_hash_out())
+		pw.set_hash_target(self.comm_root.0, act_root.to_hash_out())
 			.unwrap();
 		pw.set_hash_target(self.accin_null.0, accin_null.to_hash_out())
 			.unwrap();

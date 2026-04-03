@@ -14,7 +14,7 @@ pub use tessera_client::PrivTxTargets;
 use tessera_client::{
 	build_priv_tx_circuit, derive_deposit_tx_hash, derive_priv_tx_hash, double_hash_native,
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	prove_real_priv_tx, sample_dummy_notes,
+	prove_priv_tx, sample_dummy_notes,
 	schnorr::{schnorr_sign, PrivateKey, Scalar},
 	AccountAddress, AssetId, ConsumeAuth, DepositNote, DepositTxCircuit, FreshAccInputs, Nonce,
 	NoteCommitment, NoteIdentifier, NoteNullifier, PrivTxInputs, PrivateIdentifier, SpendAuth,
@@ -158,7 +158,7 @@ impl TesseraClientState {
 			donotes,
 		});
 
-		let proof = prove_real_priv_tx(&self.circuit, &self.targets, inputs);
+		let proof = prove_priv_tx(&self.circuit, &self.targets, inputs);
 
 		self.account = Some(accout);
 
@@ -269,7 +269,7 @@ impl TesseraClientState {
 			approval_sig,
 		});
 
-		let proof = prove_real_priv_tx(&self.circuit, &self.targets, inputs);
+		let proof = prove_priv_tx(&self.circuit, &self.targets, inputs);
 
 		self.account = Some(accout);
 

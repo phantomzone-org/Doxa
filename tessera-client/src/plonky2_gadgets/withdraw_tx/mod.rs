@@ -1,6 +1,8 @@
 pub(crate) mod cb;
-pub(crate) mod circuit;
+pub mod circuit;
 pub(crate) mod targets;
+
+pub use circuit::{WithdrawTxCircuit, build_withdraw_tx_circuit};
 
 #[cfg(test)]
 mod tests;
@@ -25,6 +27,7 @@ use crate::{AssetId, NOTE_BATCH, PIHelper};
 /// [24..80] withdrawal_amts (8 × NOTE_BATCH elements)
 /// [80..85] w_acc_addr (5 × u32 LE limbs)
 /// ```
+#[derive(Clone)]
 pub struct WithdrawProof {
 	pub proof: ProofWithPublicInputs<F, ConfigNative, D>,
 }
@@ -32,6 +35,10 @@ pub struct WithdrawProof {
 impl PIHelper for WithdrawProof {
 	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
 		&self.proof
+	}
+
+	fn output_commitments(&self) -> Vec<tessera_utils::hasher::HashOutput> {
+		vec![self.accout_commitment()]
 	}
 }
 

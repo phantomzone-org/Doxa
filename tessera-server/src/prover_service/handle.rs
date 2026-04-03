@@ -2,7 +2,6 @@ use tessera_client::NOTE_BATCH;
 use tessera_utils::hasher::HashOutput;
 use tokio::sync::{broadcast, mpsc};
 
-use super::deposit::Deposit;
 use crate::types::ProveOutcome;
 
 // ---------------------------------------------------------------------------

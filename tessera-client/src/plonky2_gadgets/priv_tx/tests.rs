@@ -20,9 +20,9 @@ use tessera_utils::{ConfigNative, D, F, hasher::HashOutput};
 
 use super::*;
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, DS_PUBLIC_IDENTIFIER, NOTE_BATCH, Nonce, PIHelper,
-	NoteCommitment, NoteIdentifier, NoteNullifier, PublicIdentifier, SpendAuth, StandardAccount,
-	StandardNote, SubpoolId, derive_priv_tx_hash,
+	AccountAddress, AssetId, COM_TREE_DEPTH, DS_PUBLIC_IDENTIFIER, NOTE_BATCH, Nonce,
+	NoteCommitment, NoteIdentifier, NoteNullifier, PIHelper, PublicIdentifier, SpendAuth,
+	StandardAccount, StandardNote, SubpoolId, derive_priv_tx_hash,
 	plonky2_gadgets::{
 		priv_tx::{
 			fake_tx::set_fake_tx_witness, freshacc_tx::set_freshacc_tx_witness, priv_tx_circuit,
@@ -218,16 +218,40 @@ fn test_prove_priv_tx() {
 	);
 
 	// ── PI accessor checks ─────────────────────────────────────────────────
-	let tp = crate::PrivateTransactionProof { proof: inner_proof.clone() };
+	let tp = crate::PrivateTransactionProof(inner_proof.clone());
 	assert_eq!(tp.act_root(), tree.root(), "act_root mismatch");
-	assert_eq!(tp.mainpool_config_root(), main_pool.root(), "mainpool_config_root mismatch");
-	assert_eq!(tp.not_fake_tx().to_canonical_u64(), 1, "not_fake_tx should be 1");
-	assert_eq!(tp.accin_nullifier(), accin_null.0, "accin_nullifier mismatch");
-	assert_eq!(tp.accout_commitment(), accout.commitment().0, "accout_commitment mismatch");
+	assert_eq!(
+		tp.mainpool_config_root(),
+		main_pool.root(),
+		"mainpool_config_root mismatch"
+	);
+	assert_eq!(
+		tp.not_fake_tx().to_canonical_u64(),
+		1,
+		"not_fake_tx should be 1"
+	);
+	assert_eq!(
+		tp.accin_nullifier(),
+		accin_null.0,
+		"accin_nullifier mismatch"
+	);
+	assert_eq!(
+		tp.accout_commitment(),
+		accout.commitment().0,
+		"accout_commitment mismatch"
+	);
 
 	let inote_nulls = tp.input_note_nullifiers();
-	assert_eq!(inote_nulls[0], HashOutput(n0_null_arr), "inote_null[0] mismatch");
-	assert_eq!(inote_nulls[1], HashOutput(n1_null_arr), "inote_null[1] mismatch");
+	assert_eq!(
+		inote_nulls[0],
+		HashOutput(n0_null_arr),
+		"inote_null[0] mismatch"
+	);
+	assert_eq!(
+		inote_nulls[1],
+		HashOutput(n1_null_arr),
+		"inote_null[1] mismatch"
+	);
 
 	let onote_comms = tp.output_note_commitments();
 	for i in 0..NOTE_BATCH {

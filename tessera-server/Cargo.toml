@@ -28,9 +28,9 @@ alloy = {workspace = true}
 tracing = {workspace = true}
 rand_chacha = {workspace = true}
 axum = {workspace = true}
-bincode = "1.3"
+bincode = "1.0.0"
 crc32fast = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
 async-trait = "0.1"
 num = "0.4.3"
 log = "0.4"
@@ -42,6 +42,3 @@ workspace = true
 [dependencies.dotenvy]
 workspace = true
 
-[[bin]]
-name = "aggregation_prover"
-path = "src/bin/aggregation_prover.rs"
