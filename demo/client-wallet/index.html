@@ -277,6 +277,19 @@
                 color: #aaa;
                 margin: 1.1rem 0 0.4rem;
             }
+            .subsection-box {
+                border: 1px solid #e0e0e8;
+                border-radius: 10px;
+                padding: 0.9rem 1rem 1rem;
+                margin-bottom: 1.2rem;
+            }
+            .subsection-box-heading {
+                font-size: 0.72rem;
+                text-transform: uppercase;
+                letter-spacing: 0.07em;
+                color: #888;
+                margin-bottom: 0.65rem;
+            }
 
             .hint { font-size: 0.82rem; color: #aaa; margin-top: 0.6rem; }
 
@@ -440,6 +453,69 @@
                     </div>
                 </div>
 
+            </div>
+        </div>
+
+        <!-- ── Public → Private Transfer ── -->
+        <div class="section-full">
+            <div class="card" id="pub2priv-section">
+                <h2>Public → Private Transfer</h2>
+
+                <!-- pre-connect state -->
+                <div id="pub2priv-connect-view">
+                    <button class="btn btn-primary" id="pub2priv-metamask-btn">Connect MetaMask</button>
+                    <div class="error" id="pub2priv-connect-error"></div>
+                </div>
+
+                <!-- post-connect state -->
+                <div id="pub2priv-wallet-view" style="display:none">
+                    <div class="subsection-box">
+                        <div class="subsection-box-heading">Connected public account</div>
+                        <div class="info-box">
+                            <div class="info-row">
+                                <span class="label">Address</span>
+                                <span class="value" id="pub2priv-address">—</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">Network</span>
+                                <span class="value plain" id="pub2priv-network">—</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">ETH Balance</span>
+                                <span class="value balance" id="pub2priv-eth-balance">—</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">USDX Balance</span>
+                                <span class="value balance" id="pub2priv-usdx-balance">—</span>
+                            </div>
+                        </div>
+
+                        <div id="pub2priv-fauceteth-wrap" style="display:none; margin-top:0.75rem">
+                            <button class="btn btn-ghost" id="pub2priv-fauceteth-btn">⛽ Receive testnet ETH</button>
+                            <div id="pub2priv-fauceteth-steps"></div>
+                        </div>
+
+                        <div style="margin-top:0.75rem">
+                            <button class="btn btn-ghost" id="pub2priv-faucetusdx-btn">⬇ Receive USDX</button>
+                            <div id="pub2priv-faucetusdx-steps"></div>
+                        </div>
+                    </div>
+
+                    <div class="amount-row" style="margin-top:1.2rem">
+                        <input type="number" id="pub2priv-amount" min="1" placeholder="Amount (USDX)" />
+                        <button class="btn btn-primary" id="pub2priv-deposit-btn" disabled>Deposit</button>
+                    </div>
+                    <p class="hint" id="pub2priv-hint">Sign into your private account above to enable deposits.</p>
+
+                    <div class="progress-bar-wrap" id="pub2priv-progress">
+                        <div class="progress-bar-track">
+                            <div class="progress-bar-fill" id="pub2priv-bar"></div>
+                        </div>
+                        <div id="pub2priv-steps"></div>
+                    </div>
+
+                    <div class="error" id="pub2priv-error"></div>
+                </div>
             </div>
         </div>
 
