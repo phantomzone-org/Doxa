@@ -63,7 +63,10 @@ console.log("Subpool ID =", SUBPOOL_ID_HEX);
 console.log("DB server =", API_BASE_URL);
 
 function getInstitutionName(subpoolIdHex: string): string {
-  return (subpoolInstitutions as Record<string, string>)[subpoolIdHex] ?? subpoolIdHex;
+  return (
+    (subpoolInstitutions as Record<string, string>)[subpoolIdHex] ??
+    subpoolIdHex
+  );
 }
 
 // ── EIP-712 deposit signing ────────────────────────────────────────────────────
@@ -902,7 +905,9 @@ const p2pError = document.getElementById("p2p-error")!;
 const xferSection = document.getElementById("xfer-section") as HTMLElement;
 const addrBook = document.getElementById("addr-book")!;
 const xferAddrIn = document.getElementById("xfer-addr") as HTMLInputElement;
-const xferAddrSelect = document.getElementById("xfer-addr-select") as HTMLSelectElement;
+const xferAddrSelect = document.getElementById(
+  "xfer-addr-select",
+) as HTMLSelectElement;
 const xferAmtIn = document.getElementById("xfer-amount") as HTMLInputElement;
 const xferBtn = document.getElementById("xfer-btn") as HTMLButtonElement;
 const addrTick = document.getElementById("addr-tick")!;
@@ -916,7 +921,9 @@ const memoSenderName = document.getElementById("memo-sender-name")!;
 const memoSenderAddr = document.getElementById("memo-sender-addr")!;
 const memoRcptName = document.getElementById("memo-rcpt-name")!;
 const memoRcptAddr = document.getElementById("memo-rcpt-addr")!;
-const memoReferenceIn = document.getElementById("memo-reference") as HTMLInputElement;
+const memoReferenceIn = document.getElementById(
+  "memo-reference",
+) as HTMLInputElement;
 const memoPreview = document.getElementById("memo-preview")!;
 
 function enableTransactSections() {
@@ -1169,7 +1176,9 @@ function updateXferBtn() {
 }
 
 function updateMemoPreview() {
-  const recipientSubpool = xferAddrIn.value ? xferAddrIn.value.slice(0, 16) : "";
+  const recipientSubpool = xferAddrIn.value
+    ? xferAddrIn.value.slice(0, 16)
+    : "";
   const memoObj = {
     sender: {
       institution_name: getInstitutionName(SUBPOOL_ID_HEX),
@@ -1177,7 +1186,9 @@ function updateMemoPreview() {
       physical_address: memoSenderAddr.textContent ?? "",
     },
     recipient: {
-      institution_name: recipientSubpool ? getInstitutionName(recipientSubpool) : "",
+      institution_name: recipientSubpool
+        ? getInstitutionName(recipientSubpool)
+        : "",
       name: memoRcptName.textContent ?? "",
       physical_address: memoRcptAddr.textContent ?? "",
     },
@@ -1324,17 +1335,17 @@ xferBtn.addEventListener("click", async () => {
         try {
           const status = await subpoolClient.getSpendTxStatus(resp.id);
           if (!status || status.status === "Pending") return;
+          if (status.status === "Approved") return;
           clearInterval(timer);
           if (status.status === "Rejected") {
-            reject(
-              new Error(
-                `Spend tx rejected: ${status.rejection_reason ?? "unknown reason"}`,
-              ),
-            );
+            step5.className = "p-step done";
+            step5.textContent = `✗ Transaction rejected`;
+            step5.style.color = "#dc2626";
+            resolve();
             return;
           }
           step5.className = "p-step done";
-          step5.textContent = "✓ Transfer approved";
+          step5.textContent = "✓ Transfer approved & settled";
           xferBar.style.width = "100%";
           await refreshAll();
           resolve();
