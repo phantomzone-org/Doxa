@@ -30,6 +30,17 @@ impl From<UserRow> for UserResponse {
 	}
 }
 
+pub async fn list_users_handler(
+	State(state): State<AppState>,
+) -> Result<(StatusCode, Json<Vec<UserResponse>>), AppError> {
+	let rows: Vec<UserRow> =
+		sqlx::query_as("SELECT * FROM users ORDER BY name ASC")
+			.fetch_all(&state.pool)
+			.await?;
+	let out = rows.into_iter().map(UserResponse::from).collect();
+	Ok((StatusCode::OK, Json(out)))
+}
+
 pub async fn get_user_handler(
 	State(state): State<AppState>,
 	Path(private_acc_address): Path<String>,

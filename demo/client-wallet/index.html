@@ -362,6 +362,33 @@
             .tick { color: #1a9e60; margin-left: 0.4rem; font-size: 0.85rem; }
             .tick.hidden { visibility: hidden; }
             .field-hint { font-size: 0.75rem; color: #e05050; margin-top: 0.25rem; min-height: 1em; }
+            .memo-preview {
+                font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+                font-size: 0.78rem;
+                line-height: 1.5;
+                background: #f0f2f5;
+                border: 1px solid #d8dce4;
+                border-radius: 6px;
+                padding: 0.75rem 1rem;
+                white-space: pre;
+                overflow-x: auto;
+                color: #2d3a4a;
+                margin-top: 0.5rem;
+            }
+            .memo-reference-row {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                margin-top: 0.6rem;
+            }
+            .memo-reference-row label {
+                font-size: 0.8rem;
+                color: #555;
+                white-space: nowrap;
+            }
+            .memo-reference-row input {
+                flex: 1;
+            }
 
             /* ── errors ── */
             .error { color: #e05050; font-size: 0.85rem; margin-top: 0.75rem; }
@@ -586,26 +613,31 @@
 
                 <div class="form-group" style="margin-top:1.1rem">
                     <label>
-                        Receiving address
+                        Recipient
                         <span id="addr-tick" class="tick hidden">✓</span>
                     </label>
-                    <input type="text" id="xfer-addr" placeholder="80-char Tessera hex address" />
+                    <select id="xfer-addr-select">
+                        <option value="">— select recipient —</option>
+                    </select>
+                    <input type="hidden" id="xfer-addr" />
                     <div class="field-hint" id="addr-hint"></div>
                 </div>
                 <div class="form-group">
                     <label>Amount (USDX)</label>
                     <input type="number" id="xfer-amount" min="1" placeholder="0" />
                 </div>
-                <div class="form-group">
-                    <label>
-                        Memo
-                        <span style="color:#444;font-size:0.75em;text-transform:none;letter-spacing:0">(optional)</span>
-                    </label>
-                    <textarea
-                        id="xfer-memo"
-                        rows="3"
-                        placeholder="Supports arbitrary text and message formats such as IVMS101, ISO 20022."
-                    ></textarea>
+                <div class="form-group" id="memo-group" style="display:none">
+                    <label>Memo</label>
+                    <!-- hidden data stores read by main.ts -->
+                    <span id="memo-sender-name" style="display:none"></span>
+                    <span id="memo-sender-addr" style="display:none"></span>
+                    <span id="memo-rcpt-name" style="display:none"></span>
+                    <span id="memo-rcpt-addr" style="display:none"></span>
+                    <pre class="memo-preview" id="memo-preview"></pre>
+                    <div class="memo-reference-row">
+                        <label for="memo-reference">Reference</label>
+                        <input type="text" id="memo-reference" placeholder="Payment reference (optional)" />
+                    </div>
                 </div>
 
                 <button class="btn btn-primary" id="xfer-btn" disabled>Transfer</button>

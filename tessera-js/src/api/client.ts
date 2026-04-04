@@ -221,6 +221,16 @@ export class SubpoolClient {
     return json as UserResponse;
   }
 
+  /**
+   * GET /users — list all registered users.
+   */
+  async listUsers(): Promise<UserResponse[]> {
+    const res = await fetch(`${this.baseUrl}/users`);
+    const json = await res.json();
+    if (!res.ok) throw new SubpoolApiError(res.status, json as ApiError);
+    return json as UserResponse[];
+  }
+
   async getSpendTxStatus(id: number): Promise<SpendTxStatusResponse | null> {
     const res = await fetch(`${this.baseUrl}/spend_tx/${id}/status`);
     if (res.status === 404) return null;

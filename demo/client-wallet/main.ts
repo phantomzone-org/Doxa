@@ -38,6 +38,7 @@ import {
   delay,
   pStep,
 } from "./helpers";
+import subpoolInstitutions from "./subpool_institutions.json";
 
 await init();
 
@@ -61,6 +62,10 @@ const ASSET_ID = leHexToU64(ASSET_ID_HEX);
 console.log("Subpool ID =", SUBPOOL_ID_HEX);
 console.log("DB server =", API_BASE_URL);
 
+function getInstitutionName(subpoolIdHex: string): string {
+  return (subpoolInstitutions as Record<string, string>)[subpoolIdHex] ?? subpoolIdHex;
+}
+
 // ── EIP-712 deposit signing ────────────────────────────────────────────────────
 
 const TESSERA_DEPOSIT_DOMAIN = {
@@ -80,6 +85,22 @@ const TESSERA_DEPOSIT_TYPES = {
 // ── API client ────────────────────────────────────────────────────────────────
 
 const subpoolClient = new SubpoolClient(API_BASE_URL);
+
+const SUBPOOL_PORTS = [8081, 8082, 8083];
+
+async function loadAllUsers(): Promise<UserResponse[]> {
+  const results = await Promise.allSettled(
+    SUBPOOL_PORTS.map((port) =>
+      new SubpoolClient(`http://localhost:${port}`).listUsers(),
+    ),
+  );
+  return results
+    .filter(
+      (r): r is PromiseFulfilledResult<UserResponse[]> =>
+        r.status === "fulfilled",
+    )
+    .flatMap((r) => r.value);
+}
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 
@@ -330,6 +351,9 @@ function renderPrivDisplayView() {
     dispName.textContent = kycInfo.name;
     dispStreet.textContent = kycInfo.physical_address;
     dispDob.textContent = kycInfo.dob;
+    memoSenderName.textContent = kycInfo.name;
+    memoSenderAddr.textContent = kycInfo.physical_address;
+    updateMemoPreview();
   }
   if (privateAccount) {
     const accountBal = privateAccount.balanceFor(AssetId.fromU64(ASSET_ID));
@@ -878,6 +902,7 @@ const p2pError = document.getElementById("p2p-error")!;
 const xferSection = document.getElementById("xfer-section") as HTMLElement;
 const addrBook = document.getElementById("addr-book")!;
 const xferAddrIn = document.getElementById("xfer-addr") as HTMLInputElement;
+const xferAddrSelect = document.getElementById("xfer-addr-select") as HTMLSelectElement;
 const xferAmtIn = document.getElementById("xfer-amount") as HTMLInputElement;
 const xferBtn = document.getElementById("xfer-btn") as HTMLButtonElement;
 const addrTick = document.getElementById("addr-tick")!;
@@ -886,6 +911,13 @@ const xferProgress = document.getElementById("xfer-progress")!;
 const xferBar = document.getElementById("xfer-bar") as HTMLElement;
 const xferSteps = document.getElementById("xfer-steps")!;
 const xferError = document.getElementById("xfer-error")!;
+const memoGroup = document.getElementById("memo-group") as HTMLElement;
+const memoSenderName = document.getElementById("memo-sender-name")!;
+const memoSenderAddr = document.getElementById("memo-sender-addr")!;
+const memoRcptName = document.getElementById("memo-rcpt-name")!;
+const memoRcptAddr = document.getElementById("memo-rcpt-addr")!;
+const memoReferenceIn = document.getElementById("memo-reference") as HTMLInputElement;
+const memoPreview = document.getElementById("memo-preview")!;
 
 function enableTransactSections() {
   p2pSection.style.opacity = "";
@@ -895,6 +927,22 @@ function enableTransactSections() {
   p2pBtn.disabled = false;
   p2pHint.textContent = "Enter an amount and click Deposit.";
   updatePub2PrivTransferBtn();
+  loadAllUsers().then((users) => {
+    // Clear existing options except the placeholder
+    while (xferAddrSelect.options.length > 1) xferAddrSelect.remove(1);
+    const seen = new Set<string>();
+    for (const u of users) {
+      if (u.private_acc_address === privateAccAddressFull) continue;
+      if (seen.has(u.private_acc_address)) continue;
+      seen.add(u.private_acc_address);
+      const opt = document.createElement("option");
+      opt.value = u.private_acc_address;
+      opt.textContent = `${u.name} (${u.private_acc_address.slice(0, 8)}…)`;
+      opt.dataset.name = u.name;
+      opt.dataset.physicalAddress = u.physical_address;
+      xferAddrSelect.appendChild(opt);
+    }
+  });
 }
 
 // ── p2p deposit ───────────────────────────────────────────────────────────────
@@ -1108,7 +1156,7 @@ for (const { label, addr } of DEMO_ADDRESSES) {
 }
 
 function updateXferBtn() {
-  const addrOk = validTesseraAddr(xferAddrIn.value.trim());
+  const addrOk = !!xferAddrSelect.value;
   const amount = parseFloat(xferAmtIn.value);
   const amtOk = amount > 0;
   if (amtOk && BigInt(Math.round(amount * 1_000_000)) > privateBalanceRaw) {
@@ -1120,21 +1168,43 @@ function updateXferBtn() {
   xferBtn.disabled = !(addrOk && amtOk);
 }
 
-xferAddrIn.addEventListener("input", () => {
-  const v = xferAddrIn.value.trim();
-  if (!v) {
-    addrTick.classList.add("hidden");
-    addrHint.textContent = "";
-  } else if (validTesseraAddr(v)) {
+function updateMemoPreview() {
+  const recipientSubpool = xferAddrIn.value ? xferAddrIn.value.slice(0, 16) : "";
+  const memoObj = {
+    sender: {
+      institution_name: getInstitutionName(SUBPOOL_ID_HEX),
+      name: memoSenderName.textContent ?? "",
+      physical_address: memoSenderAddr.textContent ?? "",
+    },
+    recipient: {
+      institution_name: recipientSubpool ? getInstitutionName(recipientSubpool) : "",
+      name: memoRcptName.textContent ?? "",
+      physical_address: memoRcptAddr.textContent ?? "",
+    },
+    reference: memoReferenceIn.value.trim(),
+  };
+  memoPreview.textContent = JSON.stringify(memoObj, null, 2);
+}
+
+xferAddrSelect.addEventListener("change", () => {
+  const opt = xferAddrSelect.selectedOptions[0];
+  xferAddrIn.value = opt?.value ?? "";
+  if (opt?.value) {
+    memoRcptName.textContent = opt.dataset.name ?? "";
+    memoRcptAddr.textContent = opt.dataset.physicalAddress ?? "";
+    updateMemoPreview();
+    memoGroup.style.display = "";
     addrTick.classList.remove("hidden");
     addrHint.textContent = "";
   } else {
+    memoGroup.style.display = "none";
     addrTick.classList.add("hidden");
-    addrHint.textContent =
-      "Invalid address (must be 80 hex chars with valid field elements)";
+    addrHint.textContent = "";
   }
   updateXferBtn();
 });
+
+memoReferenceIn.addEventListener("input", updateMemoPreview);
 
 xferAmtIn.addEventListener("input", updateXferBtn);
 
@@ -1186,10 +1256,24 @@ xferBtn.addEventListener("click", async () => {
         ),
       );
     }
+    const memoObj = {
+      sender: {
+        institution_name: getInstitutionName(SUBPOOL_ID_HEX),
+        name: kycInfo?.name ?? "",
+        physical_address: kycInfo?.physical_address ?? "",
+      },
+      recipient: {
+        institution_name: getInstitutionName(xferAddrIn.value.slice(0, 16)),
+        name: memoRcptName.textContent ?? "",
+        physical_address: memoRcptAddr.textContent ?? "",
+      },
+      reference: memoReferenceIn.value.trim(),
+    };
+    const memoBytes = new TextEncoder().encode(JSON.stringify(memoObj));
     builder.addOutputNote(
       AccountAddress.fromHex(xferAddrIn.value.trim()),
       transferAmount,
-      new Uint8Array(0),
+      memoBytes,
     );
     const spendTx = builder.build();
     step2.className = "p-step done";
@@ -1263,8 +1347,14 @@ xferBtn.addEventListener("click", async () => {
 
     xferBtn.disabled = false;
     xferAmtIn.value = "";
+    xferAddrSelect.value = "";
     xferAddrIn.value = "";
     addrTick.classList.add("hidden");
+    memoGroup.style.display = "none";
+    memoRcptName.textContent = "";
+    memoRcptAddr.textContent = "";
+    memoReferenceIn.value = "";
+    memoPreview.textContent = "";
     updateXferBtn();
   } catch (err) {
     xferError.textContent = `${err}`;
