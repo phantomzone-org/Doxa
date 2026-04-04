@@ -10,7 +10,7 @@ use tessera_client::{
 };
 use tessera_subpool_database::{
 	convert::{account_from_row, hash_to_hex, hex_to_hash_checked},
-	db::{insert_approved_input_note, update_account, update_spend_tx_request_to_approved},
+	db::{insert_incoming_input_note, update_account, update_spend_tx_request_to_settled},
 	types::{account::AccountRow, spend_tx::SpendTxRow},
 };
 use tracing::{error, info};
@@ -29,40 +29,155 @@ struct TransactionRequest {
 
 // ── Core loop ───────────────────────────────────────────────────────────────
 
-pub async fn process_pending_spend_txs(
+/// 1 000 USDX at 6 decimals = 1_000_000_000 units.
+const TRIGGER_THRESHOLD_OUTPUT_NOTE: u64 = 1_000_000_000;
+
+pub async fn triage_spend_txs(
 	pool: &PgPool,
 	approval_sk: &PrivateKey,
 	sequencer_url: &str,
 	http: &reqwest::Client,
 ) -> Result<()> {
-	let rows: Vec<SpendTxRow> = sqlx::query_as(
-		"SELECT * FROM spend_tx_requests \
-         WHERE status = 'PENDING' \
-         ORDER BY created_at ASC",
-	)
-	.fetch_all(pool)
-	.await?;
+	// ── Phase 1a: output notes with APPROVED check → APPROVED or UNDERREVIEW ──
+	{
+		#[derive(sqlx::FromRow)]
+		struct PendingNoteRow {
+			id: i64,
+			amount: Vec<u8>,
+		}
 
-	info!(pending = rows.len(), "polled spend_tx_requests");
+		let rows: Vec<PendingNoteRow> = sqlx::query_as(
+			"SELECT n.id, n.amount \
+             FROM output_notes n \
+             INNER JOIN output_note_checks c ON c.output_note_id = n.id \
+             WHERE n.status = 'PENDING' AND c.status = 'APPROVED' \
+             ORDER BY n.created_at ASC",
+		)
+		.fetch_all(pool)
+		.await?;
 
-	if rows.is_empty() {
-		return Ok(());
+		let threshold = U256::from(TRIGGER_THRESHOLD_OUTPUT_NOTE);
+		for row in rows {
+			let amount = if row.amount.len() == 32 {
+				let mut arr = [0u8; 32];
+				arr.copy_from_slice(&row.amount);
+				U256::from_little_endian(&arr)
+			} else {
+				anyhow::bail!("output_note {} has invalid amount length", row.id);
+			};
+			let new_status = if amount > threshold { "UNDERREVIEW" } else { "APPROVED" };
+			sqlx::query(
+				"UPDATE output_notes SET status = $1::input_note_status, updated_at = NOW() \
+                 WHERE id = $2",
+			)
+			.bind(new_status)
+			.bind(row.id)
+			.execute(pool)
+			.await?;
+			info!(id = row.id, status = new_status, "triaged output note (check=APPROVED)");
+		}
 	}
 
-	for row in rows {
-		if let Err(e) = process_one_spend_tx(pool, approval_sk, sequencer_url, http, &row).await {
-			error!(
-				id = row.id,
-				addr = %row.priv_acc_address,
-				"failed to process spend tx: {e:#}"
-			);
+	// ── Phase 1b: output notes with REJECTED check → UNDERREVIEW ─────────────
+	{
+		let ids: Vec<(i64,)> = sqlx::query_as(
+			"SELECT n.id \
+             FROM output_notes n \
+             INNER JOIN output_note_checks c ON c.output_note_id = n.id \
+             WHERE n.status = 'PENDING' AND c.status = 'REJECTED' \
+             ORDER BY n.created_at ASC",
+		)
+		.fetch_all(pool)
+		.await?;
+
+		for (id,) in ids {
+			sqlx::query(
+				"UPDATE output_notes SET status = 'UNDERREVIEW'::input_note_status, \
+                 updated_at = NOW() WHERE id = $1",
+			)
+			.bind(id)
+			.execute(pool)
+			.await?;
+			info!(id, "output note moved to UNDERREVIEW (check=REJECTED)");
+		}
+	}
+
+	// ── Phase 2: triage spend_tx_requests based on their output note statuses ─
+	{
+		let pending_txs: Vec<SpendTxRow> = sqlx::query_as(
+			"SELECT * FROM spend_tx_requests WHERE status = 'PENDING' ORDER BY created_at ASC",
+		)
+		.fetch_all(pool)
+		.await?;
+
+		for tx_row in pending_txs {
+			if tx_row.onote_identifiers.is_empty() {
+				continue;
+			}
+			let statuses: Vec<(String,)> = sqlx::query_as(
+				"SELECT status::text FROM output_notes \
+                 WHERE identifier = ANY($1)",
+			)
+			.bind(&tx_row.onote_identifiers)
+			.fetch_all(pool)
+			.await?;
+
+			let all_approved = statuses.iter().all(|(s,)| s == "APPROVED");
+			let any_rejected = statuses.iter().any(|(s,)| s == "REJECTED");
+
+			if any_rejected {
+				sqlx::query(
+					"UPDATE spend_tx_requests \
+                     SET status = 'REJECTED'::spend_tx_status, updated_at = NOW() \
+                     WHERE id = $1",
+				)
+				.bind(tx_row.id)
+				.execute(pool)
+				.await?;
+				info!(id = tx_row.id, "spend tx REJECTED (output note rejected)");
+			} else if all_approved {
+				sqlx::query(
+					"UPDATE spend_tx_requests \
+                     SET status = 'APPROVED'::spend_tx_status, updated_at = NOW() \
+                     WHERE id = $1",
+				)
+				.bind(tx_row.id)
+				.execute(pool)
+				.await?;
+				info!(id = tx_row.id, "spend tx APPROVED (all output notes approved)");
+			}
+		}
+	}
+
+	// ── Phase 3: settle APPROVED spend_tx_requests ────────────────────────────
+	{
+		let rows: Vec<SpendTxRow> = sqlx::query_as(
+			"SELECT * FROM spend_tx_requests \
+             WHERE status = 'APPROVED' \
+             ORDER BY created_at ASC",
+		)
+		.fetch_all(pool)
+		.await?;
+
+		info!(approved = rows.len(), "polled APPROVED spend_tx_requests");
+
+		for row in rows {
+			if let Err(e) =
+				settle_one_spend_tx(pool, approval_sk, sequencer_url, http, &row).await
+			{
+				error!(
+					id = row.id,
+					addr = %row.priv_acc_address,
+					"failed to settle spend tx: {e:#}"
+				);
+			}
 		}
 	}
 
 	Ok(())
 }
 
-async fn process_one_spend_tx(
+async fn settle_one_spend_tx(
 	pool: &PgPool,
 	approval_sk: &PrivateKey,
 	sequencer_url: &str,
@@ -266,7 +381,7 @@ async fn process_one_spend_tx(
 		.with_context(|| format!("failed to mark input note '{inote_id}' as consumed"))?;
 	}
 
-	update_spend_tx_request_to_approved(&mut *tx, sig_bytes.as_ref(), row.id).await?;
+	update_spend_tx_request_to_settled(&mut *tx, sig_bytes.as_ref(), row.id).await?;
 
 	update_account(
 		&mut *tx,
@@ -286,8 +401,8 @@ async fn process_one_spend_tx(
 		.unwrap_or(false);
 
 		if local {
-			insert_approved_input_note(
-				&mut *tx,
+			insert_incoming_input_note(
+				pool,
 				&onote.identifier,
 				&onote.asset_id,
 				&onote.amount,
@@ -440,7 +555,7 @@ pub async fn poll_incoming_notes(
 			hex::decode(&note.amount).context("invalid amount hex in forwarded note")?;
 		let memo_bytes = hex::decode(&note.memo).context("invalid memo hex in forwarded note")?;
 
-		insert_approved_input_note(
+		insert_incoming_input_note(
 			pool,
 			&note.identifier,
 			&asset_id_bytes,

@@ -1,4 +1,8 @@
-use axum::{extract::{Path, State}, http::StatusCode, Json};
+use axum::{
+	extract::{Path, State},
+	http::StatusCode,
+	Json,
+};
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -9,7 +13,10 @@ use crate::{
 	convert::{account_from_row, bytes_to_u256},
 	error::AppError,
 	state::AppState,
-	types::{account::AccountRow, spend_tx::{InputNoteStatus, SpendTxStatus}},
+	types::{
+		account::AccountRow,
+		spend_tx::{InputNoteStatus, SpendTxStatus},
+	},
 };
 
 #[derive(Deserialize)]
@@ -102,7 +109,7 @@ pub async fn submit_spend_tx_handler(
 
 		if !matches!(status, InputNoteStatus::Approved) || consume {
 			return Err(AppError::InvalidInput(format!(
-				"input note '{}' is either not approved",
+				"input note '{}' is not approved",
 				note.identifier
 			)));
 		}
@@ -143,7 +150,7 @@ pub async fn submit_spend_tx_handler(
 		.map_err(|_| AppError::InvalidInput("asset_id must be 8 bytes".into()))?;
 	let asset_id = AssetId::from_u64(u64::from_le_bytes(asset_id_arr))
 		.map_err(|e| AppError::InvalidInput(e.to_string()))?;
-	info!("Spend tx asset id = {:?}", asset_id);
+	// info!("Spend tx asset id = {:?}", asset_id);
 	let account_balance = account
 		.ast
 		.assets
@@ -286,10 +293,11 @@ pub async fn submit_spend_tx_handler(
 		.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
 
 	for out in &decoded_outputs {
-		sqlx::query(
+		let (output_note_id,): (i64,) = sqlx::query_as(
 			r#"INSERT INTO output_notes
                    (identifier, asset_id, amount, recipient_address, sender_address, memo)
-               VALUES ($1, $2, $3, $4, $5, $6)"#,
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING id"#,
 		)
 		.bind(&out.identifier)
 		.bind(&out.asset_id_bytes)
@@ -297,6 +305,15 @@ pub async fn submit_spend_tx_handler(
 		.bind(&out.recipient_address)
 		.bind(&out.sender_address)
 		.bind(&out.memo_bytes)
+		.fetch_one(&mut *tx)
+		.await
+		.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
+
+		sqlx::query(
+			"INSERT INTO output_note_checks (output_note_id, identifier) VALUES ($1, $2)",
+		)
+		.bind(output_note_id)
+		.bind(&out.identifier)
 		.execute(&mut *tx)
 		.await
 		.map_err(|e: sqlx::Error| AppError::Internal(e.into()))?;
@@ -325,18 +342,21 @@ pub async fn get_spend_tx_status_handler(
 	State(state): State<AppState>,
 	Path(id): Path<i64>,
 ) -> Result<(StatusCode, Json<SpendTxStatusResponse>), AppError> {
-	let row: Option<(i64, SpendTxStatus, Option<String>)> = sqlx::query_as(
-		"SELECT id, status, rejection_reason FROM spend_tx_requests WHERE id = $1",
-	)
-	.bind(id)
-	.fetch_optional(&state.pool)
-	.await?;
+	let row: Option<(i64, SpendTxStatus, Option<String>)> =
+		sqlx::query_as("SELECT id, status, rejection_reason FROM spend_tx_requests WHERE id = $1")
+			.bind(id)
+			.fetch_optional(&state.pool)
+			.await?;
 
 	match row {
 		None => Err(AppError::NotFound(format!("spend tx {id} not found"))),
 		Some((id, status, rejection_reason)) => Ok((
 			StatusCode::OK,
-			Json(SpendTxStatusResponse { id, status, rejection_reason }),
+			Json(SpendTxStatusResponse {
+				id,
+				status,
+				rejection_reason,
+			}),
 		)),
 	}
 }

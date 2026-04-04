@@ -90,8 +90,8 @@ pub async fn insert_account_and_user(
 	Ok(())
 }
 
-pub async fn insert_approved_input_note<'e>(
-	executor: impl Executor<'e, Database = Postgres>,
+pub async fn insert_incoming_input_note(
+	pool: &PgPool,
 	identifier: &str,
 	asset_id: &[u8],
 	amount: &[u8],
@@ -99,11 +99,12 @@ pub async fn insert_approved_input_note<'e>(
 	sender_address: &str,
 	memo: &[u8],
 ) -> Result<()> {
-	sqlx::query(
+	let row: Option<(i64,)> = sqlx::query_as(
 		r#"INSERT INTO input_notes
                (identifier, asset_id, amount, recipient_address, sender_address, memo, status)
-           VALUES ($1, $2, $3, $4, $5, $6, 'APPROVED')
-           ON CONFLICT (identifier) DO NOTHING"#,
+           VALUES ($1, $2, $3, $4, $5, $6, 'PENDING')
+           ON CONFLICT (identifier) DO NOTHING
+           RETURNING id"#,
 	)
 	.bind(identifier)
 	.bind(asset_id)
@@ -111,35 +112,20 @@ pub async fn insert_approved_input_note<'e>(
 	.bind(recipient_address)
 	.bind(sender_address)
 	.bind(memo)
-	.execute(executor)
+	.fetch_optional(pool)
 	.await
 	.context("failed to insert input_note")?;
-	Ok(())
-}
 
-/// Insert a row into the `input_notes` table with status PENDING.
-pub async fn insert_pending_input_note<'e>(
-	executor: impl Executor<'e, Database = Postgres>,
-	identifier: &str,
-	asset_id: &[u8],
-	amount: &[u8],
-	recipient_address: &str,
-	sender_address: &str,
-) -> Result<()> {
-	sqlx::query(
-		r#"INSERT INTO input_notes
-               (identifier, asset_id, amount, recipient_address, sender_address, status)
-           VALUES ($1, $2, $3, $4, $5, 'PENDING')
-           ON CONFLICT (identifier) DO NOTHING"#,
-	)
-	.bind(identifier)
-	.bind(asset_id)
-	.bind(amount)
-	.bind(recipient_address)
-	.bind(sender_address)
-	.execute(executor)
-	.await
-	.context("failed to insert pending input_note")?;
+	if let Some((input_note_id,)) = row {
+		sqlx::query(
+			"INSERT INTO input_note_checks (input_note_id, identifier) VALUES ($1, $2)",
+		)
+		.bind(input_note_id)
+		.bind(identifier)
+		.execute(pool)
+		.await
+		.context("failed to insert input_note_check")?;
+	}
 	Ok(())
 }
 
@@ -185,6 +171,24 @@ pub async fn update_spend_tx_request_to_approved<'e>(
 	.execute(executor)
 	.await
 	.context("failed to update spend_tx_requests")?;
+	Ok(())
+}
+
+pub async fn update_spend_tx_request_to_settled<'e>(
+	executor: impl Executor<'e, Database = Postgres>,
+	sig_bytes: &[u8],
+	id: i64,
+) -> Result<()> {
+	sqlx::query(
+		"UPDATE spend_tx_requests \
+         SET status = 'SETTLED', approval_signature = $1, updated_at = NOW() \
+         WHERE id = $2",
+	)
+	.bind(sig_bytes)
+	.bind(id)
+	.execute(executor)
+	.await
+	.context("failed to settle spend_tx_requests")?;
 	Ok(())
 }
 

@@ -21,7 +21,7 @@ use tessera_subpool_database::{
 	convert::{
 		account_from_row, bytes_to_f, bytes_to_u256, f_to_bytes, hash_to_hex, u256_to_bytes,
 	},
-	db::{insert_pending_input_note, update_account, update_deposit_tx_request_to_settled},
+	db::{update_account, update_deposit_tx_request_to_settled},
 	types::{account::AccountRow, deposit::DepositTxRow},
 };
 use tracing::{error, info};

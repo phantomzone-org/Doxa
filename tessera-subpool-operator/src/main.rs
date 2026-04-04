@@ -103,8 +103,7 @@ async fn main() -> Result<()> {
 		// }
 
 		if let Err(e) =
-			spend_txs::process_pending_spend_txs(&pool, &approval_sk, &config.sequencer_url, &http)
-				.await
+			spend_txs::triage_spend_txs(&pool, &approval_sk, &config.sequencer_url, &http).await
 		{
 			tracing::error!("spend_tx tick failed: {e:#}");
 		}
