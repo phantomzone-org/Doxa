@@ -24,7 +24,7 @@ pub struct DepositTxRow {
 	pub deposit_note_identifier: Vec<u8>,
 	pub deposit_amount: Vec<u8>,
 	pub asset_id: Vec<u8>,
-	pub signed_public_tx: Vec<u8>,
+	pub deposit_type_signature: Vec<u8>,
 	pub deposit_tx_hash: Option<String>,
 	pub status: DepositTxStatus,
 	pub approval_signature: Option<Vec<u8>>,

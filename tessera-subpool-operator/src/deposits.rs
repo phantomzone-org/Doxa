@@ -1,7 +1,9 @@
 use alloy::{
-	primitives::{Address, Bytes, B256},
-	providers::Provider,
+	network::EthereumWallet,
+	primitives::{Address, Bytes, B256, U256 as AlloyU256},
+	providers::{Provider, ProviderBuilder},
 	rpc::types::TransactionRequest,
+	signers::local::PrivateKeySigner,
 	sol,
 	sol_types::SolCall,
 };
@@ -28,6 +30,7 @@ use tracing::{error, info};
 
 sol! {
 	function getDeposit(bytes32 noteCommitment) external view returns (uint256 value, address recipient, uint8 status);
+	function signedDepositAndRegister(bytes signature, bytes32 depositNoteCommitment, uint256 amount) external;
 }
 
 // ── Sequencer deposit request ───────────────────────────────────────────────
@@ -37,33 +40,58 @@ struct DepositValidationRequest {
 	note_commitment: String,
 }
 
-// ── On-chain broadcast ──────────────────────────────────────────────────────
+// ── On-chain call ────────────────────────────────────────────────────────────
 
-/// Broadcast the depositor's pre-signed ETH tx and wait for confirmation.
-/// Returns the tx_hash
-async fn broadcast_deposit_tx<P: Provider + Clone>(
-	rpc_provider: &P,
-	raw_tx: &[u8],
+/// Call `signedDepositAndRegister` on the Tessera contract using the operator's wallet.
+/// Returns the confirmed tx hash.
+async fn call_signed_deposit_and_register(
+	operator_eth_key: &str,
+	rpc_url: &str,
+	rollup_address: Address,
+	signature: Vec<u8>,
+	note_commitment: B256,
+	amount_le: [u8; 32],
 	id: i64,
 ) -> Result<B256> {
-	let pending = rpc_provider
-		.send_raw_transaction(raw_tx)
+	let key = operator_eth_key.trim_start_matches("0x");
+	let signer: PrivateKeySigner = key
+		.parse()
+		.context("invalid OPERATOR_KEY for signedDepositAndRegister")?;
+	let wallet = EthereumWallet::from(signer);
+	let provider = ProviderBuilder::new()
+		.wallet(wallet)
+		.connect_http(rpc_url.parse().context("invalid RPC_URL")?);
+
+	let amount_alloy = AlloyU256::from_le_bytes(amount_le);
+	let calldata = signedDepositAndRegisterCall {
+		signature: Bytes::from(signature),
+		depositNoteCommitment: note_commitment,
+		amount: amount_alloy,
+	}
+	.abi_encode();
+
+	let eth_tx = TransactionRequest::default()
+		.to(rollup_address)
+		.input(Bytes::from(calldata).into());
+
+	let pending = provider
+		.send_transaction(eth_tx)
 		.await
-		.context("failed to broadcast deposit tx")?;
+		.context("failed to send signedDepositAndRegister tx")?;
 
 	let tx_hash = *pending.tx_hash();
-	info!(id, %tx_hash, "deposit tx broadcast, waiting for receipt");
+	info!(id, %tx_hash, "signedDepositAndRegister tx broadcast, waiting for receipt");
 
 	let receipt = pending
 		.get_receipt()
 		.await
-		.context("failed to get deposit tx receipt")?;
+		.context("failed to get signedDepositAndRegister receipt")?;
 
 	anyhow::ensure!(
 		receipt.status(),
-		"deposit tx reverted on-chain (tx={tx_hash})"
+		"signedDepositAndRegister reverted on-chain (tx={tx_hash})"
 	);
-	info!(id, %tx_hash, "deposit tx confirmed on-chain");
+	info!(id, %tx_hash, "signedDepositAndRegister confirmed on-chain");
 	Ok(tx_hash)
 }
 
@@ -116,12 +144,14 @@ async fn post_deposit_to_sequencer(
 //  - do the same for withdrawal
 //
 //
-pub async fn process_pending_deposits<P: Provider + Clone>(
+pub async fn process_pending_deposits(
 	pool: &PgPool,
 	approval_sk: &PrivateKey,
 	sequencer_url: &str,
 	http: &reqwest::Client,
-	rpc_provider: &P,
+	operator_eth_key: &str,
+	rpc_url: &str,
+	rollup_address: Address,
 ) -> Result<()> {
 	let rows: Vec<DepositTxRow> = sqlx::query_as(
 		"SELECT dtr.* FROM deposit_tx_requests dtr \
@@ -140,8 +170,17 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 	}
 
 	for row in rows {
-		if let Err(e) =
-			process_one_deposit(pool, approval_sk, sequencer_url, http, rpc_provider, &row).await
+		if let Err(e) = process_one_deposit(
+			pool,
+			approval_sk,
+			sequencer_url,
+			http,
+			operator_eth_key,
+			rpc_url,
+			rollup_address,
+			&row,
+		)
+		.await
 		{
 			error!(
 				id = row.id,
@@ -159,16 +198,18 @@ pub async fn process_pending_deposits<P: Provider + Clone>(
 //  - if check is success: then process the tx. Mark it approved
 //  - if check is fail: then reject the tx
 
-async fn process_one_deposit<P: Provider + Clone>(
+async fn process_one_deposit(
 	pool: &PgPool,
 	approval_sk: &PrivateKey,
 	sequencer_url: &str,
 	http: &reqwest::Client,
-	rpc_provider: &P,
+	operator_eth_key: &str,
+	rpc_url: &str,
+	rollup_address: Address,
 	row: &DepositTxRow,
 ) -> Result<()> {
-	// ── 1. Broadcast deposit tx on-chain ─────────────────────────────────────
-	let _broadcast_tx_hash = if let Some(tx_hash) = &row.deposit_tx_hash {
+	// ── 1. Call signedDepositAndRegister on-chain (idempotent via deposit_tx_hash) ─
+	let _on_chain_tx_hash = if let Some(tx_hash) = &row.deposit_tx_hash {
 		let parsed = tx_hash
 			.parse::<B256>()
 			.with_context(|| format!("invalid persisted deposit_tx_hash '{tx_hash}'"))?;
@@ -176,17 +217,42 @@ async fn process_one_deposit<P: Provider + Clone>(
 			id = row.id,
 			addr = %row.recipient_address,
 			tx_hash = %parsed,
-			"reusing previously broadcast deposit tx"
+			"reusing previously submitted signedDepositAndRegister tx"
 		);
 		parsed
 	} else {
 		info!(
 			id = row.id,
 			addr = %row.recipient_address,
-			"broadcasting deposit tx on-chain"
+			"calling signedDepositAndRegister on-chain"
 		);
 
-		let tx_hash = broadcast_deposit_tx(rpc_provider, &row.signed_public_tx, row.id).await?;
+		let deposit = row.to_deposite_note()?;
+		let deposit_note_comm = deposit.commitment();
+		let nc_b256 = B256::from_slice(
+			&deposit_note_comm
+				.0
+				 .0
+				.iter()
+				.flat_map(|f| f.to_canonical_u64().to_le_bytes())
+				.collect::<Vec<_>>(),
+		);
+		let amount_le: [u8; 32] = row
+			.deposit_amount
+			.as_slice()
+			.try_into()
+			.context("deposit_amount must be 32 bytes")?;
+
+		let tx_hash = call_signed_deposit_and_register(
+			operator_eth_key,
+			rpc_url,
+			rollup_address,
+			row.deposit_type_signature.clone(),
+			nc_b256,
+			amount_le,
+			row.id,
+		)
+		.await?;
 		sqlx::query(
 			"UPDATE deposit_tx_requests \
 	         SET deposit_tx_hash = $1, updated_at = NOW() \
@@ -196,7 +262,7 @@ async fn process_one_deposit<P: Provider + Clone>(
 		.bind(row.id)
 		.execute(pool)
 		.await
-		.context("failed to persist broadcast deposit tx hash")?;
+		.context("failed to persist deposit tx hash")?;
 		tx_hash
 	};
 
@@ -234,6 +300,8 @@ async fn process_one_deposit<P: Provider + Clone>(
 	let sig_bytes = approval_sig.encode();
 
 	// ── 6. POST to sequencer ─────────────────────────────────────────────────
+	// TODO: the sequencer receives deposit_note_comm, accin.nullifier(), accout.commitment(). The
+	// smart contract already has the ethaddress
 	let nc_hex = hash_to_hex(&deposit_note_comm.0 .0);
 	info!(nc = nc_hex, "deposit note cm hex");
 	post_deposit_to_sequencer(http, sequencer_url, &nc_hex).await?;

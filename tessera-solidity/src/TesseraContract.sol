@@ -88,6 +88,7 @@ contract TesseraContract {
         uint256 root; // single IMT root — must be in confirmedRoots
         bytes32 mainPoolConfigRoot;
         bytes32[] depositNoteCommitments; // note commitments consumed from pending deposits
+        //TODO: add []accinnulls, []accoutcomms
         uint256 batchPoseidonRoot;
         bool confirmed;
     }
@@ -116,6 +117,9 @@ contract TesseraContract {
 
     uint256 public constant MAX_TREE_DEPTH = 32;
 
+    bytes32 private constant DEPOSIT_TYPEHASH =
+        keccak256("Deposit(bytes32 depositNoteCommitment,uint256 amount)");
+
     /// @dev Must match `DEPOSIT_BATCH_SIZE` in the Rust deposit artifact generator
     ///      (tessera-e2e/src/bin/deposit_artifacts.rs).  The circuit hashes all
     ///      `DEPOSIT_BATCH_SIZE` eth-address slots; dummy slots carry address(0).
@@ -124,6 +128,9 @@ contract TesseraContract {
     // -------------------------------------------------------------------------
     // State variables
     // -------------------------------------------------------------------------
+
+    // --- EIP-712 ---
+    bytes32 private immutable DOMAIN_SEPARATOR;
 
     // --- access control ---
     address public operator;
@@ -276,6 +283,18 @@ contract TesseraContract {
         poolConfigRoot = _poolConfigRoot;
         treeDepth = _treeDepth;
 
+        DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256("TesseraDeposit"),
+                keccak256("1"),
+                block.chainid,
+                address(this)
+            )
+        );
+
         // Build zeros chain: zeros[0] = 0, zeros[i] = compress(zeros[i-1], zeros[i-1])
         // TODO: HARDODE
         zeros[0] = 0;
@@ -367,6 +386,44 @@ contract TesseraContract {
         uint256 maxAmount
     ) external whenNotPaused returns (bytes32) {
         return _depositAndRegister(noteCommitment, payer, payer, maxAmount);
+    }
+
+    /// @notice Operator-pays-gas variant: depositor signs an EIP-712 typed-data message
+    ///         off-chain; the operator submits this call on their behalf.
+    ///         The signature covers {depositNoteCommitment, amount} and must be 65 bytes (r,s,v).
+    function signedDepositAndRegister(
+        bytes memory signature,
+        bytes32 depositNoteCommitment,
+        uint256 amount
+    ) external whenNotPaused {
+        require(signature.length == 65, "bad sig length");
+
+        bytes32 structHash = keccak256(
+            abi.encode(DEPOSIT_TYPEHASH, depositNoteCommitment, amount)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash)
+        );
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(signature, 32))
+            s := mload(add(signature, 64))
+            v := byte(0, mload(add(signature, 96)))
+        }
+        if (v < 27) v += 27;
+
+        address depositor = ecrecover(digest, v, r, s);
+        require(depositor != address(0), "invalid signature");
+
+        _depositAndRegister(
+            depositNoteCommitment,
+            depositor,
+            depositor,
+            amount
+        );
     }
 
     function _depositAndRegister(
@@ -525,6 +582,8 @@ contract TesseraContract {
             revert PoolConfigMismatch();
 
         // Validate each deposit note exists and is Pending.
+        //
+        // TODO(fix): One can withdraw between the submitDepositBatch and proveDepositBatch.
         uint256 len = batch.depositNoteCommitments.length;
         for (uint256 i = 0; i < len; i++) {
             bytes32 nc = batch.depositNoteCommitments[i];

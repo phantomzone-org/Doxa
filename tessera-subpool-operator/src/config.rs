@@ -14,6 +14,8 @@ pub struct OperatorConfig {
 	pub approval_private_key: String,
 	/// Ethereum JSON-RPC URL for broadcasting deposit transactions. Env: RPC_URL (required).
 	pub rpc_url: String,
+	/// Ethereum private key used to submit on-chain calls (e.g. signedDepositAndRegister). Env: OPERATOR_KEY (required).
+	pub operator_eth_key: String,
 	/// How often to poll for pending FreshAcc requests. Env: POLL_INTERVAL_SECS (default 5).
 	pub poll_interval: Duration,
 	/// Subpool ID for this operator instance. Env: SUBPOOL_ID (default 1).
@@ -38,6 +40,9 @@ impl OperatorConfig {
 
 		let rpc_url = std::env::var("RPC_URL").context("RPC_URL not set")?;
 
+		let operator_eth_key =
+			std::env::var("OPERATOR_KEY").context("OPERATOR_KEY not set")?;
+
 		let poll_interval = Duration::from_secs(
 			std::env::var("POLL_INTERVAL_SECS")
 				.unwrap_or_else(|_| "5".to_string())
@@ -58,6 +63,7 @@ impl OperatorConfig {
 			sequencer_url,
 			approval_private_key,
 			rpc_url,
+			operator_eth_key,
 			poll_interval,
 			subpool_id,
 			rollup_address,

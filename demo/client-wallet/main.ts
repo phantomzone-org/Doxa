@@ -3,7 +3,6 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
-  encodeFunctionData,
   http,
   erc20Abi,
   formatUnits,
@@ -62,19 +61,21 @@ const ASSET_ID = leHexToU64(ASSET_ID_HEX);
 console.log("Subpool ID =", SUBPOOL_ID_HEX);
 console.log("DB server =", API_BASE_URL);
 
-// ── Tessera contract ABI fragment ─────────────────────────────────────────────
+// ── EIP-712 deposit signing ────────────────────────────────────────────────────
 
-const TESSERA_ABI = [
-  {
-    name: "depositAndRegister",
-    type: "function",
-    inputs: [
-      { name: "noteCommitment", type: "bytes32" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ type: "bytes32" }],
-  },
-] as const;
+const TESSERA_DEPOSIT_DOMAIN = {
+  name: "TesseraDeposit",
+  version: "1",
+  chainId: 11155111,
+  verifyingContract: TESSERA_CONTRACT,
+} as const;
+
+const TESSERA_DEPOSIT_TYPES = {
+  Deposit: [
+    { name: "depositNoteCommitment", type: "bytes32" },
+    { name: "amount", type: "uint256" },
+  ],
+} as const;
 
 // ── API client ────────────────────────────────────────────────────────────────
 
@@ -781,23 +782,22 @@ pub2privDepositBtn.addEventListener("click", async () => {
 
     const step3 = pStep(
       pub2privSteps,
-      "⏳ Signing deposit transaction…",
+      "⏳ Signing deposit message…",
       "active",
     );
     pub2privBar.style.width = "75%";
-    const calldata = encodeFunctionData({
-      abi: TESSERA_ABI,
-      functionName: "depositAndRegister",
-      args: [commitmentHex, depositAmountUnits],
+    const depositSig = await pubWalletClient!.signTypedData({
+      domain: TESSERA_DEPOSIT_DOMAIN,
+      types: TESSERA_DEPOSIT_TYPES,
+      primaryType: "Deposit",
+      message: {
+        depositNoteCommitment: commitmentHex,
+        amount: depositAmountUnits,
+      },
     });
-    const txRequest = await pubWalletClient!.prepareTransactionRequest({
-      to: TESSERA_CONTRACT,
-      data: calldata,
-    });
-    const signedTx = await pubWalletClient!.signTransaction(txRequest as any);
-    const signedTxHex = (signedTx as string).replace(/^0x/, "");
+    const depositSigHex = depositSig.replace(/^0x/, "");
     step3.className = "p-step done";
-    step3.textContent = "✓ Transaction signed";
+    step3.textContent = "✓ Deposit message signed";
 
     const step4 = pStep(
       pub2privSteps,
@@ -811,7 +811,7 @@ pub2privDepositBtn.addEventListener("click", async () => {
       deposit_note_identifier: depositNote.identifierHex(),
       deposit_amount: u256LeHex(depositAmountUnits),
       asset_id: ASSET_ID_HEX,
-      signed_public_tx: signedTxHex,
+      deposit_type_signature: depositSigHex,
     });
     step4.className = "p-step done";
     step4.textContent = "✓ Deposit submitted";
@@ -973,21 +973,20 @@ p2pBtn.addEventListener("click", async () => {
     step2.className = "p-step done";
     step2.textContent = "✓ Deposit note constructed";
 
-    const step3 = pStep(p2pSteps, "⏳ Signing deposit transaction…", "active");
+    const step3 = pStep(p2pSteps, "⏳ Signing deposit message…", "active");
     p2pBar.style.width = "75%";
-    const calldata = encodeFunctionData({
-      abi: TESSERA_ABI,
-      functionName: "depositAndRegister",
-      args: [commitmentHex, depositAmountUnits],
+    const depositSig = await walletClient!.signTypedData({
+      domain: TESSERA_DEPOSIT_DOMAIN,
+      types: TESSERA_DEPOSIT_TYPES,
+      primaryType: "Deposit",
+      message: {
+        depositNoteCommitment: commitmentHex,
+        amount: depositAmountUnits,
+      },
     });
-    const txRequest = await walletClient!.prepareTransactionRequest({
-      to: TESSERA_CONTRACT,
-      data: calldata,
-    });
-    const signedTx = await walletClient!.signTransaction(txRequest as any);
-    const signedTxHex = (signedTx as string).replace(/^0x/, "");
+    const depositSigHex = depositSig.replace(/^0x/, "");
     step3.className = "p-step done";
-    step3.textContent = "✓ Transaction signed";
+    step3.textContent = "✓ Deposit message signed";
 
     const step4 = pStep(p2pSteps, "⏳ Submitting deposit request…", "active");
     p2pBar.style.width = "88%";
@@ -997,7 +996,7 @@ p2pBtn.addEventListener("click", async () => {
       deposit_note_identifier: depositNote.identifierHex(),
       deposit_amount: u256LeHex(depositAmountUnits),
       asset_id: ASSET_ID_HEX,
-      signed_public_tx: signedTxHex,
+      deposit_type_signature: depositSigHex,
     });
     step4.className = "p-step done";
     step4.textContent = "✓ Deposit submitted";

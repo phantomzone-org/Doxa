@@ -45,8 +45,8 @@ export interface DepositRequest {
   deposit_amount: string;
   /** 16 hex chars — u64 asset_id, 8 bytes LE */
   asset_id: string;
-  /** hex-encoded RLP-encoded signed ETH tx (no 0x prefix) */
-  signed_public_tx: string;
+  /** hex-encoded EIP-712 typed-data signature (65 bytes, no 0x prefix) */
+  deposit_type_signature: string;
 }
 
 /** Response body for a successful POST /deposit (HTTP 201) */

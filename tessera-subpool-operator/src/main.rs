@@ -3,7 +3,7 @@ mod deposits;
 mod operator;
 mod spend_txs;
 
-use alloy::{primitives::Address, providers::ProviderBuilder};
+use alloy::primitives::Address;
 use anyhow::Result;
 use config::OperatorConfig;
 use tessera_client::schnorr::PrivateKey;
@@ -36,9 +36,6 @@ async fn main() -> Result<()> {
 		&schema_name,
 	)
 	.await?;
-
-	// Alloy provider for broadcasting raw transactions on-chain.
-	let rpc_provider = ProviderBuilder::new().connect_http(config.rpc_url.parse()?);
 
 	let subpool_id = config.subpool_id;
 	let rollup_address: Address = config
@@ -77,7 +74,9 @@ async fn main() -> Result<()> {
 			&approval_sk,
 			&config.sequencer_url,
 			&http,
-			&rpc_provider,
+			&config.operator_eth_key,
+			&config.rpc_url,
+			rollup_address,
 		)
 		.await
 		{

@@ -14,8 +14,8 @@ pub struct DepositRequest {
 	pub deposit_amount: String,
 	/// hex-encoded F (8 bytes)
 	pub asset_id: String,
-	/// hex-encoded RLP-encoded signed ETH tx
-	pub signed_public_tx: String,
+	/// hex-encoded EIP-712 typed-data signature (65 bytes)
+	pub deposit_type_signature: String,
 }
 
 #[derive(Serialize)]
@@ -60,8 +60,8 @@ pub async fn submit_deposit_handler(
 		.map_err(|_| AppError::InvalidInput("invalid deposit_amount hex".into()))?;
 	let asset_id_bytes = hex::decode(&req.asset_id)
 		.map_err(|_| AppError::InvalidInput("invalid asset_id hex".into()))?;
-	let signed_tx_bytes = hex::decode(&req.signed_public_tx)
-		.map_err(|_| AppError::InvalidInput("invalid signed_public_tx hex".into()))?;
+	let signed_tx_bytes = hex::decode(&req.deposit_type_signature)
+		.map_err(|_| AppError::InvalidInput("invalid deposit_type_signature hex".into()))?;
 
 	let exists: bool = sqlx::query_scalar(
 		"SELECT EXISTS(SELECT 1 FROM deposit_tx_requests WHERE deposit_note_identifier = $1)",
@@ -86,7 +86,7 @@ pub async fn submit_deposit_handler(
 	let row = sqlx::query(
 		r#"INSERT INTO deposit_tx_requests
                (recipient_address, eth_address, deposit_note_identifier,
-                deposit_amount, asset_id, signed_public_tx)
+                deposit_amount, asset_id, deposit_type_signature)
            VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING id"#,
 	)

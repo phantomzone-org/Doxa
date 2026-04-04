@@ -55,10 +55,10 @@ CREATE TABLE freshacc_requests (
 );
 
 -- ── deposit_tx_requests ───────────────────────────────────────────────────────
--- deposit_note_identifier: [F;2] = 16 bytes
--- deposit_amount:          U256  = 32 bytes
--- asset_id:                F     =  8 bytes
--- signed_public_tx:        RLP-encoded signed ETH tx (variable length)
+-- deposit_note_identifier:  [F;2] = 16 bytes
+-- deposit_amount:           U256  = 32 bytes
+-- asset_id:                 F     =  8 bytes
+-- deposit_type_signature:   EIP-712 typed-data signature (65 bytes)
 
 CREATE TABLE deposit_tx_requests (
     id                       BIGSERIAL         PRIMARY KEY,
@@ -67,7 +67,7 @@ CREATE TABLE deposit_tx_requests (
     deposit_note_identifier  BYTEA             NOT NULL UNIQUE,
     deposit_amount           BYTEA             NOT NULL,
     asset_id                 BYTEA             NOT NULL,
-    signed_public_tx         BYTEA             NOT NULL,
+    deposit_type_signature   BYTEA             NOT NULL,
     deposit_tx_hash          TEXT,
     status                   deposit_tx_status NOT NULL DEFAULT 'PENDING',
     approval_signature       BYTEA,

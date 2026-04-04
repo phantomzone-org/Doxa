@@ -335,7 +335,7 @@ async fn main() -> Result<()> {
 			"deposit_note_identifier": &note_id_hex,
 			"deposit_amount": hex::encode(amount_bytes),
 			"asset_id": hex::encode(asset_id_bytes),
-			"signed_public_tx": raw_tx_hex,
+			"deposit_type_signature": raw_tx_hex,
 		});
 
 		let resp = http
