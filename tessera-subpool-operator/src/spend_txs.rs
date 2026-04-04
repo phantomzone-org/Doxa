@@ -67,7 +67,7 @@ pub async fn triage_spend_txs(
 			};
 			let new_status = if amount > threshold { "UNDERREVIEW" } else { "APPROVED" };
 			sqlx::query(
-				"UPDATE output_notes SET status = $1::input_note_status, updated_at = NOW() \
+				"UPDATE output_notes SET status = $1::output_note_status, updated_at = NOW() \
                  WHERE id = $2",
 			)
 			.bind(new_status)
@@ -92,7 +92,7 @@ pub async fn triage_spend_txs(
 
 		for (id,) in ids {
 			sqlx::query(
-				"UPDATE output_notes SET status = 'UNDERREVIEW'::input_note_status, \
+				"UPDATE output_notes SET status = 'UNDERREVIEW'::output_note_status, \
                  updated_at = NOW() WHERE id = $1",
 			)
 			.bind(id)

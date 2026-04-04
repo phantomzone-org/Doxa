@@ -4,10 +4,11 @@ CREATE TYPE freshacc_status          AS ENUM ('PENDING', 'APPROVED', 'REJECTED')
 CREATE TYPE deposit_tx_status        AS ENUM ('PENDING', 'UNDERREVIEW', 'APPROVED', 'SETTLED', 'REJECTED');
 CREATE TYPE deposit_check_status     AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE spend_tx_status          AS ENUM ('PENDING', 'APPROVED', 'SETTLED', 'REJECTED');
-CREATE TYPE input_note_status        AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE input_note_status        AS ENUM ('PENDING', 'UNDERREVIEW', 'APPROVED', 'REJECTED');
+CREATE TYPE output_note_status       AS ENUM ('PENDING', 'UNDERREVIEW', 'APPROVED', 'REJECTED');
 CREATE TYPE withdrawal_tx_status     AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
-CREATE TYPE output_note_check_status AS ENUM ('PENDING', 'UNDERREVIEW', 'APPROVED', 'REJECTED');
-CREATE TYPE input_note_check_status  AS ENUM ('PENDING', 'UNDERREVIEW', 'APPROVED', 'REJECTED');
+CREATE TYPE output_note_check_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE input_note_check_status  AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 
 -- ── accounts ──────────────────────────────────────────────────────────────────
 -- All Goldilocks field elements stored as BYTEA via to_canonical_u64().to_le_bytes().
@@ -151,14 +152,16 @@ CREATE TABLE withdrawal_tx_requests (
 -- ── output_notes ──────────────────────────────────────────────────────────────
 
 CREATE TABLE output_notes (
-    id                BIGSERIAL   PRIMARY KEY,
-    identifier        TEXT        NOT NULL UNIQUE,
-    asset_id          BYTEA       NOT NULL,
-    amount            BYTEA       NOT NULL,
-    recipient_address TEXT        NOT NULL,
-    sender_address    TEXT        NOT NULL,
-    memo              BYTEA       NOT NULL DEFAULT '\x'::bytea,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                BIGSERIAL          PRIMARY KEY,
+    identifier        TEXT               NOT NULL UNIQUE,
+    asset_id          BYTEA              NOT NULL,
+    amount            BYTEA              NOT NULL,
+    recipient_address TEXT               NOT NULL,
+    sender_address    TEXT               NOT NULL,
+    memo              BYTEA              NOT NULL DEFAULT '\x'::bytea,
+    status            output_note_status NOT NULL DEFAULT 'PENDING',
+    created_at        TIMESTAMPTZ        NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ        NOT NULL DEFAULT NOW()
 );
 
 -- ── output_note_checks ─────────────────────────────────────────────────────────
