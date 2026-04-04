@@ -11,7 +11,7 @@ set -euo pipefail
 #   - forge + cast available
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT_DIR/scripts/demo_env.sh"
+source "$ROOT_DIR/scripts/env/priv_env.sh"
 
 mkdir -p "$DEMO_LOG_DIR"
 

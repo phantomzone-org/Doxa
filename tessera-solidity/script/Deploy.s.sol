@@ -31,12 +31,18 @@ import {ToyUser} from "../src/ToyUser.sol";
 contract DeployScript is Script {
     function run() external {
         bytes32 poolConfigRoot = vm.envBytes32("TESSERA_POOL_CONFIG_ROOT");
-        uint256 treeDepth      = vm.envUint("TESSERA_TREE_DEPTH");
+        uint256 treeDepth = vm.envUint("TESSERA_TREE_DEPTH");
 
-        address txVerifier      = vm.envOr("TESSERA_TX_VERIFIER",      address(0));
-        address depositVerifier = vm.envOr("TESSERA_DEPOSIT_VERIFIER", address(0));
-        address monitoredToken  = vm.envOr("TESSERA_MONITORED_TOKEN",  address(0));
-        address operator        = vm.envOr("TESSERA_OPERATOR",         msg.sender);
+        address txVerifier = vm.envOr("TESSERA_TX_VERIFIER", address(0));
+        address depositVerifier = vm.envOr(
+            "TESSERA_DEPOSIT_VERIFIER",
+            address(0)
+        );
+        address monitoredToken = vm.envOr(
+            "TESSERA_MONITORED_TOKEN",
+            address(0)
+        );
+        address operator = vm.envOr("TESSERA_OPERATOR", msg.sender);
 
         vm.startBroadcast();
 
@@ -59,7 +65,11 @@ contract DeployScript is Script {
         //    dedicated consume circuit is built (see prover_v2.rs).
         if (depositVerifier == address(0)) {
             depositVerifier = txVerifier;
-            console.log("DepositVerifier:     ", depositVerifier, "(reuses txVerifier)");
+            console.log(
+                "DepositVerifier:     ",
+                depositVerifier,
+                "(reuses txVerifier)"
+            );
         } else {
             console.log("DepositVerifier:     ", depositVerifier);
         }
