@@ -22,7 +22,7 @@ function statusBadge(status: string) {
       ? "bg-emerald-100 text-emerald-700"
       : status === "REJECTED"
         ? "bg-red-100 text-red-700"
-        : status === "UNDERREVIEW"
+        : status === "UNDER_REVIEW"
           ? "bg-amber-100 text-amber-700"
           : "bg-slate-100 text-slate-600";
   return (
@@ -193,7 +193,7 @@ export function OutputNotesPage() {
   const counts = data
     ? {
         PENDING: data.filter((r) => r.status === "PENDING").length,
-        UNDERREVIEW: data.filter((r) => r.status === "UNDERREVIEW").length,
+        UNDER_REVIEW: data.filter((r) => r.status === "UNDER_REVIEW").length,
         APPROVED: data.filter((r) => r.status === "APPROVED").length,
         REJECTED: data.filter((r) => r.status === "REJECTED").length,
       }
@@ -231,7 +231,7 @@ export function OutputNotesPage() {
           {(
             [
               { label: "Pending", key: "PENDING", color: "text-slate-600" },
-              { label: "Under Review", key: "UNDERREVIEW", color: "text-amber-500" },
+              { label: "Under Review", key: "UNDER_REVIEW", color: "text-amber-500" },
               { label: "Approved", key: "APPROVED", color: "text-emerald-600" },
               { label: "Rejected", key: "REJECTED", color: "text-red-500" },
             ] as const

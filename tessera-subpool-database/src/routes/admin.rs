@@ -202,7 +202,7 @@ fn map_deposit_join_row(r: DepositJoinRow) -> DepositAdminRow {
 pub async fn list_underreview_deposits_handler(
 	State(state): State<AppState>,
 ) -> Result<(StatusCode, Json<Vec<DepositAdminRow>>), AppError> {
-	let query = format!("{DEPOSIT_JOIN_QUERY} WHERE dtr.status = 'UNDERREVIEW' ORDER BY dtr.created_at ASC");
+	let query = format!("{DEPOSIT_JOIN_QUERY} WHERE dtr.status = 'UNDER_REVIEW' ORDER BY dtr.created_at ASC");
 	let rows: Vec<DepositJoinRow> = sqlx::query_as(&query).fetch_all(&state.pool).await?;
 	Ok((StatusCode::OK, Json(rows.into_iter().map(map_deposit_join_row).collect())))
 }
@@ -239,7 +239,7 @@ pub async fn review_deposit_handler(
 	Json(req): Json<ReviewDepositRequest>,
 ) -> Result<(StatusCode, Json<ReviewDepositResponse>), AppError> {
 	let exists: Option<(i64,)> = sqlx::query_as(
-		"SELECT id FROM deposit_tx_requests WHERE id = $1 AND status = 'UNDERREVIEW'",
+		"SELECT id FROM deposit_tx_requests WHERE id = $1 AND status = 'UNDER_REVIEW'",
 	)
 	.bind(id)
 	.fetch_optional(&state.pool)
@@ -247,7 +247,7 @@ pub async fn review_deposit_handler(
 
 	if exists.is_none() {
 		return Err(AppError::NotFound(format!(
-			"deposit_tx_request {id} not found or not UNDERREVIEW"
+			"deposit_tx_request {id} not found or not UNDER_REVIEW"
 		)));
 	}
 
@@ -389,7 +389,7 @@ pub async fn list_underreview_output_notes_handler(
 	State(state): State<AppState>,
 ) -> Result<(StatusCode, Json<Vec<OutputNoteAdminRow>>), AppError> {
 	let query =
-		format!("{OUTPUT_NOTE_JOIN_QUERY} WHERE n.status = 'UNDERREVIEW' ORDER BY n.created_at ASC");
+		format!("{OUTPUT_NOTE_JOIN_QUERY} WHERE n.status = 'UNDER_REVIEW' ORDER BY n.created_at ASC");
 	let rows: Vec<OutputNoteJoinRow> = sqlx::query_as(&query).fetch_all(&state.pool).await?;
 	Ok((StatusCode::OK, Json(rows.into_iter().map(map_output_note_join_row).collect())))
 }
@@ -408,7 +408,7 @@ pub async fn review_output_note_handler(
 	Json(req): Json<ReviewDepositRequest>,
 ) -> Result<(StatusCode, Json<ReviewDepositResponse>), AppError> {
 	let exists: Option<(i64,)> = sqlx::query_as(
-		"SELECT id FROM output_notes WHERE id = $1 AND status = 'UNDERREVIEW'",
+		"SELECT id FROM output_notes WHERE id = $1 AND status = 'UNDER_REVIEW'",
 	)
 	.bind(id)
 	.fetch_optional(&state.pool)
@@ -416,7 +416,7 @@ pub async fn review_output_note_handler(
 
 	if exists.is_none() {
 		return Err(AppError::NotFound(format!(
-			"output_note {id} not found or not UNDERREVIEW"
+			"output_note {id} not found or not UNDER_REVIEW"
 		)));
 	}
 

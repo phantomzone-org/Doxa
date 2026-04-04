@@ -22,7 +22,7 @@ function statusBadge(status: string) {
       ? "bg-emerald-100 text-emerald-700"
       : status === "REJECTED"
         ? "bg-red-100 text-red-700"
-        : status === "UNDERREVIEW"
+        : status === "UNDER_REVIEW"
           ? "bg-amber-100 text-amber-700"
           : "bg-slate-100 text-slate-600";
   return (
@@ -145,7 +145,7 @@ function DepositRow({ row }: { row: DepositAdminRow }) {
   );
 }
 
-const ALL_STATUSES = ["PENDING", "UNDERREVIEW", "APPROVED", "SETTLED", "REJECTED"] as const;
+const ALL_STATUSES = ["PENDING", "UNDER_REVIEW", "APPROVED", "SETTLED", "REJECTED"] as const;
 
 export function DepositsPage() {
   const { data, isLoading, isError, error, dataUpdatedAt, refetch, isFetching } = useQuery({
@@ -188,7 +188,7 @@ export function DepositsPage() {
                 ? "text-emerald-600"
                 : s === "REJECTED"
                   ? "text-red-600"
-                  : s === "UNDERREVIEW"
+                  : s === "UNDER_REVIEW"
                     ? "text-amber-500"
                     : "text-slate-500";
             return (

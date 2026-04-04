@@ -1,11 +1,11 @@
 -- ── Enum types ────────────────────────────────────────────────────────────────
 
 CREATE TYPE freshacc_status          AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
-CREATE TYPE deposit_tx_status        AS ENUM ('PENDING', 'UNDERREVIEW', 'APPROVED', 'SETTLED', 'REJECTED');
+CREATE TYPE deposit_tx_status        AS ENUM ('PENDING', 'UNDER_REVIEW', 'APPROVED', 'SETTLED', 'REJECTED');
 CREATE TYPE deposit_check_status     AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE spend_tx_status          AS ENUM ('PENDING', 'APPROVED', 'SETTLED', 'REJECTED');
-CREATE TYPE input_note_status        AS ENUM ('PENDING', 'UNDERREVIEW', 'APPROVED', 'REJECTED');
-CREATE TYPE output_note_status       AS ENUM ('PENDING', 'UNDERREVIEW', 'APPROVED', 'REJECTED');
+CREATE TYPE input_note_status        AS ENUM ('PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED');
+CREATE TYPE output_note_status       AS ENUM ('PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED');
 CREATE TYPE withdrawal_tx_status     AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE output_note_check_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE input_note_check_status  AS ENUM ('PENDING', 'APPROVED', 'REJECTED');

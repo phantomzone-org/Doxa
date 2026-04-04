@@ -249,13 +249,13 @@ async fn post_deposit_to_sequencer(
 
 // ── Deposit triage & processing ─────────────────────────────────────────────
 
-/// Deposits with amount > TRIGGER_THRESHOLD_DEPOSIT_AMOUNT are placed in UNDERREVIEW
+/// Deposits with amount > TRIGGER_THRESHOLD_DEPOSIT_AMOUNT are placed in UNDER_REVIEW
 /// regardless of AML outcome (require manual operator approval).
 /// 1 000 USDX at 6 decimals = 1_000_000_000 units.
 const TRIGGER_THRESHOLD_DEPOSIT_AMOUNT: u64 = 1_000_000_000;
 
 /// Triage PENDING deposits where the deposit_check has been APPROVED.
-/// Small deposits (≤ threshold) move to APPROVED; large ones go to UNDERREVIEW.
+/// Small deposits (≤ threshold) move to APPROVED; large ones go to UNDER_REVIEW.
 pub async fn triage_deposit_reqs_with_approved_deposit_check(pool: &PgPool) -> Result<()> {
 	let rows: Vec<DepositTxRow> = sqlx::query_as(
 		"SELECT dtr.* FROM deposit_tx_requests dtr \
@@ -270,7 +270,7 @@ pub async fn triage_deposit_reqs_with_approved_deposit_check(pool: &PgPool) -> R
 	for row in rows {
 		let amount = row.amount()?;
 		let new_status = if amount > threshold {
-			"UNDERREVIEW"
+			"UNDER_REVIEW"
 		} else {
 			"APPROVED"
 		};
@@ -289,7 +289,7 @@ pub async fn triage_deposit_reqs_with_approved_deposit_check(pool: &PgPool) -> R
 }
 
 /// Triage PENDING deposits where the deposit_check has been REJECTED.
-/// All such deposits move to UNDERREVIEW for manual review.
+/// All such deposits move to UNDER_REVIEW for manual review.
 pub async fn triage_deposit_reqs_with_rejected_deposit_check(pool: &PgPool) -> Result<()> {
 	let rows: Vec<DepositTxRow> = sqlx::query_as(
 		"SELECT dtr.* FROM deposit_tx_requests dtr \
@@ -302,12 +302,12 @@ pub async fn triage_deposit_reqs_with_rejected_deposit_check(pool: &PgPool) -> R
 
 	for row in rows {
 		sqlx::query(
-			"UPDATE deposit_tx_requests SET status = 'UNDERREVIEW', updated_at = NOW() WHERE id = $1",
+			"UPDATE deposit_tx_requests SET status = 'UNDER_REVIEW', updated_at = NOW() WHERE id = $1",
 		)
 		.bind(row.id)
 		.execute(pool)
 		.await?;
-		info!(id = row.id, "deposit moved to UNDERREVIEW (check=REJECTED)");
+		info!(id = row.id, "deposit moved to UNDER_REVIEW (check=REJECTED)");
 	}
 	Ok(())
 }

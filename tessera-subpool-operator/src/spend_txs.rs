@@ -38,7 +38,7 @@ pub async fn triage_spend_txs(
 	sequencer_url: &str,
 	http: &reqwest::Client,
 ) -> Result<()> {
-	// ── Phase 1a: output notes with APPROVED check → APPROVED or UNDERREVIEW ──
+	// ── Phase 1a: output notes with APPROVED check → APPROVED or UNDER_REVIEW ──
 	{
 		#[derive(sqlx::FromRow)]
 		struct PendingNoteRow {
@@ -65,7 +65,7 @@ pub async fn triage_spend_txs(
 			} else {
 				anyhow::bail!("output_note {} has invalid amount length", row.id);
 			};
-			let new_status = if amount > threshold { "UNDERREVIEW" } else { "APPROVED" };
+			let new_status = if amount > threshold { "UNDER_REVIEW" } else { "APPROVED" };
 			sqlx::query(
 				"UPDATE output_notes SET status = $1::output_note_status, updated_at = NOW() \
                  WHERE id = $2",
@@ -78,7 +78,7 @@ pub async fn triage_spend_txs(
 		}
 	}
 
-	// ── Phase 1b: output notes with REJECTED check → UNDERREVIEW ─────────────
+	// ── Phase 1b: output notes with REJECTED check → UNDER_REVIEW ──────────────
 	{
 		let ids: Vec<(i64,)> = sqlx::query_as(
 			"SELECT n.id \
@@ -92,13 +92,13 @@ pub async fn triage_spend_txs(
 
 		for (id,) in ids {
 			sqlx::query(
-				"UPDATE output_notes SET status = 'UNDERREVIEW'::output_note_status, \
+				"UPDATE output_notes SET status = 'UNDER_REVIEW'::output_note_status, \
                  updated_at = NOW() WHERE id = $1",
 			)
 			.bind(id)
 			.execute(pool)
 			.await?;
-			info!(id, "output note moved to UNDERREVIEW (check=REJECTED)");
+			info!(id, "output note moved to UNDER_REVIEW (check=REJECTED)");
 		}
 	}
 
