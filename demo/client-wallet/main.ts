@@ -571,7 +571,7 @@ async function loadPubBalances() {
 }
 
 function updatePub2PrivVisibility() {
-  const approved = pubAllowanceRaw >= maxUint256;
+  const approved = pubAllowanceRaw >= 1_000_000_000n * 10n ** 18n;
   pub2privApprovalWrap.style.display = approved ? "none" : "";
   pub2privDepositWrap.style.display = approved ? "" : "none";
 }
@@ -780,11 +780,7 @@ pub2privDepositBtn.addEventListener("click", async () => {
     step2.className = "p-step done";
     step2.textContent = "✓ Deposit note constructed";
 
-    const step3 = pStep(
-      pub2privSteps,
-      "⏳ Signing deposit message…",
-      "active",
-    );
+    const step3 = pStep(pub2privSteps, "⏳ Signing deposit message…", "active");
     pub2privBar.style.width = "75%";
     const depositSig = await pubWalletClient!.signTypedData({
       domain: TESSERA_DEPOSIT_DOMAIN,

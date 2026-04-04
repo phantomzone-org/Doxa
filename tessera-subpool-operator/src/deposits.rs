@@ -10,7 +10,7 @@ use alloy::{
 use anyhow::{Context, Result};
 use plonky2_field::types::PrimeField64;
 use primitive_types::U256;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tessera_client::{
 	derive_deposit_tx_hash,
@@ -38,6 +38,116 @@ sol! {
 #[derive(Serialize)]
 struct DepositValidationRequest {
 	note_commitment: String,
+}
+
+// ── Chainalysis sanctions screening ─────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ChainalysisResponse {
+	identifications: Vec<serde_json::Value>,
+}
+
+#[derive(sqlx::FromRow)]
+struct PendingDepositCheckRow {
+	id: i64,
+	eth_address: String,
+}
+
+/// Screen all PENDING deposit_checks entries against the Chainalysis sanctions list.
+/// Updates each row to APPROVED or REJECTED and stores the raw API response.
+pub async fn run_deposit_checks(
+	pool: &PgPool,
+	http: &reqwest::Client,
+	chainalysis_api_key: &str,
+) -> Result<()> {
+	let rows: Vec<PendingDepositCheckRow> = sqlx::query_as(
+		"SELECT id, eth_address FROM deposit_checks WHERE status = 'PENDING'",
+	)
+	.fetch_all(pool)
+	.await?;
+
+	for row in rows {
+		let url = format!(
+			"https://public.chainalysis.com/api/v1/address/{}",
+			row.eth_address
+		);
+		let result = http
+			.get(&url)
+			.header("X-API-Key", chainalysis_api_key)
+			.header("Accept", "application/json")
+			.send()
+			.await;
+
+		match result {
+			Err(e) => {
+				let msg = format!("HTTP request failed: {e:#}");
+				sqlx::query(
+					"UPDATE deposit_checks \
+                     SET status = 'REJECTED', check_response = $1, updated_at = NOW() \
+                     WHERE id = $2",
+				)
+				.bind(&msg)
+				.bind(row.id)
+				.execute(pool)
+				.await?;
+				error!(id = row.id, "deposit check rejected (API unreachable): {msg}");
+			},
+			Ok(resp) if !resp.status().is_success() => {
+				let status = resp.status();
+				let body = resp.text().await.unwrap_or_default();
+				let msg = format!("API error HTTP {status}: {body}");
+				sqlx::query(
+					"UPDATE deposit_checks \
+                     SET status = 'REJECTED', check_response = $1, updated_at = NOW() \
+                     WHERE id = $2",
+				)
+				.bind(&msg)
+				.bind(row.id)
+				.execute(pool)
+				.await?;
+				error!(id = row.id, "deposit check rejected (API error): {msg}");
+			},
+			Ok(resp) => {
+				let body = resp.text().await.unwrap_or_default();
+				match serde_json::from_str::<ChainalysisResponse>(&body) {
+					Err(e) => {
+						let msg = format!("JSON parse error: {e:#}; body: {body}");
+						sqlx::query(
+							"UPDATE deposit_checks \
+                             SET status = 'REJECTED', check_response = $1, updated_at = NOW() \
+                             WHERE id = $2",
+						)
+						.bind(&msg)
+						.bind(row.id)
+						.execute(pool)
+						.await?;
+						error!(id = row.id, "deposit check rejected (parse error): {msg}");
+					},
+					Ok(chainalysis) => {
+						let new_status =
+							if chainalysis.identifications.is_empty() { "APPROVED" } else { "REJECTED" };
+						sqlx::query(
+							"UPDATE deposit_checks \
+                             SET status = $1::deposit_check_status, check_response = $2, updated_at = NOW() \
+                             WHERE id = $3",
+						)
+						.bind(new_status)
+						.bind(&body)
+						.bind(row.id)
+						.execute(pool)
+						.await?;
+						info!(
+							id = row.id,
+							addr = %row.eth_address,
+							status = new_status,
+							"deposit check completed"
+						);
+					},
+				}
+			},
+		}
+	}
+	Ok(())
 }
 
 // ── On-chain call ────────────────────────────────────────────────────────────
@@ -164,7 +274,7 @@ pub async fn triage_deposit_reqs_with_approved_deposit_check(pool: &PgPool) -> R
 		} else {
 			"APPROVED"
 		};
-		sqlx::query("UPDATE deposit_tx_requests SET status = $1, updated_at = NOW() WHERE id = $2")
+		sqlx::query("UPDATE deposit_tx_requests SET status = $1::deposit_tx_status, updated_at = NOW() WHERE id = $2")
 			.bind(new_status)
 			.bind(row.id)
 			.execute(pool)

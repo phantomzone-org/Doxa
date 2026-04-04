@@ -22,6 +22,8 @@ pub struct OperatorConfig {
 	pub subpool_id: u64,
 	/// Deployed rollup contract address. Env: ROLLUP_ADDRESS (required).
 	pub rollup_address: String,
+	/// Chainalysis sanctions screening API key. Env: CHAINALYSIS_API_KEY (required).
+	pub chainalysis_api_key: String,
 }
 
 impl OperatorConfig {
@@ -57,6 +59,9 @@ impl OperatorConfig {
 
 		let rollup_address = std::env::var("ROLLUP_ADDRESS").context("ROLLUP_ADDRESS not set")?;
 
+		let chainalysis_api_key =
+			std::env::var("CHAINALYSIS_API_KEY").context("CHAINALYSIS_API_KEY not set")?;
+
 		Ok(Self {
 			database_url,
 			db_max_connections,
@@ -67,6 +72,7 @@ impl OperatorConfig {
 			poll_interval,
 			subpool_id,
 			rollup_address,
+			chainalysis_api_key,
 		})
 	}
 }

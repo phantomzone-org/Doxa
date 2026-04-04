@@ -69,6 +69,12 @@ async fn main() -> Result<()> {
 			tracing::error!("freshacc tick failed: {e:#}");
 		}
 
+		if let Err(e) =
+			deposits::run_deposit_checks(&pool, &http, &config.chainalysis_api_key).await
+		{
+			tracing::error!("deposit check tick failed: {e:#}");
+		}
+
 		if let Err(e) = deposits::triage_deposit_reqs_with_approved_deposit_check(&pool).await {
 			tracing::error!("deposit triage (approved) failed: {e:#}");
 		}

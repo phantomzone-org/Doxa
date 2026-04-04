@@ -15,8 +15,8 @@ use crate::{error::AppError, state::AppState};
 /// Sufficient ETH for approx ~8 USDX approvals and perhaps many many deposits
 const FAUCET_AMOUNT_WEI: u128 = 699270000000000;
 
-/// 1000 USDX (6 decimals)
-const USDX_MINT_AMOUNT: u64 = 1_000_000_000;
+/// 5000 USDX (6 decimals)
+const USDX_MINT_AMOUNT: u64 = 5_000_000_000;
 
 sol! {
 	interface IUSDX {

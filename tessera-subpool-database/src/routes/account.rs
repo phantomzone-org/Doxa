@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{db, error::AppError, state::AppState, types::account::AccountRow};
+use crate::{error::AppError, state::AppState, types::account::AccountRow};
 
 /// JSON response body for `GET /account/:private_acc_address`.
 ///

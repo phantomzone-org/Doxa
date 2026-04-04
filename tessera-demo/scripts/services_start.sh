@@ -144,6 +144,7 @@ for i in 1 2 3; do
   OPERATOR_KEY="$OPERATOR_KEY" \
   ROLLUP_ADDRESS="$BRIDGE_ADDRESS" \
   POLL_INTERVAL_SECS="$POLL_INTERVAL_SECS" \
+  CHAINALYSIS_API_KEY="$CHAINALYSIS_API_KEY" \
   SUBPOOL_ID="$i" \
     "$RELEASE_DIR/tessera-subpool-operator" \
     > "$LOG_DIR/operator-${i}.log" 2>&1 &
