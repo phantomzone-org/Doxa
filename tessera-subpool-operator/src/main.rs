@@ -102,6 +102,10 @@ async fn main() -> Result<()> {
 		// 	tracing::error!("confirm_notes tick failed: {e:#}");
 		// }
 
+		if let Err(e) = spend_txs::run_output_note_checks(&pool).await {
+			tracing::error!("output_note_checks tick failed: {e:#}");
+		}
+
 		if let Err(e) =
 			spend_txs::triage_spend_txs(&pool, &approval_sk, &config.sequencer_url, &http).await
 		{

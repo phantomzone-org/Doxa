@@ -498,6 +498,59 @@ struct IncomingNote {
 	memo: String,
 }
 
+pub async fn run_output_note_checks(pool: &PgPool) -> Result<()> {
+	#[derive(sqlx::FromRow)]
+	struct PendingCheckRow {
+		check_id: i64,
+		identifier: String,
+		memo: Vec<u8>,
+	}
+
+	let rows: Vec<PendingCheckRow> = sqlx::query_as(
+		"SELECT c.id AS check_id, c.identifier, n.memo \
+         FROM output_note_checks c \
+         INNER JOIN output_notes n ON n.id = c.output_note_id \
+         WHERE c.status = 'PENDING' \
+         ORDER BY c.created_at ASC",
+	)
+	.fetch_all(pool)
+	.await?;
+
+	for row in rows {
+		let memo_json: serde_json::Value = match serde_json::from_slice(&row.memo) {
+			Ok(v) => v,
+			Err(e) => {
+				info!(
+					check_id = row.check_id,
+					identifier = %row.identifier,
+					"memo is not valid JSON: {e}"
+				);
+				serde_json::Value::Null
+			},
+		};
+
+		// TODO: replace with AML screening API call
+		sqlx::query(
+			"UPDATE output_note_checks \
+             SET status = 'APPROVED'::output_note_check_status, \
+                 check_response = $1, updated_at = NOW() \
+             WHERE id = $2",
+		)
+		.bind(memo_json.to_string())
+		.bind(row.check_id)
+		.execute(pool)
+		.await?;
+
+		info!(
+			check_id = row.check_id,
+			identifier = %row.identifier,
+			"output note check approved"
+		);
+	}
+
+	Ok(())
+}
+
 /// Poll the sequencer for notes forwarded to this subpool and insert them
 /// as `input_notes` in the local database.
 pub async fn poll_incoming_notes(
