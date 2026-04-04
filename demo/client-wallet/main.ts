@@ -820,13 +820,19 @@ pub2privDepositBtn.addEventListener("click", async () => {
         try {
           const status = await subpoolClient.getDepositStatus(depositId);
           if (!status || status.status === "Pending") return;
+          if (status.status == "Approved") return;
           clearInterval(timer);
           if (status.status === "Rejected") {
-            reject(new Error("Deposit rejected by operator"));
+            step5.className = "p-step done";
+            step5.textContent =
+              "✗ Deposit request rejected by the subpool owner";
+            step5.style.color = "red";
+            resolve();
             return;
           }
+          // status == Settled
           step5.className = "p-step done";
-          step5.textContent = "✓ Deposit approved";
+          step5.textContent = "✓ Deposit approved & settled";
           if (status.deposit_tx_hash) {
             const a = document.createElement("a");
             a.href = `https://sepolia.etherscan.io/tx/${status.deposit_tx_hash}`;
@@ -841,8 +847,8 @@ pub2privDepositBtn.addEventListener("click", async () => {
           if (privateAccAddressFull) await loadPrivateBalance();
           resolve();
         } catch (e) {
-          clearInterval(timer);
-          reject(e);
+          // clearInterval(timer);
+          // reject(e);
         }
       }, 5_000);
     });

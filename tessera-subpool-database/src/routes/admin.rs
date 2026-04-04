@@ -97,7 +97,7 @@ pub struct FreshAccWithKyc {
 // ── Deposits under review ─────────────────────────────────────────────────
 
 #[derive(Debug, sqlx::FromRow)]
-struct UnderReviewJoinRow {
+struct DepositJoinRow {
 	// deposit_tx_requests
 	id: i64,
 	recipient_address: String,
@@ -105,6 +105,7 @@ struct UnderReviewJoinRow {
 	deposit_amount: Vec<u8>,
 	asset_id: Vec<u8>,
 	deposit_tx_hash: Option<String>,
+	status: String,
 	rejection_reason: Option<String>,
 	created_at: DateTime<Utc>,
 	// deposit_checks (LEFT JOIN — nullable)
@@ -134,7 +135,7 @@ pub struct AccountInfo {
 }
 
 #[derive(Debug, Serialize)]
-pub struct UnderReviewDepositRow {
+pub struct DepositAdminRow {
 	pub id: i64,
 	pub recipient_address: String,
 	pub eth_address: String,
@@ -142,6 +143,7 @@ pub struct UnderReviewDepositRow {
 	pub deposit_amount: String,
 	/// 16 hex chars — F asset_id, 8 bytes LE
 	pub asset_id: String,
+	pub status: String,
 	pub deposit_tx_hash: Option<String>,
 	pub rejection_reason: Option<String>,
 	pub created_at: DateTime<Utc>,
@@ -149,63 +151,68 @@ pub struct UnderReviewDepositRow {
 	pub account: AccountInfo,
 }
 
+const DEPOSIT_JOIN_QUERY: &str = r#"
+    SELECT
+        dtr.id,
+        dtr.recipient_address,
+        dtr.eth_address,
+        dtr.deposit_amount,
+        dtr.asset_id,
+        dtr.deposit_tx_hash,
+        dtr.status::text AS status,
+        dtr.rejection_reason,
+        dtr.created_at,
+        dc.id           AS check_id,
+        dc.status::text AS check_status,
+        dc.check_response,
+        dc.updated_at   AS check_updated_at,
+        u.name,
+        u.physical_address,
+        u.dob
+    FROM deposit_tx_requests dtr
+    LEFT JOIN deposit_checks dc ON dc.deposit_tx_request_id = dtr.id
+    LEFT JOIN users u ON u.private_acc_address = dtr.recipient_address
+"#;
+
+fn map_deposit_join_row(r: DepositJoinRow) -> DepositAdminRow {
+	DepositAdminRow {
+		deposit_amount: hex::encode(&r.deposit_amount),
+		asset_id: hex::encode(&r.asset_id),
+		status: r.status,
+		deposit_check: DepositCheckInfo {
+			id: r.check_id,
+			status: r.check_status,
+			check_response: r.check_response,
+			updated_at: r.check_updated_at,
+		},
+		account: AccountInfo {
+			name: r.name,
+			physical_address: r.physical_address,
+			dob: r.dob,
+		},
+		id: r.id,
+		recipient_address: r.recipient_address,
+		eth_address: r.eth_address,
+		deposit_tx_hash: r.deposit_tx_hash,
+		rejection_reason: r.rejection_reason,
+		created_at: r.created_at,
+	}
+}
+
 pub async fn list_underreview_deposits_handler(
 	State(state): State<AppState>,
-) -> Result<(StatusCode, Json<Vec<UnderReviewDepositRow>>), AppError> {
-	let rows: Vec<UnderReviewJoinRow> = sqlx::query_as(
-		r#"
-        SELECT
-            dtr.id,
-            dtr.recipient_address,
-            dtr.eth_address,
-            dtr.deposit_amount,
-            dtr.asset_id,
-            dtr.deposit_tx_hash,
-            dtr.rejection_reason,
-            dtr.created_at,
-            dc.id          AS check_id,
-            dc.status::text AS check_status,
-            dc.check_response,
-            dc.updated_at  AS check_updated_at,
-            u.name,
-            u.physical_address,
-            u.dob
-        FROM deposit_tx_requests dtr
-        LEFT JOIN deposit_checks dc ON dc.deposit_tx_request_id = dtr.id
-        LEFT JOIN users u ON u.private_acc_address = dtr.recipient_address
-        WHERE dtr.status = 'UNDERREVIEW'
-        ORDER BY dtr.created_at ASC
-        "#,
-	)
-	.fetch_all(&state.pool)
-	.await?;
+) -> Result<(StatusCode, Json<Vec<DepositAdminRow>>), AppError> {
+	let query = format!("{DEPOSIT_JOIN_QUERY} WHERE dtr.status = 'UNDERREVIEW' ORDER BY dtr.created_at ASC");
+	let rows: Vec<DepositJoinRow> = sqlx::query_as(&query).fetch_all(&state.pool).await?;
+	Ok((StatusCode::OK, Json(rows.into_iter().map(map_deposit_join_row).collect())))
+}
 
-	let out = rows
-		.into_iter()
-		.map(|r| UnderReviewDepositRow {
-			deposit_amount: hex::encode(&r.deposit_amount),
-			asset_id: hex::encode(&r.asset_id),
-			deposit_check: DepositCheckInfo {
-				id: r.check_id,
-				status: r.check_status,
-				check_response: r.check_response,
-				updated_at: r.check_updated_at,
-			},
-			account: AccountInfo {
-				name: r.name,
-				physical_address: r.physical_address,
-				dob: r.dob,
-			},
-			id: r.id,
-			recipient_address: r.recipient_address,
-			eth_address: r.eth_address,
-			deposit_tx_hash: r.deposit_tx_hash,
-			rejection_reason: r.rejection_reason,
-			created_at: r.created_at,
-		})
-		.collect();
-
-	Ok((StatusCode::OK, Json(out)))
+pub async fn list_all_deposits_handler(
+	State(state): State<AppState>,
+) -> Result<(StatusCode, Json<Vec<DepositAdminRow>>), AppError> {
+	let query = format!("{DEPOSIT_JOIN_QUERY} ORDER BY dtr.created_at DESC");
+	let rows: Vec<DepositJoinRow> = sqlx::query_as(&query).fetch_all(&state.pool).await?;
+	Ok((StatusCode::OK, Json(rows.into_iter().map(map_deposit_join_row).collect())))
 }
 
 #[derive(Deserialize)]

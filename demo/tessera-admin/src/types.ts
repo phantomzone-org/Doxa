@@ -27,7 +27,7 @@ export interface AccountInfo {
   dob: string | null;
 }
 
-export interface UnderReviewDeposit {
+export interface DepositAdminRow {
   id: number;
   recipient_address: string;
   eth_address: string;
@@ -35,12 +35,16 @@ export interface UnderReviewDeposit {
   deposit_amount: string;
   /** 16 hex chars — F asset_id, 8 bytes LE */
   asset_id: string;
+  status: string;
   deposit_tx_hash: string | null;
   rejection_reason: string | null;
   created_at: string;
   deposit_check: DepositCheckInfo;
   account: AccountInfo;
 }
+
+/** Alias used by the under-review page */
+export type UnderReviewDeposit = DepositAdminRow;
 
 export interface AccountWithKyc {
   private_acc_address: string;
