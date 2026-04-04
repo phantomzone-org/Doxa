@@ -46,6 +46,37 @@ export interface DepositAdminRow {
 /** Alias used by the under-review page */
 export type UnderReviewDeposit = DepositAdminRow;
 
+export interface OutputNoteCheckInfo {
+  id: number | null;
+  identifier: string | null;
+  status: string | null;
+  check_response: string | null;
+  updated_at: string | null;
+}
+
+export interface SenderInfo {
+  name: string | null;
+  physical_address: string | null;
+  dob: string | null;
+}
+
+export interface OutputNoteAdminRow {
+  id: number;
+  identifier: string;
+  asset_id: string;
+  /** 64 hex chars — U256 amount, 32 bytes LE */
+  amount: string;
+  recipient_address: string;
+  sender_address: string;
+  /** hex-encoded UTF-8 JSON bytes */
+  memo: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  output_note_check: OutputNoteCheckInfo;
+  sender: SenderInfo;
+}
+
 export interface AccountWithKyc {
   private_acc_address: string;
   eth_address: string;

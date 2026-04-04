@@ -13,6 +13,7 @@ pub enum SpendTxStatus {
 	Pending,
 	Approved,
 	Rejected,
+	Settled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]

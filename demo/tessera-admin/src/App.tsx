@@ -3,14 +3,24 @@ import { FreshAccPage } from "./pages/FreshAccPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { DepositsPage } from "./pages/DepositsPage";
 import { DepositsUnderReviewPage } from "./pages/DepositsUnderReviewPage";
+import { OutputNotesUnderReviewPage } from "./pages/OutputNotesUnderReviewPage";
+import { OutputNotesPage } from "./pages/OutputNotesPage";
 
-type Page = "freshacc" | "accounts" | "deposits" | "deposits-underreview";
+type Page =
+  | "freshacc"
+  | "accounts"
+  | "deposits"
+  | "deposits-underreview"
+  | "output-notes-underreview"
+  | "output-notes";
 
 const NAV: { id: Page; label: string; icon: string }[] = [
   { id: "freshacc", label: "FreshAcc", icon: "🪪" },
   { id: "accounts", label: "Accounts", icon: "👤" },
   { id: "deposits", label: "Deposits", icon: "💰" },
   { id: "deposits-underreview", label: "Deposits Under Review", icon: "🔍" },
+  { id: "output-notes-underreview", label: "Notes Under Review", icon: "📋" },
+  { id: "output-notes", label: "All Output Notes", icon: "📄" },
 ];
 
 export default function App() {
@@ -50,6 +60,8 @@ export default function App() {
           {page === "accounts" && <AccountsPage />}
           {page === "deposits" && <DepositsPage />}
           {page === "deposits-underreview" && <DepositsUnderReviewPage />}
+          {page === "output-notes-underreview" && <OutputNotesUnderReviewPage />}
+          {page === "output-notes" && <OutputNotesPage />}
         </div>
       </main>
     </div>

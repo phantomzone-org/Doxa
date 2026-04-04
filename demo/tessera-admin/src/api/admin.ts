@@ -1,4 +1,4 @@
-import type { AccountWithKyc, DepositAdminRow, FreshAccWithKyc } from "../types";
+import type { AccountWithKyc, DepositAdminRow, FreshAccWithKyc, OutputNoteAdminRow } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -32,6 +32,33 @@ export async function fetchUnderReviewDeposits(): Promise<DepositAdminRow[]> {
     throw new Error(`GET /admin/deposit_tx_requests/underreview failed: ${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<DepositAdminRow[]>;
+}
+
+export async function fetchAllOutputNotes(): Promise<OutputNoteAdminRow[]> {
+  const res = await fetch(`${API_BASE}/admin/output_notes`);
+  if (!res.ok) {
+    throw new Error(`GET /admin/output_notes failed: ${res.status} ${res.statusText}`);
+  }
+  return res.json() as Promise<OutputNoteAdminRow[]>;
+}
+
+export async function fetchUnderReviewOutputNotes(): Promise<OutputNoteAdminRow[]> {
+  const res = await fetch(`${API_BASE}/admin/output_notes/underreview`);
+  if (!res.ok) {
+    throw new Error(`GET /admin/output_notes/underreview failed: ${res.status} ${res.statusText}`);
+  }
+  return res.json() as Promise<OutputNoteAdminRow[]>;
+}
+
+export async function reviewOutputNote(id: number, action: "approve" | "reject"): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/output_notes/${id}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  if (!res.ok) {
+    throw new Error(`POST /admin/output_notes/${id}/review failed: ${res.status} ${res.statusText}`);
+  }
 }
 
 export async function reviewDeposit(id: number, action: "approve" | "reject"): Promise<void> {
