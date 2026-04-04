@@ -3,8 +3,13 @@ set -euo pipefail
 
 # Step B: deploy the demo contract stack.
 #
-# Deploys: AcceptAllVerifier, PoseidonGoldilocks, ToyUSDT, TesseraContract.
-# Uses AcceptAllVerifier for BOTH tx and deposit verifiers (zero proofs accepted).
+# Deploys: AcceptAllVerifier (if not already deployed), PoseidonGoldilocks,
+#          ToyUSDT (unless USDX_TOKEN_ADDRESS is set), TesseraContract.
+# Uses AcceptAllVerifier for tx / deposit / withdrawal verifiers (zero proofs accepted).
+#
+# Environment overrides (optional):
+#   ACCEPT_ADDR          -- skip AcceptAllVerifier deploy, reuse this address
+#   USDX_TOKEN_ADDRESS   -- use an existing ERC20 instead of deploying ToyUSDT
 #
 # Prerequisites:
 #   - Anvil running (scripts/demo_a_anvil.sh)
@@ -23,25 +28,41 @@ SOLIDITY_DIR="$ROOT_DIR/tessera-solidity"
 
 pushd "$SOLIDITY_DIR" >/dev/null
 
-# 1. Deploy AcceptAllVerifier
-echo ""
-echo "Deploying AcceptAllVerifier..."
-ACCEPT_OUT=$(forge create src/AcceptAllVerifier.sol:AcceptAllVerifier \
-  --rpc-url "$RPC" \
-  --private-key "$OPERATOR_KEY" \
-  --broadcast 2>&1)
-echo "$ACCEPT_OUT"
-ACCEPT_ADDR=$(echo "$ACCEPT_OUT" | grep -oP 'Deployed to: \K0x[0-9a-fA-F]+')
-echo "  AcceptAllVerifier = $ACCEPT_ADDR"
+# 1. Deploy AcceptAllVerifier (skip if ACCEPT_ADDR already set).
+if [[ -n "${ACCEPT_ADDR:-}" ]]; then
+  echo ""
+  echo "Reusing existing AcceptAllVerifier = $ACCEPT_ADDR"
+else
+  echo ""
+  echo "Deploying AcceptAllVerifier..."
+  ACCEPT_OUT=$(forge create src/AcceptAllVerifier.sol:AcceptAllVerifier \
+    --rpc-url "$RPC" \
+    --private-key "$OPERATOR_KEY" \
+    --broadcast 2>&1)
+  echo "$ACCEPT_OUT"
+  ACCEPT_ADDR=$(echo "$ACCEPT_OUT" | grep -oP 'Deployed to: \K0x[0-9a-fA-F]+')
+  echo "  AcceptAllVerifier = $ACCEPT_ADDR"
+fi
 
-# 2. Deploy using the existing Deploy.s.sol with AcceptAllVerifier as tx/deposit verifier.
+# 2. Deploy using the existing Deploy.s.sol.
+#    - All three verifiers use AcceptAllVerifier (zero proofs accepted).
+#    - If USDX_TOKEN_ADDRESS is set, reuse it as the monitored token (skip ToyUSDT deploy).
 echo ""
-echo "Deploying full stack (PoseidonGoldilocks + ToyUSDT + TesseraContract + ToyUser)..."
+if [[ -n "${USDX_TOKEN_ADDRESS:-}" ]]; then
+  echo "Deploying full stack (PoseidonGoldilocks + TesseraContract + ToyUser) — reusing token $USDX_TOKEN_ADDRESS..."
+  EXTRA_TOKEN_ENV="TESSERA_MONITORED_TOKEN=$USDX_TOKEN_ADDRESS"
+else
+  echo "Deploying full stack (PoseidonGoldilocks + ToyUSDT + TesseraContract + ToyUser)..."
+  EXTRA_TOKEN_ENV=""
+fi
 
-TESSERA_TX_VERIFIER="$ACCEPT_ADDR" \
-TESSERA_DEPOSIT_VERIFIER="$ACCEPT_ADDR" \
-TESSERA_POOL_CONFIG_ROOT="$POOL_CONFIG_ROOT" \
-TESSERA_TREE_DEPTH="$TREE_DEPTH" \
+env \
+  TESSERA_TX_VERIFIER="$ACCEPT_ADDR" \
+  TESSERA_DEPOSIT_VERIFIER="$ACCEPT_ADDR" \
+  TESSERA_WITHDRAWAL_VERIFIER="$ACCEPT_ADDR" \
+  TESSERA_POOL_CONFIG_ROOT="$POOL_CONFIG_ROOT" \
+  TESSERA_TREE_DEPTH="$TREE_DEPTH" \
+  ${EXTRA_TOKEN_ENV:+"$EXTRA_TOKEN_ENV"} \
 forge script script/Deploy.s.sol \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" \
@@ -57,15 +78,21 @@ if [[ ! -f "$BROADCAST_JSON" ]]; then
 fi
 
 ROLLUP=$(jq -r '.transactions[] | select(.contractName == "TesseraContract") | .contractAddress' "$BROADCAST_JSON" | head -n1)
-TOKEN=$(jq -r '.transactions[] | select(.contractName == "ToyUSDT") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 
 if [[ -z "${ROLLUP:-}" ]]; then
   echo "ERROR: failed to parse TesseraContract address." >&2
   exit 1
 fi
-if [[ -z "${TOKEN:-}" ]]; then
-  echo "ERROR: failed to parse ToyUSDT address." >&2
-  exit 1
+
+# Use the pre-existing token if supplied, otherwise read the freshly-deployed ToyUSDT address.
+if [[ -n "${USDX_TOKEN_ADDRESS:-}" ]]; then
+  TOKEN="$USDX_TOKEN_ADDRESS"
+else
+  TOKEN=$(jq -r '.transactions[] | select(.contractName == "ToyUSDT") | .contractAddress' "$BROADCAST_JSON" | head -n1)
+  if [[ -z "${TOKEN:-}" ]]; then
+    echo "ERROR: failed to parse ToyUSDT address." >&2
+    exit 1
+  fi
 fi
 
 # Read genesis root from on-chain.
@@ -74,13 +101,16 @@ GENESIS_ROOT=$(cast call "$ROLLUP" "currentRoot()(uint256)" --rpc-url "$RPC" | t
 # Derive operator address from key.
 OPERATOR_ADDR=$(cast wallet address --private-key "$OPERATOR_KEY")
 
+TOKEN_LABEL="${USDX_TOKEN_ADDRESS:+USDX (reused)}"
+TOKEN_LABEL="${TOKEN_LABEL:-ToyUSDT (fresh)}"
+
 echo ""
 echo "=== Deployment summary ==="
 echo "  AcceptAllVerifier  = $ACCEPT_ADDR"
 echo "  TesseraContract    = $ROLLUP"
-echo "  ToyUSDT            = $TOKEN"
-echo "  Operator            = $OPERATOR_ADDR"
-echo "  Genesis root        = $GENESIS_ROOT"
+echo "  Token ($TOKEN_LABEL) = $TOKEN"
+echo "  Operator           = $OPERATOR_ADDR"
+echo "  Genesis root       = $GENESIS_ROOT"
 
 # Write state file for subsequent scripts.
 cat > "$DEMO_STATE_ENV" <<EOV

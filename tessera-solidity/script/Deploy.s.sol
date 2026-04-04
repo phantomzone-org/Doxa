@@ -23,8 +23,10 @@ import {ToyUser} from "../src/ToyUser.sol";
 /// Optional:
 ///   TESSERA_TX_VERIFIER      -- pre-deployed Groth16 tx-batch verifier address
 ///                               (deploys a fresh TesseraBatchTransactionVerifier if unset)
-///   TESSERA_DEPOSIT_VERIFIER -- pre-deployed Groth16 deposit-batch verifier address
-///                               (reuses txVerifier address if unset — same circuit)
+///   TESSERA_DEPOSIT_VERIFIER     -- pre-deployed Groth16 deposit-batch verifier address
+///                                   (reuses txVerifier address if unset — same circuit)
+///   TESSERA_WITHDRAWAL_VERIFIER  -- pre-deployed Groth16 withdrawal-batch verifier address
+///                                   (reuses txVerifier address if unset)
 ///   TESSERA_MONITORED_TOKEN  -- ERC20 address escrowed by the bridge
 ///                               (deploys a fresh ToyUSDT if unset)
 ///   TESSERA_OPERATOR         -- operator address (defaults to msg.sender)
@@ -36,6 +38,10 @@ contract DeployScript is Script {
         address txVerifier = vm.envOr("TESSERA_TX_VERIFIER", address(0));
         address depositVerifier = vm.envOr(
             "TESSERA_DEPOSIT_VERIFIER",
+            address(0)
+        );
+        address withdrawalVerifier = vm.envOr(
+            "TESSERA_WITHDRAWAL_VERIFIER",
             address(0)
         );
         address monitoredToken = vm.envOr(
@@ -74,6 +80,18 @@ contract DeployScript is Script {
             console.log("DepositVerifier:     ", depositVerifier);
         }
 
+        // 3b. Groth16 withdrawal-batch verifier — reuses txVerifier if unset.
+        if (withdrawalVerifier == address(0)) {
+            withdrawalVerifier = txVerifier;
+            console.log(
+                "WithdrawalVerifier:  ",
+                withdrawalVerifier,
+                "(reuses txVerifier)"
+            );
+        } else {
+            console.log("WithdrawalVerifier:  ", withdrawalVerifier);
+        }
+
         // 4. ERC20 token — deploy ToyUSDT if no address provided.
         if (monitoredToken == address(0)) {
             monitoredToken = address(new ToyUSDT());
@@ -86,6 +104,7 @@ contract DeployScript is Script {
         TesseraContract rollup = new TesseraContract(
             txVerifier,
             depositVerifier,
+            withdrawalVerifier,
             address(poseidon),
             operator,
             monitoredToken,
