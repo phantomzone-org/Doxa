@@ -1,4 +1,4 @@
-import type { AccountWithKyc, FreshAccWithKyc } from "../types";
+import type { AccountWithKyc, FreshAccWithKyc, UnderReviewDeposit } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -16,4 +16,23 @@ export async function fetchAccounts(): Promise<AccountWithKyc[]> {
     throw new Error(`GET /admin/accounts failed: ${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<AccountWithKyc[]>;
+}
+
+export async function fetchUnderReviewDeposits(): Promise<UnderReviewDeposit[]> {
+  const res = await fetch(`${API_BASE}/admin/deposit_tx_requests/underreview`);
+  if (!res.ok) {
+    throw new Error(`GET /admin/deposit_tx_requests/underreview failed: ${res.status} ${res.statusText}`);
+  }
+  return res.json() as Promise<UnderReviewDeposit[]>;
+}
+
+export async function reviewDeposit(id: number, action: "approve" | "reject"): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/deposit_tx_requests/${id}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  if (!res.ok) {
+    throw new Error(`POST /admin/deposit_tx_requests/${id}/review failed: ${res.status} ${res.statusText}`);
+  }
 }

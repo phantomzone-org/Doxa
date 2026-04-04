@@ -27,6 +27,14 @@ pub fn router(state: AppState) -> Router {
 		.route("/status", get(health_handler))
 		.route("/admin/freshacc", get(admin::list_freshacc_handler))
 		.route("/admin/accounts", get(admin::list_accounts_handler))
+		.route(
+			"/admin/deposit_tx_requests/underreview",
+			get(admin::list_underreview_deposits_handler),
+		)
+		.route(
+			"/admin/deposit_tx_requests/{id}/review",
+			post(admin::review_deposit_handler),
+		)
 		.route("/register", post(register::register_handler))
 		.route("/deposit", post(deposit::submit_deposit_handler))
 		.route(

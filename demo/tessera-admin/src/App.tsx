@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { FreshAccPage } from "./pages/FreshAccPage";
 import { AccountsPage } from "./pages/AccountsPage";
+import { DepositsUnderReviewPage } from "./pages/DepositsUnderReviewPage";
 
-type Page = "freshacc" | "accounts";
+type Page = "freshacc" | "accounts" | "deposits-underreview";
 
 const NAV: { id: Page; label: string; icon: string }[] = [
   { id: "freshacc", label: "FreshAcc", icon: "🪪" },
   { id: "accounts", label: "Accounts", icon: "👤" },
+  { id: "deposits-underreview", label: "Deposits Under Review", icon: "🔍" },
 ];
 
 export default function App() {
@@ -44,6 +46,7 @@ export default function App() {
         <div className="mx-auto max-w-7xl px-8 py-8">
           {page === "freshacc" && <FreshAccPage />}
           {page === "accounts" && <AccountsPage />}
+          {page === "deposits-underreview" && <DepositsUnderReviewPage />}
         </div>
       </main>
     </div>
