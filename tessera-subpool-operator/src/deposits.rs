@@ -21,7 +21,7 @@ use tessera_subpool_database::{
 	convert::{
 		account_from_row, bytes_to_f, bytes_to_u256, f_to_bytes, hash_to_hex, u256_to_bytes,
 	},
-	db::{insert_pending_input_note, update_account, update_deposit_tx_request_to_approved},
+	db::{insert_pending_input_note, update_account, update_deposit_tx_request_to_settled},
 	types::{account::AccountRow, deposit::DepositTxRow},
 };
 use tracing::{error, info};
@@ -137,14 +137,73 @@ async fn post_deposit_to_sequencer(
 	Ok(())
 }
 
-// ── Core loop ───────────────────────────────────────────────────────────────
+// ── Deposit triage & processing ─────────────────────────────────────────────
 
-// TODO:
-//  - add a separate operation to process deposit_checks entry
-//  - do the same for withdrawal
-//
-//
-pub async fn process_pending_deposits(
+/// Deposits with amount > TRIGGER_THRESHOLD_DEPOSIT_AMOUNT are placed in UNDERREVIEW
+/// regardless of AML outcome (require manual operator approval).
+/// 1 000 USDX at 6 decimals = 1_000_000_000 units.
+const TRIGGER_THRESHOLD_DEPOSIT_AMOUNT: u64 = 1_000_000_000;
+
+/// Triage PENDING deposits where the deposit_check has been APPROVED.
+/// Small deposits (≤ threshold) move to APPROVED; large ones go to UNDERREVIEW.
+pub async fn triage_deposit_reqs_with_approved_deposit_check(pool: &PgPool) -> Result<()> {
+	let rows: Vec<DepositTxRow> = sqlx::query_as(
+		"SELECT dtr.* FROM deposit_tx_requests dtr \
+         INNER JOIN deposit_checks dc ON dc.deposit_tx_request_id = dtr.id \
+         WHERE dtr.status = 'PENDING' AND dc.status = 'APPROVED' \
+         ORDER BY dtr.created_at ASC",
+	)
+	.fetch_all(pool)
+	.await?;
+
+	let threshold = U256::from(TRIGGER_THRESHOLD_DEPOSIT_AMOUNT);
+	for row in rows {
+		let amount = row.amount()?;
+		let new_status = if amount > threshold {
+			"UNDERREVIEW"
+		} else {
+			"APPROVED"
+		};
+		sqlx::query("UPDATE deposit_tx_requests SET status = $1, updated_at = NOW() WHERE id = $2")
+			.bind(new_status)
+			.bind(row.id)
+			.execute(pool)
+			.await?;
+		info!(
+			id = row.id,
+			status = new_status,
+			"triaged deposit (check=APPROVED)"
+		);
+	}
+	Ok(())
+}
+
+/// Triage PENDING deposits where the deposit_check has been REJECTED.
+/// All such deposits move to UNDERREVIEW for manual review.
+pub async fn triage_deposit_reqs_with_rejected_deposit_check(pool: &PgPool) -> Result<()> {
+	let rows: Vec<DepositTxRow> = sqlx::query_as(
+		"SELECT dtr.* FROM deposit_tx_requests dtr \
+         INNER JOIN deposit_checks dc ON dc.deposit_tx_request_id = dtr.id \
+         WHERE dtr.status = 'PENDING' AND dc.status = 'REJECTED' \
+         ORDER BY dtr.created_at ASC",
+	)
+	.fetch_all(pool)
+	.await?;
+
+	for row in rows {
+		sqlx::query(
+			"UPDATE deposit_tx_requests SET status = 'UNDERREVIEW', updated_at = NOW() WHERE id = $1",
+		)
+		.bind(row.id)
+		.execute(pool)
+		.await?;
+		info!(id = row.id, "deposit moved to UNDERREVIEW (check=REJECTED)");
+	}
+	Ok(())
+}
+
+/// Process all APPROVED deposits: call on-chain, update account, submit to sequencer, mark SETTLED.
+pub async fn process_approved_deposits(
 	pool: &PgPool,
 	approval_sk: &PrivateKey,
 	sequencer_url: &str,
@@ -154,23 +213,15 @@ pub async fn process_pending_deposits(
 	rollup_address: Address,
 ) -> Result<()> {
 	let rows: Vec<DepositTxRow> = sqlx::query_as(
-		"SELECT dtr.* FROM deposit_tx_requests dtr \
-         INNER JOIN deposit_checks dc ON dc.deposit_tx_request_id = dtr.id \
-         WHERE dtr.status = 'PENDING' \
-           AND dc.status = 'APPROVED' \
-         ORDER BY dtr.created_at ASC",
+		"SELECT * FROM deposit_tx_requests WHERE status = 'APPROVED' ORDER BY created_at ASC",
 	)
 	.fetch_all(pool)
 	.await?;
 
-	info!(pending = rows.len(), "polled deposit_tx_requests");
-
-	if rows.is_empty() {
-		return Ok(());
-	}
+	info!(approved = rows.len(), "polled approved deposit_tx_requests");
 
 	for row in rows {
-		if let Err(e) = process_one_deposit(
+		if let Err(e) = settle_one_deposit(
 			pool,
 			approval_sk,
 			sequencer_url,
@@ -185,7 +236,7 @@ pub async fn process_pending_deposits(
 			error!(
 				id = row.id,
 				addr = row.recipient_address,
-				"failed to process deposit request: {e:#}"
+				"failed to settle deposit: {e:#}"
 			);
 		}
 	}
@@ -193,12 +244,7 @@ pub async fn process_pending_deposits(
 	Ok(())
 }
 
-// 1. retrieve all pending deposits
-// 2. retrieve correspodning AML check
-//  - if check is success: then process the tx. Mark it approved
-//  - if check is fail: then reject the tx
-
-async fn process_one_deposit(
+async fn settle_one_deposit(
 	pool: &PgPool,
 	approval_sk: &PrivateKey,
 	sequencer_url: &str,
@@ -314,7 +360,7 @@ async fn process_one_deposit(
 		.await
 		.context("failed to begin deposit transaction")?;
 
-	update_deposit_tx_request_to_approved(&mut *tx, sig_bytes.as_ref(), row.id).await?;
+	update_deposit_tx_request_to_settled(&mut *tx, sig_bytes.as_ref(), row.id).await?;
 
 	update_account(
 		&mut *tx,
@@ -339,7 +385,7 @@ async fn process_one_deposit(
 		addr = %row.recipient_address,
 		asset_id = deposit.asset_id.0.to_canonical_u64(),
 		new_balance = %new_asset_balance,
-		"deposit approved, PENDING input note created (awaiting on-chain confirmation)"
+		"deposit settled, account balance updated"
 	);
 
 	Ok(())

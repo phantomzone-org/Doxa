@@ -205,3 +205,21 @@ pub async fn update_deposit_tx_request_to_approved<'e>(
 	.context("failed to update deposit_tx_requests")?;
 	Ok(())
 }
+
+pub async fn update_deposit_tx_request_to_settled<'e>(
+	executor: impl Executor<'e, Database = Postgres>,
+	sig_bytes: &[u8],
+	id: i64,
+) -> Result<()> {
+	sqlx::query(
+		"UPDATE deposit_tx_requests \
+         SET status = 'SETTLED', approval_signature = $1, updated_at = NOW() \
+         WHERE id = $2",
+	)
+	.bind(sig_bytes)
+	.bind(id)
+	.execute(executor)
+	.await
+	.context("failed to settle deposit_tx_requests")?;
+	Ok(())
+}

@@ -12,7 +12,9 @@ use crate::convert::{bytes_to_f, bytes_to_u256, parse_eth_address};
 #[sqlx(type_name = "deposit_tx_status", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DepositTxStatus {
 	Pending,
+	UnderReview,
 	Approved,
+	Settled,
 	Rejected,
 }
 

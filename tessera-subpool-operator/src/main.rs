@@ -69,7 +69,15 @@ async fn main() -> Result<()> {
 			tracing::error!("freshacc tick failed: {e:#}");
 		}
 
-		if let Err(e) = deposits::process_pending_deposits(
+		if let Err(e) = deposits::triage_deposit_reqs_with_approved_deposit_check(&pool).await {
+			tracing::error!("deposit triage (approved) failed: {e:#}");
+		}
+
+		if let Err(e) = deposits::triage_deposit_reqs_with_rejected_deposit_check(&pool).await {
+			tracing::error!("deposit triage (rejected) failed: {e:#}");
+		}
+
+		if let Err(e) = deposits::process_approved_deposits(
 			&pool,
 			&approval_sk,
 			&config.sequencer_url,
@@ -80,7 +88,7 @@ async fn main() -> Result<()> {
 		)
 		.await
 		{
-			tracing::error!("deposit tick failed: {e:#}");
+			tracing::error!("deposit process (approved→settled) failed: {e:#}");
 		}
 
 		// if let Err(e) = deposits::confirm_pending_notes(&pool, &rpc_provider,

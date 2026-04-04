@@ -54,7 +54,7 @@ export interface DepositResponse {
   id: number;
 }
 
-export type DepositTxStatus = "Pending" | "Approved" | "Rejected";
+export type DepositTxStatus = "Pending" | "UnderReview" | "Approved" | "Settled" | "Rejected";
 
 /** Response body for GET /deposit/:id/status */
 export interface DepositStatusResponse {
