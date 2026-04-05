@@ -71,6 +71,15 @@ pub fn router(state: AppState) -> Router {
 			get(user::get_user_handler),
 		)
 		.route("/withdrawal", post(withdrawal_tx::submit_withdrawal_tx_handler))
+		.route("/admin/input_notes", get(admin::list_all_input_notes_handler))
+		.route(
+			"/admin/input_notes/underreview",
+			get(admin::list_underreview_input_notes_handler),
+		)
+		.route(
+			"/admin/input_notes/{id}/review",
+			post(admin::review_input_note_handler),
+		)
 		.route("/admin/output_notes", get(admin::list_all_output_notes_handler))
 		.route(
 			"/admin/output_notes/underreview",

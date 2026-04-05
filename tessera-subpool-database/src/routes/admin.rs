@@ -438,6 +438,172 @@ pub async fn review_output_note_handler(
 	Ok((StatusCode::OK, Json(ReviewDepositResponse { id, status: new_status_str.to_string() })))
 }
 
+// ── Input Notes ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, sqlx::FromRow)]
+struct InputNoteJoinRow {
+	id: i64,
+	identifier: String,
+	asset_id: Vec<u8>,
+	amount: Vec<u8>,
+	recipient_address: String,
+	sender_address: String,
+	memo: Vec<u8>,
+	status: String,
+	created_at: DateTime<Utc>,
+	updated_at: DateTime<Utc>,
+	// input_note_checks (LEFT JOIN — nullable)
+	check_id: Option<i64>,
+	check_identifier: Option<String>,
+	check_status: Option<String>,
+	check_response: Option<String>,
+	check_updated_at: Option<DateTime<Utc>>,
+	// users (LEFT JOIN on recipient_address — nullable)
+	name: Option<String>,
+	physical_address: Option<String>,
+	dob: Option<NaiveDate>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InputNoteCheckInfo {
+	pub id: Option<i64>,
+	pub identifier: Option<String>,
+	pub status: Option<String>,
+	pub check_response: Option<String>,
+	pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecipientInfo {
+	pub name: Option<String>,
+	pub physical_address: Option<String>,
+	pub dob: Option<NaiveDate>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InputNoteAdminRow {
+	pub id: i64,
+	pub identifier: String,
+	/// hex-encoded asset_id bytes
+	pub asset_id: String,
+	/// 64 hex chars — U256 amount, 32 bytes LE
+	pub amount: String,
+	pub recipient_address: String,
+	pub sender_address: String,
+	/// hex-encoded memo bytes (UTF-8 JSON)
+	pub memo: String,
+	pub status: String,
+	pub created_at: DateTime<Utc>,
+	pub updated_at: DateTime<Utc>,
+	pub input_note_check: InputNoteCheckInfo,
+	pub recipient: RecipientInfo,
+}
+
+const INPUT_NOTE_JOIN_QUERY: &str = r#"
+    SELECT
+        n.id,
+        n.identifier,
+        n.asset_id,
+        n.amount,
+        n.recipient_address,
+        n.sender_address,
+        n.memo,
+        n.status::text   AS status,
+        n.created_at,
+        n.updated_at,
+        c.id             AS check_id,
+        c.identifier     AS check_identifier,
+        c.status::text   AS check_status,
+        c.check_response,
+        c.updated_at     AS check_updated_at,
+        u.name,
+        u.physical_address,
+        u.dob
+    FROM input_notes n
+    LEFT JOIN input_note_checks c ON c.input_note_id = n.id
+    LEFT JOIN users u ON u.private_acc_address = n.recipient_address
+"#;
+
+fn map_input_note_join_row(r: InputNoteJoinRow) -> InputNoteAdminRow {
+	InputNoteAdminRow {
+		asset_id: hex::encode(&r.asset_id),
+		amount: hex::encode(&r.amount),
+		memo: hex::encode(&r.memo),
+		status: r.status,
+		input_note_check: InputNoteCheckInfo {
+			id: r.check_id,
+			identifier: r.check_identifier,
+			status: r.check_status,
+			check_response: r.check_response,
+			updated_at: r.check_updated_at,
+		},
+		recipient: RecipientInfo {
+			name: r.name,
+			physical_address: r.physical_address,
+			dob: r.dob,
+		},
+		id: r.id,
+		identifier: r.identifier,
+		recipient_address: r.recipient_address,
+		sender_address: r.sender_address,
+		created_at: r.created_at,
+		updated_at: r.updated_at,
+	}
+}
+
+pub async fn list_underreview_input_notes_handler(
+	State(state): State<AppState>,
+) -> Result<(StatusCode, Json<Vec<InputNoteAdminRow>>), AppError> {
+	let query =
+		format!("{INPUT_NOTE_JOIN_QUERY} WHERE n.status = 'UNDER_REVIEW' ORDER BY n.created_at ASC");
+	let rows: Vec<InputNoteJoinRow> = sqlx::query_as(&query).fetch_all(&state.pool).await?;
+	Ok((StatusCode::OK, Json(rows.into_iter().map(map_input_note_join_row).collect())))
+}
+
+pub async fn list_all_input_notes_handler(
+	State(state): State<AppState>,
+) -> Result<(StatusCode, Json<Vec<InputNoteAdminRow>>), AppError> {
+	let query = format!("{INPUT_NOTE_JOIN_QUERY} ORDER BY n.created_at DESC");
+	let rows: Vec<InputNoteJoinRow> = sqlx::query_as(&query).fetch_all(&state.pool).await?;
+	Ok((StatusCode::OK, Json(rows.into_iter().map(map_input_note_join_row).collect())))
+}
+
+pub async fn review_input_note_handler(
+	State(state): State<AppState>,
+	Path(id): Path<i64>,
+	Json(req): Json<ReviewDepositRequest>,
+) -> Result<(StatusCode, Json<ReviewDepositResponse>), AppError> {
+	let exists: Option<(i64,)> = sqlx::query_as(
+		"SELECT id FROM input_notes WHERE id = $1 AND status = 'UNDER_REVIEW'",
+	)
+	.bind(id)
+	.fetch_optional(&state.pool)
+	.await?;
+
+	if exists.is_none() {
+		return Err(AppError::NotFound(format!(
+			"input_note {id} not found or not UNDER_REVIEW"
+		)));
+	}
+
+	let (new_status_str, new_status_pg) = match req.action {
+		ReviewAction::Approve => ("Approved", "APPROVED"),
+		ReviewAction::Reject => ("Rejected", "REJECTED"),
+	};
+
+	sqlx::query(
+		"UPDATE input_notes \
+         SET status = $1::input_note_status, updated_at = NOW() \
+         WHERE id = $2",
+	)
+	.bind(new_status_pg)
+	.bind(id)
+	.execute(&state.pool)
+	.await?;
+
+	Ok((StatusCode::OK, Json(ReviewDepositResponse { id, status: new_status_str.to_string() })))
+}
+
 pub async fn list_freshacc_handler(
 	State(state): State<AppState>,
 ) -> Result<(StatusCode, Json<Vec<FreshAccWithKyc>>), AppError> {

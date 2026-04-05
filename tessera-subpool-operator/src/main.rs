@@ -117,5 +117,17 @@ async fn main() -> Result<()> {
 		{
 			tracing::error!("incoming_notes tick failed: {e:#}");
 		}
+
+		if let Err(e) = spend_txs::run_input_note_checks(&pool).await {
+			tracing::error!("input_note_checks tick failed: {e:#}");
+		}
+
+		if let Err(e) = spend_txs::triage_input_notes_with_approved_check(&pool).await {
+			tracing::error!("input note triage (approved) failed: {e:#}");
+		}
+
+		if let Err(e) = spend_txs::triage_input_notes_with_rejected_check(&pool).await {
+			tracing::error!("input note triage (rejected) failed: {e:#}");
+		}
 	}
 }

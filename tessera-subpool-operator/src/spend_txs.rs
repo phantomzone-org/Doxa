@@ -31,6 +31,7 @@ struct TransactionRequest {
 
 /// 1 000 USDX at 6 decimals = 1_000_000_000 units.
 const TRIGGER_THRESHOLD_OUTPUT_NOTE: u64 = 1_000_000_000;
+const TRIGGER_THRESHOLD_INCOMING_NOTE: u64 = 1_000_000_000;
 
 pub async fn triage_spend_txs(
 	pool: &PgPool,
@@ -546,6 +547,125 @@ pub async fn run_output_note_checks(pool: &PgPool) -> Result<()> {
 			identifier = %row.identifier,
 			"output note check approved"
 		);
+	}
+
+	Ok(())
+}
+
+pub async fn run_input_note_checks(pool: &PgPool) -> Result<()> {
+	#[derive(sqlx::FromRow)]
+	struct PendingCheckRow {
+		check_id: i64,
+		identifier: String,
+		memo: Vec<u8>,
+	}
+
+	let rows: Vec<PendingCheckRow> = sqlx::query_as(
+		"SELECT c.id AS check_id, c.identifier, n.memo \
+         FROM input_note_checks c \
+         INNER JOIN input_notes n ON n.id = c.input_note_id \
+         WHERE c.status = 'PENDING' \
+         ORDER BY c.created_at ASC",
+	)
+	.fetch_all(pool)
+	.await?;
+
+	for row in rows {
+		let memo_json: serde_json::Value = match serde_json::from_slice(&row.memo) {
+			Ok(v) => v,
+			Err(e) => {
+				info!(
+					check_id = row.check_id,
+					identifier = %row.identifier,
+					"input note memo is not valid JSON: {e}"
+				);
+				serde_json::Value::Null
+			},
+		};
+
+		// TODO: replace with AML screening API call
+		sqlx::query(
+			"UPDATE input_note_checks \
+             SET status = 'APPROVED'::input_note_check_status, \
+                 check_response = $1, updated_at = NOW() \
+             WHERE id = $2",
+		)
+		.bind(memo_json.to_string())
+		.bind(row.check_id)
+		.execute(pool)
+		.await?;
+
+		info!(
+			check_id = row.check_id,
+			identifier = %row.identifier,
+			"input note check approved"
+		);
+	}
+
+	Ok(())
+}
+
+pub async fn triage_input_notes_with_approved_check(pool: &PgPool) -> Result<()> {
+	#[derive(sqlx::FromRow)]
+	struct PendingNoteRow {
+		id: i64,
+		amount: Vec<u8>,
+	}
+
+	let rows: Vec<PendingNoteRow> = sqlx::query_as(
+		"SELECT n.id, n.amount \
+         FROM input_notes n \
+         INNER JOIN input_note_checks c ON c.input_note_id = n.id \
+         WHERE n.status = 'PENDING' AND c.status = 'APPROVED' \
+         ORDER BY n.created_at ASC",
+	)
+	.fetch_all(pool)
+	.await?;
+
+	let threshold = U256::from(TRIGGER_THRESHOLD_INCOMING_NOTE);
+	for row in rows {
+		let amount = if row.amount.len() == 32 {
+			let mut arr = [0u8; 32];
+			arr.copy_from_slice(&row.amount);
+			U256::from_little_endian(&arr)
+		} else {
+			anyhow::bail!("input_note {} has invalid amount length", row.id);
+		};
+		let new_status = if amount > threshold { "UNDER_REVIEW" } else { "APPROVED" };
+		sqlx::query(
+			"UPDATE input_notes SET status = $1::input_note_status, updated_at = NOW() \
+             WHERE id = $2",
+		)
+		.bind(new_status)
+		.bind(row.id)
+		.execute(pool)
+		.await?;
+		info!(id = row.id, status = new_status, "triaged input note (check=APPROVED)");
+	}
+
+	Ok(())
+}
+
+pub async fn triage_input_notes_with_rejected_check(pool: &PgPool) -> Result<()> {
+	let ids: Vec<(i64,)> = sqlx::query_as(
+		"SELECT n.id \
+         FROM input_notes n \
+         INNER JOIN input_note_checks c ON c.input_note_id = n.id \
+         WHERE n.status = 'PENDING' AND c.status = 'REJECTED' \
+         ORDER BY n.created_at ASC",
+	)
+	.fetch_all(pool)
+	.await?;
+
+	for (id,) in ids {
+		sqlx::query(
+			"UPDATE input_notes SET status = 'UNDER_REVIEW'::input_note_status, \
+             updated_at = NOW() WHERE id = $1",
+		)
+		.bind(id)
+		.execute(pool)
+		.await?;
+		info!(id, "input note moved to UNDER_REVIEW (check=REJECTED)");
 	}
 
 	Ok(())
