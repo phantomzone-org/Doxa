@@ -173,6 +173,30 @@
                 letter-spacing: 0.06em;
                 margin-bottom: 0.35rem;
             }
+            .form-group select {
+                width: 100%;
+                background: #f8f8fc;
+                border: 1px solid #d8d8e8;
+                border-radius: 6px;
+                color: #1a1a2e;
+                padding: 0.6rem 2rem 0.6rem 0.75rem;
+                font-size: 0.95rem;
+                font-family: inherit;
+                outline: none;
+                appearance: none;
+                background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23888' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+                background-repeat: no-repeat;
+                background-position: right 0.75rem center;
+                cursor: pointer;
+                transition: border-color 0.15s;
+            }
+            .form-group select:focus {
+                border-color: #4f6ef7;
+            }
+            .form-group select option {
+                font-family: inherit;
+                color: #1a1a2e;
+            }
             .form-group input,
             .form-group textarea {
                 width: 100%;
@@ -666,13 +690,22 @@
                 <!-- Sub-section 1: Public → Private Transfer -->
                 <div class="fund-subsection" id="pub2priv-section">
                     <div class="card-subheader">
-                        <span class="subsection-title">Public → Private Transfer</span>
-                        <span class="info-icon" data-tooltip="Users can receive transfers from public ethereum accounts, like Metamask">ⓘ</span>
+                        <span class="subsection-title"
+                            >Public → Private Transfer</span
+                        >
+                        <span
+                            class="info-icon"
+                            data-tooltip="Users can receive transfers from public ethereum accounts, like Metamask"
+                            >ⓘ</span
+                        >
                     </div>
 
                     <!-- pre-connect state -->
                     <div id="pub2priv-connect-view">
-                        <button class="btn btn-primary" id="pub2priv-metamask-btn">
+                        <button
+                            class="btn btn-primary"
+                            id="pub2priv-metamask-btn"
+                        >
                             Connect MetaMask
                         </button>
                         <div class="error" id="pub2priv-connect-error"></div>
@@ -693,7 +726,9 @@
                                 </div>
                                 <div class="info-row">
                                     <span class="label">Network</span>
-                                    <span class="value plain" id="pub2priv-network"
+                                    <span
+                                        class="value plain"
+                                        id="pub2priv-network"
                                         >—</span
                                     >
                                 </div>
@@ -796,46 +831,19 @@
                 <!-- Sub-section 2: Fiat → Private Transfer -->
                 <div class="fund-subsection">
                     <div class="card-subheader">
-                        <span class="subsection-title">Fiat → Private Transfer</span>
-                        <span class="info-icon" data-tooltip="Tessera is pluggable into on-ramping solutions for users to go from fiat -> stablecoins in private account">ⓘ</span>
+                        <span class="subsection-title"
+                            >Fiat → Private Transfer</span
+                        >
+                        <span
+                            class="info-icon"
+                            data-tooltip="Tessera is pluggable into on-ramping solutions for users to go from fiat -> stablecoins in private account"
+                            >ⓘ</span
+                        >
                     </div>
-                    <button class="btn btn-secondary" id="fiat-priv-btn">Add 100 USD to your account</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- ── Public → Private Deposit ── -->
-        <div class="section-full">
-            <div
-                class="card"
-                id="p2p-section"
-                style="opacity: 0.4; pointer-events: none"
-            >
-                <h2>Public → Private Deposit</h2>
-
-                <div class="amount-row">
-                    <input
-                        type="number"
-                        id="p2p-amount"
-                        min="1"
-                        placeholder="Amount (USDX)"
-                    />
-                    <button class="btn btn-primary" id="p2p-btn" disabled>
-                        Deposit
+                    <button class="btn btn-secondary" id="fiat-priv-btn">
+                        Add 1000USD to your account
                     </button>
                 </div>
-                <p class="hint" id="p2p-hint">
-                    Sign in above to enable deposits.
-                </p>
-
-                <div class="progress-bar-wrap" id="p2p-progress">
-                    <div class="progress-bar-track">
-                        <div class="progress-bar-fill" id="p2p-bar"></div>
-                    </div>
-                    <div id="p2p-steps"></div>
-                </div>
-
-                <div class="error" id="p2p-error"></div>
             </div>
         </div>
 
@@ -847,35 +855,6 @@
                 style="opacity: 0.4; pointer-events: none"
             >
                 <h2>Private Transfer</h2>
-
-                <div class="subsection-label">Demo addresses</div>
-                <div id="addr-book"></div>
-
-                <div class="info-boxes">
-                    <div class="info-card">
-                        <h3>What's private?</h3>
-                        <ul>
-                            <li>Amount</li>
-                            <li>Sender and receiver</li>
-                            <li>Respective pools</li>
-                            <li>Memo</li>
-                        </ul>
-                    </div>
-                    <div class="info-card">
-                        <h3>Sending subpool owner</h3>
-                        <ul>
-                            <li>Views &amp; approves all outgoing txs</li>
-                            <li>Has all information for regulatory audits</li>
-                        </ul>
-                    </div>
-                    <div class="info-card">
-                        <h3>Receiving subpool owner</h3>
-                        <ul>
-                            <li>Can reject the incoming tx</li>
-                            <li>Has all information for regulatory audits</li>
-                        </ul>
-                    </div>
-                </div>
 
                 <div class="form-group" style="margin-top: 1.1rem">
                     <label>

@@ -255,7 +255,6 @@ const dispStreet = document.getElementById("disp-street")!;
 const dispDob = document.getElementById("disp-dob")!;
 const dispTesseraAddr = document.getElementById("disp-tessera-addr")!;
 
-
 // ── DOM refs — pub2priv section ───────────────────────────────────────────────
 
 const pub2privMetamaskBtn = document.getElementById(
@@ -855,21 +854,9 @@ pub2privDepositBtn.addEventListener("click", async () => {
   }
 });
 
-// ── Public → Private deposit section ─────────────────────────────────────────
-
-const p2pSection = document.getElementById("p2p-section") as HTMLElement;
-const p2pAmountIn = document.getElementById("p2p-amount") as HTMLInputElement;
-const p2pBtn = document.getElementById("p2p-btn") as HTMLButtonElement;
-const p2pHint = document.getElementById("p2p-hint")!;
-const p2pProgress = document.getElementById("p2p-progress")!;
-const p2pBar = document.getElementById("p2p-bar") as HTMLElement;
-const p2pSteps = document.getElementById("p2p-steps")!;
-const p2pError = document.getElementById("p2p-error")!;
-
 // ── Private transfer section ──────────────────────────────────────────────────
 
 const xferSection = document.getElementById("xfer-section") as HTMLElement;
-const addrBook = document.getElementById("addr-book")!;
 const xferAddrIn = document.getElementById("xfer-addr") as HTMLInputElement;
 const xferAddrSelect = document.getElementById(
   "xfer-addr-select",
@@ -893,12 +880,8 @@ const memoReferenceIn = document.getElementById(
 const memoPreview = document.getElementById("memo-preview")!;
 
 function enableTransactSections() {
-  p2pSection.style.opacity = "";
-  p2pSection.style.pointerEvents = "";
   xferSection.style.opacity = "";
   xferSection.style.pointerEvents = "";
-  p2pBtn.disabled = false;
-  p2pHint.textContent = "Enter an amount and click Deposit.";
   updatePub2PrivTransferBtn();
   loadAllUsers().then((users) => {
     // Clear existing options except the placeholder
@@ -910,158 +893,15 @@ function enableTransactSections() {
       seen.add(u.private_acc_address);
       const opt = document.createElement("option");
       opt.value = u.private_acc_address;
-      opt.textContent = `${u.name} (${u.private_acc_address.slice(0, 8)}…)`;
+      const addr = u.private_acc_address;
+      const addrShort = addr.slice(0, 4) + "…" + addr.slice(-6);
+      opt.textContent = `${u.name} (0x${addrShort})`;
       opt.dataset.name = u.name;
       opt.dataset.physicalAddress = u.physical_address;
       xferAddrSelect.appendChild(opt);
     }
   });
 }
-
-// ── p2p deposit ───────────────────────────────────────────────────────────────
-
-p2pAmountIn.addEventListener("input", () => {
-  const amount = parseFloat(p2pAmountIn.value);
-  if (!amount || amount <= 0) {
-    p2pBtn.disabled = false;
-    p2pError.textContent = "";
-    return;
-  }
-  const units = BigInt(Math.round(amount * 1_000_000));
-  if (units > publicBalanceRaw) {
-    p2pBtn.disabled = true;
-    p2pError.textContent = "Amount exceeds your USDX balance.";
-  } else {
-    p2pBtn.disabled = false;
-    p2pError.textContent = "";
-  }
-});
-
-p2pBtn.addEventListener("click", async () => {
-  const amount = parseFloat(p2pAmountIn.value);
-  if (!amount || amount <= 0) {
-    p2pError.textContent = "Enter a valid amount.";
-    return;
-  }
-
-  try {
-    if (!isMetaMaskUser) currentSeed = await evalPrf();
-    await refreshAll();
-
-    p2pBtn.disabled = true;
-    p2pError.textContent = "";
-    p2pProgress.classList.add("visible");
-    p2pSteps.innerHTML = "";
-    p2pBar.style.width = "0%";
-
-    const depositAmountUnits = BigInt(Math.round(amount * 1_000_000));
-    if (depositAmountUnits > publicBalanceRaw) {
-      p2pError.textContent = "Amount exceeds your USDX balance.";
-      p2pBtn.disabled = false;
-      return;
-    }
-
-    const allowance = await publicClient.readContract({
-      address: USDX_CONTRACT_ADDR,
-      abi: erc20Abi,
-      functionName: "allowance",
-      args: [ethAddressFull as `0x${string}`, TESSERA_CONTRACT],
-    });
-
-    if (allowance < depositAmountUnits) {
-      const step = pStep(p2pSteps, "⏳ Awaiting USDX approval…", "active");
-      p2pBar.style.width = "30%";
-      const approveTxHash = await walletClient!.writeContract({
-        address: USDX_CONTRACT_ADDR,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [TESSERA_CONTRACT, maxUint256],
-      });
-      await publicClient.waitForTransactionReceipt({
-        hash: approveTxHash as `0x${string}`,
-      });
-      step.className = "p-step done";
-      step.textContent = "✓ USDX approval given";
-    }
-
-    const step2 = pStep(p2pSteps, "⏳ Constructing deposit note…", "active");
-    p2pBar.style.width = "55%";
-    const depositNote = DepositNote.create(
-      AccountAddress.fromHex(privateAccAddressFull!),
-      depositAmountUnits,
-      AssetId.fromU64(ASSET_ID),
-    );
-    const commitmentHex = ("0x" +
-      depositNote.commitment().toHex()) as `0x${string}`;
-    step2.className = "p-step done";
-    step2.textContent = "✓ Deposit note constructed";
-
-    const step3 = pStep(p2pSteps, "⏳ Signing deposit message…", "active");
-    p2pBar.style.width = "75%";
-    const depositSig = await walletClient!.signTypedData({
-      domain: TESSERA_DEPOSIT_DOMAIN,
-      types: TESSERA_DEPOSIT_TYPES,
-      primaryType: "Deposit",
-      message: {
-        depositNoteCommitment: commitmentHex,
-        amount: depositAmountUnits,
-      },
-    });
-    const depositSigHex = depositSig.replace(/^0x/, "");
-    step3.className = "p-step done";
-    step3.textContent = "✓ Deposit message signed";
-
-    const step4 = pStep(p2pSteps, "⏳ Submitting deposit request…", "active");
-    p2pBar.style.width = "88%";
-    const { id: depositId } = await subpoolClient.submitDeposit({
-      recipient_address: privateAccAddressFull!,
-      eth_address: ethAddressFull!,
-      deposit_note_identifier: depositNote.identifierHex(),
-      deposit_amount: u256LeHex(depositAmountUnits),
-      asset_id: ASSET_ID_HEX,
-      deposit_type_signature: depositSigHex,
-    });
-    step4.className = "p-step done";
-    step4.textContent = "✓ Deposit submitted";
-
-    const step5 = pStep(p2pSteps, "⏳ Waiting for approval…", "active");
-    p2pBar.style.width = "95%";
-
-    await new Promise<void>((resolve, reject) => {
-      const timer = setInterval(async () => {
-        try {
-          const status = await subpoolClient.getDepositStatus(depositId);
-          if (!status || status.status === "Pending") return;
-          clearInterval(timer);
-          if (status.status === "Rejected") {
-            reject(new Error("Deposit rejected by operator"));
-            return;
-          }
-          step5.className = "p-step done";
-          step5.textContent = "✓ Deposit approved";
-          if (status.deposit_tx_hash) {
-            const a = document.createElement("a");
-            a.href = `https://sepolia.etherscan.io/tx/${status.deposit_tx_hash}`;
-            a.target = "_blank";
-            a.rel = "noopener";
-            a.textContent = "View deposit tx on Etherscan ↗";
-            a.className = "tx-link";
-            p2pSteps.appendChild(a);
-          }
-          p2pBar.style.width = "100%";
-          await refreshAll();
-          resolve();
-        } catch (e) {
-          clearInterval(timer);
-          reject(e);
-        }
-      }, 5_000);
-    });
-  } catch (err) {
-    p2pError.textContent = `${err}`;
-    p2pBtn.disabled = false;
-  }
-});
 
 // ── Private transfer ──────────────────────────────────────────────────────────
 
@@ -1102,30 +942,6 @@ function validTesseraAddr(hex: string): boolean {
   } catch {
     return false;
   }
-}
-
-for (const { label, addr } of DEMO_ADDRESSES) {
-  const row = document.createElement("div");
-  row.className = "addr-book-row";
-  const lbl = document.createElement("span");
-  lbl.className = "addr-label";
-  lbl.textContent = label;
-  const val = document.createElement("span");
-  val.className = "addr-val";
-  val.textContent = addr.slice(0, 12) + "…" + addr.slice(-10);
-  val.title = addr;
-  const btn = document.createElement("button");
-  btn.className = "copy-btn";
-  btn.textContent = "Copy";
-  btn.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(addr);
-    btn.textContent = "Copied!";
-    setTimeout(() => {
-      btn.textContent = "Copy";
-    }, 1500);
-  });
-  row.append(lbl, val, btn);
-  addrBook.appendChild(row);
 }
 
 function updateXferBtn() {
