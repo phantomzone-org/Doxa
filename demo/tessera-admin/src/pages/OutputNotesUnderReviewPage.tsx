@@ -31,7 +31,13 @@ function checkStatusBadge(status: string | null) {
   );
 }
 
-function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
+function DetailField({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
@@ -42,15 +48,69 @@ function DetailField({ label, value }: { label: string; value: React.ReactNode }
   );
 }
 
-function decodeMemo(hexMemo: string): string {
-  if (!hexMemo) return "—";
+function parseMemo(hexMemo: string): Record<string, any> | null {
+  if (!hexMemo) return null;
   try {
-    const bytes = new Uint8Array((hexMemo.match(/.{2}/g) ?? []).map((h) => parseInt(h, 16)));
-    const text = new TextDecoder().decode(bytes);
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return hexMemo;
+    const bytes = new Uint8Array(
+      (hexMemo.match(/.{2}/g) ?? []).map((h) => parseInt(h, 16)),
+    );
+    const text = new TextDecoder().decode(bytes).replace(/\0+$/, "");
+    return JSON.parse(text);
+  } catch (e) {
+    console.error("parseMemo failed:", e);
+    return null;
   }
+}
+
+function MemoDisplay({ hexMemo }: { hexMemo: string }) {
+  const memo = parseMemo(hexMemo);
+  if (!memo) {
+    return (
+      <pre className="max-h-60 overflow-auto rounded bg-slate-100 p-2 text-xs text-slate-600">
+        {hexMemo || "—"}
+      </pre>
+    );
+  }
+
+  const { sender, recipient, reference } = memo;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-2 gap-2">
+        {[
+          { label: "From", party: sender },
+          { label: "To", party: recipient },
+        ].map(({ label, party }) => (
+          <div key={label} className="rounded bg-slate-50 p-3">
+            <div className="mb-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+              {label}
+            </div>
+            {party?.institution_name && (
+              <div className="text-xs font-semibold text-indigo-500">
+                {party.institution_name}
+              </div>
+            )}
+            {party?.name && (
+              <div className="text-xs font-semibold text-slate-700">
+                {party.name}
+              </div>
+            )}
+            {party?.physical_address && (
+              <div className="text-xs text-slate-500">
+                {party.physical_address}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {reference && (
+        <div className="border-t border-slate-100 pt-2 text-xs text-slate-500">
+          <span className="font-semibold text-slate-600">Reference:</span>{" "}
+          {reference}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function OutputNoteRow({ row }: { row: OutputNoteAdminRow }) {
@@ -58,7 +118,8 @@ function OutputNoteRow({ row }: { row: OutputNoteAdminRow }) {
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: (action: "approve" | "reject") => reviewOutputNote(row.id, action),
+    mutationFn: (action: "approve" | "reject") =>
+      reviewOutputNote(row.id, action),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["output-notes-underreview"] }),
   });
@@ -79,10 +140,13 @@ function OutputNoteRow({ row }: { row: OutputNoteAdminRow }) {
           {truncate(row.identifier, 20)}
         </td>
         <td className="px-4 py-3 font-mono text-xs" title={row.sender_address}>
-          {truncate(row.sender_address)}
+          {`0x${row.sender_address.slice(0, 4)}…${row.sender_address.slice(-6)}`}
         </td>
-        <td className="px-4 py-3 font-mono text-xs" title={row.recipient_address}>
-          {truncate(row.recipient_address)}
+        <td
+          className="px-4 py-3 font-mono text-xs"
+          title={row.recipient_address}
+        >
+          {`0x${row.recipient_address.slice(0, 4)}…${row.recipient_address.slice(-6)}`}
         </td>
         <td className="px-4 py-3 text-xs text-slate-700">
           {hexLeToUsdx(row.amount)} USDX
@@ -135,7 +199,11 @@ function OutputNoteRow({ row }: { row: OutputNoteAdminRow }) {
                   <DetailField label="Identifier" value={c.identifier} />
                   <DetailField
                     label="Last updated"
-                    value={c.updated_at ? new Date(c.updated_at).toLocaleString() : null}
+                    value={
+                      c.updated_at
+                        ? new Date(c.updated_at).toLocaleString()
+                        : null
+                    }
                   />
                   {c.check_response && (
                     <div className="flex flex-col gap-0.5">
@@ -145,7 +213,11 @@ function OutputNoteRow({ row }: { row: OutputNoteAdminRow }) {
                       <pre className="max-h-40 overflow-auto rounded bg-slate-100 p-2 text-xs text-slate-600">
                         {(() => {
                           try {
-                            return JSON.stringify(JSON.parse(c.check_response!), null, 2);
+                            return JSON.stringify(
+                              JSON.parse(c.check_response!),
+                              null,
+                              2,
+                            );
                           } catch {
                             return c.check_response;
                           }
@@ -163,9 +235,15 @@ function OutputNoteRow({ row }: { row: OutputNoteAdminRow }) {
                 </h3>
                 <div className="flex flex-col gap-3">
                   <DetailField label="Name" value={sender.name} />
-                  <DetailField label="Physical address" value={sender.physical_address} />
+                  <DetailField
+                    label="Physical address"
+                    value={sender.physical_address}
+                  />
                   <DetailField label="Date of birth" value={sender.dob} />
-                  <DetailField label="Tessera address" value={row.sender_address} />
+                  <DetailField
+                    label="Tessera address"
+                    value={`0x${row.sender_address}`}
+                  />
                 </div>
               </div>
 
@@ -174,11 +252,14 @@ function OutputNoteRow({ row }: { row: OutputNoteAdminRow }) {
                 <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Memo
                 </h3>
-                <pre className="max-h-60 overflow-auto rounded bg-slate-100 p-2 text-xs text-slate-600">
-                  {decodeMemo(row.memo)}
-                </pre>
-                <div className="mt-3">
-                  <DetailField label="Recipient" value={row.recipient_address} />
+                <div className="rounded border border-slate-200 p-3">
+                  <MemoDisplay hexMemo={row.memo} />
+                </div>
+                <div className="mt-3 border-t border-slate-100 pt-3">
+                  <DetailField
+                    label="Recipient"
+                    value={`0x${row.recipient_address}`}
+                  />
                 </div>
               </div>
             </div>
@@ -210,10 +291,10 @@ export function OutputNotesUnderReviewPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">
-            Output Notes Under Review
+            Outgoing Transactions to be Approved/Reject
           </h1>
           <p className="mt-0.5 text-sm text-slate-500">
-            Output notes requiring manual approval or rejection.
+            paired with sender's account/KYC details and recipient's AML check
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -238,7 +319,9 @@ export function OutputNotesUnderReviewPage() {
           <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
             Under Review
           </p>
-          <p className="mt-1 text-3xl font-bold text-amber-500">{data.length}</p>
+          <p className="mt-1 text-3xl font-bold text-amber-500">
+            {data.length}
+          </p>
         </div>
       )}
 

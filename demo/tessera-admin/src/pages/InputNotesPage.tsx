@@ -46,7 +46,13 @@ function checkStatusBadge(status: string | null) {
   );
 }
 
-function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
+function DetailField({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
@@ -57,15 +63,69 @@ function DetailField({ label, value }: { label: string; value: React.ReactNode }
   );
 }
 
-function decodeMemo(hexMemo: string): string {
-  if (!hexMemo) return "—";
+function parseMemo(hexMemo: string): Record<string, any> | null {
+  if (!hexMemo) return null;
   try {
-    const bytes = new Uint8Array((hexMemo.match(/.{2}/g) ?? []).map((h) => parseInt(h, 16)));
-    const text = new TextDecoder().decode(bytes);
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return hexMemo;
+    const bytes = new Uint8Array(
+      (hexMemo.match(/.{2}/g) ?? []).map((h) => parseInt(h, 16)),
+    );
+    const text = new TextDecoder().decode(bytes).replace(/\0+$/, "");
+    return JSON.parse(text);
+  } catch (e) {
+    console.error("parseMemo failed:", e);
+    return null;
   }
+}
+
+function MemoDisplay({ hexMemo }: { hexMemo: string }) {
+  const memo = parseMemo(hexMemo);
+  if (!memo) {
+    return (
+      <pre className="max-h-60 overflow-auto rounded bg-slate-100 p-2 text-xs text-slate-600">
+        {hexMemo || "—"}
+      </pre>
+    );
+  }
+
+  const { sender, recipient, reference } = memo;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-2 gap-2">
+        {[
+          { label: "From", party: sender },
+          { label: "To", party: recipient },
+        ].map(({ label, party }) => (
+          <div key={label} className="rounded bg-slate-50 p-3">
+            <div className="mb-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+              {label}
+            </div>
+            {party?.institution_name && (
+              <div className="text-xs font-semibold text-indigo-500">
+                {party.institution_name}
+              </div>
+            )}
+            {party?.name && (
+              <div className="text-xs font-semibold text-slate-700">
+                {party.name}
+              </div>
+            )}
+            {party?.physical_address && (
+              <div className="text-xs text-slate-500">
+                {party.physical_address}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {reference && (
+        <div className="border-t border-slate-100 pt-2 text-xs text-slate-500">
+          <span className="font-semibold text-slate-600">Reference:</span>{" "}
+          {reference}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function InputNoteRow({ row }: { row: InputNoteAdminRow }) {
@@ -86,11 +146,14 @@ function InputNoteRow({ row }: { row: InputNoteAdminRow }) {
         <td className="px-4 py-3 font-mono text-xs" title={row.identifier}>
           {truncate(row.identifier, 20)}
         </td>
-        <td className="px-4 py-3 font-mono text-xs" title={row.recipient_address}>
-          {truncate(row.recipient_address)}
+        <td
+          className="px-4 py-3 font-mono text-xs"
+          title={row.recipient_address}
+        >
+          {`0x${row.recipient_address.slice(0, 4)}…${row.recipient_address.slice(-6)}`}
         </td>
         <td className="px-4 py-3 font-mono text-xs" title={row.sender_address}>
-          {truncate(row.sender_address)}
+          {`0x${row.sender_address.slice(0, 4)}…${row.sender_address.slice(-6)}`}
         </td>
         <td className="px-4 py-3 text-xs text-slate-700">
           {hexLeToUsdx(row.amount)} USDX
@@ -120,7 +183,11 @@ function InputNoteRow({ row }: { row: InputNoteAdminRow }) {
                   <DetailField label="Identifier" value={c.identifier} />
                   <DetailField
                     label="Last updated"
-                    value={c.updated_at ? new Date(c.updated_at).toLocaleString() : null}
+                    value={
+                      c.updated_at
+                        ? new Date(c.updated_at).toLocaleString()
+                        : null
+                    }
                   />
                   {c.check_response && (
                     <div className="flex flex-col gap-0.5">
@@ -130,7 +197,11 @@ function InputNoteRow({ row }: { row: InputNoteAdminRow }) {
                       <pre className="max-h-40 overflow-auto rounded bg-slate-100 p-2 text-xs text-slate-600">
                         {(() => {
                           try {
-                            return JSON.stringify(JSON.parse(c.check_response!), null, 2);
+                            return JSON.stringify(
+                              JSON.parse(c.check_response!),
+                              null,
+                              2,
+                            );
                           } catch {
                             return c.check_response;
                           }
@@ -148,10 +219,15 @@ function InputNoteRow({ row }: { row: InputNoteAdminRow }) {
                 </h3>
                 <div className="flex flex-col gap-3">
                   <DetailField label="Name" value={recipient.name} />
-                  <DetailField label="Physical address" value={recipient.physical_address} />
+                  <DetailField
+                    label="Physical address"
+                    value={recipient.physical_address}
+                  />
                   <DetailField label="Date of birth" value={recipient.dob} />
-                  <DetailField label="Tessera address" value={row.recipient_address} />
-                  <DetailField label="Sender address" value={row.sender_address} />
+                  <DetailField
+                    label="Tessera address"
+                    value={`0x${row.recipient_address}`}
+                  />
                 </div>
               </div>
 
@@ -160,9 +236,15 @@ function InputNoteRow({ row }: { row: InputNoteAdminRow }) {
                 <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Memo
                 </h3>
-                <pre className="max-h-60 overflow-auto rounded bg-slate-100 p-2 text-xs text-slate-600">
-                  {decodeMemo(row.memo)}
-                </pre>
+                <div className="rounded border border-slate-200 p-3">
+                  <MemoDisplay hexMemo={row.memo} />
+                </div>
+                <div className="mt-3 border-t border-slate-100 pt-3">
+                  <DetailField
+                    label="Sender"
+                    value={`0x${row.sender_address}`}
+                  />
+                </div>
               </div>
             </div>
           </td>
@@ -200,9 +282,11 @@ export function InputNotesPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-slate-800">All Input Notes</h1>
+          <h1 className="text-xl font-semibold text-slate-800">
+            All Incoming Transfers
+          </h1>
           <p className="mt-0.5 text-sm text-slate-500">
-            All incoming notes with check and recipient information.
+            paired with recipient's account/KYC details and sender's AML check
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -226,7 +310,11 @@ export function InputNotesPage() {
           {(
             [
               { label: "Pending", key: "PENDING", color: "text-slate-600" },
-              { label: "Under Review", key: "UNDER_REVIEW", color: "text-amber-500" },
+              {
+                label: "Under Review",
+                key: "UNDER_REVIEW",
+                color: "text-amber-500",
+              },
               { label: "Approved", key: "APPROVED", color: "text-emerald-600" },
               { label: "Rejected", key: "REJECTED", color: "text-red-500" },
             ] as const
@@ -238,20 +326,26 @@ export function InputNotesPage() {
               <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
                 {label}
               </p>
-              <p className={`mt-1 text-3xl font-bold ${color}`}>{counts[key]}</p>
+              <p className={`mt-1 text-3xl font-bold ${color}`}>
+                {counts[key]}
+              </p>
             </div>
           ))}
         </div>
       )}
 
-      {isLoading && <div className="py-16 text-center text-slate-400">Loading…</div>}
+      {isLoading && (
+        <div className="py-16 text-center text-slate-400">Loading…</div>
+      )}
       {isError && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-600">
           {(error as Error).message}
         </div>
       )}
       {data && data.length === 0 && (
-        <div className="py-16 text-center text-slate-400">No input notes found.</div>
+        <div className="py-16 text-center text-slate-400">
+          No input notes found.
+        </div>
       )}
       {data && data.length > 0 && (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">

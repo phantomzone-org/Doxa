@@ -77,7 +77,7 @@ function DepositRow({ row }: { row: UnderReviewDeposit }) {
           className="px-4 py-3 font-mono text-xs"
           title={row.recipient_address}
         >
-          {truncate(row.recipient_address)}
+          {`0x${row.recipient_address.slice(0, 4)}…${row.recipient_address.slice(-6)}`}
         </td>
         <td className="px-4 py-3 text-xs text-slate-700">
           {hexLeToUsdx(row.deposit_amount)} USDX
@@ -172,7 +172,7 @@ function DepositRow({ row }: { row: UnderReviewDeposit }) {
                   <DetailField label="Date of birth" value={acc.dob} />
                   <DetailField
                     label="Tessera address"
-                    value={row.recipient_address}
+                    value={`0x${row.recipient_address}`}
                   />
                 </div>
               </div>
@@ -205,10 +205,10 @@ export function DepositsUnderReviewPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">
-            Deposits Under Review
+            Public to Private Tranfers to be Approved/Reject
           </h1>
           <p className="mt-0.5 text-sm text-slate-500">
-            Deposits requiring manual approval or rejection.
+            paired with receiving account KYC and AML/Wallet check
           </p>
         </div>
         <div className="flex items-center gap-3">
