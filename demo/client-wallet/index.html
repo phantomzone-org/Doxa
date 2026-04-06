@@ -60,7 +60,7 @@
                 border: 1px solid #e0e0e8;
                 border-radius: 12px;
                 padding: 1.75rem;
-                box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
             }
             .card h2 {
                 font-size: 1.05rem;
@@ -82,16 +82,33 @@
                 font-size: 0.95rem;
                 font-weight: 600;
                 cursor: pointer;
-                transition: opacity 0.15s, transform 0.1s;
+                transition:
+                    opacity 0.15s,
+                    transform 0.1s;
                 width: 100%;
                 justify-content: center;
             }
-            .btn:active { transform: scale(0.98); }
-            .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-            .btn-primary { background: #4f6ef7; color: #fff; }
-            .btn-primary:hover:not(:disabled) { background: #3d5ce0; }
-            .btn-secondary { background: #eef0fb; color: #3d5ce0; }
-            .btn-secondary:hover:not(:disabled) { background: #dfe3f9; }
+            .btn:active {
+                transform: scale(0.98);
+            }
+            .btn:disabled {
+                opacity: 0.4;
+                cursor: not-allowed;
+            }
+            .btn-primary {
+                background: #4f6ef7;
+                color: #fff;
+            }
+            .btn-primary:hover:not(:disabled) {
+                background: #3d5ce0;
+            }
+            .btn-secondary {
+                background: #eef0fb;
+                color: #3d5ce0;
+            }
+            .btn-secondary:hover:not(:disabled) {
+                background: #dfe3f9;
+            }
             .btn-ghost {
                 background: transparent;
                 color: #666;
@@ -99,7 +116,10 @@
                 margin-top: 0.6rem;
                 font-size: 0.88rem;
             }
-            .btn-ghost:hover:not(:disabled) { background: #f0f0f8; color: #333; }
+            .btn-ghost:hover:not(:disabled) {
+                background: #f0f0f8;
+                color: #333;
+            }
 
             /* ── info rows ── */
             .info-box {
@@ -118,8 +138,13 @@
                 font-size: 0.88rem;
                 gap: 0.75rem;
             }
-            .info-row:last-child { border-bottom: none; }
-            .info-row .label { color: #888; white-space: nowrap; }
+            .info-row:last-child {
+                border-bottom: none;
+            }
+            .info-row .label {
+                color: #888;
+                white-space: nowrap;
+            }
             .info-row .value {
                 color: #2a2a40;
                 font-family: monospace;
@@ -132,10 +157,14 @@
                 font-weight: 600;
                 font-family: inherit;
             }
-            .info-row .value.plain { font-family: inherit; }
+            .info-row .value.plain {
+                font-family: inherit;
+            }
 
             /* ── KYC form ── */
-            .form-group { margin-bottom: 1rem; }
+            .form-group {
+                margin-bottom: 1rem;
+            }
             .form-group label {
                 display: block;
                 font-size: 0.8rem;
@@ -159,7 +188,9 @@
                 resize: vertical;
             }
             .form-group input:focus,
-            .form-group textarea:focus { border-color: #4f6ef7; }
+            .form-group textarea:focus {
+                border-color: #4f6ef7;
+            }
 
             /* ── progress bar ── */
             .progress-bar-wrap {
@@ -171,7 +202,9 @@
                 padding: 0.9rem 1rem;
                 font-size: 0.85rem;
             }
-            .progress-bar-wrap.visible { display: block; }
+            .progress-bar-wrap.visible {
+                display: block;
+            }
             .progress-bar-track {
                 height: 6px;
                 background: #e0e0e8;
@@ -186,16 +219,26 @@
                 border-radius: 3px;
                 transition: width 0.6s ease;
             }
-            .p-step { color: #aaa; line-height: 1.9; animation: fadein 0.3s ease; }
-            .p-step.active { color: #1a1a2e; }
-            .p-step.done { color: #1a9e60; }
+            .p-step {
+                color: #aaa;
+                line-height: 1.9;
+                animation: fadein 0.3s ease;
+            }
+            .p-step.active {
+                color: #1a1a2e;
+            }
+            .p-step.done {
+                color: #1a9e60;
+            }
             .p-step a {
                 color: #4f6ef7;
                 text-decoration: none;
                 font-family: monospace;
                 font-size: 0.8rem;
             }
-            .p-step a:hover { text-decoration: underline; }
+            .p-step a:hover {
+                text-decoration: underline;
+            }
 
             /* ── registration progress log ── */
             #register-progress {
@@ -208,14 +251,28 @@
                 font-size: 0.88rem;
                 line-height: 1.8;
             }
-            #register-progress.visible { display: block; }
-            .progress-line { color: #aaa; animation: fadein 0.3s ease; }
-            .progress-line.done { color: #1a9e60; }
-            .progress-line.active { color: #1a1a2e; }
+            #register-progress.visible {
+                display: block;
+            }
+            .progress-line {
+                color: #aaa;
+                animation: fadein 0.3s ease;
+            }
+            .progress-line.done {
+                color: #1a9e60;
+            }
+            .progress-line.active {
+                color: #1a1a2e;
+            }
 
             @keyframes fadein {
-                from { opacity: 0; transform: translateY(4px); }
-                to { opacity: 1; }
+                from {
+                    opacity: 0;
+                    transform: translateY(4px);
+                }
+                to {
+                    opacity: 1;
+                }
             }
 
             /* ── tessera address box ── */
@@ -241,14 +298,18 @@
                 font-size: 0.82rem;
                 color: #888;
             }
-            .etherscan-link.visible { display: block; }
+            .etherscan-link.visible {
+                display: block;
+            }
             .etherscan-link a {
                 color: #4f6ef7;
                 text-decoration: none;
                 font-family: monospace;
                 font-size: 0.8rem;
             }
-            .etherscan-link a:hover { text-decoration: underline; }
+            .etherscan-link a:hover {
+                text-decoration: underline;
+            }
 
             /* ── p2p deposit section ── */
             .amount-row {
@@ -267,8 +328,13 @@
                 outline: none;
                 transition: border-color 0.15s;
             }
-            .amount-row input:focus { border-color: #4f6ef7; }
-            .amount-row .btn { width: auto; flex-shrink: 0; }
+            .amount-row input:focus {
+                border-color: #4f6ef7;
+            }
+            .amount-row .btn {
+                width: auto;
+                flex-shrink: 0;
+            }
 
             .subsection-label {
                 font-size: 0.75rem;
@@ -291,7 +357,63 @@
                 margin-bottom: 0.65rem;
             }
 
-            .hint { font-size: 0.82rem; color: #aaa; margin-top: 0.6rem; }
+            .hint {
+                font-size: 0.82rem;
+                color: #aaa;
+                margin-top: 0.6rem;
+            }
+
+            /* ── card sub-header (title + info icon row) ── */
+            .card-subheader {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 1rem;
+            }
+            .subsection-title {
+                font-size: 0.9rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.07em;
+                color: #888;
+            }
+            .fund-subsection + .fund-subsection {
+                margin-top: 1.5rem;
+                padding-top: 1.5rem;
+                border-top: 1px solid #e0e0e8;
+            }
+            .info-icon {
+                position: relative;
+                cursor: help;
+                color: #bbb;
+                font-size: 1rem;
+                line-height: 1;
+                flex-shrink: 0;
+            }
+            .info-icon::after {
+                content: attr(data-tooltip);
+                position: absolute;
+                right: 0;
+                top: 1.6rem;
+                background: #1a1a2e;
+                color: #fff;
+                padding: 0.5rem 0.75rem;
+                border-radius: 6px;
+                font-size: 0.78rem;
+                font-weight: 400;
+                text-transform: none;
+                letter-spacing: 0;
+                white-space: normal;
+                width: 220px;
+                line-height: 1.5;
+                z-index: 20;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.15s;
+            }
+            .info-icon:hover::after {
+                opacity: 1;
+            }
 
             /* ── privacy info boxes ── */
             .info-boxes {
@@ -301,7 +423,9 @@
                 margin: 1.25rem 0;
             }
             @media (max-width: 680px) {
-                .info-boxes { grid-template-columns: 1fr; }
+                .info-boxes {
+                    grid-template-columns: 1fr;
+                }
             }
             .info-card {
                 background: #f8f8fc;
@@ -324,7 +448,10 @@
                 color: #888;
                 line-height: 1.75;
             }
-            .info-card ul li::before { content: "· "; color: #ccc; }
+            .info-card ul li::before {
+                content: "· ";
+                color: #ccc;
+            }
 
             /* ── address book ── */
             .addr-book-row {
@@ -335,8 +462,14 @@
                 border-bottom: 1px solid #ebebf2;
                 font-size: 0.82rem;
             }
-            .addr-book-row:last-child { border-bottom: none; }
-            .addr-book-row .addr-label { color: #888; width: 4.5rem; flex-shrink: 0; }
+            .addr-book-row:last-child {
+                border-bottom: none;
+            }
+            .addr-book-row .addr-label {
+                color: #888;
+                width: 4.5rem;
+                flex-shrink: 0;
+            }
             .addr-book-row .addr-val {
                 font-family: monospace;
                 color: #555;
@@ -356,14 +489,29 @@
                 flex-shrink: 0;
                 transition: color 0.15s;
             }
-            .copy-btn:hover { color: #333; }
+            .copy-btn:hover {
+                color: #333;
+            }
 
             /* ── transfer form ── */
-            .tick { color: #1a9e60; margin-left: 0.4rem; font-size: 0.85rem; }
-            .tick.hidden { visibility: hidden; }
-            .field-hint { font-size: 0.75rem; color: #e05050; margin-top: 0.25rem; min-height: 1em; }
+            .tick {
+                color: #1a9e60;
+                margin-left: 0.4rem;
+                font-size: 0.85rem;
+            }
+            .tick.hidden {
+                visibility: hidden;
+            }
+            .field-hint {
+                font-size: 0.75rem;
+                color: #e05050;
+                margin-top: 0.25rem;
+                min-height: 1em;
+            }
             .memo-preview {
-                font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+                font-family:
+                    "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+                    monospace;
                 font-size: 0.78rem;
                 line-height: 1.5;
                 background: #f0f2f5;
@@ -391,49 +539,85 @@
             }
 
             /* ── errors ── */
-            .error { color: #e05050; font-size: 0.85rem; margin-top: 0.75rem; }
+            .error {
+                color: #e05050;
+                font-size: 0.85rem;
+                margin-top: 0.75rem;
+            }
 
-            .tx-link { display: block; margin-top: 6px; }
+            .tx-link {
+                display: block;
+                margin-top: 6px;
+            }
         </style>
     </head>
     <body>
         <header class="app-header">
             <div class="header-left">
-                <img src="./images/logo-client.svg" alt="Client logo" class="header-logo" onerror="this.style.display='none'" />
+                <img
+                    src="./images/logo-client.svg"
+                    alt="Client logo"
+                    class="header-logo"
+                    onerror="this.style.display = 'none'"
+                />
                 <span class="header-title">Client wallet</span>
             </div>
             <div class="header-right">
-                <img src="./images/logo-partner.svg" alt="Partner logo" class="header-logo" onerror="this.style.display='none'" />
+                <img
+                    src="./images/logo-partner.svg"
+                    alt="Partner logo"
+                    class="header-logo"
+                    onerror="this.style.display = 'none'"
+                />
             </div>
         </header>
 
         <!-- ── Private account card ── -->
         <div class="section-full">
             <div class="card" id="private-account-card">
+                <h2>Account details</h2>
 
                 <!-- ── Login view ── -->
                 <div id="login-priv-view">
-                    <button class="btn btn-primary" id="createpasskeys-btn">Create with passkeys</button>
-                    <button class="btn btn-ghost" id="signinpasskeys-btn">Sign in with passkeys</button>
-                    <button class="btn btn-ghost" id="signinmetamask-btn">Sign in with MetaMask</button>
+                    <button class="btn btn-primary" id="createpasskeys-btn">
+                        Create with passkeys
+                    </button>
+                    <button class="btn btn-ghost" id="signinpasskeys-btn">
+                        Sign in with passkeys
+                    </button>
+                    <button class="btn btn-ghost" id="signinmetamask-btn">
+                        Sign in with MetaMask
+                    </button>
                     <div class="error" id="login-error"></div>
                 </div>
 
                 <!-- ── Register view ── -->
-                <div id="register-priv-view" style="display:none">
+                <div id="register-priv-view" style="display: none">
                     <div class="form-group">
                         <label>Full name</label>
-                        <input type="text" id="kyc-name" placeholder="Alice Smith" />
+                        <input
+                            type="text"
+                            id="kyc-name"
+                            placeholder="Alice Smith"
+                        />
                     </div>
                     <div class="form-group">
                         <label>Street address</label>
-                        <input type="text" id="kyc-street" placeholder="123 Main St" />
+                        <input
+                            type="text"
+                            id="kyc-street"
+                            placeholder="123 Main St"
+                        />
                     </div>
                     <div class="form-group">
                         <label>Date of birth</label>
                         <input type="date" id="kyc-dob" />
                     </div>
-                    <button class="btn btn-secondary" id="register-btn" disabled>
+                    <button
+                        class="btn btn-secondary"
+                        id="register-btn"
+                        disabled
+                    >
                         🛡 Register Private Account
                     </button>
                     <div id="register-progress"></div>
@@ -441,7 +625,7 @@
                 </div>
 
                 <!-- ── Display view ── -->
-                <div id="display-priv-view" style="display:none">
+                <div id="display-priv-view" style="display: none">
                     <div class="info-box">
                         <div class="info-row">
                             <span class="label">Full name</span>
@@ -455,116 +639,194 @@
                             <span class="label">Date of birth</span>
                             <span class="value plain" id="disp-dob">—</span>
                         </div>
-                        <div class="info-row" id="disp-priv-balance-row" style="display:none">
+                        <div
+                            class="info-row"
+                            id="disp-priv-balance-row"
+                            style="display: none"
+                        >
                             <span class="label">Private Balance</span>
-                            <span class="value balance" id="disp-priv-balance">0.00 USDX</span>
+                            <span class="value balance" id="disp-priv-balance"
+                                >0.00 USDX</span
+                            >
                         </div>
                     </div>
 
                     <div class="tessera-addr-box">
                         Tessera address: <span id="disp-tessera-addr">—</span>
                     </div>
-
-                    <div style="margin-top:1rem">
-                        <button class="btn btn-secondary" id="faucet-btn">⬇ Get 10 USDX from faucet</button>
-                    </div>
-                    <div class="progress-bar-wrap" id="faucet-progress">
-                        <div class="progress-bar-track">
-                            <div class="progress-bar-fill" id="faucet-bar"></div>
-                        </div>
-                        <div id="faucet-steps"></div>
-                    </div>
-                    <div class="etherscan-link" id="faucet-etherscan-link">
-                        View on Etherscan:
-                        <a id="faucet-etherscan-anchor" href="#" target="_blank" rel="noopener"></a>
-                    </div>
                 </div>
-
             </div>
         </div>
 
-        <!-- ── Public → Private Transfer ── -->
+        <!-- ── Fund private account ── -->
         <div class="section-full">
-            <div class="card" id="pub2priv-section">
-                <h2>Public → Private Transfer</h2>
+            <div class="card">
+                <h2>Fund private account</h2>
 
-                <!-- pre-connect state -->
-                <div id="pub2priv-connect-view">
-                    <button class="btn btn-primary" id="pub2priv-metamask-btn">Connect MetaMask</button>
-                    <div class="error" id="pub2priv-connect-error"></div>
+                <!-- Sub-section 1: Public → Private Transfer -->
+                <div class="fund-subsection" id="pub2priv-section">
+                    <div class="card-subheader">
+                        <span class="subsection-title">Public → Private Transfer</span>
+                        <span class="info-icon" data-tooltip="Users can receive transfers from public ethereum accounts, like Metamask">ⓘ</span>
+                    </div>
+
+                    <!-- pre-connect state -->
+                    <div id="pub2priv-connect-view">
+                        <button class="btn btn-primary" id="pub2priv-metamask-btn">
+                            Connect MetaMask
+                        </button>
+                        <div class="error" id="pub2priv-connect-error"></div>
+                    </div>
+
+                    <!-- post-connect state -->
+                    <div id="pub2priv-wallet-view" style="display: none">
+                        <div class="subsection-box">
+                            <div class="subsection-box-heading">
+                                Connected public account
+                            </div>
+                            <div class="info-box">
+                                <div class="info-row">
+                                    <span class="label">Address</span>
+                                    <span class="value" id="pub2priv-address"
+                                        >—</span
+                                    >
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Network</span>
+                                    <span class="value plain" id="pub2priv-network"
+                                        >—</span
+                                    >
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">ETH Balance</span>
+                                    <span
+                                        class="value balance"
+                                        id="pub2priv-eth-balance"
+                                        >—</span
+                                    >
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">USDX Balance</span>
+                                    <span
+                                        class="value balance"
+                                        id="pub2priv-usdx-balance"
+                                        >—</span
+                                    >
+                                </div>
+                            </div>
+
+                            <div
+                                id="pub2priv-fauceteth-wrap"
+                                style="display: none; margin-top: 0.75rem"
+                            >
+                                <button
+                                    class="btn btn-ghost"
+                                    id="pub2priv-fauceteth-btn"
+                                >
+                                    ⛽ Receive testnet ETH
+                                </button>
+                                <div id="pub2priv-fauceteth-steps"></div>
+                            </div>
+
+                            <div style="margin-top: 0.75rem">
+                                <button
+                                    class="btn btn-ghost"
+                                    id="pub2priv-faucetusdx-btn"
+                                >
+                                    ⬇ Receive USDX
+                                </button>
+                                <div id="pub2priv-faucetusdx-steps"></div>
+                            </div>
+                        </div>
+
+                        <!-- shown when allowance < maxUint256 -->
+                        <div
+                            id="pub2priv-approval-wrap"
+                            style="display: none; margin-top: 1.2rem"
+                        >
+                            <button
+                                class="btn btn-secondary"
+                                id="pub2priv-approval-btn"
+                            >
+                                Approve USDX
+                            </button>
+                            <div id="pub2priv-approval-steps"></div>
+                        </div>
+
+                        <!-- shown when allowance == maxUint256 -->
+                        <div
+                            id="pub2priv-deposit-wrap"
+                            style="display: none; margin-top: 1.2rem"
+                        >
+                            <div class="amount-row">
+                                <input
+                                    type="number"
+                                    id="pub2priv-amount"
+                                    min="1"
+                                    placeholder="Amount (USDX)"
+                                />
+                                <button
+                                    class="btn btn-primary"
+                                    id="pub2priv-deposit-btn"
+                                    disabled
+                                >
+                                    Transfer
+                                </button>
+                            </div>
+                            <p class="hint" id="pub2priv-hint">
+                                Sign into your private account above to enable
+                                deposits.
+                            </p>
+                        </div>
+
+                        <div class="progress-bar-wrap" id="pub2priv-progress">
+                            <div class="progress-bar-track">
+                                <div
+                                    class="progress-bar-fill"
+                                    id="pub2priv-bar"
+                                ></div>
+                            </div>
+                            <div id="pub2priv-steps"></div>
+                        </div>
+
+                        <div class="error" id="pub2priv-error"></div>
+                    </div>
                 </div>
 
-                <!-- post-connect state -->
-                <div id="pub2priv-wallet-view" style="display:none">
-                    <div class="subsection-box">
-                        <div class="subsection-box-heading">Connected public account</div>
-                        <div class="info-box">
-                            <div class="info-row">
-                                <span class="label">Address</span>
-                                <span class="value" id="pub2priv-address">—</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="label">Network</span>
-                                <span class="value plain" id="pub2priv-network">—</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="label">ETH Balance</span>
-                                <span class="value balance" id="pub2priv-eth-balance">—</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="label">USDX Balance</span>
-                                <span class="value balance" id="pub2priv-usdx-balance">—</span>
-                            </div>
-                        </div>
-
-                        <div id="pub2priv-fauceteth-wrap" style="display:none; margin-top:0.75rem">
-                            <button class="btn btn-ghost" id="pub2priv-fauceteth-btn">⛽ Receive testnet ETH</button>
-                            <div id="pub2priv-fauceteth-steps"></div>
-                        </div>
-
-                        <div style="margin-top:0.75rem">
-                            <button class="btn btn-ghost" id="pub2priv-faucetusdx-btn">⬇ Receive USDX</button>
-                            <div id="pub2priv-faucetusdx-steps"></div>
-                        </div>
+                <!-- Sub-section 2: Fiat → Private Transfer -->
+                <div class="fund-subsection">
+                    <div class="card-subheader">
+                        <span class="subsection-title">Fiat → Private Transfer</span>
+                        <span class="info-icon" data-tooltip="Tessera is pluggable into on-ramping solutions for users to go from fiat -> stablecoins in private account">ⓘ</span>
                     </div>
-
-                    <!-- shown when allowance < maxUint256 -->
-                    <div id="pub2priv-approval-wrap" style="display:none; margin-top:1.2rem">
-                        <button class="btn btn-secondary" id="pub2priv-approval-btn">Approve USDX</button>
-                        <div id="pub2priv-approval-steps"></div>
-                    </div>
-
-                    <!-- shown when allowance == maxUint256 -->
-                    <div id="pub2priv-deposit-wrap" style="display:none; margin-top:1.2rem">
-                        <div class="amount-row">
-                            <input type="number" id="pub2priv-amount" min="1" placeholder="Amount (USDX)" />
-                            <button class="btn btn-primary" id="pub2priv-deposit-btn" disabled>Deposit</button>
-                        </div>
-                        <p class="hint" id="pub2priv-hint">Sign into your private account above to enable deposits.</p>
-                    </div>
-
-                    <div class="progress-bar-wrap" id="pub2priv-progress">
-                        <div class="progress-bar-track">
-                            <div class="progress-bar-fill" id="pub2priv-bar"></div>
-                        </div>
-                        <div id="pub2priv-steps"></div>
-                    </div>
-
-                    <div class="error" id="pub2priv-error"></div>
+                    <button class="btn btn-secondary" id="fiat-priv-btn">Add 100 USD to your account</button>
                 </div>
             </div>
         </div>
 
         <!-- ── Public → Private Deposit ── -->
         <div class="section-full">
-            <div class="card" id="p2p-section" style="opacity:0.4;pointer-events:none">
+            <div
+                class="card"
+                id="p2p-section"
+                style="opacity: 0.4; pointer-events: none"
+            >
                 <h2>Public → Private Deposit</h2>
 
                 <div class="amount-row">
-                    <input type="number" id="p2p-amount" min="1" placeholder="Amount (USDX)" />
-                    <button class="btn btn-primary" id="p2p-btn" disabled>Deposit</button>
+                    <input
+                        type="number"
+                        id="p2p-amount"
+                        min="1"
+                        placeholder="Amount (USDX)"
+                    />
+                    <button class="btn btn-primary" id="p2p-btn" disabled>
+                        Deposit
+                    </button>
                 </div>
-                <p class="hint" id="p2p-hint">Sign in above to enable deposits.</p>
+                <p class="hint" id="p2p-hint">
+                    Sign in above to enable deposits.
+                </p>
 
                 <div class="progress-bar-wrap" id="p2p-progress">
                     <div class="progress-bar-track">
@@ -579,7 +841,11 @@
 
         <!-- ── Private Transfer ── -->
         <div class="section-full">
-            <div class="card" id="xfer-section" style="opacity:0.4;pointer-events:none">
+            <div
+                class="card"
+                id="xfer-section"
+                style="opacity: 0.4; pointer-events: none"
+            >
                 <h2>Private Transfer</h2>
 
                 <div class="subsection-label">Demo addresses</div>
@@ -611,7 +877,7 @@
                     </div>
                 </div>
 
-                <div class="form-group" style="margin-top:1.1rem">
+                <div class="form-group" style="margin-top: 1.1rem">
                     <label>
                         Recipient
                         <span id="addr-tick" class="tick hidden">✓</span>
@@ -624,23 +890,34 @@
                 </div>
                 <div class="form-group">
                     <label>Amount (USDX)</label>
-                    <input type="number" id="xfer-amount" min="1" placeholder="0" />
+                    <input
+                        type="number"
+                        id="xfer-amount"
+                        min="1"
+                        placeholder="0"
+                    />
                 </div>
-                <div class="form-group" id="memo-group" style="display:none">
+                <div class="form-group" id="memo-group" style="display: none">
                     <label>Memo</label>
                     <!-- hidden data stores read by main.ts -->
-                    <span id="memo-sender-name" style="display:none"></span>
-                    <span id="memo-sender-addr" style="display:none"></span>
-                    <span id="memo-rcpt-name" style="display:none"></span>
-                    <span id="memo-rcpt-addr" style="display:none"></span>
+                    <span id="memo-sender-name" style="display: none"></span>
+                    <span id="memo-sender-addr" style="display: none"></span>
+                    <span id="memo-rcpt-name" style="display: none"></span>
+                    <span id="memo-rcpt-addr" style="display: none"></span>
                     <pre class="memo-preview" id="memo-preview"></pre>
                     <div class="memo-reference-row">
                         <label for="memo-reference">Reference</label>
-                        <input type="text" id="memo-reference" placeholder="Payment reference (optional)" />
+                        <input
+                            type="text"
+                            id="memo-reference"
+                            placeholder="Payment reference (optional)"
+                        />
                     </div>
                 </div>
 
-                <button class="btn btn-primary" id="xfer-btn" disabled>Transfer</button>
+                <button class="btn btn-primary" id="xfer-btn" disabled>
+                    Transfer
+                </button>
 
                 <div class="progress-bar-wrap" id="xfer-progress">
                     <div class="progress-bar-track">

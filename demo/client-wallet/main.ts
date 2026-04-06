@@ -255,14 +255,6 @@ const dispStreet = document.getElementById("disp-street")!;
 const dispDob = document.getElementById("disp-dob")!;
 const dispTesseraAddr = document.getElementById("disp-tessera-addr")!;
 
-const faucetBtn = document.getElementById("faucet-btn") as HTMLButtonElement;
-const faucetProgress = document.getElementById("faucet-progress")!;
-const faucetBar = document.getElementById("faucet-bar") as HTMLElement;
-const faucetSteps = document.getElementById("faucet-steps")!;
-const faucetEtherscanLink = document.getElementById("faucet-etherscan-link")!;
-const faucetEtherscanAnchor = document.getElementById(
-  "faucet-etherscan-anchor",
-) as HTMLAnchorElement;
 
 // ── DOM refs — pub2priv section ───────────────────────────────────────────────
 
@@ -533,32 +525,6 @@ registerBtn.addEventListener("click", async () => {
   } catch (err) {
     registerError.textContent = `${err}`;
     registerBtn.disabled = false;
-  }
-});
-
-// ── Faucet (display view) ─────────────────────────────────────────────────────
-
-faucetBtn.addEventListener("click", async () => {
-  faucetBtn.disabled = true;
-  faucetProgress.classList.add("visible");
-  faucetSteps.innerHTML = "";
-  faucetEtherscanLink.classList.remove("visible");
-
-  const step = pStep(faucetSteps, "⏳ Submitting faucet request…", "active");
-  faucetBar.style.width = "50%";
-  try {
-    const { tx_hash } = await subpoolClient.requestFaucetUsdx(ethAddressFull!);
-    step.className = "p-step done";
-    step.textContent = "✓ Faucet transaction submitted";
-    faucetBar.style.width = "100%";
-    faucetEtherscanAnchor.href = `https://sepolia.etherscan.io/tx/${tx_hash}`;
-    faucetEtherscanAnchor.textContent =
-      tx_hash.slice(0, 10) + "…" + tx_hash.slice(-8);
-    faucetEtherscanLink.classList.add("visible");
-  } catch (err) {
-    step.className = "p-step done";
-    step.textContent = `Error: ${err}`;
-    faucetBtn.disabled = false;
   }
 });
 
