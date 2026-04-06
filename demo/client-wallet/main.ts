@@ -976,7 +976,24 @@ function updateMemoPreview() {
     },
     reference: memoReferenceIn.value.trim(),
   };
-  memoPreview.textContent = JSON.stringify(memoObj, null, 2);
+  const ref = memoObj.reference;
+  memoPreview.innerHTML = `
+    <div class="memo-parties">
+      <div class="memo-party">
+        <div class="memo-party-label">From</div>
+        <div class="memo-party-institution">${memoObj.sender.institution_name}</div>
+        <div class="memo-party-name">${memoObj.sender.name}</div>
+        <div class="memo-party-address">${memoObj.sender.physical_address}</div>
+      </div>
+      <div class="memo-party">
+        <div class="memo-party-label">To</div>
+        <div class="memo-party-institution">${memoObj.recipient.institution_name}</div>
+        <div class="memo-party-name">${memoObj.recipient.name}</div>
+        <div class="memo-party-address">${memoObj.recipient.physical_address}</div>
+      </div>
+    </div>
+    ${ref ? `<div class="memo-ref-row">Reference: <span>${ref}</span></div>` : ""}
+  `;
 }
 
 xferAddrSelect.addEventListener("change", () => {
@@ -1147,7 +1164,7 @@ xferBtn.addEventListener("click", async () => {
     memoRcptName.textContent = "";
     memoRcptAddr.textContent = "";
     memoReferenceIn.value = "";
-    memoPreview.textContent = "";
+    memoPreview.innerHTML = "";
     updateXferBtn();
   } catch (err) {
     xferError.textContent = `${err}`;

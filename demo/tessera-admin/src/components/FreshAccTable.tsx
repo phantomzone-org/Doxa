@@ -40,15 +40,18 @@ const columns = [
   }),
   col.accessor("name", {
     header: "Name",
-    cell: (i) => i.getValue() ?? <span className="text-slate-300 italic">—</span>,
+    cell: (i) =>
+      i.getValue() ?? <span className="text-slate-300 italic">—</span>,
   }),
   col.accessor("dob", {
     header: "Date of Birth",
-    cell: (i) => i.getValue() ?? <span className="text-slate-300 italic">—</span>,
+    cell: (i) =>
+      i.getValue() ?? <span className="text-slate-300 italic">—</span>,
   }),
   col.accessor("physical_address", {
-    header: "Address",
-    cell: (i) => i.getValue() ?? <span className="text-slate-300 italic">—</span>,
+    header: "Physical Address",
+    cell: (i) =>
+      i.getValue() ?? <span className="text-slate-300 italic">—</span>,
   }),
   col.accessor("private_acc_address", {
     header: "Tessera Address",
@@ -57,7 +60,7 @@ const columns = [
         className="font-mono text-xs text-slate-500 cursor-default"
         title={i.getValue()}
       >
-        {truncate(i.getValue())}
+        {`0x${i.getValue().slice(0, 4)}…${i.getValue().slice(-6)}`}
       </span>
     ),
   }),
@@ -97,7 +100,7 @@ export function FreshAccTable({ data }: { data: FreshAccWithKyc[] }) {
       [r.name, r.physical_address, r.private_acc_address, r.status, r.dob]
         .join(" ")
         .toLowerCase()
-        .includes(q)
+        .includes(q),
     );
   }, [data, globalFilter]);
 
@@ -166,7 +169,10 @@ export function FreshAccTable({ data }: { data: FreshAccWithKyc[] }) {
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-3 text-slate-700">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
                     </td>
                   ))}
                 </tr>

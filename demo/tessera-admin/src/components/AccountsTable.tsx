@@ -19,29 +19,27 @@ function truncate(s: string, head = 8, tail = 6) {
 const columns = [
   col.accessor("name", {
     header: "Name",
-    cell: (i) => i.getValue() ?? <span className="text-slate-300 italic">—</span>,
+    cell: (i) =>
+      i.getValue() ?? <span className="text-slate-300 italic">—</span>,
   }),
   col.accessor("dob", {
     header: "Date of Birth",
-    cell: (i) => i.getValue() ?? <span className="text-slate-300 italic">—</span>,
+    cell: (i) =>
+      i.getValue() ?? <span className="text-slate-300 italic">—</span>,
   }),
   col.accessor("physical_address", {
-    header: "Address",
-    cell: (i) => i.getValue() ?? <span className="text-slate-300 italic">—</span>,
-  }),
-  col.accessor("eth_address", {
-    header: "ETH Address",
-    cell: (i) => (
-      <span className="font-mono text-xs text-slate-500 cursor-default" title={i.getValue()}>
-        {truncate(i.getValue(), 10, 8)}
-      </span>
-    ),
+    header: "Physical Address",
+    cell: (i) =>
+      i.getValue() ?? <span className="text-slate-300 italic">—</span>,
   }),
   col.accessor("private_acc_address", {
     header: "Tessera Address",
     cell: (i) => (
-      <span className="font-mono text-xs text-slate-500 cursor-default" title={i.getValue()}>
-        {truncate(i.getValue())}
+      <span
+        className="font-mono text-xs text-slate-500 cursor-default"
+        title={i.getValue()}
+      >
+        {`0x${i.getValue().slice(0, 4)}…${i.getValue().slice(-6)}`}
       </span>
     ),
   }),
@@ -74,7 +72,7 @@ export function AccountsTable({ data }: { data: AccountWithKyc[] }) {
       [r.name, r.physical_address, r.eth_address, r.private_acc_address, r.dob]
         .join(" ")
         .toLowerCase()
-        .includes(q)
+        .includes(q),
     );
   }, [data, globalFilter]);
 
@@ -91,7 +89,7 @@ export function AccountsTable({ data }: { data: AccountWithKyc[] }) {
     <div className="flex flex-col gap-4">
       <input
         type="text"
-        placeholder="Search by name, address, ETH address…"
+        placeholder="Search by name, physical address, tessera address…"
         value={globalFilter}
         onChange={(e) => setGlobalFilter(e.target.value)}
         className="w-full max-w-sm rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
@@ -107,7 +105,9 @@ export function AccountsTable({ data }: { data: AccountWithKyc[] }) {
                     key={h.id}
                     onClick={h.column.getToggleSortingHandler()}
                     className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 select-none ${
-                      h.column.getCanSort() ? "cursor-pointer hover:text-slate-700" : ""
+                      h.column.getCanSort()
+                        ? "cursor-pointer hover:text-slate-700"
+                        : ""
                     }`}
                   >
                     <span className="flex items-center gap-1">
@@ -123,16 +123,25 @@ export function AccountsTable({ data }: { data: AccountWithKyc[] }) {
           <tbody className="divide-y divide-slate-100 bg-white">
             {table.getRowModel().rows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-10 text-center text-slate-400">
+                <td
+                  colSpan={columns.length}
+                  className="px-4 py-10 text-center text-slate-400"
+                >
                   No records found.
                 </td>
               </tr>
             ) : (
               table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="transition-colors hover:bg-slate-50">
+                <tr
+                  key={row.id}
+                  className="transition-colors hover:bg-slate-50"
+                >
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-3 text-slate-700">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
                     </td>
                   ))}
                 </tr>

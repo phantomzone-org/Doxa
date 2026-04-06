@@ -22,7 +22,7 @@ export function FreshAccPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">
-            FreshAcc Requests
+            New Account Requests
           </h1>
           <p className="mt-0.5 text-sm text-slate-500">
             All account registration requests paired with KYC data.

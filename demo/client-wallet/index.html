@@ -533,19 +533,55 @@
                 min-height: 1em;
             }
             .memo-preview {
-                font-family:
-                    "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
-                    monospace;
-                font-size: 0.78rem;
-                line-height: 1.5;
-                background: #f0f2f5;
-                border: 1px solid #d8dce4;
-                border-radius: 6px;
-                padding: 0.75rem 1rem;
-                white-space: pre;
-                overflow-x: auto;
-                color: #2d3a4a;
+                background: #f8f8fc;
+                border: 1px solid #e0e0e8;
+                border-radius: 8px;
+                padding: 0.85rem 1rem;
                 margin-top: 0.5rem;
+                font-size: 0.85rem;
+                color: #1a1a2e;
+            }
+            .memo-parties {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 0.75rem;
+            }
+            .memo-party {
+                display: flex;
+                flex-direction: column;
+                gap: 0.15rem;
+            }
+            .memo-party-label {
+                font-size: 0.7rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.07em;
+                color: #888;
+                margin-bottom: 0.25rem;
+            }
+            .memo-party-institution {
+                font-size: 0.78rem;
+                color: #4f6ef7;
+                font-weight: 600;
+            }
+            .memo-party-name {
+                font-weight: 600;
+                color: #1a1a2e;
+            }
+            .memo-party-address {
+                font-size: 0.8rem;
+                color: #666;
+            }
+            .memo-ref-row {
+                margin-top: 0.65rem;
+                padding-top: 0.65rem;
+                border-top: 1px solid #e0e0e8;
+                font-size: 0.8rem;
+                color: #555;
+            }
+            .memo-ref-row span {
+                font-weight: 600;
+                color: #1a1a2e;
             }
             .memo-reference-row {
                 display: flex;
@@ -854,7 +890,10 @@
                 id="xfer-section"
                 style="opacity: 0.4; pointer-events: none"
             >
-                <h2>Private Transfer</h2>
+                <div class="card-subheader">
+                    <h2>Private Transfer</h2>
+                    <span class="info-icon" data-tooltip="Users can send private transfers both within and across institutions">ⓘ</span>
+                </div>
 
                 <div class="form-group" style="margin-top: 1.1rem">
                     <label>
@@ -877,19 +916,20 @@
                     />
                 </div>
                 <div class="form-group" id="memo-group" style="display: none">
-                    <label>Memo</label>
+                    <label>Memo <span class="info-icon" data-tooltip="Every private transfer carries sufficient information institutions on both ends to remain compliant (travel rule, etc.)">ⓘ</span></label>
                     <!-- hidden data stores read by main.ts -->
                     <span id="memo-sender-name" style="display: none"></span>
                     <span id="memo-sender-addr" style="display: none"></span>
                     <span id="memo-rcpt-name" style="display: none"></span>
                     <span id="memo-rcpt-addr" style="display: none"></span>
-                    <pre class="memo-preview" id="memo-preview"></pre>
+                    <div class="memo-preview" id="memo-preview"></div>
                     <div class="memo-reference-row">
                         <label for="memo-reference">Reference</label>
                         <input
                             type="text"
                             id="memo-reference"
                             placeholder="Payment reference (optional)"
+                            maxlength="500"
                         />
                     </div>
                 </div>

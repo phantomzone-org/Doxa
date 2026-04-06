@@ -18,15 +18,22 @@ type Page =
   | "input-notes-underreview"
   | "input-notes";
 
-const NAV: { id: Page; label: string; icon: string }[] = [
-  { id: "freshacc", label: "FreshAcc", icon: "🪪" },
-  { id: "accounts", label: "Accounts", icon: "👤" },
-  { id: "deposits", label: "Deposits", icon: "💰" },
-  { id: "deposits-underreview", label: "Deposits Under Review", icon: "🔍" },
-  { id: "output-notes-underreview", label: "Output Notes Review", icon: "📋" },
-  { id: "output-notes", label: "All Output Notes", icon: "📄" },
-  { id: "input-notes-underreview", label: "Input Notes Review", icon: "📥" },
-  { id: "input-notes", label: "All Input Notes", icon: "📩" },
+const NAV_MAIN: { id: Page; label: string; icon: string }[] = [
+  { id: "accounts", label: "All Accounts", icon: "👤" },
+  { id: "freshacc", label: "New Account Requests", icon: "🪪" },
+  { id: "deposits", label: "All Public to Private transfers", icon: "⬇️" },
+  { id: "output-notes", label: "All Outgoing transfers", icon: "📄" },
+  { id: "input-notes", label: "All Incoming transfers", icon: "📩" },
+];
+
+const NAV_UNDER_REVIEW: { id: Page; label: string; icon: string }[] = [
+  {
+    id: "deposits-underreview",
+    label: "Public to Private transfers",
+    icon: "⬇️",
+  },
+  { id: "output-notes-underreview", label: "Outgoing transfers", icon: "📄" },
+  { id: "input-notes-underreview", label: "Input transfers", icon: "📩" },
 ];
 
 export default function App() {
@@ -42,7 +49,27 @@ export default function App() {
           </span>
         </div>
         <nav className="flex flex-col gap-1 px-3">
-          {NAV.map((item) => (
+          {NAV_MAIN.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setPage(item.id)}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                page === item.id
+                  ? "bg-slate-100 text-slate-900"
+                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+              }`}
+            >
+              <span>{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+
+          <div className="mx-3 my-3 border-t border-slate-200" />
+          <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+            Under Review
+          </p>
+
+          {NAV_UNDER_REVIEW.map((item) => (
             <button
               key={item.id}
               onClick={() => setPage(item.id)}
@@ -66,7 +93,9 @@ export default function App() {
           {page === "accounts" && <AccountsPage />}
           {page === "deposits" && <DepositsPage />}
           {page === "deposits-underreview" && <DepositsUnderReviewPage />}
-          {page === "output-notes-underreview" && <OutputNotesUnderReviewPage />}
+          {page === "output-notes-underreview" && (
+            <OutputNotesUnderReviewPage />
+          )}
           {page === "output-notes" && <OutputNotesPage />}
           {page === "input-notes-underreview" && <InputNotesUnderReviewPage />}
           {page === "input-notes" && <InputNotesPage />}

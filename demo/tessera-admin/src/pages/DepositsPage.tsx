@@ -47,10 +47,18 @@ function checkStatusBadge(status: string | null) {
   );
 }
 
-function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
+function DetailField({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-xs font-medium uppercase tracking-wider text-slate-400">{label}</span>
+      <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
+        {label}
+      </span>
       <span className="break-all text-xs text-slate-700">{value ?? "—"}</span>
     </div>
   );
@@ -74,8 +82,11 @@ function DepositRow({ row }: { row: DepositAdminRow }) {
         <td className="px-4 py-3 font-mono text-xs" title={row.eth_address}>
           {truncate(row.eth_address)}
         </td>
-        <td className="px-4 py-3 font-mono text-xs" title={row.recipient_address}>
-          {truncate(row.recipient_address)}
+        <td
+          className="px-4 py-3 font-mono text-xs"
+          title={row.recipient_address}
+        >
+          {`0x${row.recipient_address.slice(0, 4)}…${row.recipient_address.slice(-6)}`}
         </td>
         <td className="px-4 py-3 text-xs text-slate-700">
           {hexLeToUsdx(row.deposit_amount)} USDX
@@ -92,7 +103,7 @@ function DepositRow({ row }: { row: DepositAdminRow }) {
               {/* Deposit check */}
               <div className="rounded-lg border border-slate-200 bg-white p-4">
                 <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  AML / Sanctions Check
+                  AML / Wallet sanction check
                 </h3>
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-2">
@@ -104,7 +115,11 @@ function DepositRow({ row }: { row: DepositAdminRow }) {
                   <DetailField label="Check ID" value={dc.id} />
                   <DetailField
                     label="Last updated"
-                    value={dc.updated_at ? new Date(dc.updated_at).toLocaleString() : null}
+                    value={
+                      dc.updated_at
+                        ? new Date(dc.updated_at).toLocaleString()
+                        : null
+                    }
                   />
                   {dc.check_response && (
                     <div className="flex flex-col gap-0.5">
@@ -114,7 +129,11 @@ function DepositRow({ row }: { row: DepositAdminRow }) {
                       <pre className="max-h-40 overflow-auto rounded bg-slate-100 p-2 text-xs text-slate-600">
                         {(() => {
                           try {
-                            return JSON.stringify(JSON.parse(dc.check_response!), null, 2);
+                            return JSON.stringify(
+                              JSON.parse(dc.check_response!),
+                              null,
+                              2,
+                            );
                           } catch {
                             return dc.check_response;
                           }
@@ -132,9 +151,15 @@ function DepositRow({ row }: { row: DepositAdminRow }) {
                 </h3>
                 <div className="flex flex-col gap-3">
                   <DetailField label="Name" value={acc.name} />
-                  <DetailField label="Physical address" value={acc.physical_address} />
+                  <DetailField
+                    label="Physical address"
+                    value={acc.physical_address}
+                  />
                   <DetailField label="Date of birth" value={acc.dob} />
-                  <DetailField label="Tessera address" value={row.recipient_address} />
+                  <DetailField
+                    label="Tessera address"
+                    value={`0x${row.recipient_address}`}
+                  />
                 </div>
               </div>
             </div>
@@ -145,10 +170,24 @@ function DepositRow({ row }: { row: DepositAdminRow }) {
   );
 }
 
-const ALL_STATUSES = ["PENDING", "UNDER_REVIEW", "APPROVED", "SETTLED", "REJECTED"] as const;
+const ALL_STATUSES = [
+  "PENDING",
+  "UNDER_REVIEW",
+  "APPROVED",
+  "SETTLED",
+  "REJECTED",
+] as const;
 
 export function DepositsPage() {
-  const { data, isLoading, isError, error, dataUpdatedAt, refetch, isFetching } = useQuery({
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    dataUpdatedAt,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ["deposits-all"],
     queryFn: fetchAllDeposits,
     refetchInterval: 10_000,
@@ -159,8 +198,12 @@ export function DepositsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-slate-800">Deposits</h1>
-          <p className="mt-0.5 text-sm text-slate-500">All deposit requests.</p>
+          <h1 className="text-xl font-semibold text-slate-800">
+            All Public to Private transfers
+          </h1>
+          <p className="mt-0.5 text-sm text-slate-500">
+            paired with receiving account KYC and AML/Wallet check
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {dataUpdatedAt > 0 && (
@@ -192,8 +235,13 @@ export function DepositsPage() {
                     ? "text-amber-500"
                     : "text-slate-500";
             return (
-              <div key={s} className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">{s}</p>
+              <div
+                key={s}
+                className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm"
+              >
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+                  {s}
+                </p>
                 <p className={`mt-1 text-3xl font-bold ${color}`}>{count}</p>
               </div>
             );
@@ -202,7 +250,9 @@ export function DepositsPage() {
       )}
 
       {/* Content */}
-      {isLoading && <div className="py-16 text-center text-slate-400">Loading…</div>}
+      {isLoading && (
+        <div className="py-16 text-center text-slate-400">Loading…</div>
+      )}
       {isError && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-600">
           {(error as Error).message}
