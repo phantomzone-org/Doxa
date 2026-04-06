@@ -1,4 +1,5 @@
 import { useState } from "react";
+import institutions from "../../institutions.json";
 import { FreshAccPage } from "./pages/FreshAccPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { DepositsPage } from "./pages/DepositsPage";
@@ -36,16 +37,55 @@ const NAV_UNDER_REVIEW: { id: Page; label: string; icon: string }[] = [
   { id: "input-notes-underreview", label: "Input transfers", icon: "📩" },
 ];
 
+interface InstitutionConfig {
+  name: string;
+  "background-color": string;
+  "logo-file": string;
+  "partner-logo-file": string;
+}
+
+const SUBPOOL_ID_HEX =
+  (import.meta.env.VITE_SUBPOOL_ID_HEX as string | undefined) ??
+  "0100000000000000";
+
+const institution = (
+  institutions as Record<string, InstitutionConfig>
+)[SUBPOOL_ID_HEX];
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>("freshacc");
 
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
-      <aside className="w-56 flex-shrink-0 border-r border-slate-200 bg-white">
-        <div className="px-5 py-6">
-          <span className="text-base font-bold tracking-tight text-slate-800">
-            Tessera Admin
+      <aside
+        className="w-56 flex-shrink-0 border-r border-slate-200"
+        style={{
+          backgroundColor: institution
+            ? hexToRgba(institution["background-color"], 0.85)
+            : undefined,
+        }}
+      >
+        <div className="px-5 py-6 flex items-center gap-3">
+          {institution && (
+            <img
+              src={`/images/${institution["logo-file"]}`}
+              alt={institution.name}
+              className="h-7 w-auto"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = "none";
+              }}
+            />
+          )}
+          <span className="text-base font-bold tracking-tight text-white">
+            {institution?.name ?? "Tessera Admin"}
           </span>
         </div>
         <nav className="flex flex-col gap-1 px-3">
@@ -55,8 +95,8 @@ export default function App() {
               onClick={() => setPage(item.id)}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                 page === item.id
-                  ? "bg-slate-100 text-slate-900"
-                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                  ? "bg-white/20 text-white"
+                  : "text-white/70 hover:bg-white/10 hover:text-white"
               }`}
             >
               <span>{item.icon}</span>
@@ -64,8 +104,8 @@ export default function App() {
             </button>
           ))}
 
-          <div className="mx-3 my-3 border-t border-slate-200" />
-          <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="mx-3 my-3 border-t border-white/20" />
+          <p className="px-3 pb-1 text-xs font-semibold uppercase tracking-wider text-white/50">
             Under Review
           </p>
 
@@ -75,8 +115,8 @@ export default function App() {
               onClick={() => setPage(item.id)}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                 page === item.id
-                  ? "bg-slate-100 text-slate-900"
-                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                  ? "bg-white/20 text-white"
+                  : "text-white/70 hover:bg-white/10 hover:text-white"
               }`}
             >
               <span>{item.icon}</span>

@@ -38,7 +38,7 @@ import {
   delay,
   pStep,
 } from "./helpers";
-import subpoolInstitutions from "./subpool_institutions.json";
+import subpoolInstitutions from "../institutions.json";
 
 await init();
 
@@ -62,11 +62,40 @@ const ASSET_ID = leHexToU64(ASSET_ID_HEX);
 console.log("Subpool ID =", SUBPOOL_ID_HEX);
 console.log("DB server =", API_BASE_URL);
 
+// Apply institution branding from config
+{
+  const inst = getInstitution(SUBPOOL_ID_HEX);
+  if (inst) {
+    const logoClient = document.getElementById("header-logo-client") as HTMLImageElement | null;
+    const logoPartner = document.getElementById("header-logo-partner") as HTMLImageElement | null;
+    const institutionName = document.getElementById("header-institution-name");
+    if (logoClient) logoClient.src = `./images/${inst["logo-file"]}`;
+    if (logoPartner) logoPartner.src = `./images/${inst["partner-logo-file"]}`;
+    if (institutionName) institutionName.textContent = inst.name;
+    document.body.style.backgroundColor = hexToRgba(inst["background-color"], 0.08);
+  }
+}
+
+interface InstitutionConfig {
+  name: string;
+  "background-color": string;
+  "logo-file": string;
+  "partner-logo-file": string;
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function getInstitution(subpoolIdHex: string): InstitutionConfig | undefined {
+  return (subpoolInstitutions as Record<string, InstitutionConfig>)[subpoolIdHex];
+}
+
 function getInstitutionName(subpoolIdHex: string): string {
-  return (
-    (subpoolInstitutions as Record<string, string>)[subpoolIdHex] ??
-    subpoolIdHex
-  );
+  return getInstitution(subpoolIdHex)?.name ?? subpoolIdHex;
 }
 
 // ── EIP-712 deposit signing ────────────────────────────────────────────────────
