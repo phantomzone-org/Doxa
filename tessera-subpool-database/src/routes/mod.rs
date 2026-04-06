@@ -44,6 +44,7 @@ pub fn router(state: AppState) -> Router {
 		)
 		.route("/faucet/eth", post(faucet::faucet_eth_handler))
 		.route("/faucet/usdx", post(faucet::faucet_usdx_handler))
+		.route("/faucet/private", post(account::private_faucet_handler))
 		.route("/spend_tx", post(spend_tx::submit_spend_tx_handler))
 		.route(
 			"/spend_tx/{id}/status",

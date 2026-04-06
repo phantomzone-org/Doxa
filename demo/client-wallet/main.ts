@@ -301,6 +301,9 @@ const pub2privProgress = document.getElementById("pub2priv-progress")!;
 const pub2privBar = document.getElementById("pub2priv-bar") as HTMLElement;
 const pub2privSteps = document.getElementById("pub2priv-steps")!;
 const pub2privError = document.getElementById("pub2priv-error")!;
+const fiatPrivBtn = document.getElementById(
+  "fiat-priv-btn",
+) as HTMLButtonElement;
 
 // ── Balance loading ───────────────────────────────────────────────────────────
 
@@ -705,6 +708,27 @@ pub2privFaucetUsdxBtn.addEventListener("click", async () => {
   }
 });
 
+fiatPrivBtn.addEventListener("click", async () => {
+  if (!privateAccAddressFull) return;
+  fiatPrivBtn.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE_URL}/faucet/private`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        private_acc_address: privateAccAddressFull,
+        asset_id: ASSET_ID_HEX,
+      }),
+    });
+    if (!res.ok) throw new Error(`faucet/private failed: ${res.status}`);
+    await loadPrivateBalance();
+  } catch (err) {
+    console.error("fiat-priv faucet error:", err);
+  } finally {
+    fiatPrivBtn.disabled = false;
+  }
+});
+
 pub2privApprovalBtn.addEventListener("click", async () => {
   pub2privApprovalBtn.disabled = true;
   pub2privApprovalSteps.innerHTML = "";
@@ -856,6 +880,7 @@ pub2privDepositBtn.addEventListener("click", async () => {
 
 // ── Private transfer section ──────────────────────────────────────────────────
 
+const fundSection = document.getElementById("fund-section") as HTMLElement;
 const xferSection = document.getElementById("xfer-section") as HTMLElement;
 const xferAddrIn = document.getElementById("xfer-addr") as HTMLInputElement;
 const xferAddrSelect = document.getElementById(
@@ -880,6 +905,8 @@ const memoReferenceIn = document.getElementById(
 const memoPreview = document.getElementById("memo-preview")!;
 
 function enableTransactSections() {
+  fundSection.style.opacity = "";
+  fundSection.style.pointerEvents = "";
   xferSection.style.opacity = "";
   xferSection.style.pointerEvents = "";
   updatePub2PrivTransferBtn();
@@ -904,36 +931,6 @@ function enableTransactSections() {
 }
 
 // ── Private transfer ──────────────────────────────────────────────────────────
-
-const DEMO_ADDRESSES = [
-  {
-    label: "Alice",
-    addr:
-      "0000000000000001" +
-      "0000000000000001" +
-      "0000000000000002" +
-      "0000000000000003" +
-      "0000000000000004",
-  },
-  {
-    label: "Bob",
-    addr:
-      "0000000000000002" +
-      "0000000000000005" +
-      "0000000000000006" +
-      "0000000000000007" +
-      "0000000000000008",
-  },
-  {
-    label: "Charlie",
-    addr:
-      "0000000000000003" +
-      "0000000000000009" +
-      "000000000000000a" +
-      "000000000000000b" +
-      "000000000000000c",
-  },
-];
 
 function validTesseraAddr(hex: string): boolean {
   try {
