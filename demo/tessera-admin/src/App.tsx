@@ -34,7 +34,7 @@ const NAV_UNDER_REVIEW: { id: Page; label: string; icon: string }[] = [
     icon: "⬇️",
   },
   { id: "output-notes-underreview", label: "Outgoing transfers", icon: "📄" },
-  { id: "input-notes-underreview", label: "Input transfers", icon: "📩" },
+  { id: "input-notes-underreview", label: "Incoming transfers", icon: "📩" },
 ];
 
 interface InstitutionConfig {

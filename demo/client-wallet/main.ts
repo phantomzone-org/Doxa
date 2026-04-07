@@ -85,6 +85,8 @@ console.log("DB server =", API_BASE_URL);
 
 interface InstitutionConfig {
   name: string;
+  slug: string;
+  api_port: number;
   "background-color": string;
   "logo-file": string;
   "partner-logo-file": string;
@@ -127,12 +129,26 @@ const TESSERA_DEPOSIT_TYPES = {
 
 const subpoolClient = new SubpoolClient(API_BASE_URL);
 
-const SUBPOOL_PORTS = [8081, 8082, 8083];
+// Derive API URL for any institution from institutions.json.
+// In prod: API_BASE_URL = "https://api.example.com/group/slug" — strip current
+//          slug to get base, then append each institution's slug.
+// In dev:  API_BASE_URL = "http://localhost:8081" — use api_port directly.
+function institutionApiUrl(inst: InstitutionConfig): string {
+  const currentSlug = getInstitution(SUBPOOL_ID_HEX)?.slug;
+  if (currentSlug && API_BASE_URL.endsWith(`/${currentSlug}`)) {
+    const base = API_BASE_URL.slice(0, -currentSlug.length - 1);
+    return `${base}/${inst.slug}`;
+  }
+  return `http://localhost:${inst.api_port}`;
+}
 
 async function loadAllUsers(): Promise<UserResponse[]> {
+  const institutions = Object.values(
+    subpoolInstitutions as Record<string, InstitutionConfig>,
+  );
   const results = await Promise.allSettled(
-    SUBPOOL_PORTS.map((port) =>
-      new SubpoolClient(`http://localhost:${port}`).listUsers(),
+    institutions.map((inst) =>
+      new SubpoolClient(institutionApiUrl(inst)).listUsers(),
     ),
   );
   return results
