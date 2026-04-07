@@ -31,6 +31,7 @@ DOMAIN=""
 SERVER=""
 DEMO_GROUP=""
 ALL=false
+LOCAL=false
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -39,12 +40,13 @@ while [[ $# -gt 0 ]]; do
     --server)  SERVER="$2";      shift 2 ;;
     --group)   DEMO_GROUP="$2";  shift 2 ;;
     --all)     ALL=true;         shift ;;
+    --local)   LOCAL=true;       shift ;;
     *) echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
 
 if [[ -z "$DOMAIN" ]]; then
-  echo "Usage: $0 --domain <domain> [--group <slug> | --all] [--server <user@host>]"
+  echo "Usage: $0 --domain <domain> [--group <slug> | --all] [--server <user@host>] [--local]"
   exit 1
 fi
 
@@ -136,40 +138,38 @@ EOF
 echo "Generated: $MAIN_CONF"
 echo ""
 
-if [[ -z "$SERVER" ]]; then
-  echo "Skipping deploy (pass --server <user@host> to deploy)."
-  echo ""
-  echo "To deploy manually:"
-  echo "  scp $MAIN_CONF <server>:/tmp/tessera-backend.conf"
+if [[ "$LOCAL" == true ]]; then
+  # ── Deploy locally ───────────────────────────────────────────────────────────
+  echo "Installing locally…"
+  sudo mkdir -p /etc/nginx/tessera-locations
   for f in "${ALL_LOCATION_FILES[@]}"; do
     g="$(basename "$f" .locations.conf)"
-    echo "  scp $f <server>:/tmp/${g}.locations.conf"
+    echo "  Installing locations for group '${g}'…"
+    sudo cp "$f" "/etc/nginx/tessera-locations/${g}.conf"
   done
-  echo "  ssh <server> 'sudo mkdir -p /etc/nginx/tessera-locations && ..."
+  echo "  Installing main server block…"
+  sudo cp "$MAIN_CONF" /etc/nginx/sites-enabled/tessera-backend.conf
+  sudo nginx -t && sudo systemctl reload nginx
+
+elif [[ -n "$SERVER" ]]; then
+  # ── Deploy remotely ──────────────────────────────────────────────────────────
+  echo "Deploying to ${SERVER}…"
+  ssh "$SERVER" "sudo mkdir -p /etc/nginx/tessera-locations"
+  for f in "${ALL_LOCATION_FILES[@]}"; do
+    g="$(basename "$f" .locations.conf)"
+    echo "  Uploading locations for group '${g}'…"
+    scp "$f" "${SERVER}:/tmp/${g}.locations.conf"
+    ssh "$SERVER" "sudo mv /tmp/${g}.locations.conf /etc/nginx/tessera-locations/${g}.conf"
+  done
+  echo "  Uploading main server block…"
+  scp "$MAIN_CONF" "${SERVER}:/tmp/tessera-backend.conf"
+  ssh "$SERVER" "sudo mv /tmp/tessera-backend.conf /etc/nginx/sites-enabled/tessera-backend.conf"
+  ssh "$SERVER" "sudo nginx -t && sudo systemctl reload nginx"
+
+else
+  echo "Skipping deploy (pass --local to install on this machine, or --server <user@host> to deploy remotely)."
   exit 0
 fi
-
-# ── Deploy ────────────────────────────────────────────────────────────────────
-echo "Deploying to ${SERVER}…"
-
-# Ensure locations directory exists on server
-ssh "$SERVER" "sudo mkdir -p /etc/nginx/tessera-locations"
-
-# Upload per-group location files
-for f in "${ALL_LOCATION_FILES[@]}"; do
-  g="$(basename "$f" .locations.conf)"
-  echo "  Uploading locations for group '${g}'…"
-  scp "$f" "${SERVER}:/tmp/${g}.locations.conf"
-  ssh "$SERVER" "sudo mv /tmp/${g}.locations.conf /etc/nginx/tessera-locations/${g}.conf"
-done
-
-# Upload main server block
-echo "  Uploading main server block…"
-scp "$MAIN_CONF" "${SERVER}:/tmp/tessera-backend.conf"
-ssh "$SERVER" "sudo mv /tmp/tessera-backend.conf /etc/nginx/sites-enabled/tessera-backend.conf"
-
-# Test and reload
-ssh "$SERVER" "sudo nginx -t && sudo systemctl reload nginx"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

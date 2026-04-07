@@ -69,8 +69,11 @@ set -a
 source "$GROUP_DIR/prod.env"
 set +a
 
-# Default BACKEND_BASE_URL if not set by .env or environment
-BACKEND_BASE_URL="${BACKEND_BASE_URL:-http://localhost}"
+# BACKEND_BASE_URL must be set in prod.env (e.g. https://api.tesseralabs.xyz)
+if [[ -z "${BACKEND_BASE_URL:-}" ]]; then
+  echo "Error: BACKEND_BASE_URL not set in $GROUP_DIR/prod.env"
+  exit 1
+fi
 
 # ── Build loop ────────────────────────────────────────────────────────────────
 NGINX_BLOCKS=""
@@ -82,8 +85,7 @@ echo "Building group: $DEMO_GROUP  →  $DOMAIN"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 while IFS= read -r hex; do
-  slug=$(jq -r     --arg h "$hex" '.[$h].slug'     "$GROUP_DIR/institutions.json")
-  api_port=$(jq -r --arg h "$hex" '.[$h].api_port' "$GROUP_DIR/institutions.json")
+  slug=$(jq -r --arg h "$hex" '.[$h].slug' "$GROUP_DIR/institutions.json")
 
   wallet_host="wallet-${slug}-${DEMO_GROUP}.${DOMAIN}"
   admin_host="admin-${slug}-${DEMO_GROUP}.${DOMAIN}"
@@ -97,7 +99,7 @@ while IFS= read -r hex; do
   (
     cd "$CW_DIR"
     VITE_SUBPOOL_ID_HEX="$hex" \
-    VITE_API_BASE_URL="${BACKEND_BASE_URL}:${api_port}" \
+    VITE_API_BASE_URL="${BACKEND_BASE_URL}/${DEMO_GROUP}/${slug}" \
       npx vite build --outDir "$wallet_out" --emptyOutDir
   )
 
@@ -106,7 +108,7 @@ while IFS= read -r hex; do
   (
     cd "$ADMIN_DIR"
     VITE_SUBPOOL_ID_HEX="$hex" \
-    VITE_API_BASE_URL="${BACKEND_BASE_URL}:${api_port}" \
+    VITE_API_BASE_URL="${BACKEND_BASE_URL}/${DEMO_GROUP}/${slug}" \
       npx vite build --outDir "$admin_out" --emptyOutDir
   )
 
