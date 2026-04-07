@@ -1,46 +1,55 @@
 #!/usr/bin/env bash
-# Build and deploy a demo group to a remote server via nginx + static files.
+# Build and optionally deploy a demo group's frontends to a remote server.
+#
+# The API base URL is read from the group's .env file (VITE_API_BASE_URL).
+# This script only handles the client-wallet and admin-dashboard frontends.
 #
 # Usage:
-#   ./build_and_deploy.sh --group <slug> --server <user@host> --domain <domain>
+#   ./build_and_deploy.sh --group <slug> --domain <domain> [--deploy --server <user@host>]
 #
-# Example:
-#   ./build_and_deploy.sh --group example --server ubuntu@1.2.3.4 --domain demo.tessera.xyz
+# Example (build only):
+#   ./build_and_deploy.sh --group example --domain demo.tessera.xyz
+#
+# Example (build + deploy):
+#   ./build_and_deploy.sh --group example --domain demo.tessera.xyz --deploy --server ubuntu@1.2.3.4
 #
 # Prerequisites (local):  jq, node/npm, rsync
-# Prerequisites (server): nginx, certbot (for wildcard TLS)
-#
-# DNS: point *.<domain> to the server's IP before running.
-# TLS: the script generates nginx config; run certbot separately:
-#   certbot certonly --dns-<provider> -d "*.<domain>" -d "<domain>"
+# Prerequisites (server): nginx, certbot
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CW_DIR="$SCRIPT_DIR/client-wallet"
 ADMIN_DIR="$SCRIPT_DIR/tessera-admin"
 BUILD_DIR="$SCRIPT_DIR/.build"
-GROUP=""
+DEMO_GROUP=""
 SERVER=""
 DOMAIN=""
+DEPLOY=false
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --group)  GROUP="$2";  shift 2 ;;
-    --server) SERVER="$2"; shift 2 ;;
-    --domain) DOMAIN="$2"; shift 2 ;;
+    --group)   DEMO_GROUP="$2"; shift 2 ;;
+    --server)  SERVER="$2";     shift 2 ;;
+    --domain)  DOMAIN="$2";     shift 2 ;;
+    --deploy)  DEPLOY=true;     shift ;;
     *) echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
 
-if [[ -z "$GROUP" || -z "$SERVER" || -z "$DOMAIN" ]]; then
-  echo "Usage: $0 --group <slug> --server <user@host> --domain <domain>"
+if [[ -z "$DEMO_GROUP" || -z "$DOMAIN" ]]; then
+  echo "Usage: $0 --group <slug> --domain <domain> [--deploy --server <user@host>]"
   exit 1
 fi
 
-GROUP_DIR="$SCRIPT_DIR/groups/$GROUP"
+if [[ "$DEPLOY" == true && -z "$SERVER" ]]; then
+  echo "Error: --deploy requires --server <user@host>"
+  exit 1
+fi
+
+GROUP_DIR="$SCRIPT_DIR/groups/$DEMO_GROUP"
 if [[ ! -d "$GROUP_DIR" ]]; then
-  echo "Group '$GROUP' not found in $SCRIPT_DIR/groups/"
+  echo "Group '$DEMO_GROUP' not found in $SCRIPT_DIR/groups/"
   exit 1
 fi
 
@@ -50,11 +59,18 @@ command -v rsync >/dev/null 2>&1 || { echo "Error: rsync is required"; exit 1; }
 # ── Activate this group's institutions.json ───────────────────────────────────
 cp "$GROUP_DIR/institutions.json" "$SCRIPT_DIR/institutions.json"
 
-# ── Load group .env ───────────────────────────────────────────────────────────
+# ── Load group prod.env ───────────────────────────────────────────────────────
+if [[ ! -f "$GROUP_DIR/prod.env" ]]; then
+  echo "Error: prod.env not found in $GROUP_DIR/"
+  exit 1
+fi
 set -a
 # shellcheck source=/dev/null
-source "$GROUP_DIR/.env"
+source "$GROUP_DIR/prod.env"
 set +a
+
+# Default BACKEND_BASE_URL if not set by .env or environment
+BACKEND_BASE_URL="${BACKEND_BASE_URL:-http://localhost}"
 
 # ── Build loop ────────────────────────────────────────────────────────────────
 NGINX_BLOCKS=""
@@ -62,15 +78,15 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 echo ""
-echo "Building group: $GROUP  →  $DOMAIN"
+echo "Building group: $DEMO_GROUP  →  $DOMAIN"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 while IFS= read -r hex; do
-  slug=$(jq -r     --arg h "$hex" '.[$h].slug'     "$GROUP_DIR/ports.json")
-  api_port=$(jq -r --arg h "$hex" '.[$h].api_port' "$GROUP_DIR/ports.json")
+  slug=$(jq -r     --arg h "$hex" '.[$h].slug'     "$GROUP_DIR/institutions.json")
+  api_port=$(jq -r --arg h "$hex" '.[$h].api_port' "$GROUP_DIR/institutions.json")
 
-  wallet_host="${GROUP}-${slug}-wallet.${DOMAIN}"
-  admin_host="${GROUP}-${slug}-admin.${DOMAIN}"
+  wallet_host="wallet-${slug}-${DEMO_GROUP}.${DOMAIN}"
+  admin_host="admin-${slug}-${DEMO_GROUP}.${DOMAIN}"
 
   wallet_out="$BUILD_DIR/wallet-${slug}"
   admin_out="$BUILD_DIR/admin-${slug}"
@@ -81,7 +97,7 @@ while IFS= read -r hex; do
   (
     cd "$CW_DIR"
     VITE_SUBPOOL_ID_HEX="$hex" \
-    VITE_API_BASE_URL="https://${GROUP}-${slug}-api.${DOMAIN}" \
+    VITE_API_BASE_URL="${BACKEND_BASE_URL}:${api_port}" \
       npx vite build --outDir "$wallet_out" --emptyOutDir
   )
 
@@ -90,18 +106,18 @@ while IFS= read -r hex; do
   (
     cd "$ADMIN_DIR"
     VITE_SUBPOOL_ID_HEX="$hex" \
-    VITE_API_BASE_URL="https://${GROUP}-${slug}-api.${DOMAIN}" \
+    VITE_API_BASE_URL="${BACKEND_BASE_URL}:${api_port}" \
       npx vite build --outDir "$admin_out" --emptyOutDir
   )
 
   # ── nginx blocks ───────────────────────────────────────────────────────────
   NGINX_BLOCKS+="
-# ── ${GROUP} / ${slug} ──────────────────────────────────────────────────────
+# ── ${DEMO_GROUP} / ${slug} ──────────────────────────────────────────────────
 
 server {
     listen 443 ssl;
     server_name ${wallet_host};
-    root /var/www/${GROUP}/wallet-${slug};
+    root /var/www/${DEMO_GROUP}/wallet-${slug};
     index index.html;
     ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
@@ -111,7 +127,7 @@ server {
 server {
     listen 443 ssl;
     server_name ${admin_host};
-    root /var/www/${GROUP}/admin-${slug};
+    root /var/www/${DEMO_GROUP}/admin-${slug};
     index index.html;
     ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
@@ -119,70 +135,66 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    server_name ${GROUP}-${slug}-api.${DOMAIN};
-    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-    location / {
-        proxy_pass http://127.0.0.1:${api_port};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-}
-
-server {
     listen 80;
-    server_name ${wallet_host} ${admin_host} ${GROUP}-${slug}-api.${DOMAIN};
+    server_name ${wallet_host} ${admin_host};
     return 301 https://\$host\$request_uri;
 }
 "
 
-done < <(jq -r 'keys[]' "$GROUP_DIR/ports.json")
+done < <(jq -r 'keys[]' "$GROUP_DIR/institutions.json")
 
 # Write nginx config file
-NGINX_CONF="$BUILD_DIR/${GROUP}.nginx.conf"
+NGINX_CONF="$BUILD_DIR/${DEMO_GROUP}.nginx.conf"
 cat > "$NGINX_CONF" <<EOF
-# Auto-generated by build_and_deploy.sh for group: ${GROUP}
-# Place this file in /etc/nginx/sites-enabled/tessera-${GROUP}.conf
+# Auto-generated by build_and_deploy.sh for group: ${DEMO_GROUP}
+# Place this file in /etc/nginx/sites-enabled/tessera-${DEMO_GROUP}.conf
 ${NGINX_BLOCKS}
 EOF
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Build complete. Deploying to ${SERVER}…"
+echo "Build complete. Nginx config: $NGINX_CONF"
+
+if [[ "$DEPLOY" == false ]]; then
+  echo ""
+  echo "Skipping deploy (pass --deploy --server <user@host> to deploy)."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  exit 0
+fi
+
+echo "Deploying to ${SERVER}…"
 echo ""
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
 # Create remote web root dirs
 while IFS= read -r hex; do
-  slug=$(jq -r --arg h "$hex" '.[$h].slug' "$GROUP_DIR/ports.json")
-  ssh "$SERVER" "mkdir -p /var/www/${GROUP}/wallet-${slug} /var/www/${GROUP}/admin-${slug}"
-done < <(jq -r 'keys[]' "$GROUP_DIR/ports.json")
+  slug=$(jq -r --arg h "$hex" '.[$h].slug' "$GROUP_DIR/institutions.json")
+  ssh "$SERVER" "sudo mkdir -p /var/www/${DEMO_GROUP}/wallet-${slug} /var/www/${DEMO_GROUP}/admin-${slug} && sudo chown -R \$USER:\$USER /var/www/${DEMO_GROUP}"
+done < <(jq -r 'keys[]' "$GROUP_DIR/institutions.json")
 
 # Rsync built dist folders
 while IFS= read -r hex; do
-  slug=$(jq -r --arg h "$hex" '.[$h].slug' "$GROUP_DIR/ports.json")
+  slug=$(jq -r --arg h "$hex" '.[$h].slug' "$GROUP_DIR/institutions.json")
   echo "  Uploading wallet-${slug}…"
-  rsync -az --delete "$BUILD_DIR/wallet-${slug}/" "${SERVER}:/var/www/${GROUP}/wallet-${slug}/"
+  rsync -az --delete "$BUILD_DIR/wallet-${slug}/" "${SERVER}:/var/www/${DEMO_GROUP}/wallet-${slug}/"
   echo "  Uploading admin-${slug}…"
-  rsync -az --delete "$BUILD_DIR/admin-${slug}/"  "${SERVER}:/var/www/${GROUP}/admin-${slug}/"
-done < <(jq -r 'keys[]' "$GROUP_DIR/ports.json")
+  rsync -az --delete "$BUILD_DIR/admin-${slug}/"  "${SERVER}:/var/www/${DEMO_GROUP}/admin-${slug}/"
+done < <(jq -r 'keys[]' "$GROUP_DIR/institutions.json")
 
 # Upload nginx config and reload
 echo "  Uploading nginx config…"
-scp "$NGINX_CONF" "${SERVER}:/etc/nginx/sites-enabled/tessera-${GROUP}.conf"
-ssh "$SERVER" "nginx -t && systemctl reload nginx"
+scp "$NGINX_CONF" "${SERVER}:/tmp/tessera-${DEMO_GROUP}.conf"
+ssh "$SERVER" "sudo mv /tmp/tessera-${DEMO_GROUP}.conf /etc/nginx/sites-enabled/tessera-${DEMO_GROUP}.conf && sudo nginx -t && sudo systemctl reload nginx"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Deployed! URLs:"
 while IFS= read -r hex; do
-  slug=$(jq -r --arg h "$hex" '.[$h].slug' "$GROUP_DIR/ports.json")
-  echo "  Wallet : https://${GROUP}-${slug}-wallet.${DOMAIN}"
-  echo "  Admin  : https://${GROUP}-${slug}-admin.${DOMAIN}"
-  echo "  API    : https://${GROUP}-${slug}-api.${DOMAIN}  (proxy → backend)"
-done < <(jq -r 'keys[]' "$GROUP_DIR/ports.json")
+  slug=$(jq -r --arg h "$hex" '.[$h].slug' "$GROUP_DIR/institutions.json")
+  echo "  Wallet : https://wallet-${slug}-${DEMO_GROUP}.${DOMAIN}"
+  echo "  Admin  : https://admin-${slug}-${DEMO_GROUP}.${DOMAIN}"
+done < <(jq -r 'keys[]' "$GROUP_DIR/institutions.json")
 echo ""
 echo "TLS: if not yet done, run on the server:"
 echo "  certbot certonly --dns-<provider> -d \"*.${DOMAIN}\""

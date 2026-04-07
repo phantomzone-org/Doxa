@@ -42,10 +42,12 @@ echo "=== PostgreSQL ==="
 
 if docker ps --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER_NAME"; then
   echo "  Container '$POSTGRES_CONTAINER_NAME' already running — reusing."
+elif docker ps -a --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER_NAME"; then
+  echo "  Container '$POSTGRES_CONTAINER_NAME' exists but stopped — restarting."
+  docker start "$POSTGRES_CONTAINER_NAME" >/dev/null
 elif bash -c "echo >/dev/tcp/localhost/$POSTGRES_PORT" 2>/dev/null; then
   echo "  Port $POSTGRES_PORT already in use (external PostgreSQL?) — reusing."
 else
-  docker rm -f "$POSTGRES_CONTAINER_NAME" 2>/dev/null || true
   docker run -d \
     --name "$POSTGRES_CONTAINER_NAME" \
     -e POSTGRES_USER="$POSTGRES_USER" \

@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Tessera Demo</title>
+        <title>Tessera Client Wallet</title>
         <style>
             *,
             *::before,
@@ -609,6 +609,29 @@
                 display: block;
                 margin-top: 6px;
             }
+
+            /* ── powered by badge ── */
+            .powered-by {
+                position: fixed;
+                bottom: 1.25rem;
+                right: 1.25rem;
+                display: flex;
+                align-items: center;
+                gap: 0.4rem;
+                background: rgba(255, 255, 255, 0.85);
+                border: 1px solid #e0e0e8;
+                border-radius: 8px;
+                padding: 0.4rem 0.75rem;
+                font-size: 0.85rem;
+                color: #aaa;
+                backdrop-filter: blur(4px);
+                z-index: 100;
+                text-decoration: none;
+            }
+            .powered-by img {
+                height: 24px;
+                width: auto;
+            }
         </style>
     </head>
     <body>
@@ -621,7 +644,9 @@
                     class="header-logo"
                     onerror="this.style.display = 'none'"
                 />
-                <span class="header-title" id="header-institution-name">Client wallet</span>
+                <span class="header-title" id="header-institution-name"
+                    >Client wallet</span
+                >
             </div>
             <div class="header-right">
                 <img
@@ -722,7 +747,11 @@
 
         <!-- ── Fund private account ── -->
         <div class="section-full">
-            <div class="card" id="fund-section" style="opacity: 0.4; pointer-events: none">
+            <div
+                class="card"
+                id="fund-section"
+                style="opacity: 0.4; pointer-events: none"
+            >
                 <h2>Fund private account</h2>
 
                 <!-- Sub-section 1: Public → Private Transfer -->
@@ -881,6 +910,7 @@
                     <button class="btn btn-secondary" id="fiat-priv-btn">
                         Add 1000USD to your account
                     </button>
+                    <div id="fiat-priv-steps"></div>
                 </div>
             </div>
         </div>
@@ -894,7 +924,11 @@
             >
                 <div class="card-subheader">
                     <h2>Private Transfer</h2>
-                    <span class="info-icon" data-tooltip="Users can send private transfers both within and across institutions">ⓘ</span>
+                    <span
+                        class="info-icon"
+                        data-tooltip="Users can send private transfers both within and across institutions"
+                        >ⓘ</span
+                    >
                 </div>
 
                 <div class="form-group" style="margin-top: 1.1rem">
@@ -918,7 +952,14 @@
                     />
                 </div>
                 <div class="form-group" id="memo-group" style="display: none">
-                    <label>Memo <span class="info-icon" data-tooltip="Every private transfer carries sufficient information institutions on both ends to remain compliant (travel rule, etc.)">ⓘ</span></label>
+                    <label
+                        >Memo
+                        <span
+                            class="info-icon"
+                            data-tooltip="Every private transfer carries sufficient information institutions on both ends to remain compliant (travel rule, etc.)"
+                            >ⓘ</span
+                        ></label
+                    >
                     <!-- hidden data stores read by main.ts -->
                     <span id="memo-sender-name" style="display: none"></span>
                     <span id="memo-sender-addr" style="display: none"></span>
@@ -949,6 +990,15 @@
 
                 <div class="error" id="xfer-error"></div>
             </div>
+        </div>
+
+        <div class="powered-by">
+            <span>powered by</span>
+            <img
+                src="./images/logo-tessera.avif"
+                alt="Tessera"
+                onerror="this.style.display = 'none'"
+            />
         </div>
 
         <script type="module" src="./main.ts"></script>

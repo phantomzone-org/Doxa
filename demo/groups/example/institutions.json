@@ -1,19 +1,25 @@
 {
   "0100000000000000": {
-    "name": "Alpha Bank",
+    "slug": "alpha",
+    "api_port": 8081,
+    "name": "Bank A",
     "background-color": "#1e3a5f",
     "logo-file": "logo-alpha.svg",
     "partner-logo-file": "logo-tessera.svg"
   },
   "0200000000000000": {
-    "name": "Beta Bank",
+    "slug": "beta",
+    "api_port": 8082,
+    "name": "Bank B",
     "background-color": "#1a6fa8",
     "logo-file": "logo-beta.svg",
     "partner-logo-file": "logo-tessera.svg"
   },
   "0300000000000000": {
-    "name": "Gamma Bank",
-    "background-color": "#2563a8",
+    "slug": "gamma",
+    "api_port": 8083,
+    "name": "Bank C",
+    "background-color": "#0e6b5e",
     "logo-file": "logo-gamma.svg",
     "partner-logo-file": "logo-tessera.svg"
   }

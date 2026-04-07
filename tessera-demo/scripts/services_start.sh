@@ -134,7 +134,7 @@ start_group() {
   echo ""
   echo "=== Group: $group ==="
 
-  # ── Database ────────────────────────────────────────────────────────────────
+  # ── Database (schema init only — container already started) ─────────────────
   "$SCRIPT_DIR/services_db.sh" "$merged_env"
   record_pid "$pid_file" "postgres" "docker:$POSTGRES_CONTAINER_NAME"
 
@@ -226,30 +226,17 @@ start_group() {
 # ── Launch ────────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
 
-if [[ ${#DEMO_GROUPS[@]} -eq 1 ]]; then
-  start_group "${DEMO_GROUPS[0]}"
-else
-  declare -A BGPIDS
-  mkdir -p "$LOG_DIR"
-  for g in "${DEMO_GROUPS[@]}"; do
-    mkdir -p "$LOG_DIR/$g"
-    start_group "$g" > "$LOG_DIR/$g/startup.log" 2>&1 &
-    BGPIDS["$g"]=$!
-    echo "Started group '$g' in background (startup log: $LOG_DIR/$g/startup.log)"
-  done
+# Start PostgreSQL once before launching groups in parallel (shared container).
+# Use the first group's merged env to get shared postgres vars.
+FIRST_GROUP="${DEMO_GROUPS[0]}"
+FIRST_MERGED="$(mktemp)"
+cat "$SHARED_ENV" "$DEMO_GROUPS_DIR/$FIRST_GROUP/group.env" > "$FIRST_MERGED"
+"$SCRIPT_DIR/services_db.sh" "$FIRST_MERGED" || { echo "ERROR: PostgreSQL failed to start" >&2; exit 1; }
+rm -f "$FIRST_MERGED"
 
-  FAILED=false
-  for g in "${!BGPIDS[@]}"; do
-    if wait "${BGPIDS[$g]}"; then
-      echo "Group '$g' started successfully."
-    else
-      echo "ERROR: group '$g' failed — startup log:" >&2
-      cat "$LOG_DIR/$g/startup.log" >&2
-      FAILED=true
-    fi
-  done
-  [[ "$FAILED" == false ]] || exit 1
-fi
+for g in "${DEMO_GROUPS[@]}"; do
+  start_group "$g"
+done
 
 echo ""
 echo "=== All groups started ==="

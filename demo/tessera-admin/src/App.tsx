@@ -48,9 +48,9 @@ const SUBPOOL_ID_HEX =
   (import.meta.env.VITE_SUBPOOL_ID_HEX as string | undefined) ??
   "0100000000000000";
 
-const institution = (
-  institutions as Record<string, InstitutionConfig>
-)[SUBPOOL_ID_HEX];
+const institution = (institutions as Record<string, InstitutionConfig>)[
+  SUBPOOL_ID_HEX
+];
 
 function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16);
@@ -66,10 +66,10 @@ export default function App() {
     <div className="flex min-h-screen">
       {/* Sidebar */}
       <aside
-        className="w-56 flex-shrink-0 border-r border-slate-200"
+        className="w-56 flex-shrink-0 flex flex-col border-r border-slate-200"
         style={{
           backgroundColor: institution
-            ? hexToRgba(institution["background-color"], 0.85)
+            ? hexToRgba(institution["background-color"], 0.5)
             : undefined,
         }}
       >
@@ -85,7 +85,7 @@ export default function App() {
             />
           )}
           <span className="text-base font-bold tracking-tight text-white">
-            {institution?.name ?? "Tessera Admin"}
+            {institution?.name ?? ""} - Admin Dashboard
           </span>
         </div>
         <nav className="flex flex-col gap-1 px-3">
@@ -124,6 +124,19 @@ export default function App() {
             </button>
           ))}
         </nav>
+
+        {/* Powered by */}
+        <div className="mt-auto px-5 py-4 flex items-center gap-2">
+          <span className="text-sm text-white/40">powered by</span>
+          <img
+            src="/images/logo-tessera.avif"
+            alt="Tessera"
+            className="h-6 w-auto"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = "none";
+            }}
+          />
+        </div>
       </aside>
 
       {/* Main */}

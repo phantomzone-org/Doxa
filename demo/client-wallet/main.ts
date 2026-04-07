@@ -66,13 +66,20 @@ console.log("DB server =", API_BASE_URL);
 {
   const inst = getInstitution(SUBPOOL_ID_HEX);
   if (inst) {
-    const logoClient = document.getElementById("header-logo-client") as HTMLImageElement | null;
-    const logoPartner = document.getElementById("header-logo-partner") as HTMLImageElement | null;
+    const logoClient = document.getElementById(
+      "header-logo-client",
+    ) as HTMLImageElement | null;
+    const logoPartner = document.getElementById(
+      "header-logo-partner",
+    ) as HTMLImageElement | null;
     const institutionName = document.getElementById("header-institution-name");
     if (logoClient) logoClient.src = `./images/${inst["logo-file"]}`;
     if (logoPartner) logoPartner.src = `./images/${inst["partner-logo-file"]}`;
-    if (institutionName) institutionName.textContent = inst.name;
-    document.body.style.backgroundColor = hexToRgba(inst["background-color"], 0.08);
+    if (institutionName) institutionName.textContent = `${inst.name} - Client Wallet`;
+    document.body.style.backgroundColor = hexToRgba(
+      inst["background-color"],
+      0.08,
+    );
   }
 }
 
@@ -91,7 +98,9 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 function getInstitution(subpoolIdHex: string): InstitutionConfig | undefined {
-  return (subpoolInstitutions as Record<string, InstitutionConfig>)[subpoolIdHex];
+  return (subpoolInstitutions as Record<string, InstitutionConfig>)[
+    subpoolIdHex
+  ];
 }
 
 function getInstitutionName(subpoolIdHex: string): string {
@@ -333,6 +342,7 @@ const pub2privError = document.getElementById("pub2priv-error")!;
 const fiatPrivBtn = document.getElementById(
   "fiat-priv-btn",
 ) as HTMLButtonElement;
+const fiatPrivSteps = document.getElementById("fiat-priv-steps")!;
 
 // ── Balance loading ───────────────────────────────────────────────────────────
 
@@ -608,7 +618,7 @@ function updatePub2PrivTransferBtn() {
     pub2privError.textContent = "";
     return;
   }
-  pub2privHint.textContent = "Enter an amount and click Deposit.";
+  pub2privHint.textContent = "Enter an amount and click Transfer.";
   const amount = parseFloat(pub2privAmountIn.value);
   if (!amount || amount <= 0) {
     pub2privDepositBtn.disabled = false;
@@ -740,18 +750,27 @@ pub2privFaucetUsdxBtn.addEventListener("click", async () => {
 fiatPrivBtn.addEventListener("click", async () => {
   if (!privateAccAddressFull) return;
   fiatPrivBtn.disabled = true;
+  fiatPrivSteps.innerHTML = "";
+  const step = pStep(fiatPrivSteps, "⏳ Processing on-ramp…", "active");
   try {
-    const res = await fetch(`${API_BASE_URL}/faucet/private`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        private_acc_address: privateAccAddressFull,
-        asset_id: ASSET_ID_HEX,
+    const [res] = await Promise.all([
+      fetch(`${API_BASE_URL}/faucet/private`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          private_acc_address: privateAccAddressFull,
+          asset_id: ASSET_ID_HEX,
+        }),
       }),
-    });
+      new Promise((r) => setTimeout(r, 1000)),
+    ]);
     if (!res.ok) throw new Error(`faucet/private failed: ${res.status}`);
+    step.className = "p-step done";
+    step.textContent = "✓ 1000 USD added to private account";
     await loadPrivateBalance();
   } catch (err) {
+    step.className = "p-step done";
+    step.textContent = `Error: ${err}`;
     console.error("fiat-priv faucet error:", err);
   } finally {
     fiatPrivBtn.disabled = false;
@@ -811,7 +830,7 @@ pub2privDepositBtn.addEventListener("click", async () => {
 
     const step2 = pStep(
       pub2privSteps,
-      "⏳ Constructing deposit note…",
+      "⏳ Constructing Public -> Private transfer note…",
       "active",
     );
     pub2privBar.style.width = "55%";
@@ -823,9 +842,13 @@ pub2privDepositBtn.addEventListener("click", async () => {
     const commitmentHex = ("0x" +
       depositNote.commitment().toHex()) as `0x${string}`;
     step2.className = "p-step done";
-    step2.textContent = "✓ Deposit note constructed";
+    step2.textContent = "✓ Public -> Private note constructed";
 
-    const step3 = pStep(pub2privSteps, "⏳ Signing deposit message…", "active");
+    const step3 = pStep(
+      pub2privSteps,
+      "⏳ Signing transfer message…",
+      "active",
+    );
     pub2privBar.style.width = "75%";
     const depositSig = await pubWalletClient!.signTypedData({
       domain: TESSERA_DEPOSIT_DOMAIN,
@@ -838,11 +861,11 @@ pub2privDepositBtn.addEventListener("click", async () => {
     });
     const depositSigHex = depositSig.replace(/^0x/, "");
     step3.className = "p-step done";
-    step3.textContent = "✓ Deposit message signed";
+    step3.textContent = "✓ Transfer message signed";
 
     const step4 = pStep(
       pub2privSteps,
-      "⏳ Submitting deposit request…",
+      "⏳ Submitting Public -> Private transfer request…",
       "active",
     );
     pub2privBar.style.width = "88%";
@@ -855,7 +878,7 @@ pub2privDepositBtn.addEventListener("click", async () => {
       deposit_type_signature: depositSigHex,
     });
     step4.className = "p-step done";
-    step4.textContent = "✓ Deposit submitted";
+    step4.textContent = "✓ Request submitted";
 
     const step5 = pStep(pub2privSteps, "⏳ Waiting for approval…", "active");
     pub2privBar.style.width = "95%";
@@ -870,20 +893,20 @@ pub2privDepositBtn.addEventListener("click", async () => {
           if (status.status === "Rejected") {
             step5.className = "p-step done";
             step5.textContent =
-              "✗ Deposit request rejected by the subpool owner";
+              "✗ Transfer request rejected by the subpool owner";
             step5.style.color = "red";
             resolve();
             return;
           }
           // status == Settled
           step5.className = "p-step done";
-          step5.textContent = "✓ Deposit approved & settled";
+          step5.textContent = "✓ Public -> Private transfer approved & settled";
           if (status.deposit_tx_hash) {
             const a = document.createElement("a");
             a.href = `https://sepolia.etherscan.io/tx/${status.deposit_tx_hash}`;
             a.target = "_blank";
             a.rel = "noopener";
-            a.textContent = "View deposit tx on Etherscan ↗";
+            a.textContent = "View transfer tx on Etherscan ↗";
             a.className = "tx-link";
             pub2privSteps.appendChild(a);
           }

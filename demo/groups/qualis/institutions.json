@@ -1,24 +1,24 @@
 {
   "0100000000000000": {
-    "slug": "alpha",
-    "api_port": 8081,
-    "name": "Bank A",
+    "slug": "bbva",
+    "api_port": 8084,
+    "name": "BBVA",
     "background-color": "#1e3a5f",
     "logo-file": "logo-alpha.svg",
     "partner-logo-file": "logo-tessera.svg"
   },
   "0200000000000000": {
-    "slug": "beta",
-    "api_port": 8082,
-    "name": "Bank B",
+    "slug": "santader",
+    "api_port": 8085,
+    "name": "Santander",
     "background-color": "#1a6fa8",
     "logo-file": "logo-beta.svg",
     "partner-logo-file": "logo-tessera.svg"
   },
   "0300000000000000": {
-    "slug": "gamma",
-    "api_port": 8083,
-    "name": "Bank C",
+    "slug": "barclays",
+    "api_port": 8086,
+    "name": "Barclays",
     "background-color": "#0e6b5e",
     "logo-file": "logo-gamma.svg",
     "partner-logo-file": "logo-tessera.svg"
