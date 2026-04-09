@@ -1,6 +1,6 @@
 pub(crate) mod cb;
 pub(crate) mod circuit;
-pub(crate) mod targets;
+pub mod targets;
 
 pub use circuit::*;
 use plonky2::plonk::proof::ProofWithPublicInputs;

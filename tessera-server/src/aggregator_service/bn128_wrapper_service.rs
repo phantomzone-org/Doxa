@@ -7,7 +7,7 @@ use tessera_utils::{
 };
 use tracing::info;
 
-use crate::{sequencer::parse_solidity_proof_json, types::SolidityProof};
+use crate::{aggregator_service::utils::parse_solidity_proof_json, types::SolidityProof};
 
 /// Wraps [`SuperAggregator`] + BN128 + Groth16 for end-to-end proving.
 pub struct BN128WrapperService {

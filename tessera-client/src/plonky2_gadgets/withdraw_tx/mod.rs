@@ -1,6 +1,6 @@
 pub(crate) mod cb;
 pub mod circuit;
-pub(crate) mod targets;
+pub mod targets;
 
 pub use circuit::{WithdrawTxCircuit, build_withdraw_tx_circuit};
 

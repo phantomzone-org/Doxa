@@ -1,5 +1,6 @@
 use plonky2::{
-	hash::{hash_types::RichField, poseidon::Poseidon},
+	hash::hash_types::{HashOutTarget, RichField},
+	hash::poseidon::Poseidon,
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
@@ -35,23 +36,23 @@ use crate::{
 // ── Public targets ─────────────────────────────────────────────────────────────
 
 /// Public input targets for the withdrawal transaction circuit.
-pub(crate) struct WithdrawTxPublicTargets {
+pub struct WithdrawTxPublicTargets {
 	/// PI[0..4]: Account Commitment Tree root.
-	pub(crate) root: RootTarget,
+	pub root: RootTarget,
 	/// PI[4..8]: Main pool configuration tree root.
-	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
+	pub mainpool_config_root: MainPoolConfigRootTarget,
 	/// PI[8]: 1 for a real withdrawal, 0 for a dummy/padding proof.
-	pub(crate) not_fake_tx: BoolTarget,
+	pub not_fake_tx: BoolTarget,
 	/// PI[9..13]: Input account nullifier (derived from private `accin` witness).
-	pub(crate) accin_null: AccountNullifierTarget,
+	pub accin_null: AccountNullifierTarget,
 	/// PI[13..17]: Output account commitment (derived from private `accout` witness).
-	pub(crate) accout_comm: AccountCommitmentTarget,
+	pub accout_comm: AccountCommitmentTarget,
 	/// PI[17..24]: Asset IDs for each withdrawal slot (zero for padding slots).
-	pub(crate) asset_ids: [AssetIdTarget; NOTE_BATCH],
+	pub asset_ids: [AssetIdTarget; NOTE_BATCH],
 	/// PI[24..80]: Withdrawal amounts per slot (8 limbs × NOTE_BATCH slots).
-	pub(crate) withdrawal_amts: [U256Target; NOTE_BATCH],
+	pub withdrawal_amts: [U256Target; NOTE_BATCH],
 	/// PI[80..85]: Ethereum destination address (5 × u32 field elements).
-	pub(crate) w_acc_addr: [Target; 5],
+	pub w_acc_addr: [Target; 5],
 }
 
 impl WithdrawTxPublicTargets {
@@ -76,6 +77,60 @@ impl WithdrawTxPublicTargets {
 				.collect::<Vec<_>>(),
 		);
 		builder.register_public_inputs(&self.w_acc_addr);
+	}
+
+	/// Construct from a flat PI slice. Reads fields in the same order as `register()`.
+	pub fn from_pis(pis: &[Target]) -> Self {
+		use tessera_utils::plonky2_gadgets::u32::U32Target;
+		let (root_s, rest) = pis.split_at(4);
+		let (main_s, rest) = rest.split_at(4);
+		let (nft_s, rest) = rest.split_at(1);
+		let (ain_s, rest) = rest.split_at(4);
+		let (aout_s, rest) = rest.split_at(4);
+		let (aid_s, rest) = rest.split_at(NOTE_BATCH);
+		let (wamt_s, rest) = rest.split_at(NOTE_BATCH * 8);
+		let (addr_s, _) = rest.split_at(5);
+		Self {
+			root: RootTarget(HashOutTarget {
+				elements: root_s.try_into().unwrap(),
+			}),
+			mainpool_config_root: MainPoolConfigRootTarget(HashOutTarget {
+				elements: main_s.try_into().unwrap(),
+			}),
+			not_fake_tx: BoolTarget::new_unsafe(nft_s[0]),
+			accin_null: AccountNullifierTarget(HashOutTarget {
+				elements: ain_s.try_into().unwrap(),
+			}),
+			accout_comm: AccountCommitmentTarget(HashOutTarget {
+				elements: aout_s.try_into().unwrap(),
+			}),
+			asset_ids: core::array::from_fn(|i| AssetIdTarget(aid_s[i])),
+			withdrawal_amts: core::array::from_fn(|i| {
+				U256Target(core::array::from_fn(|j| U32Target(wamt_s[i * 8 + j])))
+			}),
+			w_acc_addr: addr_s.try_into().unwrap(),
+		}
+	}
+
+	/// Output commitment target (AC only — withdraw has one output commitment per slot).
+	pub fn output_commitment(&self) -> [Target; 4] {
+		self.accout_comm.0.elements
+	}
+
+	/// Unique PI targets (not_fake_tx onwards) for Keccak preimage.
+	/// Matches PIHelper::batch_unique_pis() order. Uses only named fields.
+	pub fn unique_pi_targets(&self) -> Vec<Target> {
+		let mut out = vec![self.not_fake_tx.target];
+		out.extend(self.accin_null.0.elements);
+		out.extend(self.accout_comm.0.elements);
+		for id in &self.asset_ids {
+			out.push(id.0);
+		}
+		for amt in &self.withdrawal_amts {
+			out.extend(amt.0.map(|u| u.0));
+		}
+		out.extend(self.w_acc_addr);
+		out
 	}
 
 	/// Fill all free public-input targets for a real withdrawal.

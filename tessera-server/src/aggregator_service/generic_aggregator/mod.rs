@@ -1,4 +1,14 @@
-//! Shared artifact helpers and circuit utilities for proof aggregation.
+mod aggregator;
+mod artifacts;
+
+pub use aggregator::*;
+pub use artifacts::*;
+
+#[cfg(test)]
+mod tests;
+
+/// Maximum total leaf count supported (`arity^depth <= MAX_AGGREGATION_LEAVES`).
+pub const MAX_AGGREGATION_LEAVES: usize = 512;
 
 /// Current manifest format version.  Increment when the on-disk layout changes.
 pub(super) const MANIFEST_VERSION: u32 = 1;

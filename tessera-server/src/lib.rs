@@ -1,4 +1,5 @@
 // pub mod aggregation_pipeline;
+pub mod aggregator_service;
 pub(crate) mod batch_helper;
 pub mod config;
 pub mod contract;

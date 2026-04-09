@@ -119,11 +119,11 @@ impl AccountTarget {
 /// A newtype over `HashOutTarget` so the compiler rejects accidental swaps with
 /// `AccountNullifierTarget` or note targets.
 #[derive(Clone, Copy)]
-pub(crate) struct AccountCommitmentTarget(pub(crate) HashOutTarget);
+pub struct AccountCommitmentTarget(pub HashOutTarget);
 
 /// In-circuit type for an account nullifier (`H(commitment || nk)`).
 #[derive(Clone, Copy)]
-pub(crate) struct AccountNullifierTarget(pub(crate) HashOutTarget);
+pub struct AccountNullifierTarget(pub HashOutTarget);
 
 /// Opaque hash target used as a padding account in dummy proofs.
 #[derive(Clone, Copy)]
@@ -201,11 +201,11 @@ pub(crate) struct RejectCondTarget {
 
 /// In-circuit type for a note commitment (`H(note_fields)`).
 #[derive(Clone, Copy)]
-pub(crate) struct NoteCommitmentTarget(pub(crate) HashOutTarget);
+pub struct NoteCommitmentTarget(pub HashOutTarget);
 
 /// In-circuit type for a note nullifier (`H(commitment || pos || nk)`).
 #[derive(Clone, Copy)]
-pub(crate) struct NoteNullifierTarget(pub(crate) HashOutTarget);
+pub struct NoteNullifierTarget(pub HashOutTarget);
 
 /// Opaque hash target used as a padding note in inactive note slots.
 ///
@@ -236,11 +236,11 @@ pub(crate) struct TxSignatureTargets {
 
 /// The Note/Account Commitment Tree root (shared ACT + NCT root in V2).
 #[derive(Clone, Copy)]
-pub(crate) struct RootTarget(pub(crate) HashOutTarget);
+pub struct RootTarget(pub HashOutTarget);
 
 /// Root of the main pool configuration tree (depth [`MAIN_POOL_CONFIG_DEPTH`]).
 #[derive(Clone, Copy)]
-pub(crate) struct MainPoolConfigRootTarget(pub(crate) HashOutTarget);
+pub struct MainPoolConfigRootTarget(pub HashOutTarget);
 
 /// Root of a single subpool's authority-key tree (depth [`SUBPOOL_CONFIG_DEPTH`]).
 #[derive(Clone, Copy)]
@@ -248,7 +248,7 @@ pub(crate) struct SubpoolConfigRootTarget(pub(crate) HashOutTarget);
 
 /// In-circuit representation of an [`AssetId`](crate::account::AssetId).
 #[derive(Clone, Copy)]
-pub(crate) struct AssetIdTarget(pub(crate) Target);
+pub struct AssetIdTarget(pub Target);
 
 /// All targets needed to prove subpool authority key membership.
 ///
@@ -385,19 +385,19 @@ impl TxCircuitTargets {
 
 pub struct TxCircuitPublicTargets {
 	/// [0..4]: Combined ACT / NCT Merkle root.
-	pub(crate) root: RootTarget,
+	pub root: RootTarget,
 	/// [4..8]: Main pool configuration tree root.
-	pub(crate) mainpool_config_root: MainPoolConfigRootTarget,
+	pub mainpool_config_root: MainPoolConfigRootTarget,
 	/// [8]: 1 for a real transaction, 0 for a dummy/padding proof.
-	pub(crate) not_fake_tx: BoolTarget,
+	pub not_fake_tx: BoolTarget,
 	/// [9..13]: Account nullifier (public input; constrained == derived when `not_fake_tx=1`).
-	pub(crate) accin_null: AccountNullifierTarget,
+	pub accin_null: AccountNullifierTarget,
 	/// [13..17]: Account output commitment (public input; constrained == derived when `not_fake_tx=1`).
-	pub(crate) accout_comm: AccountCommitmentTarget,
+	pub accout_comm: AccountCommitmentTarget,
 	/// [17..45]: Input notes nullifiers
-	pub(crate) inotes_null: [NoteNullifierTarget; NOTE_BATCH],
+	pub inotes_null: [NoteNullifierTarget; NOTE_BATCH],
 	/// [45..73]: Output notes commitments
-	pub(crate) onotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
+	pub onotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 }
 
 impl TxCircuitPublicTargets {
@@ -425,6 +425,69 @@ impl TxCircuitPublicTargets {
 				.flat_map(|c| c.0.elements)
 				.collect::<Vec<_>>(),
 		);
+	}
+
+	/// Construct from a flat PI slice. Reads fields in the same order as `register()`.
+	/// No named offset constants — sequential split_at cursor only.
+	pub fn from_pis(pis: &[Target]) -> Self {
+		let (root_s, rest) = pis.split_at(4);
+		let (main_s, rest) = rest.split_at(4);
+		let (nft_s, rest) = rest.split_at(1);
+		let (ain_s, rest) = rest.split_at(4);
+		let (aout_s, rest) = rest.split_at(4);
+		let (inull_s, rest) = rest.split_at(NOTE_BATCH * 4);
+		let (ocomm_s, _) = rest.split_at(NOTE_BATCH * 4);
+		Self {
+			root: RootTarget(HashOutTarget {
+				elements: root_s.try_into().unwrap(),
+			}),
+			mainpool_config_root: MainPoolConfigRootTarget(HashOutTarget {
+				elements: main_s.try_into().unwrap(),
+			}),
+			not_fake_tx: BoolTarget::new_unsafe(nft_s[0]),
+			accin_null: AccountNullifierTarget(HashOutTarget {
+				elements: ain_s.try_into().unwrap(),
+			}),
+			accout_comm: AccountCommitmentTarget(HashOutTarget {
+				elements: aout_s.try_into().unwrap(),
+			}),
+			inotes_null: core::array::from_fn(|j| {
+				NoteNullifierTarget(HashOutTarget {
+					elements: inull_s[j * 4..j * 4 + 4].try_into().unwrap(),
+				})
+			}),
+			onotes_comm: core::array::from_fn(|j| {
+				NoteCommitmentTarget(HashOutTarget {
+					elements: ocomm_s[j * 4..j * 4 + 4].try_into().unwrap(),
+				})
+			}),
+		}
+	}
+
+	/// SR leaf order: [AC, NC0..NC6] — uses only named fields.
+	pub fn output_commitments(&self) -> [[Target; 4]; 1 + NOTE_BATCH] {
+		core::array::from_fn(|j| {
+			if j == 0 {
+				self.accout_comm.0.elements
+			} else {
+				self.onotes_comm[j - 1].0.elements
+			}
+		})
+	}
+
+	/// Unique PI targets (not_fake_tx onwards) for Keccak preimage.
+	/// Matches PIHelper::batch_unique_pis() order. Uses only named fields.
+	pub fn unique_pi_targets(&self) -> Vec<Target> {
+		let mut out = vec![self.not_fake_tx.target];
+		out.extend(self.accin_null.0.elements);
+		out.extend(self.accout_comm.0.elements);
+		for nn in &self.inotes_null {
+			out.extend(nn.0.elements);
+		}
+		for nc in &self.onotes_comm {
+			out.extend(nc.0.elements);
+		}
+		out
 	}
 }
 

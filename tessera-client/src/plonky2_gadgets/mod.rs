@@ -9,10 +9,10 @@ use plonky2_field::types::Field;
 
 pub mod deposit_tx;
 pub(crate) mod merkle;
-pub(crate) mod priv_tx;
+pub mod priv_tx;
 pub(crate) mod signature;
-pub(crate) mod u256;
-pub(crate) mod withdraw_tx;
+pub mod u256;
+pub mod withdraw_tx;
 pub(crate) mod witness;
 
 pub mod serialization;

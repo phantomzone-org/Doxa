@@ -6,7 +6,7 @@ pub mod inputs;
 mod prove;
 mod reject_tx;
 mod spend_tx;
-pub(crate) mod targets;
+pub mod targets;
 pub(crate) mod utils;
 
 pub use circuit::*;

@@ -81,7 +81,7 @@ impl DepositNoteTarget {
 /// exposed as a public input so the on-chain verifier can match it to the
 /// corresponding Ethereum event.
 #[derive(Clone, Copy)]
-pub(crate) struct DepositNoteCommitmentTarget(pub(crate) HashOutTarget);
+pub struct DepositNoteCommitmentTarget(pub HashOutTarget);
 
 // ----- Signature targets -----
 
@@ -209,6 +209,59 @@ impl DepositTxPublicTargets {
 		builder.register_public_inputs(&self.eth_address);
 		builder.register_public_inputs(&self.amount.0.map(|v| v.0));
 		builder.register_public_input(self.asset_id.0);
+	}
+
+	/// Construct from a flat PI slice. Reads fields in the same order as `register()`.
+	pub fn from_pis(pis: &[Target]) -> Self {
+		use tessera_utils::plonky2_gadgets::u32::U32Target;
+		let (root_s, rest) = pis.split_at(4);
+		let (main_s, rest) = rest.split_at(4);
+		let (nft_s, rest) = rest.split_at(1);
+		let (ain_s, rest) = rest.split_at(4);
+		let (aout_s, rest) = rest.split_at(4);
+		let (nc_s, rest) = rest.split_at(4);
+		let (eth_s, rest) = rest.split_at(5);
+		let (amt_s, rest) = rest.split_at(8);
+		let (aid_s, _) = rest.split_at(1);
+		Self {
+			comm_root: RootTarget(HashOutTarget {
+				elements: root_s.try_into().unwrap(),
+			}),
+			mainpool_config_root: MainPoolConfigRootTarget(HashOutTarget {
+				elements: main_s.try_into().unwrap(),
+			}),
+			not_fake_tx: BoolTarget::new_unsafe(nft_s[0]),
+			accin_null: AccountNullifierTarget(HashOutTarget {
+				elements: ain_s.try_into().unwrap(),
+			}),
+			accout_comm: AccountCommitmentTarget(HashOutTarget {
+				elements: aout_s.try_into().unwrap(),
+			}),
+			note_comm: DepositNoteCommitmentTarget(HashOutTarget {
+				elements: nc_s.try_into().unwrap(),
+			}),
+			eth_address: eth_s.try_into().unwrap(),
+			amount: U256Target(core::array::from_fn(|i| U32Target(amt_s[i]))),
+			asset_id: AssetIdTarget(aid_s[0]),
+		}
+	}
+
+	/// Output commitment target (AC only — deposit has one output commitment per slot).
+	pub fn output_commitment(&self) -> [Target; 4] {
+		self.accout_comm.0.elements
+	}
+
+	/// Unique PI targets (not_fake_tx onwards) for Keccak preimage.
+	/// Matches PIHelper::batch_unique_pis() order. Uses only named fields.
+	pub fn unique_pi_targets(&self) -> Vec<Target> {
+		let mut out = vec![self.not_fake_tx.target];
+		out.extend(self.accin_null.0.elements);
+		out.extend(self.accout_comm.0.elements);
+		out.extend(self.note_comm.0.elements);
+		out.extend(self.eth_address);
+		out.extend(self.amount.0.map(|u| u.0));
+		out.push(self.asset_id.0);
+		out
 	}
 }
 
