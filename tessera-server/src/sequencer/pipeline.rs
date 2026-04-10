@@ -67,69 +67,68 @@ impl Sequencer {
 
 		let finalized = bb.finalize();
 
-		// Fetch current pool config root.
+		// Fetch current pool config root (uint256 = LE-packed Goldilocks hash).
 		let rollup =
 			ITesseraRollupV2::ITesseraRollupV2Instance::new(self.config.bridge_address, provider);
-		let pool_cfg_root: [u8; 32] = rollup.poolConfigRoot().call().await?.into();
+		let pool_cfg_root_u256 = rollup.poolConfigRoot().call().await?;
+		// Convert to GL-preimage bytes32 (matches what the contract expects in the batch
+		// and what the prover expects as main_pool_cfg_root witness).
+		let pool_cfg_root_hash = contract::u256_le_to_hash(pool_cfg_root_u256)?;
+		let pool_cfg_root_preimage: alloy::primitives::B256 =
+			contract::hash_to_preimage_bytes32(&pool_cfg_root_hash);
 
-		// Build the on-chain TransactionBatch struct.
-		// Per-slot layout: 7 NC + 1 AC, 7 NN + 1 AN.
-		// The piCommitment factors out the common root/config/poseidon fields
-		// and lists all 64 ACs, ANs, 7×64 NCs, 7×64 NNs.
+		// Build the batch preimage bytes.
+		// Layout: [batchPoseidonRoot(32B)][root(32B)][mainPoolConfigRoot(32B)]
+		//         then n_slots × 520B:
+		//           [notFakeTx:8B][accinNull:32B][accoutComm:32B][noteInNull×7:224B][noteOutComm×7:224B]
+		//
+		// GL-preimage encoding per field: [lo_u32_BE4][hi_u32_BE4].
+		// nc_leaves/nn_leaves stride = NOTE_BATCH + 1 (7 NC + 1 AC per slot).
 		let n_slots = finalized.ac_leaves.len();
+		let stride = tessera_client::NOTE_BATCH + 1; // = 8
 
-		// noteCommitments: 7 per slot (skip AC at position NOTE_BATCH=7), LE-packed.
-		let stride = tessera_client::NOTE_BATCH + 1; // 8 entries per slot in nc/nn_leaves
-		let mut note_commitments = Vec::with_capacity(n_slots * tessera_client::NOTE_BATCH);
+		let mut batch_preimage: Vec<u8> =
+			Vec::with_capacity(96 + n_slots * (8 + 32 + 32 + 7 * 32 + 7 * 32));
+
+		// Header (96B)
+		batch_preimage
+			.extend_from_slice(contract::hash_to_preimage_bytes32(&finalized.batch_poseidon_root).as_slice());
+		batch_preimage
+			.extend_from_slice(contract::hash_to_preimage_bytes32(&self.confirmed_root).as_slice());
+		batch_preimage.extend_from_slice(pool_cfg_root_preimage.as_slice());
+
+		// Per-slot data
 		for s in 0..n_slots {
-			let nc_base = s * stride;
+			// 8B: notFakeTx as GL field [lo_BE4][hi_BE4]
+			let nft: u64 = if finalized.tx_proofs_by_slot.contains_key(&s) { 1 } else { 0 };
+			batch_preimage.extend_from_slice(&(nft as u32).to_be_bytes()); // lo
+			batch_preimage.extend_from_slice(&0u32.to_be_bytes()); // hi
+
+			// 32B: accinNullifier (AN leaf)
+			batch_preimage
+				.extend_from_slice(contract::raw_to_preimage_bytes32(&finalized.an_leaves[s]).as_slice());
+			// 32B: accoutCommitment (AC leaf)
+			batch_preimage
+				.extend_from_slice(contract::raw_to_preimage_bytes32(&finalized.ac_leaves[s]).as_slice());
+
+			let base = s * stride;
+			// 7×32B: noteInNullifiers (NN leaves)
 			for j in 0..tessera_client::NOTE_BATCH {
-				note_commitments.push(contract::bytes32_be_to_u256_le(
-					&finalized.nc_leaves[nc_base + j],
-				));
+				batch_preimage.extend_from_slice(
+					contract::raw_to_preimage_bytes32(&finalized.nn_leaves[base + j]).as_slice(),
+				);
+			}
+			// 7×32B: noteOutCommitments (NC leaves)
+			for j in 0..tessera_client::NOTE_BATCH {
+				batch_preimage.extend_from_slice(
+					contract::raw_to_preimage_bytes32(&finalized.nc_leaves[base + j]).as_slice(),
+				);
 			}
 		}
 
-		// accountCommitments: all 64 slots, LE-packed.
-		let account_commitments: Vec<alloy::primitives::U256> = finalized
-			.ac_leaves
-			.iter()
-			.map(contract::bytes32_be_to_u256_le)
-			.collect();
-
-		// Nullifiers: only from real TX slots (padding slots have no nullifiers).
-		let mut note_nullifiers = Vec::new();
-		let mut account_nullifiers = Vec::new();
-		for s in 0..n_slots {
-			if !finalized.tx_proofs_by_slot.contains_key(&s) {
-				continue;
-			}
-			let nn_base = s * stride;
-			for j in 0..tessera_client::NOTE_BATCH {
-				note_nullifiers.push(contract::bytes32_be_to_u256_le(
-					&finalized.nn_leaves[nn_base + j],
-				));
-			}
-			account_nullifiers.push(contract::bytes32_be_to_u256_le(&finalized.an_leaves[s]));
-		}
-
-		let batch_poseidon_root = contract::hash_to_u256_le(&finalized.batch_poseidon_root);
-		let root = contract::hash_to_u256_le(&self.confirmed_root);
-
-		let batch = ITesseraRollupV2::TransactionBatch {
-			root,
-			mainPoolConfigRoot: pool_cfg_root.into(),
-			noteCommitments: note_commitments,
-			noteNullifiers: note_nullifiers,
-			accountCommitments: account_commitments,
-			accountNullifiers: account_nullifiers,
-			batchPoseidonRoot: batch_poseidon_root,
-			confirmed: false,
-		};
-
-		// Submit on-chain (phase 1).
+		// Submit on-chain (phase 1) — preimage bytes are in calldata (on-chain DA).
 		let receipt = rollup
-			.submitTransactionBatch(batch)
+			.submitTransactionBatch(batch_preimage.clone().into())
 			.send()
 			.await
 			.map_err(|e| {
@@ -150,7 +149,7 @@ impl Sequencer {
 			receipt.transaction_hash
 		);
 
-		// Extract piCommitment from the TransactionBatchSubmitted event.
+		// Extract piCommitment from the TransactionBatchSubmitted event (for logging).
 		let pi_commitment: [u8; 32] = receipt
 			.inner
 			.logs()
@@ -164,67 +163,6 @@ impl Sequencer {
 				anyhow::anyhow!("TransactionBatchSubmitted event not found in receipt")
 			})?;
 
-		// DEBUG: decode and print the Solidity TX preimage
-		if let Some(debug) = receipt
-			.inner
-			.logs()
-			.iter()
-			.find_map(|log| log.log_decode::<ITesseraRollupV2::DebugTxPreimage>().ok())
-		{
-			let pre = &debug.inner.preimage;
-			eprintln!("[TX-CONTRACT] preimage len     : {}", pre.len());
-			if pre.len() >= 192 {
-				eprintln!(
-					"[TX-CONTRACT] root             : {}",
-					hex::encode(&pre[..32])
-				);
-				eprintln!(
-					"[TX-CONTRACT] root (dup)        : {}",
-					hex::encode(&pre[32..64])
-				);
-				eprintln!(
-					"[TX-CONTRACT] mainPoolCfgRoot   : {}",
-					hex::encode(&pre[64..96])
-				);
-				eprintln!(
-					"[TX-CONTRACT] batchPoseidonRoot : {}",
-					hex::encode(&pre[96..128])
-				);
-				eprintln!(
-					"[TX-CONTRACT] accountCommitment : {}",
-					hex::encode(&pre[128..160])
-				);
-				eprintln!(
-					"[TX-CONTRACT] accountNullifier  : {}",
-					hex::encode(&pre[160..192])
-				);
-				let rest = &pre[192..];
-				let n_u256 = rest.len() / 32;
-				let half = n_u256 / 2;
-				eprintln!("[TX-CONTRACT] noteCommitments  : {} values", half);
-				for i in 0..half.min(3) {
-					eprintln!(
-						"[TX-CONTRACT] nc[{:>3}]           : {}",
-						i,
-						hex::encode(&rest[i * 32..(i + 1) * 32])
-					);
-				}
-				eprintln!("[TX-CONTRACT] noteNullifiers   : {} values", n_u256 - half);
-				for i in 0..((n_u256 - half).min(3)) {
-					let off = (half + i) * 32;
-					eprintln!(
-						"[TX-CONTRACT] nn[{:>3}]           : {}",
-						i,
-						hex::encode(&rest[off..off + 32])
-					);
-				}
-			}
-			eprintln!(
-				"[TX-CONTRACT] result           : {}",
-				hex::encode(debug.inner.result)
-			);
-		}
-
 		let batch_id = self.next_batch_id;
 		self.next_batch_id = self.next_batch_id.saturating_add(1);
 
@@ -236,10 +174,14 @@ impl Sequencer {
 		);
 
 		// Build the prove request (returned to caller — may or may not be dispatched).
-		let prove_request =
-			finalized.into_prove_request_v2(batch_id, self.confirmed_root, pool_cfg_root);
+		// main_pool_cfg_root is GL-preimage [u8;32] — same format the proof witness expects.
+		let prove_request = finalized.into_prove_request_v2(
+			batch_id,
+			self.confirmed_root,
+			pool_cfg_root_preimage.into(),
+		);
 
-		Ok((batch_id, pi_commitment, prove_request))
+		Ok((batch_id, batch_preimage, prove_request))
 	}
 
 	/// Finalize the batch builder, submit on-chain, and dispatch a prove request.
@@ -247,12 +189,12 @@ impl Sequencer {
 		&mut self,
 		provider: &P,
 	) -> anyhow::Result<()> {
-		let (batch_id, pi_commitment, prove_request) =
+		let (batch_id, batch_preimage, prove_request) =
 			self.submit_tx_batch_on_chain(provider).await?;
 		self.pending_batches.insert(
 			batch_id,
 			SolidityTransactionBatchCommitment {
-				pi_commitment,
+				batch_preimage,
 			},
 		);
 		self.submit_prove_request_v2_with_retry(prove_request)?;
@@ -300,7 +242,9 @@ impl Sequencer {
 					);
 					return Ok(());
 				};
-				let pi_commitment = pending.pi_commitment;
+				let batch_preimage = pending.batch_preimage.clone();
+				let pi_commitment: [u8; 32] =
+					alloy::primitives::keccak256(&batch_preimage).into();
 
 				let rollup = ITesseraRollupV2::ITesseraRollupV2Instance::new(
 					self.config.bridge_address,
@@ -322,7 +266,7 @@ impl Sequencer {
 
 				let confirm_result: Result<_, anyhow::Error> = async {
 					let receipt = rollup
-						.proveTransactionBatch(pi_commitment.into(), sol_proof)
+						.proveTransactionBatch(batch_preimage.into(), sol_proof)
 						.send()
 						.await
 						.map_err(|e| {

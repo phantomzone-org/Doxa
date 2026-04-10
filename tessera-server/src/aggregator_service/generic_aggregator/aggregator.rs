@@ -72,8 +72,6 @@ pub struct AggregatedProof<F: RichField + Extendable<D>, C: GenericConfig<D, F =
 {
 	/// The root aggregation proof.
 	pub proof: ProofWithPublicInputs<F, C, D>,
-	/// The configuration that produced this proof.
-	pub config: GenericAggregatorConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +95,7 @@ pub struct LevelCircuit<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>
 ///
 /// # Artifact lifecycle
 ///
-/// ```ignore
+/// ```text
 /// // Fresh build (compiles all level circuits — may be slow).
 /// let agg = GenericAggregator::new(config, leaf_common, leaf_verifier)?;
 /// agg.store_artifacts(Path::new("artifacts/aggregator"), &gate_ser)?;
@@ -171,17 +169,20 @@ where
 		})
 	}
 
+	#[allow(dead_code)]
 	pub fn get_circuit(&self, level: usize) -> Result<&LevelCircuit<F, C, D>> {
 		self.levels
 			.get(level)
 			.ok_or_else(|| anyhow::anyhow!("level index > {}", self.levels.len()))
 	}
 
+	#[allow(dead_code)]
 	/// Returns the aggregator configuration (arity, depth).
 	pub fn config(&self) -> &GenericAggregatorConfig {
 		&self.config
 	}
 
+	#[allow(dead_code)]
 	/// Returns the [`LevelCircuit`] at `level`, or `Err` if `level >= depth`.
 	pub fn level_circuit(&self, level: usize) -> Result<&LevelCircuit<F, C, D>> {
 		self.levels
@@ -189,6 +190,7 @@ where
 			.ok_or_else(|| anyhow!("level {} out of range (depth={})", level, self.levels.len()))
 	}
 
+	#[allow(dead_code)]
 	/// Returns the inner verifier used by level `level`.
 	///
 	/// - Level 0 → `&self.leaf_verifier` (verifies leaf proofs).
@@ -270,12 +272,51 @@ where
 			"aggregation must produce exactly one root proof"
 		);
 		let root = current.into_iter().next().unwrap();
-		Ok(AggregatedProof {
-			proof: root,
-			config: self.config.clone(),
-		})
+		Ok(AggregatedProof { proof: root })
 	}
 
+	/// Aggregate a single leaf proof into a root proof by cloning it at every
+	/// level of the tree (`[p, p, ..., p]` at each level).
+	///
+	/// Costs `depth` proof generations instead of `arity^depth`, making it
+	/// suitable for generating dummy proofs during artifact setup.
+	pub fn aggregate_dummy(
+		&self,
+		leaf: ProofWithPublicInputs<F, C, D>,
+	) -> Result<AggregatedProof<F, C, D>> {
+		let mut current = leaf;
+
+		// Level 0: clone leaf `arity` times.
+		{
+			let level = &self.levels[0];
+			let mut pw = PartialWitness::new();
+			pw.set_verifier_data_target(&level.verifier_target, &self.leaf_verifier)?;
+			for i in 0..self.config.arity {
+				pw.set_proof_with_pis_target(&level.proof_targets[i], &current)?;
+			}
+			let now = Instant::now();
+			current = level.circuit_data.prove(pw)?;
+			println!("aggregate_dummy level: 0 -> {:?}", now.elapsed());
+		}
+
+		// Levels 1..depth: clone previous-level proof `arity` times.
+		for level_idx in 1..self.config.depth {
+			let level = &self.levels[level_idx];
+			let inner_verifier = self.levels[level_idx - 1].circuit_data.verifier_only.clone();
+			let mut pw = PartialWitness::new();
+			pw.set_verifier_data_target(&level.verifier_target, &inner_verifier)?;
+			for i in 0..self.config.arity {
+				pw.set_proof_with_pis_target(&level.proof_targets[i], &current)?;
+			}
+			let now = Instant::now();
+			current = level.circuit_data.prove(pw)?;
+			println!("aggregate_dummy level: {} -> {:?}", level_idx, now.elapsed());
+		}
+
+		Ok(AggregatedProof { proof: current })
+	}
+
+	#[allow(dead_code)]
 	/// Verify the root proof against the top-level aggregation circuit.
 	pub fn verify_root(&self, proof: &ProofWithPublicInputs<F, C, D>) -> Result<()> {
 		self.levels
@@ -286,6 +327,7 @@ where
 			.map_err(|e| anyhow!("root proof verification failed: {e}"))
 	}
 
+	#[allow(dead_code)]
 	/// Returns the leaf circuit's `CommonCircuitData`.
 	///
 	/// Required to deserialize leaf proof bytes via

@@ -27,7 +27,7 @@ contract TesseraRollupV2IntegrationTest is Test {
     TesseraContract            public tessera_contract;
 
     address constant OP  = address(0x0001);
-    bytes32 constant PCR = bytes32(0);
+    uint256 constant PCR = 0;
 
     function setUp() public {
         batch_tx_verifier = new TesseraBatchTransactionVerifier();
@@ -82,24 +82,62 @@ contract TesseraRollupV2IntegrationTest is Test {
         return string.concat(field, "[", vm.toString(i), "]");
     }
 
-    /// Load the TransactionBatch fields written by `tx_artifacts`.
-    /// The fixture contains the exact AC/AN/NC/NN arrays that the circuit used
-    /// for the keccak piCommitment, so the Solidity test can reconstruct the
-    /// exact TransactionBatch without guessing values.
-    function _loadBatch()
-        internal
-        view
-        returns (TesseraContract.TransactionBatch memory batch)
-    {
+    /// Convert LE-packed uint256 (el0|(el1<<64)|...) to GL-preimage bytes32
+    /// ([lo0_BE4][hi0_BE4][lo1_BE4][hi1_BE4]...).
+    function _glH(uint256 p) internal pure returns (bytes32) {
+        uint256 e0 = p & 0xFFFFFFFFFFFFFFFF;
+        uint256 e1 = (p >> 64)  & 0xFFFFFFFFFFFFFFFF;
+        uint256 e2 = (p >> 128) & 0xFFFFFFFFFFFFFFFF;
+        uint256 e3 =  p >> 192;
+        return bytes32(
+            ((e0 & 0xFFFFFFFF) << 224) | ((e0 >> 32) << 192) |
+            ((e1 & 0xFFFFFFFF) << 160) | ((e1 >> 32) << 128) |
+            ((e2 & 0xFFFFFFFF) << 96)  | ((e2 >> 32) << 64)  |
+            ((e3 & 0xFFFFFFFF) << 32)  |  (e3 >> 32)
+        );
+    }
+
+    /// Build the batch preimage bytes from the fixture JSON.
+    ///
+    /// Layout: [batchPoseidonRoot(32B)][root(32B)][mainPoolConfigRoot(32B)]
+    ///         then 64 slots × 520B:
+    ///           [notFakeTx: 8B GL-field][accinNull: 32B][accoutComm: 32B]
+    ///           [noteInNull×7: 7×32B][noteOutComm×7: 7×32B]
+    function _loadBatch() internal returns (bytes memory preimage) {
         string memory json = vm.readFile(FIXTURE);
-        batch.root               = vm.parseJsonUint(json, ".root");
-        batch.mainPoolConfigRoot = PCR;
-        batch.batchPoseidonRoot  = vm.parseJsonUint(json, ".batchPoseidonRoot");
-        batch.accountCommitments = vm.parseJsonUintArray(json, ".accountCommitments");
-        batch.accountNullifiers  = vm.parseJsonUintArray(json, ".accountNullifiers");
-        batch.noteCommitments    = vm.parseJsonUintArray(json, ".noteCommitments");
-        batch.noteNullifiers     = vm.parseJsonUintArray(json, ".noteNullifiers");
-        batch.confirmed          = false;
+
+        preimage = abi.encodePacked(
+            _glH(vm.parseJsonUint(json, ".batchPoseidonRoot")),
+            _glH(vm.parseJsonUint(json, ".root")),
+            _glH(PCR)
+        );
+
+        bool[] memory notFakeTx;
+        try vm.parseJsonBoolArray(json, ".notFakeTx") returns (bool[] memory nft) {
+            notFakeTx = nft;
+        } catch {
+            vm.skip(true);
+        }
+        uint256[] memory acNull  = vm.parseJsonUintArray(json, ".accinNullifiers");
+        uint256[] memory acComm  = vm.parseJsonUintArray(json, ".accoutCommitments");
+        uint256[] memory noteNull = vm.parseJsonUintArray(json, ".noteInNullifiers");
+        uint256[] memory noteComm = vm.parseJsonUintArray(json, ".noteOutCommitments");
+
+        uint256 NOTE_BATCH = 7;
+        for (uint256 s = 0; s < 64; s++) {
+            // 8B: notFakeTx as GL field — [lo_BE4][hi_BE4], value 0 or 1
+            uint32 nftVal = notFakeTx[s] ? 1 : 0;
+            preimage = abi.encodePacked(preimage, bytes4(nftVal), bytes4(uint32(0)));
+            // 32B each: accin nullifier, accout commitment
+            preimage = abi.encodePacked(preimage, _glH(acNull[s]), _glH(acComm[s]));
+            // 7×32B: note-in nullifiers, note-out commitments
+            for (uint256 n = 0; n < NOTE_BATCH; n++) {
+                preimage = abi.encodePacked(preimage, _glH(noteNull[s * NOTE_BATCH + n]));
+            }
+            for (uint256 n = 0; n < NOTE_BATCH; n++) {
+                preimage = abi.encodePacked(preimage, _glH(noteComm[s * NOTE_BATCH + n]));
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -168,20 +206,13 @@ contract TesseraRollupV2IntegrationTest is Test {
             (publicInputs[6] << 32)  |  publicInputs[7]
         );
 
-        // Load the batch directly from fixture arrays.
-        TesseraContract.TransactionBatch memory batch = _loadBatch();
-
-        // Verify our local piCommitment matches what the contract will compute.
-        bytes32 computed = keccak256(abi.encodePacked(
-            batch.root, batch.mainPoolConfigRoot, batch.batchPoseidonRoot,
-            batch.accountCommitments, batch.accountNullifiers,
-            batch.noteCommitments, batch.noteNullifiers
-        ));
-        assertEq(computed, piCommitment, "piCommitment mismatch - batch fields don't match proof");
+        // Build preimage bytes from fixture and verify piCommitment matches the proof.
+        bytes memory preimage = _loadBatch();
+        assertEq(keccak256(preimage), piCommitment, "piCommitment mismatch - batch fields don't match proof");
 
         // Submit phase (operator).
         vm.prank(OP);
-        tessera_contract.submitTransactionBatch(batch);
+        tessera_contract.submitTransactionBatch(preimage);
 
         // Prove phase — uses the real gnark verifier.
         TesseraContract.Proof memory p = TesseraContract.Proof({
@@ -189,7 +220,7 @@ contract TesseraRollupV2IntegrationTest is Test {
             commitments:   commitments,
             commitmentPok: commitmentPok
         });
-        tessera_contract.proveTransactionBatch(piCommitment, p);
+        tessera_contract.proveTransactionBatch(preimage, p);
 
         assertEq(tessera_contract.leafCount(), 1, "leaf appended");
     }
@@ -214,7 +245,7 @@ contract TesseraDepositIntegrationTest is Test {
     TesseraContract                  public rollup;
 
     address constant OP  = address(0x0001);
-    bytes32 constant PCR = bytes32(0);
+    uint256 constant PCR = 0;
 
     function setUp() public {
         batch_tx_verifier      = new TesseraBatchTransactionVerifier();
@@ -318,7 +349,7 @@ contract TesseraDepositIntegrationTest is Test {
         // _addressToLE20(address(0)) = 20 zero bytes.
         bytes memory preimage = abi.encodePacked(
             uint256(0),           // root
-            bytes32(0),           // mainPoolConfigRoot
+            uint256(0),           // mainPoolConfigRoot
             batchPoseidonRoot     // batchPoseidonRoot
         );
         // 512 × address(0) LE-encoded = 512 × 20 zero bytes = 10240 zero bytes.

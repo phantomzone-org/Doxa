@@ -31,10 +31,22 @@ interface IPoseidonGoldilocks {
 
 /// @title TesseraContract
 /// @notice On-chain Poseidon Merkle tree + ERC20 deposit escrow + two-phase ZK batch proving.
-/// @dev V2 moves the commitment tree onto the contract. The contract is the canonical
-///      source of truth for all confirmed tree roots. Nullifiers are stored in a flat
-///      mapping; the ZK circuit proves double-spend absence and the contract enforces
-///      replay protection post-proof.
+///
+/// Three batch types are supported, each following the same two-phase model:
+///   Phase 1 – `submit*`  (operator only): validate roots, compute piCommitment, store batch.
+///   Phase 2 – `prove*`   (permissionless): verify Groth16, insert nullifiers, update tree.
+///
+/// Keccak preimage encoding (all three types):
+///   Each Goldilocks field element f is encoded as [lo_u32_BE(4 B), hi_u32_BE(4 B)]
+///   where lo = uint32(f), hi = uint32(f >> 32).
+///   A packed LE HashOut (uint256 = el0|(el1<<64)|(el2<<128)|(el3<<192)) produces 32 B via
+///   `_glHashToBytes`. A scalar GL field (uint64) produces 8 B via `_glFieldToBytes`.
+///
+/// Preimage layout (must match `BatchHelper::pi_commitment` in tessera-server):
+///   1. batchPoseidonRoot (32 B)
+///   2. act_root          (32 B)  ← common to all slots
+///   3. mainPoolConfigRoot(32 B)  ← common to all slots
+///   4. Per slot: unique PIs in circuit registration order (type-specific, see below)
 contract TesseraContract {
     // -------------------------------------------------------------------------
     // Enums & Structs
@@ -57,26 +69,6 @@ contract TesseraContract {
         uint256[2] commitmentPok;
     }
 
-    /// @notice On-chain record for a pending private-transaction batch.
-    struct TransactionBatch {
-        uint256   root;                  // single IMT root — must be in confirmedRoots
-        bytes32   mainPoolConfigRoot;
-        uint256[] noteCommitments;       // 7 per slot (row-major, NC only — no AC)
-        uint256[] noteNullifiers;        // 7 per slot (row-major, NN only — no AN)
-        uint256[] accountCommitments;    // 1 per slot (64 total)
-        uint256[] accountNullifiers;     // 1 per slot (64 total)
-        uint256   batchPoseidonRoot;     // Poseidon root of subtree leaves; inserted as leaf on prove
-        bool      confirmed;
-    }
-
-    /// @notice On-chain record for a pending deposit batch.
-    struct DepositBatch {
-        uint256   root;                // single IMT root — must be in confirmedRoots
-        bytes32   mainPoolConfigRoot;
-        bytes32[] depositNoteCommitments; // note commitments consumed from pending deposits
-        uint256   batchPoseidonRoot;
-        bool      confirmed;
-    }
 
     // -------------------------------------------------------------------------
     // Constants
@@ -84,10 +76,49 @@ contract TesseraContract {
 
     uint256 public constant MAX_TREE_DEPTH = 32;
 
-    /// @dev Must match `DEPOSIT_BATCH_SIZE` in the Rust deposit artifact generator
-    ///      (tessera-e2e/src/bin/deposit_artifacts.rs).  The circuit hashes all
-    ///      `DEPOSIT_BATCH_SIZE` eth-address slots; dummy slots carry address(0).
-    uint256 public constant DEPOSIT_BATCH_SIZE = 512;
+    /// @dev Number of private-TX slots per batch (arity=8, depth=2 aggregator).
+    uint256 public constant PRIV_TX_BATCH_SIZE = 64;
+
+    /// @dev Number of withdraw slots (= deposit slots) per bridge-TX batch.
+    ///      Total bridge batch size = 2 × BRIDGE_TX_HALF_SIZE = 512.
+    uint256 public constant BRIDGE_TX_HALF_SIZE = 256;
+
+    /// @dev Note slots per private-TX slot (input note nullifiers / output note commitments).
+    uint256 public constant NOTE_BATCH = 7;
+
+    /// @dev Depth of the per-batch Poseidon subtree.
+    ///      Both TX and bridge-TX batches commit 512 leaves → depth = log2(512) = 9.
+    uint256 public constant BATCH_SUBTREE_DEPTH = 9;
+
+    // ── TX batch preimage layout ─────────────────────────────────────────────
+    //
+    // All GL hash fields (bytes32 in the preimage) are GL-preimage encoded:
+    //   bytes32 = [lo0_BE(4B), hi0_BE(4B), lo1_BE(4B), hi1_BE(4B), ...]
+    // GL fields stored as uint64 are encoded as [lo_u32_BE(4B), hi_u32_BE(4B)] (8 bytes).
+    //
+    // Header (96 B):  batchPoseidonRoot[32] | root[32] | mainPoolConfigRoot[32]
+    // Per slot (520 B): notFakeTx[8] | accinNull[32] | accoutComm[32]
+    //                   | noteInNull[7×32=224] | noteOutComm[7×32=224]
+    uint256 private constant TX_HEADER_SIZE    = 96;
+    uint256 private constant TX_SLOT_SIZE      = 8 + 32 + 32 + NOTE_BATCH * 32 + NOTE_BATCH * 32; // 520
+    uint256 private constant TX_ACCIN_NULL_OFF = 8;
+    uint256 private constant TX_NOTE_IN_OFF    = 8 + 32 + 32; // 72
+
+    // ── Bridge TX batch preimage layout ─────────────────────────────────────
+    //
+    // Header (96 B): batchPoseidonRoot[32] | root[32] | mainPoolConfigRoot[32]
+    // Withdraw section (BRIDGE_TX_HALF_SIZE × 616 B):
+    //   Per w-slot (616 B): notFakeTx[8] | wAccinNull[32] | wAccoutComm[32]
+    //                        | wAssetIds[7×8=56] | wWithdrawalAmounts[7×8×8=448] | wAccAddr[5×8=40]
+    // Deposit section (BRIDGE_TX_HALF_SIZE × 216 B):
+    //   Per d-slot (216 B): notFakeTx[8] | dAccinNull[32] | dAccoutComm[32] | dNoteComm[32]
+    //                        | dEthAddress[5×8=40] | dAmount[8×8=64] | dAssetId[8]
+    uint256 private constant W_SLOT_SIZE    = 8 + 32 + 32 + NOTE_BATCH * 8 + NOTE_BATCH * 64 + 40; // 616
+    uint256 private constant D_SLOT_SIZE    = 8 + 32 + 32 + 32 + 40 + 64 + 8;                      // 216
+    uint256 private constant D_SECTION_OFF  = 96 + BRIDGE_TX_HALF_SIZE * W_SLOT_SIZE;              // 157792
+    uint256 private constant W_ACCIN_NULL_OFF = 8;
+    uint256 private constant D_ACCIN_NULL_OFF = 8;
+    uint256 private constant D_NOTE_COMM_OFF  = 72;
 
     // -------------------------------------------------------------------------
     // State variables
@@ -99,13 +130,13 @@ contract TesseraContract {
 
     // --- verifiers ---
     IGroth16Verifier public immutable txVerifier;
-    IGroth16Verifier public immutable depositVerifier;
+    IGroth16Verifier public immutable bridgeTxVerifier;
 
     // --- token ---
     address public immutable monitoredToken;
 
     // --- pool config ---
-    bytes32 public poolConfigRoot;
+    uint256 public poolConfigRoot;
 
     // --- on-chain Poseidon incremental Merkle tree ---
     IPoseidonGoldilocks public immutable poseidon;
@@ -121,29 +152,37 @@ contract TesseraContract {
     // --- nullifier set ---
     mapping(uint256 => bool) public nullifiers;
 
+    // --- leaf store (leafIndex => LE-packed GL batchPoseidonRoot) ---
+    mapping(uint256 => uint256) public leaves;
+
+    // --- validated batch roots (batchPoseidonRoot => true once its batch is proven) ---
+    // Allows anyone to verify that a given batchPoseidonRoot was part of a proven batch,
+    // and therefore that any leaf in its Poseidon subtree is a committed value.
+    mapping(uint256 => bool) public validatedBatchRoots;
+
     // --- deposits ---
     mapping(bytes32 => Deposit) public deposits;
 
-    // --- pending batches ---
-    mapping(bytes32 => TransactionBatch) public pendingTxBatches;
-    mapping(bytes32 => DepositBatch)     public pendingDepositBatches;
+    // --- pending / confirmed batches (keyed by piCommitment = keccak256(batchPreimage)) ---
+    mapping(bytes32 => bool) public pendingTxBatches;
+    mapping(bytes32 => bool) public confirmedTxBatches;
+    mapping(bytes32 => bool) public pendingBridgeTxBatches;
+    mapping(bytes32 => bool) public confirmedBridgeTxBatches;
 
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
 
-    event TransactionBatchSubmitted(bytes32 indexed piCommitment, uint256 batchPoseidonRoot);
+    event TransactionBatchSubmitted(bytes32 indexed piCommitment, bytes32 batchPoseidonRoot);
     event TransactionBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
-    event DepositBatchSubmitted(bytes32 indexed piCommitment, uint256 batchPoseidonRoot);
-    event DepositBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
+    event BridgeTxBatchSubmitted(bytes32 indexed piCommitment, bytes32 batchPoseidonRoot);
+    event BridgeTxBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
     event DepositAvailable(bytes32 indexed noteCommitment, uint256 value, address recipient);
     event DepositWithdrawn(bytes32 indexed noteCommitment, uint256 value, address recipient);
     event DepositValidated(bytes32 indexed noteCommitment);
     event OperatorChanged(address indexed oldOp, address indexed newOp);
-    event PoolConfigRootUpdated(bytes32 indexed oldRoot, bytes32 indexed newRoot);
+    event PoolConfigRootUpdated(uint256 indexed oldRoot, uint256 indexed newRoot);
     event PausedChanged(bool isPaused);
-    event DebugDepositPreimage(bytes preimage, bytes32 result);
-    event DebugTxPreimage(bytes preimage, bytes32 result);
 
     // -------------------------------------------------------------------------
     // Errors
@@ -153,13 +192,13 @@ contract TesseraContract {
     error PausedErr();
     error ZeroAddress();
     error InvalidTreeDepth();
-    error RootNotConfirmed(uint256 root);
+    error RootNotConfirmed(bytes32 root);
     error PoolConfigMismatch();
     error BatchAlreadySubmitted(bytes32 piCommitment);
     error BatchNotFound(bytes32 piCommitment);
     error BatchAlreadyConfirmed(bytes32 piCommitment);
     error ProofVerificationFailed(bytes32 piCommitment, uint256[8] pubInputs);
-    error NullifierAlreadyUsed(uint256 nullifier);
+    error NullifierAlreadyUsed(bytes32 nullifier);
     error NoteNotFound(bytes32 noteCommitment);
     error InvalidDepositState(bytes32 noteCommitment);
     error DuplicateNoteCommitment(bytes32 noteCommitment);
@@ -173,39 +212,39 @@ contract TesseraContract {
     // Constructor
     // -------------------------------------------------------------------------
 
-    /// @param _txVerifier      Groth16 verifier for transaction batches.
-    /// @param _depositVerifier Groth16 verifier for deposit batches.
-    /// @param _poseidon        Deployed PoseidonGoldilocks contract address.
-    /// @param _operator        Initial operator address.
-    /// @param _monitoredToken  ERC20 token escrowed by this bridge.
-    /// @param _poolConfigRoot  Initial pool configuration root.
-    /// @param _treeDepth       Depth of the on-chain Poseidon Merkle tree (e.g. 20).
+    /// @param _txVerifier        Groth16 verifier for private-transaction batches.
+    /// @param _bridgeTxVerifier  Groth16 verifier for bridge-transaction batches.
+    /// @param _poseidon          Deployed PoseidonGoldilocks contract address.
+    /// @param _operator          Initial operator address.
+    /// @param _monitoredToken    ERC20 token escrowed by this bridge.
+    /// @param _poolConfigRoot    Initial pool configuration root (LE-packed GL HashOut).
+    /// @param _treeDepth         Depth of the on-chain Poseidon Merkle tree (e.g. 20).
     constructor(
         address _txVerifier,
-        address _depositVerifier,
+        address _bridgeTxVerifier,
         address _poseidon,
         address _operator,
         address _monitoredToken,
-        bytes32 _poolConfigRoot,
+        uint256 _poolConfigRoot,
         uint256 _treeDepth
     ) {
-        if (_txVerifier == address(0))      revert ZeroAddress();
-        if (_depositVerifier == address(0)) revert ZeroAddress();
-        if (_poseidon == address(0))        revert ZeroAddress();
-        if (_operator == address(0))        revert ZeroAddress();
-        if (_monitoredToken == address(0))  revert ZeroAddress();
+        if (_txVerifier == address(0))       revert ZeroAddress();
+        if (_bridgeTxVerifier == address(0)) revert ZeroAddress();
+        if (_poseidon == address(0))         revert ZeroAddress();
+        if (_operator == address(0))         revert ZeroAddress();
+        if (_monitoredToken == address(0))   revert ZeroAddress();
         if (_treeDepth == 0 || _treeDepth > MAX_TREE_DEPTH) revert InvalidTreeDepth();
 
-        txVerifier      = IGroth16Verifier(_txVerifier);
-        depositVerifier = IGroth16Verifier(_depositVerifier);
-        poseidon        = IPoseidonGoldilocks(_poseidon);
-        operator        = _operator;
-        monitoredToken  = _monitoredToken;
-        poolConfigRoot  = _poolConfigRoot;
-        treeDepth       = _treeDepth;
+        txVerifier       = IGroth16Verifier(_txVerifier);
+        bridgeTxVerifier = IGroth16Verifier(_bridgeTxVerifier);
+        poseidon         = IPoseidonGoldilocks(_poseidon);
+        operator         = _operator;
+        monitoredToken   = _monitoredToken;
+        poolConfigRoot   = _poolConfigRoot;
+        treeDepth        = _treeDepth;
 
         // Build zeros chain: zeros[0] = 0, zeros[i] = compress(zeros[i-1], zeros[i-1])
-        // TODO: HARDODE
+        // TODO: HARDCODE
         zeros[0] = 0;
         for (uint256 i = 1; i <= _treeDepth; i++) {
             zeros[i] = IPoseidonGoldilocks(_poseidon).compress(zeros[i - 1], zeros[i - 1]);
@@ -262,7 +301,7 @@ contract TesseraContract {
 
     /// @notice Updates the accepted pool configuration root.
     ///         New batches must reference the current value.
-    function setPoolConfigRoot(bytes32 newRoot) external onlyOperator {
+    function setPoolConfigRoot(uint256 newRoot) external onlyOperator {
         emit PoolConfigRootUpdated(poolConfigRoot, newRoot);
         poolConfigRoot = newRoot;
     }
@@ -328,9 +367,9 @@ contract TesseraContract {
     /// @notice Withdraws a `Pending` deposit back to its recipient.
     function withdrawPendingDeposit(bytes32 noteCommitment) external whenNotPaused {
         Deposit storage dep = deposits[noteCommitment];
-        if (dep.status == DepositStatus.None)    revert NoteNotFound(noteCommitment);
-        if (dep.status != DepositStatus.Pending)  revert InvalidDepositState(noteCommitment);
-        if (msg.sender != dep.recipient)           revert NotDepositRecipient();
+        if (dep.status == DepositStatus.None)   revert NoteNotFound(noteCommitment);
+        if (dep.status != DepositStatus.Pending) revert InvalidDepositState(noteCommitment);
+        if (msg.sender != dep.recipient)          revert NotDepositRecipient();
 
         uint256 value = dep.value;
         dep.status = DepositStatus.Withdrawn; // effects before interaction
@@ -346,24 +385,38 @@ contract TesseraContract {
     // -------------------------------------------------------------------------
 
     /// @notice Registers a private-transaction batch for later proof verification.
-    /// @dev Phase 1 of the two-phase model. Validates roots and pre-checks nullifiers,
-    ///      then stores the batch keyed by its piCommitment.
-    function submitTransactionBatch(TransactionBatch calldata batch)
+    ///
+    /// @param batchPreimage  Raw Keccak-256 preimage of the piCommitment.
+    ///
+    /// Preimage layout (must match `BatchHelper::pi_commitment` in tessera-server):
+    ///   Header (96 B): batchPoseidonRoot[32] | root[32] | mainPoolConfigRoot[32]
+    ///   Per slot s in [0, PRIV_TX_BATCH_SIZE):
+    ///     notFakeTx[8] | accinNull[32] | accoutComm[32]
+    ///     | noteInNull[7×32] | noteOutComm[7×32]
+    ///
+    /// All hash fields are GL-preimage encoded bytes32.
+    /// Scalar GL fields (bools) are encoded as [lo_u32_BE(4B), hi_u32_BE(4B)].
+    ///
+    /// @dev Phase 1. piCommitment = keccak256(batchPreimage). Storing only the
+    ///      piCommitment (1 bool) instead of the full struct saves ~3–12 M gas.
+    function submitTransactionBatch(bytes calldata batchPreimage)
         external
         onlyOperator
         whenNotPaused
     {
-        if (!confirmedRoots[batch.root]) revert RootNotConfirmed(batch.root);
-        if (batch.mainPoolConfigRoot != poolConfigRoot) revert PoolConfigMismatch();
+        bytes32 root              = _cdB32(batchPreimage, 32);
+        bytes32 mainPoolConfigRoot = _cdB32(batchPreimage, 64);
 
-        bytes32 piCommitment = _computeTxPiCommitment(batch);
-        if (pendingTxBatches[piCommitment].batchPoseidonRoot != 0) revert BatchAlreadySubmitted(piCommitment);
+        if (!confirmedRoots[_glHashToU256(root)]) revert RootNotConfirmed(root);
+        if (_glHashToU256(mainPoolConfigRoot) != poolConfigRoot) revert PoolConfigMismatch();
 
-        // Deep-copy calldata to storage; always set confirmed = false.
-        pendingTxBatches[piCommitment] = batch;
-        pendingTxBatches[piCommitment].confirmed = false;
+        bytes32 piCommitment = keccak256(batchPreimage);
+        if (confirmedTxBatches[piCommitment])  revert BatchAlreadyConfirmed(piCommitment);
+        if (pendingTxBatches[piCommitment])    revert BatchAlreadySubmitted(piCommitment);
 
-        emit TransactionBatchSubmitted(piCommitment, batch.batchPoseidonRoot);
+        pendingTxBatches[piCommitment] = true;
+
+        emit TransactionBatchSubmitted(piCommitment, _cdB32(batchPreimage, 0));
     }
 
     // -------------------------------------------------------------------------
@@ -371,15 +424,23 @@ contract TesseraContract {
     // -------------------------------------------------------------------------
 
     /// @notice Verifies the Groth16 proof for a submitted transaction batch and finalises it.
-    /// @dev Phase 2 of the two-phase model. Anyone may call.
-    ///      On success: nullifiers inserted, batchPoseidonRoot appended to the on-chain tree.
-    function proveTransactionBatch(bytes32 piCommitment, Proof calldata proof)
+    ///
+    /// @param batchPreimage  The same raw bytes passed to `submitTransactionBatch`.
+    ///
+    /// @dev Phase 2. piCommitment is re-derived as keccak256(batchPreimage) — no
+    ///      re-encoding needed; all nullifiers are read from `batchPreimage` at
+    ///      fixed offsets.  On success: nullifiers inserted, batchPoseidonRoot
+    ///      appended to the on-chain Merkle tree.
+    function proveTransactionBatch(bytes calldata batchPreimage, Proof calldata proof)
         external
         whenNotPaused
     {
-        TransactionBatch storage batch = pendingTxBatches[piCommitment];
-        if (batch.batchPoseidonRoot == 0) revert BatchNotFound(piCommitment);
-        if (batch.confirmed)              revert BatchAlreadyConfirmed(piCommitment);
+        bytes32 piCommitment = keccak256(batchPreimage);
+
+        if (!pendingTxBatches[piCommitment]) {
+            if (confirmedTxBatches[piCommitment]) revert BatchAlreadyConfirmed(piCommitment);
+            revert BatchNotFound(piCommitment);
+        }
 
         uint256[8] memory pubInputs = keccakToPublicInputs(piCommitment);
         try txVerifier.verifyProof(proof.proof, proof.commitments, proof.commitmentPok, pubInputs) {
@@ -388,98 +449,146 @@ contract TesseraContract {
             revert ProofVerificationFailed(piCommitment, pubInputs);
         }
 
-        uint256 nnLen = batch.noteNullifiers.length;
-        for (uint256 i = 0; i < nnLen; i++) {
-            if (nullifiers[batch.noteNullifiers[i]]) revert NullifierAlreadyUsed(batch.noteNullifiers[i]);
-        }
-        uint256 anLen = batch.accountNullifiers.length;
-        for (uint256 i = 0; i < anLen; i++) {
-            if (nullifiers[batch.accountNullifiers[i]]) revert NullifierAlreadyUsed(batch.accountNullifiers[i]);
+        // Pre-check all nullifiers before mutating state (read at fixed preimage offsets).
+        for (uint256 s = 0; s < PRIV_TX_BATCH_SIZE; s++) {
+            uint256 slotOff = TX_HEADER_SIZE + s * TX_SLOT_SIZE;
+            if (!_cdBool(batchPreimage, slotOff)) continue;
+            bytes32 accNull = _cdB32(batchPreimage, slotOff + TX_ACCIN_NULL_OFF);
+            if (nullifiers[_glHashToU256(accNull)]) revert NullifierAlreadyUsed(accNull);
+            for (uint256 j = 0; j < NOTE_BATCH; j++) {
+                bytes32 nn = _cdB32(batchPreimage, slotOff + TX_NOTE_IN_OFF + j * 32);
+                if (nullifiers[_glHashToU256(nn)]) revert NullifierAlreadyUsed(nn);
+            }
         }
 
-        batch.confirmed = true;
+        delete pendingTxBatches[piCommitment];
+        confirmedTxBatches[piCommitment] = true;
 
-        // Insert nullifiers into the flat set.
-        for (uint256 i = 0; i < nnLen; i++) {
-            nullifiers[batch.noteNullifiers[i]] = true;
-        }
-        for (uint256 i = 0; i < anLen; i++) {
-            nullifiers[batch.accountNullifiers[i]] = true;
+        // Insert nullifiers for real slots only.
+        for (uint256 s = 0; s < PRIV_TX_BATCH_SIZE; s++) {
+            uint256 slotOff = TX_HEADER_SIZE + s * TX_SLOT_SIZE;
+            if (!_cdBool(batchPreimage, slotOff)) continue;
+            nullifiers[_glHashToU256(_cdB32(batchPreimage, slotOff + TX_ACCIN_NULL_OFF))] = true;
+            for (uint256 j = 0; j < NOTE_BATCH; j++) {
+                nullifiers[_glHashToU256(_cdB32(batchPreimage, slotOff + TX_NOTE_IN_OFF + j * 32))] = true;
+            }
         }
 
         uint256 leafIndex = leafCount;
-        _appendLeaf(batch.batchPoseidonRoot);
+        _appendLeaf(_glHashToU256(_cdB32(batchPreimage, 0)));
 
         emit TransactionBatchProven(piCommitment, currentRoot, leafIndex);
     }
 
     // -------------------------------------------------------------------------
-    // Deposit batch — submit phase (operator only)
+    // Bridge-transaction batch — submit phase (operator only)
     // -------------------------------------------------------------------------
 
-    /// @notice Registers a deposit batch for later proof verification.
-    ///         All referenced deposit notes must be `Pending`.
-    function submitDepositBatch(DepositBatch calldata batch)
+    /// @notice Registers a bridge-transaction batch (256 withdrawals + 256 deposits).
+    ///
+    /// @param batchPreimage  Raw Keccak-256 preimage of the piCommitment.
+    ///
+    /// Preimage layout:
+    ///   Header (96 B): batchPoseidonRoot[32] | root[32] | mainPoolConfigRoot[32]
+    ///   Withdraw section (BRIDGE_TX_HALF_SIZE × 616 B)
+    ///   Deposit section  (BRIDGE_TX_HALF_SIZE × 216 B)
+    ///
+    /// @dev Phase 1.  All referenced deposit notes must be `Pending`.
+    function submitBridgeTxBatch(bytes calldata batchPreimage)
         external
         onlyOperator
         whenNotPaused
     {
-        if (!confirmedRoots[batch.root]) revert RootNotConfirmed(batch.root);
-        if (batch.mainPoolConfigRoot != poolConfigRoot) revert PoolConfigMismatch();
+        bytes32 root               = _cdB32(batchPreimage, 32);
+        bytes32 mainPoolConfigRoot = _cdB32(batchPreimage, 64);
 
-        // Validate each deposit note exists and is Pending.
-        uint256 len = batch.depositNoteCommitments.length;
-        for (uint256 i = 0; i < len; i++) {
-            bytes32 nc = batch.depositNoteCommitments[i];
-            DepositStatus s = deposits[nc].status;
-            if (s == DepositStatus.None)    revert NoteNotFound(nc);
-            if (s != DepositStatus.Pending)  revert InvalidDepositState(nc);
+        if (!confirmedRoots[_glHashToU256(root)]) revert RootNotConfirmed(root);
+        if (_glHashToU256(mainPoolConfigRoot) != poolConfigRoot) revert PoolConfigMismatch();
+
+        // Validate all real deposit notes exist and are Pending.
+        for (uint256 s = 0; s < BRIDGE_TX_HALF_SIZE; s++) {
+            uint256 slotOff = D_SECTION_OFF + s * D_SLOT_SIZE;
+            if (!_cdBool(batchPreimage, slotOff)) continue;
+            bytes32 noteKey = _cdB32(batchPreimage, slotOff + D_NOTE_COMM_OFF);
+            DepositStatus st = deposits[noteKey].status;
+            if (st == DepositStatus.None)    revert NoteNotFound(noteKey);
+            if (st != DepositStatus.Pending) revert InvalidDepositState(noteKey);
         }
 
-        bytes32 piCommitment = _computeDepositPiCommitment(batch);
-        if (pendingDepositBatches[piCommitment].batchPoseidonRoot != 0) revert BatchAlreadySubmitted(piCommitment);
+        bytes32 piCommitment = keccak256(batchPreimage);
+        if (confirmedBridgeTxBatches[piCommitment]) revert BatchAlreadyConfirmed(piCommitment);
+        if (pendingBridgeTxBatches[piCommitment])   revert BatchAlreadySubmitted(piCommitment);
 
-        pendingDepositBatches[piCommitment] = batch;
-        pendingDepositBatches[piCommitment].confirmed = false;
+        pendingBridgeTxBatches[piCommitment] = true;
 
-        emit DepositBatchSubmitted(piCommitment, batch.batchPoseidonRoot);
+        emit BridgeTxBatchSubmitted(piCommitment, _cdB32(batchPreimage, 0));
     }
 
     // -------------------------------------------------------------------------
-    // Deposit batch — prove phase (permissionless)
+    // Bridge-transaction batch — prove phase (permissionless)
     // -------------------------------------------------------------------------
 
-    /// @notice Verifies the Groth16 proof for a submitted deposit batch and finalises it.
-    ///         On success: deposit notes advanced to `Validated`, batchPoseidonRoot appended.
-    function proveDepositBatch(bytes32 piCommitment, Proof calldata proof)
+    /// @notice Verifies the Groth16 proof for a submitted bridge-tx batch and finalises it.
+    ///
+    /// @param batchPreimage  The same raw bytes passed to `submitBridgeTxBatch`.
+    ///
+    /// @dev Phase 2. On success:
+    ///      - Account nullifiers inserted for real withdraw and deposit slots.
+    ///      - Deposit notes advanced to `Validated` for real deposit slots.
+    ///      - batchPoseidonRoot appended to the on-chain tree.
+    ///      - TODO: release ERC20 tokens for real withdrawal slots (requires multi-asset registry).
+    function proveBridgeTxBatch(bytes calldata batchPreimage, Proof calldata proof)
         external
         whenNotPaused
     {
-        DepositBatch storage batch = pendingDepositBatches[piCommitment];
-        if (batch.batchPoseidonRoot == 0) revert BatchNotFound(piCommitment);
-        if (batch.confirmed)              revert BatchAlreadyConfirmed(piCommitment);
+        bytes32 piCommitment = keccak256(batchPreimage);
+
+        if (!pendingBridgeTxBatches[piCommitment]) {
+            if (confirmedBridgeTxBatches[piCommitment]) revert BatchAlreadyConfirmed(piCommitment);
+            revert BatchNotFound(piCommitment);
+        }
 
         uint256[8] memory pubInputs = keccakToPublicInputs(piCommitment);
-        try depositVerifier.verifyProof(proof.proof, proof.commitments, proof.commitmentPok, pubInputs) {
+        try bridgeTxVerifier.verifyProof(proof.proof, proof.commitments, proof.commitmentPok, pubInputs) {
             // success — fall through
         } catch {
             revert ProofVerificationFailed(piCommitment, pubInputs);
         }
 
-        batch.confirmed = true;
+        // Pre-check all account nullifiers before mutating state.
+        for (uint256 s = 0; s < BRIDGE_TX_HALF_SIZE; s++) {
+            uint256 wOff = 96 + s * W_SLOT_SIZE;
+            if (_cdBool(batchPreimage, wOff) && nullifiers[_glHashToU256(_cdB32(batchPreimage, wOff + W_ACCIN_NULL_OFF))])
+                revert NullifierAlreadyUsed(_cdB32(batchPreimage, wOff + W_ACCIN_NULL_OFF));
+            uint256 dOff = D_SECTION_OFF + s * D_SLOT_SIZE;
+            if (_cdBool(batchPreimage, dOff) && nullifiers[_glHashToU256(_cdB32(batchPreimage, dOff + D_ACCIN_NULL_OFF))])
+                revert NullifierAlreadyUsed(_cdB32(batchPreimage, dOff + D_ACCIN_NULL_OFF));
+        }
 
-        // Mark deposit notes as Validated.
-        uint256 len = batch.depositNoteCommitments.length;
-        for (uint256 i = 0; i < len; i++) {
-            bytes32 nc = batch.depositNoteCommitments[i];
-            deposits[nc].status = DepositStatus.Validated;
-            emit DepositValidated(nc);
+        delete pendingBridgeTxBatches[piCommitment];
+        confirmedBridgeTxBatches[piCommitment] = true;
+
+        // Insert withdraw account nullifiers (token release: TODO — requires multi-asset registry).
+        for (uint256 s = 0; s < BRIDGE_TX_HALF_SIZE; s++) {
+            uint256 wOff = 96 + s * W_SLOT_SIZE;
+            if (!_cdBool(batchPreimage, wOff)) continue;
+            nullifiers[_glHashToU256(_cdB32(batchPreimage, wOff + W_ACCIN_NULL_OFF))] = true;
+        }
+
+        // Insert deposit account nullifiers and advance deposit note lifecycle.
+        for (uint256 s = 0; s < BRIDGE_TX_HALF_SIZE; s++) {
+            uint256 dOff = D_SECTION_OFF + s * D_SLOT_SIZE;
+            if (!_cdBool(batchPreimage, dOff)) continue;
+            nullifiers[_glHashToU256(_cdB32(batchPreimage, dOff + D_ACCIN_NULL_OFF))] = true;
+            bytes32 noteKey = _cdB32(batchPreimage, dOff + D_NOTE_COMM_OFF);
+            deposits[noteKey].status = DepositStatus.Validated;
+            emit DepositValidated(noteKey);
         }
 
         uint256 leafIndex = leafCount;
-        _appendLeaf(batch.batchPoseidonRoot);
+        _appendLeaf(_glHashToU256(_cdB32(batchPreimage, 0)));
 
-        emit DepositBatchProven(piCommitment, currentRoot, leafIndex);
+        emit BridgeTxBatchProven(piCommitment, currentRoot, leafIndex);
     }
 
     // -------------------------------------------------------------------------
@@ -488,8 +597,12 @@ contract TesseraContract {
 
     /// @dev Standard IMT append. O(treeDepth) Poseidon calls.
     ///      Stores the new root in confirmedRoots so it can be referenced by future batches.
+    ///      Also persists the raw leaf value so clients can reconstruct Merkle paths.
     function _appendLeaf(uint256 leaf) internal {
         if (leafCount >= (uint256(1) << treeDepth)) revert TreeFull();
+
+        leaves[leafCount] = leaf;
+        validatedBatchRoots[leaf] = true;
 
         uint256 node = leaf;
         for (uint256 i = 0; i < treeDepth; i++) {
@@ -508,80 +621,43 @@ contract TesseraContract {
     }
 
     // -------------------------------------------------------------------------
-    // piCommitment helpers (internal pure)
+    // Calldata read helpers
     // -------------------------------------------------------------------------
 
-    /// @dev Computes the Keccak-256 commitment over all transaction batch public inputs.
-    ///      Field order must match the Rust sequencer and SuperAggregator circuit exactly.
-    ///      Preimage (packed, no length prefixes):
-    ///        root | mainPoolConfigRoot | batchPoseidonRoot |
-    ///        accountCommitments[0..S] | accountNullifiers[0..S] |
-    ///        noteCommitments[0..7*S] | noteNullifiers[0..7*S]
-    function _computeTxPiCommitment(TransactionBatch calldata batch)
-        internal
-        returns (bytes32)
-    {
-        bytes memory preimage = abi.encodePacked(
-            batch.root,
-            batch.mainPoolConfigRoot,
-            batch.batchPoseidonRoot,
-            batch.accountCommitments,
-            batch.accountNullifiers,
-            batch.noteCommitments,
-            batch.noteNullifiers
-        );
-        bytes32 result = keccak256(preimage);
-        emit DebugTxPreimage(preimage, result);
-        return result;
+    /// @dev Read 32 bytes from `data` at byte offset `off` as a bytes32.
+    function _cdB32(bytes calldata data, uint256 off) private pure returns (bytes32 v) {
+        assembly ("memory-safe") {
+            v := calldataload(add(data.offset, off))
+        }
     }
 
-    /// @dev Computes the Keccak-256 commitment over deposit batch public inputs.
-    ///      Preimage (packed):
-    ///        root | mainPoolConfigRoot | batchPoseidonRoot | ethAddresses[0..DEPOSIT_BATCH_SIZE]
-    ///      Real deposit slots carry the depositor address; dummy slots carry address(0).
-    ///      Each address is serialised as 5 × 4-byte little-endian u32 limbs, matching
-    ///      the `map_h160_to_f` encoding used by the deposit-TX circuit.
-    function _computeDepositPiCommitment(DepositBatch calldata batch)
-        internal
-        returns (bytes32)
-    {
-        bytes memory preimage = abi.encodePacked(
-            batch.root,
-            batch.mainPoolConfigRoot,
-            batch.batchPoseidonRoot
-        );
-        uint256 realLen = batch.depositNoteCommitments.length;
-        for (uint256 i = 0; i < realLen; i++) {
-            address depositor = deposits[batch.depositNoteCommitments[i]].recipient;
-            preimage = bytes.concat(preimage, _addressToLE20(depositor));
+    /// @dev Read 8 bytes (one GL field) from `data` at byte offset `off` and
+    ///      return true iff the value is non-zero.
+    ///      GL-field encoding: [lo_u32_BE(4B), hi_u32_BE(4B)].
+    function _cdBool(bytes calldata data, uint256 off) private pure returns (bool v) {
+        assembly ("memory-safe") {
+            v := iszero(iszero(shr(192, calldataload(add(data.offset, off)))))
         }
-        // Pad remaining slots with address(0) to match the circuit's fixed DEPOSIT_BATCH_SIZE.
-        bytes memory zeroPadded = _addressToLE20(address(0));
-        for (uint256 i = realLen; i < DEPOSIT_BATCH_SIZE; i++) {
-            preimage = bytes.concat(preimage, zeroPadded);
-        }
-        bytes32 result = keccak256(preimage);
-        emit DebugDepositPreimage(preimage, result);
-        return result;
     }
 
-    /// @dev Serialises an Ethereum address as 5 × 4-byte little-endian u32 limbs.
-    ///
-    /// The EVM stores `address` as 20 bytes in big-endian order. The deposit-TX
-    /// circuit encodes addresses via `map_h160_to_f`, which splits the 20 bytes
-    /// into 5 × u32 limbs using `u32::from_le_bytes` — i.e. each 4-byte chunk is
-    /// interpreted in little-endian (byte 0 is the LSB of that limb). The Keccak
-    /// gadget then emits each u32 as 4 big-endian bytes, effectively byte-reversing
-    /// each chunk. This helper reproduces that transformation on-chain.
-    function _addressToLE20(address a) internal pure returns (bytes memory out) {
-        bytes20 be = bytes20(a); // big-endian: be[0] is the most-significant byte
-        out = new bytes(20);
-        for (uint256 i = 0; i < 5; i++) {
-            out[4 * i]     = be[4 * i + 3];
-            out[4 * i + 1] = be[4 * i + 2];
-            out[4 * i + 2] = be[4 * i + 1];
-            out[4 * i + 3] = be[4 * i];
-        }
+    // -------------------------------------------------------------------------
+    // Goldilocks encoding helpers
+    // -------------------------------------------------------------------------
+
+    /// @dev Convert a GL-preimage-encoded bytes32 back to a LE-packed uint256.
+    ///      Preimage layout: [lo0_BE4][hi0_BE4][lo1_BE4][hi1_BE4]...
+    ///      LE-packed layout: e0|(e1<<64)|(e2<<128)|(e3<<192)
+    ///      Used for confirmedRoots/nullifiers lookups and _appendLeaf calls.
+    function _glHashToU256(bytes32 b) private pure returns (uint256) {
+        uint256 w = uint256(b);
+        return  (w >> 224) |
+               (((w >> 192) & 0xFFFFFFFF) << 32)  |
+               (((w >> 160) & 0xFFFFFFFF) << 64)  |
+               (((w >> 128) & 0xFFFFFFFF) << 96)  |
+               (((w >>  96) & 0xFFFFFFFF) << 128) |
+               (((w >>  64) & 0xFFFFFFFF) << 160) |
+               (((w >>  32) & 0xFFFFFFFF) << 192) |
+               ( (w          & 0xFFFFFFFF) << 224);
     }
 
     // -------------------------------------------------------------------------
@@ -603,6 +679,39 @@ contract TesseraContract {
     /// @notice Returns whether `nullifier` has been consumed.
     function isNullifierUsed(uint256 nullifier_) external view returns (bool) {
         return nullifiers[nullifier_];
+    }
+
+    /// @notice Verifies that `leaf` is at position `leafIndex` in the Poseidon subtree
+    ///         committed by `batchRoot`, AND that `batchRoot` belongs to a validated batch.
+    ///
+    /// @param batchRoot  LE-packed GL uint256 batchPoseidonRoot to check (must be in
+    ///                   `validatedBatchRoots`).
+    /// @param leaf       LE-packed GL uint256 leaf value (account or note commitment).
+    /// @param leafIndex  0-based index of `leaf` within the 512-leaf batch subtree.
+    /// @param siblings   Poseidon Merkle path of exactly `BATCH_SUBTREE_DEPTH` (= 9) siblings.
+    ///                   siblings[0] is paired with the leaf; siblings[8] is paired just below
+    ///                   the root.
+    /// @return           True iff (1) batchRoot is validated and (2) the path hashes to batchRoot.
+    ///
+    /// @dev The per-level zero hashes for the 512-leaf subtree are identical to `zeros[0..8]`
+    ///      already stored in the contract (same Poseidon hasher, same starting zero).
+    function verifyBatchLeaf(
+        uint256 batchRoot,
+        uint256 leaf,
+        uint256 leafIndex,
+        uint256[] calldata siblings
+    ) external view returns (bool) {
+        if (!validatedBatchRoots[batchRoot]) return false;
+        if (siblings.length != BATCH_SUBTREE_DEPTH) return false;
+        uint256 node = leaf;
+        for (uint256 i = 0; i < BATCH_SUBTREE_DEPTH; i++) {
+            if ((leafIndex >> i) & 1 == 0) {
+                node = poseidon.compress(node, siblings[i]);
+            } else {
+                node = poseidon.compress(siblings[i], node);
+            }
+        }
+        return node == batchRoot;
     }
 
     /// @notice Converts a bytes32 Keccak-256 digest to the 8 uint32 public inputs

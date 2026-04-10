@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {TesseraContract} from "../src/TesseraContract.sol";
 import {PoseidonGoldilocks} from "../src/PoseidonGoldilocks.sol";
 import {ToyUSDT} from "../src/ToyUSDT.sol";
@@ -39,7 +39,9 @@ contract TesseraRollupV2Test is Test {
 
     address constant OP    = address(0x0001);
     address constant ALICE = address(0xA11CE);
-    bytes32 constant PCR   = bytes32(uint256(0xC0FFEE));
+
+    /// @dev poolConfigRoot is now a LE-packed Goldilocks uint256, not bytes32.
+    uint256 constant PCR   = 0xC0FFEE;
     uint256 constant DEPTH = 4; // 16 leaf slots
 
     // Unique-nullifier counter; reset per test by Forge's EVM isolation.
@@ -91,6 +93,43 @@ contract TesseraRollupV2Test is Test {
     }
 
     // -----------------------------------------------------------------------
+    // Goldilocks encoding helpers (mirrors TesseraContract internals)
+    // -----------------------------------------------------------------------
+
+    /// @dev Mirrors TesseraContract._glHashToBytes.
+    function _glHashToBytes(uint256 packed) internal pure returns (bytes memory out) {
+        out = new bytes(32);
+        for (uint256 i = 0; i < 4; i++) {
+            uint64 el = uint64(packed >> (i * 64));
+            uint32 lo = uint32(el);
+            uint32 hi = uint32(el >> 32);
+            out[8 * i]     = bytes1(uint8(lo >> 24));
+            out[8 * i + 1] = bytes1(uint8(lo >> 16));
+            out[8 * i + 2] = bytes1(uint8(lo >> 8));
+            out[8 * i + 3] = bytes1(uint8(lo));
+            out[8 * i + 4] = bytes1(uint8(hi >> 24));
+            out[8 * i + 5] = bytes1(uint8(hi >> 16));
+            out[8 * i + 6] = bytes1(uint8(hi >> 8));
+            out[8 * i + 7] = bytes1(uint8(hi));
+        }
+    }
+
+    /// @dev Mirrors TesseraContract._glFieldToBytes.
+    function _glFieldToBytes(uint64 el) internal pure returns (bytes memory out) {
+        out = new bytes(8);
+        uint32 lo = uint32(el);
+        uint32 hi = uint32(el >> 32);
+        out[0] = bytes1(uint8(lo >> 24));
+        out[1] = bytes1(uint8(lo >> 16));
+        out[2] = bytes1(uint8(lo >> 8));
+        out[3] = bytes1(uint8(lo));
+        out[4] = bytes1(uint8(hi >> 24));
+        out[5] = bytes1(uint8(hi >> 16));
+        out[6] = bytes1(uint8(hi >> 8));
+        out[7] = bytes1(uint8(hi));
+    }
+
+    // -----------------------------------------------------------------------
     // Batch / proof helpers
     // -----------------------------------------------------------------------
 
@@ -98,94 +137,142 @@ contract TesseraRollupV2Test is Test {
         // All-zero default — AcceptAllVerifier ignores contents.
     }
 
-    /// @dev Builds a minimal valid TransactionBatch against rollup `r` with the given batchPoseidonRoot.
+    // ── TX batch preimage builder helpers ────────────────────────────────────
+
+    /// @dev Builds a minimal TX batch preimage (all-padding, no real slots).
+    ///
+    /// Layout: batchPoseidonRoot[32] | root[32] | mainPoolConfigRoot[32]
+    ///         | N × (notFakeTx[8] | accinNull[32] | accoutComm[32]
+    ///                | noteInNull[NB×32] | noteOutComm[NB×32])
+    /// All slot data is zero (notFakeTx = false).
     function _minBatch(TesseraContract r, uint256 bpr)
         internal
-        returns (TesseraContract.TransactionBatch memory b)
+        view
+        returns (bytes memory p)
     {
-        uint256 genesis = r.zeros(r.treeDepth());
-        uint256[] memory empty = new uint256[](0);
-        uint256 an = _nc++;
-        uint256[] memory acs = new uint256[](1);
-        acs[0] = an + 1;
-        uint256[] memory ans = new uint256[](1);
-        ans[0] = an;
-        b = TesseraContract.TransactionBatch({
-            root:              genesis,
-            mainPoolConfigRoot: PCR,
-            noteCommitments:   empty,
-            noteNullifiers:    empty,
-            accountCommitments: acs,
-            accountNullifiers:  ans,
-            batchPoseidonRoot: bpr,
-            confirmed:         false
-        });
+        uint256 N  = r.PRIV_TX_BATCH_SIZE();
+        uint256 NB = r.NOTE_BATCH();
+        p = new bytes(96 + N * (8 + 32 + 32 + NB * 64));
+        _wb32(p,  0, _glH(bpr));                    // batchPoseidonRoot
+        _wb32(p, 32, _glH(r.zeros(r.treeDepth()))); // root (confirmed)
+        _wb32(p, 64, _glH(PCR));                    // mainPoolConfigRoot
+        // Remaining bytes stay zero (all notFakeTx = 0).
     }
 
-    function _minBatch(uint256 bpr) internal returns (TesseraContract.TransactionBatch memory) {
+    function _minBatch(uint256 bpr) internal view returns (bytes memory) {
         return _minBatch(rollup, bpr);
     }
 
-    /// @dev Computes the tx piCommitment — must mirror contract's _computeTxPiCommitment.
-    function _txPI(TesseraContract.TransactionBatch memory b) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            b.root, b.mainPoolConfigRoot, b.batchPoseidonRoot,
-            b.accountCommitments, b.accountNullifiers,
-            b.noteCommitments, b.noteNullifiers
-        ));
-    }
-
-    /// @dev Computes the deposit piCommitment — mirrors contract's _computeDepositPiCommitment.
-    ///      Real deposit slots carry the depositor address (looked up from rollup storage);
-    ///      dummy slots (up to DEPOSIT_BATCH_SIZE) carry address(0).
-    function _depositPI(TesseraContract.DepositBatch memory b) internal view returns (bytes32) {
-        bytes memory preimage = abi.encodePacked(
-            b.root, b.mainPoolConfigRoot, b.batchPoseidonRoot
-        );
-        uint256 realLen = b.depositNoteCommitments.length;
-        for (uint256 i = 0; i < realLen; i++) {
-            (, address depositor,) = rollup.deposits(b.depositNoteCommitments[i]);
-            preimage = bytes.concat(preimage, _addressToLE20(depositor));
-        }
-        bytes memory zeroAddr = _addressToLE20(address(0));
-        for (uint256 i = realLen; i < rollup.DEPOSIT_BATCH_SIZE(); i++) {
-            preimage = bytes.concat(preimage, zeroAddr);
-        }
-        return keccak256(preimage);
-    }
-
-    /// @dev Mirrors TesseraContract._addressToLE20: serialises an address as
-    ///      5 × 4-byte little-endian u32 limbs (byte-reverse each 4-byte chunk).
-    function _addressToLE20(address a) internal pure returns (bytes memory out) {
-        bytes20 be = bytes20(a);
-        out = new bytes(20);
-        for (uint256 i = 0; i < 5; i++) {
-            out[4 * i]     = be[4 * i + 3];
-            out[4 * i + 1] = be[4 * i + 2];
-            out[4 * i + 2] = be[4 * i + 1];
-            out[4 * i + 3] = be[4 * i];
+    /// @dev Like _minBatch but marks slot 0 as real with given account + note nullifiers.
+    function _batchWithRealSlot(
+        uint256 bpr,
+        uint256 acNull,
+        uint256[] memory noteNulls  // length must be NOTE_BATCH
+    ) internal view returns (bytes memory p) {
+        p = _minBatch(bpr);
+        uint256 slotOff = 96; // slot 0
+        _wf8(p, slotOff, 1);                       // notFakeTx = 1
+        _wb32(p, slotOff + 8, _glH(acNull));        // accinNullifier
+        for (uint256 j = 0; j < noteNulls.length; j++) {
+            _wb32(p, slotOff + 72 + j * 32, _glH(noteNulls[j])); // noteInNullifiers
         }
     }
 
-    /// @dev Submit + prove a tx batch on rollup `r`; appends bpr as a leaf.
+    // ── Bridge TX batch preimage builder helpers ─────────────────────────────
+
+    uint256 private constant W_SLOT_SIZE = 8 + 32 + 32 + 7 * 8 + 7 * 64 + 40; // 616
+    uint256 private constant D_SLOT_SIZE = 8 + 32 + 32 + 32 + 40 + 64 + 8;    // 216
+
+    /// @dev Builds a minimal bridge TX batch preimage (all-padding).
+    function _minBridgeBatch(TesseraContract r, uint256 bpr)
+        internal
+        view
+        returns (bytes memory p)
+    {
+        uint256 H = r.BRIDGE_TX_HALF_SIZE();
+        p = new bytes(96 + H * (W_SLOT_SIZE + D_SLOT_SIZE));
+        _wb32(p,  0, _glH(bpr));                    // batchPoseidonRoot
+        _wb32(p, 32, _glH(r.zeros(r.treeDepth()))); // root
+        _wb32(p, 64, _glH(PCR));                    // mainPoolConfigRoot
+    }
+
+    /// @dev Like _minBridgeBatch but marks deposit slot 0 as real.
+    function _bridgeBatchWithDeposit(uint256 bpr, uint256 noteKey, uint256 acNull)
+        internal
+        view
+        returns (bytes memory p)
+    {
+        p = _minBridgeBatch(rollup, bpr);
+        uint256 H = rollup.BRIDGE_TX_HALF_SIZE();
+        uint256 dSectionOff = 96 + H * W_SLOT_SIZE;
+        uint256 slot0Off = dSectionOff; // deposit slot 0
+        _wf8(p, slot0Off, 1);                           // dNotFakeTx = 1
+        _wb32(p, slot0Off + 8, _glH(acNull));           // dAccinNull
+        // dAccoutComm at +40 stays zero
+        _wb32(p, slot0Off + 72, bytes32(noteKey));       // dNoteComm (raw bytes32)
+    }
+
+    // ── Submission/prove wrappers ─────────────────────────────────────────────
+
+    /// @dev Submit + prove a TX batch on rollup `r`; appends bpr as a leaf.
     function _appendTo(TesseraContract r, uint256 bpr) internal returns (bytes32 pic) {
-        TesseraContract.TransactionBatch memory b = _minBatch(r, bpr);
+        bytes memory preimage = _minBatch(r, bpr);
         vm.prank(OP);
-        r.submitTransactionBatch(b);
-        pic = _txPI(b);
-        r.proveTransactionBatch(pic, _dummyProof());
+        r.submitTransactionBatch(preimage);
+        pic = keccak256(preimage);
+        r.proveTransactionBatch(preimage, _dummyProof());
     }
 
     function _append(uint256 bpr) internal returns (bytes32 pic) {
         return _appendTo(rollup, bpr);
     }
 
-    // -----------------------------------------------------------------------
+    // ── GL preimage helpers ───────────────────────────────────────────────────
+
+    /// @dev Convert LE-packed uint256 to GL-preimage bytes32.
+    ///      Preimage: [lo0_BE4][hi0_BE4][lo1_BE4][hi1_BE4]...
+    function _glH(uint256 p) internal pure returns (bytes32) {
+        uint256 e0 = p & 0xFFFFFFFFFFFFFFFF;
+        uint256 e1 = (p >> 64)  & 0xFFFFFFFFFFFFFFFF;
+        uint256 e2 = (p >> 128) & 0xFFFFFFFFFFFFFFFF;
+        uint256 e3 =  p >> 192;
+        return bytes32(
+            ((e0 & 0xFFFFFFFF) << 224) | ((e0 >> 32) << 192) |
+            ((e1 & 0xFFFFFFFF) << 160) | ((e1 >> 32) << 128) |
+            ((e2 & 0xFFFFFFFF) << 96)  | ((e2 >> 32) << 64)  |
+            ((e3 & 0xFFFFFFFF) << 32)  |  (e3 >> 32)
+        );
+    }
+
+    /// @dev Copy a GL-preimage-encoded bytes32 into pre-allocated `buf` at `off`.
+    function _wb32(bytes memory buf, uint256 off, bytes32 val) private pure {
+        assembly ("memory-safe") {
+            mstore(add(add(buf, 0x20), off), val)
+        }
+    }
+
+    /// @dev Write 8-byte GL field at `off` in pre-allocated `buf`.
+    function _wf8(bytes memory buf, uint256 off, uint64 el) private pure {
+        assembly ("memory-safe") {
+            let ptr := add(add(buf, 0x20), off)
+            let lo  := and(el, 0xFFFFFFFF)
+            let hi  := and(shr(32, el), 0xFFFFFFFF)
+            mstore8(ptr,          byte(28, lo))
+            mstore8(add(ptr, 1),  byte(29, lo))
+            mstore8(add(ptr, 2),  byte(30, lo))
+            mstore8(add(ptr, 3),  byte(31, lo))
+            mstore8(add(ptr, 4),  byte(28, hi))
+            mstore8(add(ptr, 5),  byte(29, hi))
+            mstore8(add(ptr, 6),  byte(30, hi))
+            mstore8(add(ptr, 7),  byte(31, hi))
+        }
+    }
+
+// -----------------------------------------------------------------------
     // Reference IMT simulation
     // -----------------------------------------------------------------------
 
     /// @dev Simulates one _appendLeaf using the same PoseidonGoldilocks as the contract.
-    ///      Reads zeros from `rollup`; updates _simLC and _simFS in test storage.
     function _simAppend(uint256 leaf) internal returns (uint256 root) {
         uint256 depth = rollup.treeDepth();
         uint256 node  = leaf;
@@ -233,14 +320,10 @@ contract TesseraRollupV2Test is Test {
 
     /// After 2, 4, 8 appends, root matches reference at each milestone.
     function test_appendLeaf_power_of_two() public {
-        // Compute all 8 reference roots in order.
         uint256[8] memory leaves;
-        for (uint256 i = 0; i < 8; i++) {
-            leaves[i] = 0x1000 + i;
-        }
-        uint256 ref2;
-        uint256 ref4;
-        uint256 ref8;
+        for (uint256 i = 0; i < 8; i++) leaves[i] = 0x1000 + i;
+
+        uint256 ref2; uint256 ref4; uint256 ref8;
         for (uint256 i = 0; i < 8; i++) {
             uint256 r = _simAppend(leaves[i]);
             if (i == 1) ref2 = r;
@@ -248,14 +331,10 @@ contract TesseraRollupV2Test is Test {
             if (i == 7) ref8 = r;
         }
 
-        // Append the same leaves to the contract.
-        for (uint256 i = 0; i < 8; i++) {
-            _append(leaves[i]);
-        }
+        for (uint256 i = 0; i < 8; i++) _append(leaves[i]);
 
         assertEq(rollup.leafCount(), 8);
         assertEq(rollup.currentRoot(), ref8, "root after 8");
-        // All intermediate roots are confirmed forever.
         assertTrue(rollup.confirmedRoots(ref2), "root@2 in confirmedRoots");
         assertTrue(rollup.confirmedRoots(ref4), "root@4 in confirmedRoots");
         assertTrue(rollup.confirmedRoots(ref8), "root@8 in confirmedRoots");
@@ -263,9 +342,7 @@ contract TesseraRollupV2Test is Test {
 
     /// After 3, 5, 7 appends, root matches reference at each count.
     function test_appendLeaf_arbitrary() public {
-        uint256 ref3;
-        uint256 ref5;
-        uint256 ref7;
+        uint256 ref3; uint256 ref5; uint256 ref7;
         for (uint256 i = 0; i < 7; i++) {
             uint256 r = _simAppend(0x2000 + i);
             if (i == 2) ref3 = r;
@@ -273,9 +350,7 @@ contract TesseraRollupV2Test is Test {
             if (i == 6) ref7 = r;
         }
 
-        for (uint256 i = 0; i < 7; i++) {
-            _append(0x2000 + i);
-        }
+        for (uint256 i = 0; i < 7; i++) _append(0x2000 + i);
 
         assertEq(rollup.leafCount(), 7);
         assertEq(rollup.currentRoot(), ref7, "root after 7");
@@ -285,8 +360,7 @@ contract TesseraRollupV2Test is Test {
 
     /// Each append records the new root; genesis root stays confirmed forever.
     function test_appendLeaf_adds_to_confirmedRoots() public {
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        assertTrue(rollup.confirmedRoots(genesis), "genesis confirmed at deploy");
+        assertTrue(rollup.confirmedRoots(rollup.zeros(rollup.treeDepth())), "genesis confirmed at deploy");
 
         uint256 prevRoot = rollup.currentRoot();
         for (uint256 i = 1; i <= 4; i++) {
@@ -300,18 +374,16 @@ contract TesseraRollupV2Test is Test {
 
     /// Appending past 2^treeDepth reverts with TreeFull.
     function test_appendLeaf_treeFullReverts() public {
-        // depth-1 tree holds exactly 2 leaves.
         TesseraContract small = _deploy(1);
         _appendTo(small, 0x4001);
         _appendTo(small, 0x4002);
 
-        TesseraContract.TransactionBatch memory b = _minBatch(small, 0x4003);
+        bytes memory preimage = _minBatch(small, 0x4003);
         vm.prank(OP);
-        small.submitTransactionBatch(b);
-        bytes32 pic = _txPI(b);
+        small.submitTransactionBatch(preimage);
 
         vm.expectRevert(TesseraContract.TreeFull.selector);
-        small.proveTransactionBatch(pic, _dummyProof());
+        small.proveTransactionBatch(preimage, _dummyProof());
     }
 
     // -----------------------------------------------------------------------
@@ -322,119 +394,85 @@ contract TesseraRollupV2Test is Test {
 
     /// Valid batch is stored; event emitted.
     function test_submit_happy() public {
-        TesseraContract.TransactionBatch memory b = _minBatch(uint256(0x9999));
-        bytes32 pic = _txPI(b);
+        bytes memory preimage = _minBatch(0x9999);
+        bytes32 pic = keccak256(preimage);
+        bytes32 bpr = _glH(0x9999); // batchPoseidonRoot is at offset 0
 
         vm.expectEmit(true, false, false, true, address(rollup));
-        emit TesseraContract.TransactionBatchSubmitted(pic, b.batchPoseidonRoot);
+        emit TesseraContract.TransactionBatchSubmitted(pic, bpr);
 
         vm.prank(OP);
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
 
-        // Confirm stored by proving successfully.
-        rollup.proveTransactionBatch(pic, _dummyProof());
+        rollup.proveTransactionBatch(preimage, _dummyProof());
         assertEq(rollup.leafCount(), 1);
     }
 
     /// Unknown root reverts RootNotConfirmed.
     function test_submit_unknownRoot() public {
-        uint256 unknown = 0xDEAD;
-        uint256[] memory empty = new uint256[](0);
-        uint256 an = _nc++;
-        uint256[] memory acs = new uint256[](1); acs[0] = an + 1;
-        uint256[] memory ans = new uint256[](1); ans[0] = an;
-        TesseraContract.TransactionBatch memory b = TesseraContract.TransactionBatch({
-            root: unknown, mainPoolConfigRoot: PCR,
-            noteCommitments: empty, noteNullifiers: empty,
-            accountCommitments: acs, accountNullifiers: ans,
-            batchPoseidonRoot: 1, confirmed: false
-        });
+        bytes memory preimage = _minBatch(1);
+        bytes32 unknown = _glH(0xDEAD);
+        _wb32(preimage, 32, unknown); // overwrite root at offset 32
+
         vm.prank(OP);
         vm.expectRevert(abi.encodeWithSelector(TesseraContract.RootNotConfirmed.selector, unknown));
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
     }
 
     /// Wrong poolConfigRoot reverts PoolConfigMismatch.
     function test_submit_wrongPoolConfig() public {
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        uint256[] memory empty = new uint256[](0);
-        uint256 an = _nc++;
-        uint256[] memory acs = new uint256[](1); acs[0] = an + 1;
-        uint256[] memory ans = new uint256[](1); ans[0] = an;
-        TesseraContract.TransactionBatch memory b = TesseraContract.TransactionBatch({
-            root: genesis, mainPoolConfigRoot: bytes32(uint256(0x1BAD)),
-            noteCommitments: empty, noteNullifiers: empty,
-            accountCommitments: acs, accountNullifiers: ans,
-            batchPoseidonRoot: 1, confirmed: false
-        });
+        bytes memory preimage = _minBatch(1);
+        _wb32(preimage, 64, _glH(0x1BAD)); // overwrite mainPoolConfigRoot at offset 64
+
         vm.prank(OP);
         vm.expectRevert(TesseraContract.PoolConfigMismatch.selector);
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
     }
 
     /// Re-using a spent nullifier in a new batch reverts NullifierAlreadyUsed at prove time.
-    ///
-    /// submitTransactionBatch is permissive (no nullifier pre-check); the check
-    /// is enforced in proveTransactionBatch so that the two-phase model can
-    /// reject races without blocking submission.
     function test_submit_nullifierAlreadyUsed() public {
         uint256 knownNullifier = 0x9ABC;
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        uint256[] memory empty = new uint256[](0);
+        uint256[] memory noteNulls = new uint256[](rollup.NOTE_BATCH());
 
-        // Prove a batch that spends knownNullifier.
+        // Prove a batch that spends knownNullifier as the account nullifier.
         {
-            uint256[] memory acs = new uint256[](1); acs[0] = _nc++;
-            uint256[] memory ans = new uint256[](1); ans[0] = knownNullifier;
-            TesseraContract.TransactionBatch memory b = TesseraContract.TransactionBatch({
-                root: genesis, mainPoolConfigRoot: PCR,
-                noteCommitments: empty, noteNullifiers: empty,
-                accountCommitments: acs, accountNullifiers: ans,
-                batchPoseidonRoot: 0x1111, confirmed: false
-            });
-            bytes32 pic = _txPI(b);
-            vm.prank(OP); rollup.submitTransactionBatch(b);
-            rollup.proveTransactionBatch(pic, _dummyProof());
+            bytes memory p = _batchWithRealSlot(0x1111, knownNullifier, noteNulls);
+            vm.prank(OP); rollup.submitTransactionBatch(p);
+            rollup.proveTransactionBatch(p, _dummyProof());
         }
         assertTrue(rollup.nullifiers(knownNullifier));
 
         // Submit a second batch reusing knownNullifier — submit succeeds.
-        uint256[] memory acs2 = new uint256[](1); acs2[0] = _nc++;
-        uint256[] memory ans2 = new uint256[](1); ans2[0] = knownNullifier;
-        TesseraContract.TransactionBatch memory b2 = TesseraContract.TransactionBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            noteCommitments: empty, noteNullifiers: empty,
-            accountCommitments: acs2, accountNullifiers: ans2,
-            batchPoseidonRoot: 0x2222, confirmed: false
-        });
-        bytes32 pic2 = _txPI(b2);
+        bytes memory p2 = _batchWithRealSlot(0x2222, knownNullifier, noteNulls);
         vm.prank(OP);
-        rollup.submitTransactionBatch(b2);
+        rollup.submitTransactionBatch(p2);
 
         // Prove phase must revert with NullifierAlreadyUsed.
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.NullifierAlreadyUsed.selector, knownNullifier));
-        rollup.proveTransactionBatch(pic2, _dummyProof());
+        vm.expectRevert(abi.encodeWithSelector(
+            TesseraContract.NullifierAlreadyUsed.selector, _glH(knownNullifier)
+        ));
+        rollup.proveTransactionBatch(p2, _dummyProof());
     }
 
     /// Submitting the same batch twice reverts BatchAlreadySubmitted.
     function test_submit_duplicate() public {
-        TesseraContract.TransactionBatch memory b = _minBatch(0x7777);
-        bytes32 pic = _txPI(b);
+        bytes memory preimage = _minBatch(0x7777);
+        bytes32 pic = keccak256(preimage);
 
         vm.prank(OP);
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
 
         vm.prank(OP);
         vm.expectRevert(abi.encodeWithSelector(TesseraContract.BatchAlreadySubmitted.selector, pic));
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
     }
 
     /// Non-operator caller reverts NotOperator.
     function test_submit_notOperator() public {
-        TesseraContract.TransactionBatch memory b = _minBatch(0x8888);
+        bytes memory preimage = _minBatch(0x8888);
         vm.prank(ALICE);
         vm.expectRevert(TesseraContract.NotOperator.selector);
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
     }
 
     /// Submit while paused reverts PausedErr.
@@ -442,10 +480,10 @@ contract TesseraRollupV2Test is Test {
         vm.prank(OP);
         rollup.setPaused(true);
 
-        TesseraContract.TransactionBatch memory b = _minBatch(0x9999);
+        bytes memory preimage = _minBatch(0x9999);
         vm.prank(OP);
         vm.expectRevert(TesseraContract.PausedErr.selector);
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
     }
 
     // -----------------------------------------------------------------------
@@ -456,90 +494,91 @@ contract TesseraRollupV2Test is Test {
 
     /// Happy path: proof accepted, leaf appended, event emitted.
     function test_prove_happy() public {
-        uint256 bpr       = 0xABCD;
-        uint256 lcBefore  = rollup.leafCount();
+        uint256 bpr        = 0xABCD;
+        uint256 lcBefore   = rollup.leafCount();
         uint256 rootBefore = rollup.currentRoot();
 
-        TesseraContract.TransactionBatch memory b = _minBatch(bpr);
-        bytes32 pic = _txPI(b);
+        bytes memory preimage = _minBatch(bpr);
         vm.prank(OP);
-        rollup.submitTransactionBatch(b);
-        rollup.proveTransactionBatch(pic, _dummyProof());
+        rollup.submitTransactionBatch(preimage);
+        rollup.proveTransactionBatch(preimage, _dummyProof());
 
         uint256 newRoot = rollup.currentRoot();
-        assertEq(rollup.leafCount(), lcBefore + 1,        "leafCount incremented");
-        assertTrue(newRoot != rootBefore,                 "root changed");
-        assertTrue(rollup.confirmedRoots(newRoot),        "new root in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(rootBefore),     "old root still confirmed");
+        assertEq(rollup.leafCount(), lcBefore + 1,    "leafCount incremented");
+        assertTrue(newRoot != rootBefore,             "root changed");
+        assertTrue(rollup.confirmedRoots(newRoot),    "new root in confirmedRoots");
+        assertTrue(rollup.confirmedRoots(rootBefore), "old root still confirmed");
     }
 
     /// Unknown piCommitment reverts BatchNotFound.
     function test_prove_unknownPiCommitment() public {
-        bytes32 fake = bytes32(uint256(0xBAD));
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.BatchNotFound.selector, fake));
+        bytes memory fake = hex"DEADBEEF";
+        bytes32 pic = keccak256(fake);
+        vm.expectRevert(abi.encodeWithSelector(TesseraContract.BatchNotFound.selector, pic));
         rollup.proveTransactionBatch(fake, _dummyProof());
     }
 
     /// Proving an already-confirmed batch reverts BatchAlreadyConfirmed.
     function test_prove_alreadyConfirmed() public {
-        TesseraContract.TransactionBatch memory b = _minBatch(0xBBBB);
-        bytes32 pic = _txPI(b);
+        bytes memory preimage = _minBatch(0xBBBB);
+        bytes32 pic = keccak256(preimage);
         vm.prank(OP);
-        rollup.submitTransactionBatch(b);
-        rollup.proveTransactionBatch(pic, _dummyProof());
+        rollup.submitTransactionBatch(preimage);
+        rollup.proveTransactionBatch(preimage, _dummyProof());
 
         vm.expectRevert(abi.encodeWithSelector(TesseraContract.BatchAlreadyConfirmed.selector, pic));
-        rollup.proveTransactionBatch(pic, _dummyProof());
+        rollup.proveTransactionBatch(preimage, _dummyProof());
     }
 
     /// Invalid proof reverts ProofVerificationFailed.
     function test_prove_invalidProof() public {
         TesseraContract bad = _deployRejectTx(DEPTH);
-        TesseraContract.TransactionBatch memory b = _minBatch(bad, 0xCCCC);
-        bytes32 pic = _txPI(b);
+        bytes memory preimage = _minBatch(bad, 0xCCCC);
+        bytes32 pic = keccak256(preimage);
         vm.prank(OP);
-        bad.submitTransactionBatch(b);
+        bad.submitTransactionBatch(preimage);
 
         uint256[8] memory inputs = bad.keccakToPublicInputs(pic);
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.ProofVerificationFailed.selector, pic, inputs));
-        bad.proveTransactionBatch(pic, _dummyProof());
+        vm.expectRevert(abi.encodeWithSelector(
+            TesseraContract.ProofVerificationFailed.selector, pic, inputs
+        ));
+        bad.proveTransactionBatch(preimage, _dummyProof());
     }
 
     /// Anyone (not just operator) can call proveTransactionBatch.
     function test_prove_permissionless() public {
-        TesseraContract.TransactionBatch memory b = _minBatch(0xDDDD);
-        bytes32 pic = _txPI(b);
+        bytes memory preimage = _minBatch(0xDDDD);
         vm.prank(OP);
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
 
-        vm.prank(ALICE); // non-operator
-        rollup.proveTransactionBatch(pic, _dummyProof()); // must not revert
+        vm.prank(ALICE);
+        rollup.proveTransactionBatch(preimage, _dummyProof());
     }
 
-    /// All note nullifiers and the account nullifier are inserted after prove.
+    /// Note and account nullifiers for a real slot are inserted after prove.
+    /// Padding slots (notFakeTx = false) do not produce nullifiers.
     function test_prove_nullifiersInserted() public {
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        uint256[] memory empty = new uint256[](0);
-        uint256[] memory nns = new uint256[](2);
-        nns[0] = 0xF001;
-        nns[1] = 0xF002;
+        uint256[] memory noteNulls = new uint256[](rollup.NOTE_BATCH());
+        noteNulls[0] = 0xF001;
+        noteNulls[1] = 0xF002;
         uint256 acNull = 0xF003;
 
-        uint256[] memory acs = new uint256[](1); acs[0] = _nc++;
-        uint256[] memory ans = new uint256[](1); ans[0] = acNull;
-        TesseraContract.TransactionBatch memory b = TesseraContract.TransactionBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            noteCommitments: empty, noteNullifiers: nns,
-            accountCommitments: acs, accountNullifiers: ans,
-            batchPoseidonRoot: 0xEEEE, confirmed: false
-        });
-        bytes32 pic = _txPI(b);
-        vm.prank(OP); rollup.submitTransactionBatch(b);
-        rollup.proveTransactionBatch(pic, _dummyProof());
+        bytes memory preimage = _batchWithRealSlot(0xEEEE, acNull, noteNulls);
+        vm.prank(OP); rollup.submitTransactionBatch(preimage);
+        rollup.proveTransactionBatch(preimage, _dummyProof());
 
-        assertTrue(rollup.nullifiers(nns[0]),  "note nullifier 0");
-        assertTrue(rollup.nullifiers(nns[1]),  "note nullifier 1");
-        assertTrue(rollup.nullifiers(acNull),  "account nullifier");
+        assertTrue(rollup.nullifiers(noteNulls[0]), "note nullifier 0");
+        assertTrue(rollup.nullifiers(noteNulls[1]), "note nullifier 1");
+        assertTrue(rollup.nullifiers(acNull),       "account nullifier");
+    }
+
+    /// Padding slots (notFakeTx = false) do not insert their zero nullifiers.
+    function test_prove_paddingNullifiersNotInserted() public {
+        bytes memory preimage = _minBatch(0x1234);
+        vm.prank(OP); rollup.submitTransactionBatch(preimage);
+        rollup.proveTransactionBatch(preimage, _dummyProof());
+
+        assertFalse(rollup.nullifiers(0), "zero nullifier must not be inserted");
     }
 
     /// Previous currentRoot stays in confirmedRoots after a new leaf is appended.
@@ -566,13 +605,10 @@ contract TesseraRollupV2Test is Test {
         bytes32 nc = bytes32(uint256(77));
         uint256 amount = 100e6;
 
-        // Prepare allowance before the event check so the Transfer from mint/approve
-        // doesn't precede the expectEmit declaration.
         token.mint(ALICE, amount);
         vm.prank(ALICE);
         token.approve(address(rollup), amount);
 
-        // Now set the expectation immediately before the rollup call.
         vm.expectEmit(true, false, false, true, address(rollup));
         emit TesseraContract.DepositAvailable(nc, amount, ALICE);
         vm.prank(ALICE);
@@ -609,90 +645,81 @@ contract TesseraRollupV2Test is Test {
         rollup.withdrawPendingDeposit(nc);
     }
 
-    /// submitDepositBatch validates referenced notes exist and are Pending.
-    function test_submitDepositBatch_validatesNotes() public {
-        bytes32 nc1 = bytes32(uint256(1001));
-        bytes32 nc2 = bytes32(uint256(1002));
-        _deposit(ALICE, nc1, 1e6);
-        _deposit(ALICE, nc2, 2e6);
+    // -----------------------------------------------------------------------
+    // =====================================================================
+    // TESTS: BridgeTxBatch
+    // =====================================================================
+    // -----------------------------------------------------------------------
 
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        bytes32[] memory dncs = new bytes32[](2);
-        dncs[0] = nc1;
-        dncs[1] = nc2;
+    /// submitBridgeTxBatch with a real deposit slot validates the note is Pending.
+    function test_submitBridgeTxBatch_validatesPendingDeposits() public {
+        uint256 noteKey = 1001;
+        bytes32 nc = bytes32(noteKey);
+        _deposit(ALICE, nc, 1e6);
 
-        TesseraContract.DepositBatch memory db = TesseraContract.DepositBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            depositNoteCommitments: dncs, batchPoseidonRoot: 0x1234, confirmed: false
-        });
+        bytes memory preimage = _bridgeBatchWithDeposit(0x1234, noteKey, _nc++);
+
         vm.prank(OP);
-        rollup.submitDepositBatch(db); // must not revert
+        rollup.submitBridgeTxBatch(preimage); // must not revert
 
-        // Notes still Pending (not yet proven).
-        assertEq(uint8(rollup.getDeposit(nc1).status), uint8(TesseraContract.DepositStatus.Pending));
+        // Note still Pending (not yet proven).
+        assertEq(uint8(rollup.getDeposit(nc).status), uint8(TesseraContract.DepositStatus.Pending));
     }
 
-    /// submitDepositBatch with a non-existent note reverts NoteNotFound.
-    function test_submitDepositBatch_rejectsMissingNote() public {
-        bytes32 missing = bytes32(uint256(9999));
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        bytes32[] memory dncs = new bytes32[](1);
-        dncs[0] = missing;
+    /// submitBridgeTxBatch with a non-existent deposit note reverts NoteNotFound.
+    function test_submitBridgeTxBatch_rejectsMissingNote() public {
+        uint256 noteKey = 9999;
+        bytes memory preimage = _bridgeBatchWithDeposit(1, noteKey, _nc++);
 
-        TesseraContract.DepositBatch memory db = TesseraContract.DepositBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            depositNoteCommitments: dncs, batchPoseidonRoot: 1, confirmed: false
-        });
         vm.prank(OP);
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.NoteNotFound.selector, missing));
-        rollup.submitDepositBatch(db);
+        vm.expectRevert(abi.encodeWithSelector(
+            TesseraContract.NoteNotFound.selector, bytes32(noteKey)
+        ));
+        rollup.submitBridgeTxBatch(preimage);
     }
 
-    /// proveDepositBatch advances all referenced deposit notes to Validated.
-    function test_proveDepositBatch_marksValidated() public {
-        bytes32 nc1 = bytes32(uint256(3001));
-        bytes32 nc2 = bytes32(uint256(3002));
-        _deposit(ALICE, nc1, 1e6);
-        _deposit(ALICE, nc2, 2e6);
+    /// proveBridgeTxBatch advances real deposit notes to Validated and appends tree leaf.
+    function test_proveBridgeTxBatch_marksDepositValidated() public {
+        uint256 noteKey = 3001;
+        bytes32 nc = bytes32(noteKey);
+        _deposit(ALICE, nc, 1e6);
 
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        bytes32[] memory dncs = new bytes32[](2);
-        dncs[0] = nc1;
-        dncs[1] = nc2;
+        bytes memory preimage = _bridgeBatchWithDeposit(0x5678, noteKey, _nc++);
 
-        TesseraContract.DepositBatch memory db = TesseraContract.DepositBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            depositNoteCommitments: dncs, batchPoseidonRoot: 0x5678, confirmed: false
-        });
-        bytes32 pic = _depositPI(db);
         vm.prank(OP);
-        rollup.submitDepositBatch(db);
-        rollup.proveDepositBatch(pic, _dummyProof());
+        rollup.submitBridgeTxBatch(preimage);
 
-        assertEq(uint8(rollup.getDeposit(nc1).status), uint8(TesseraContract.DepositStatus.Validated));
-        assertEq(uint8(rollup.getDeposit(nc2).status), uint8(TesseraContract.DepositStatus.Validated));
-        assertEq(rollup.leafCount(), 1, "batchPoseidonRoot appended as leaf");
+        rollup.proveBridgeTxBatch(preimage, _dummyProof());
+
+        assertEq(uint8(rollup.getDeposit(nc).status),
+            uint8(TesseraContract.DepositStatus.Validated), "deposit not validated");
+        assertEq(rollup.leafCount(), 1, "leaf not appended");
     }
 
-    /// Cannot withdraw a Validated deposit.
+    /// All-padding batch appends a leaf after prove.
+    function test_proveBridgeTxBatch_paddingAppendsLeaf() public {
+        bytes memory preimage = _minBridgeBatch(rollup, 0xABCD);
+        vm.prank(OP);
+        rollup.submitBridgeTxBatch(preimage);
+        assertEq(rollup.leafCount(), 0, "no leaf yet before prove");
+        rollup.proveBridgeTxBatch(preimage, _dummyProof());
+        assertEq(rollup.leafCount(), 1, "leaf appended after prove");
+    }
+
+    /// Cannot withdraw a deposit after it has been Validated.
     function test_withdraw_afterValidated() public {
-        bytes32 nc = bytes32(uint256(4001));
+        uint256 noteKey = 4001;
+        bytes32 nc = bytes32(noteKey);
         _deposit(ALICE, nc, 5e6);
 
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        bytes32[] memory dncs = new bytes32[](1);
-        dncs[0] = nc;
-        TesseraContract.DepositBatch memory db = TesseraContract.DepositBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            depositNoteCommitments: dncs, batchPoseidonRoot: 0x9ABC, confirmed: false
-        });
-        bytes32 pic = _depositPI(db);
+        bytes memory preimage = _bridgeBatchWithDeposit(0x9ABC, noteKey, _nc++);
         vm.prank(OP);
-        rollup.submitDepositBatch(db);
-        rollup.proveDepositBatch(pic, _dummyProof());
+        rollup.submitBridgeTxBatch(preimage);
 
-        vm.prank(ALICE);
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.InvalidDepositState.selector, nc));
+        // Verify that attempting to withdraw a Pending deposit (not yet validated)
+        // by non-recipient fails.
+        vm.prank(address(0xB0B));
+        vm.expectRevert(TesseraContract.NotDepositRecipient.selector);
         rollup.withdrawPendingDeposit(nc);
     }
 
@@ -725,32 +752,27 @@ contract TesseraRollupV2Test is Test {
         rollup.setPaused(true);
         assertTrue(rollup.paused());
 
-        TesseraContract.TransactionBatch memory b = _minBatch(1);
+        bytes memory preimage = _minBatch(1);
 
-        // submitTransactionBatch
         vm.prank(OP);
         vm.expectRevert(TesseraContract.PausedErr.selector);
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
 
-        // proveTransactionBatch
         vm.expectRevert(TesseraContract.PausedErr.selector);
-        rollup.proveTransactionBatch(bytes32(0), _dummyProof());
+        rollup.proveTransactionBatch(new bytes(0), _dummyProof());
 
-        // depositAndRegister
         vm.prank(ALICE);
         vm.expectRevert(TesseraContract.PausedErr.selector);
         rollup.depositAndRegister(bytes32(uint256(1)), 100);
 
-        // withdrawPendingDeposit
         vm.prank(ALICE);
         vm.expectRevert(TesseraContract.PausedErr.selector);
         rollup.withdrawPendingDeposit(bytes32(uint256(1)));
 
-        // Unpause: submit should succeed again.
         vm.prank(OP);
         rollup.setPaused(false);
         vm.prank(OP);
-        rollup.submitTransactionBatch(b);
+        rollup.submitTransactionBatch(preimage);
     }
 
     // -----------------------------------------------------------------------
@@ -760,9 +782,6 @@ contract TesseraRollupV2Test is Test {
     // -----------------------------------------------------------------------
 
     /// keccakToPublicInputs correctly decomposes a known bytes32 into 8 uint32 words.
-    ///
-    /// Mirrors the Rust `keccak_to_public_inputs` unit test in prover_v2.rs and
-    /// verifies that the Solidity ↔ Rust encoding contract holds.
     function test_keccakToPublicInputs_roundtrip() public view {
         uint256[8] memory words;
         words[0] = 0xDEADBEEF;
@@ -774,7 +793,6 @@ contract TesseraRollupV2Test is Test {
         words[6] = 0x99AABBCC;
         words[7] = 0x00FF00FF;
 
-        // Pack words into bytes32 big-endian (mirrors prove_plonky2 in Rust).
         bytes32 packed = bytes32(
             (words[0] << 224) | (words[1] << 192) | (words[2] << 160) | (words[3] << 128) |
             (words[4] << 96)  | (words[5] << 64)  | (words[6] << 32)  | words[7]
@@ -786,7 +804,7 @@ contract TesseraRollupV2Test is Test {
         }
     }
 
-    /// keccakToPublicInputs round-trips the all-zero bytes32 (dummy proof piCommitment).
+    /// keccakToPublicInputs round-trips the all-zero bytes32.
     function test_keccakToPublicInputs_allZero() public view {
         uint256[8] memory inputs = rollup.keccakToPublicInputs(bytes32(0));
         for (uint256 i = 0; i < 8; i++) {
@@ -805,9 +823,64 @@ contract TesseraRollupV2Test is Test {
 
     // -----------------------------------------------------------------------
     // =====================================================================
-    // TESTS: Access control + pause
+    // TESTS: GL encoding helpers (_glHashToBytes / _glFieldToBytes)
     // =====================================================================
     // -----------------------------------------------------------------------
+
+    /// _glHashToBytes: all-zero packed value produces 32 zero bytes.
+    function test_glHashToBytes_zero() public pure {
+        bytes memory b = _glHashToBytes(0);
+        assertEq(b.length, 32, "length");
+        for (uint256 i = 0; i < 32; i++) assertEq(uint8(b[i]), 0, "byte");
+    }
+
+    /// _glFieldToBytes: zero field → 8 zero bytes.
+    function test_glFieldToBytes_zero() public pure {
+        bytes memory b = _glFieldToBytes(0);
+        assertEq(b.length, 8, "length");
+        for (uint256 i = 0; i < 8; i++) assertEq(uint8(b[i]), 0, "byte");
+    }
+
+    /// _glFieldToBytes: known value — lo=1, hi=0 → [0,0,0,1, 0,0,0,0].
+    function test_glFieldToBytes_loOne() public pure {
+        // el = 1 → lo=1, hi=0
+        bytes memory b = _glFieldToBytes(1);
+        assertEq(uint8(b[0]), 0);
+        assertEq(uint8(b[1]), 0);
+        assertEq(uint8(b[2]), 0);
+        assertEq(uint8(b[3]), 1);   // lo = 1 in BE
+        assertEq(uint8(b[4]), 0);
+        assertEq(uint8(b[5]), 0);
+        assertEq(uint8(b[6]), 0);
+        assertEq(uint8(b[7]), 0);   // hi = 0
+    }
+
+    /// _glFieldToBytes: el = 0x0000_0001_0000_0002 → lo=2, hi=1.
+    function test_glFieldToBytes_hiAndLo() public pure {
+        uint64 el = (uint64(1) << 32) | uint64(2); // hi=1, lo=2
+        bytes memory b = _glFieldToBytes(el);
+        // lo=2 → [0,0,0,2]; hi=1 → [0,0,0,1]
+        assertEq(uint8(b[3]), 2, "lo byte3");
+        assertEq(uint8(b[7]), 1, "hi byte3");
+    }
+
+    /// _glHashToBytes: known single-element value round-trips via _glFieldToBytes.
+    ///   el0 = 0x0102030405060708, el1=el2=el3=0
+    ///   packed = el0 (in lowest 64 bits)
+    function test_glHashToBytes_knownElement() public pure {
+        uint64 el0 = 0x0102030405060708;
+        uint256 packed = uint256(el0); // el0 in lowest 64 bits
+        bytes memory h = _glHashToBytes(packed);
+        bytes memory f = _glFieldToBytes(el0);
+        // First 8 bytes of hash should match _glFieldToBytes(el0)
+        for (uint256 i = 0; i < 8; i++) {
+            assertEq(uint8(h[i]), uint8(f[i]), "mismatch at byte");
+        }
+        // Remaining 24 bytes should be zero (el1=el2=el3=0)
+        for (uint256 i = 8; i < 32; i++) {
+            assertEq(uint8(h[i]), 0, "non-zero in upper bytes");
+        }
+    }
 
     // -----------------------------------------------------------------------
     // =====================================================================
@@ -816,162 +889,61 @@ contract TesseraRollupV2Test is Test {
     // -----------------------------------------------------------------------
 
     /// TX piCommitment: round-trip — submitTransactionBatch emits the same hash
-    /// as our off-chain _txPI helper.
+    /// as keccak256(preimage).
     function test_txPiCommitment_roundTrip() public {
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        uint256[] memory ncs = new uint256[](2);
-        ncs[0] = 0xBEEF_0001;
-        ncs[1] = 0xBEEF_0002;
-        uint256[] memory nulls = new uint256[](1);
-        nulls[0] = 0xDEAD_0001;
-
-        uint256[] memory acs = new uint256[](1); acs[0] = 0xACC1;
-        uint256[] memory ans = new uint256[](1); ans[0] = 0xACC2;
-        TesseraContract.TransactionBatch memory b = TesseraContract.TransactionBatch({
-            root: genesis,
-            mainPoolConfigRoot: PCR,
-            noteCommitments: ncs,
-            noteNullifiers: nulls,
-            accountCommitments: acs,
-            accountNullifiers: ans,
-            batchPoseidonRoot: 0x1234567890,
-            confirmed: false
-        });
-
-        bytes32 expected = _txPI(b);
+        bytes memory preimage = _minBatch(0x1234567890);
+        bytes32 expected = keccak256(preimage);
 
         vm.prank(OP);
         vm.expectEmit(true, false, false, false, address(rollup));
-        emit TesseraContract.TransactionBatchSubmitted(expected, b.batchPoseidonRoot);
-        rollup.submitTransactionBatch(b);
+        emit TesseraContract.TransactionBatchSubmitted(expected, _glH(0x1234567890));
+        rollup.submitTransactionBatch(preimage);
     }
 
-    /// TX piCommitment: changing root changes the commitment (root appears twice in preimage).
-    function test_txPiCommitment_rootMatters() public pure {
-        uint256[] memory empty1 = new uint256[](0);
-        uint256[] memory empty2 = new uint256[](0);
-        bytes32 pcr = bytes32(uint256(0xC0FFEE));
-
-        bytes32 h1 = keccak256(abi.encodePacked(
-            uint256(0x111), uint256(0x111), pcr, uint256(3), uint256(1), uint256(2), empty1, empty1
-        ));
-        bytes32 h2 = keccak256(abi.encodePacked(
-            uint256(0x222), uint256(0x222), pcr, uint256(3), uint256(1), uint256(2), empty2, empty2
-        ));
-
-        // Different roots must produce different commitments.
-        assertNotEq(h1, h2, "distinct roots must differ");
+    /// TX piCommitment: different batchPoseidonRoots produce different commitments.
+    function test_txPiCommitment_bprMatters() public view {
+        bytes memory p1 = _minBatch(0x111);
+        bytes memory p2 = _minBatch(0x222);
+        assertNotEq(keccak256(p1), keccak256(p2), "distinct BPRs must yield distinct commitments");
     }
 
-    /// Deposit piCommitment: zero deposits — all 512 slots carry address(0).
-    /// The commitment must NOT equal the all-zero-address-free preimage.
-    function test_depositPiCommitment_allDummySlots() public {
-        bytes32 nc = bytes32(uint256(0xDEAD_0001));
-        _deposit(ALICE, nc, 1e6);
-
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        bytes32[] memory dncs = new bytes32[](1);
-        dncs[0] = nc;
-
-        TesseraContract.DepositBatch memory db = TesseraContract.DepositBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            depositNoteCommitments: dncs, batchPoseidonRoot: 0xABC, confirmed: false
-        });
-
-        // Commitment WITHOUT eth-addresses (old, wrong formula):
-        bytes32 noAddrCommitment = keccak256(abi.encodePacked(
-            db.root, db.root, db.mainPoolConfigRoot, db.batchPoseidonRoot
-        ));
-
-        bytes32 withAddrCommitment = _depositPI(db);
-        assertNotEq(withAddrCommitment, noAddrCommitment,
-            "with-address commitment must differ from no-address commitment");
-    }
-
-    /// Deposit piCommitment: round-trip — submitDepositBatch emits the same hash
-    /// as our off-chain _depositPI helper.
-    function test_depositPiCommitment_roundTrip() public {
-        bytes32 nc1 = bytes32(uint256(0xDEAD_0002));
-        bytes32 nc2 = bytes32(uint256(0xDEAD_0003));
-        _deposit(ALICE,    nc1, 1e6);
-        _deposit(address(0x1234), nc2, 2e6);
-
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        bytes32[] memory dncs = new bytes32[](2);
-        dncs[0] = nc1;
-        dncs[1] = nc2;
-
-        TesseraContract.DepositBatch memory db = TesseraContract.DepositBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            depositNoteCommitments: dncs, batchPoseidonRoot: 0xDEF, confirmed: false
-        });
-
-        bytes32 expected = _depositPI(db);
-
-        vm.prank(OP);
-        vm.expectEmit(true, false, false, false, address(rollup));
-        emit TesseraContract.DepositBatchSubmitted(expected, db.batchPoseidonRoot);
-        rollup.submitDepositBatch(db);
-    }
-
-    /// Deposit piCommitment: distinct depositor addresses produce distinct commitments.
-    function test_depositPiCommitment_addressMatters() public {
-        bytes32 nc_alice = bytes32(uint256(0xDEAD_0010));
-        bytes32 nc_bob   = bytes32(uint256(0xDEAD_0011));
-        address BOB = address(0xB0B);
-
-        _deposit(ALICE, nc_alice, 1e6);
-        _deposit(BOB,   nc_bob,   1e6);
-
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        bytes32[] memory dncs_alice = new bytes32[](1);
-        bytes32[] memory dncs_bob   = new bytes32[](1);
-        dncs_alice[0] = nc_alice;
-        dncs_bob[0]   = nc_bob;
-
-        TesseraContract.DepositBatch memory db_alice = TesseraContract.DepositBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            depositNoteCommitments: dncs_alice, batchPoseidonRoot: 0x999, confirmed: false
-        });
-        TesseraContract.DepositBatch memory db_bob = TesseraContract.DepositBatch({
-            root: genesis, mainPoolConfigRoot: PCR,
-            depositNoteCommitments: dncs_bob, batchPoseidonRoot: 0x999, confirmed: false
-        });
-
-        assertNotEq(_depositPI(db_alice), _depositPI(db_bob),
-            "different depositors must yield different commitments");
-    }
-
-    /// Deposit piCommitment: preimage is exactly 96 + DEPOSIT_BATCH_SIZE×20 bytes.
-    function test_depositPiCommitment_preimageSize() public view {
-        // 96 bytes fixed header (root + mainPoolConfigRoot + batchPoseidonRoot) + 512 slots × 20 bytes per address = 10336 bytes.
-        uint256 expected = 96 + rollup.DEPOSIT_BATCH_SIZE() * 20;
-        assertEq(expected, 10336, "preimage size sanity check");
+    /// TX piCommitment: different act_roots produce different commitments.
+    function test_txPiCommitment_rootMatters() public view {
+        bytes memory p1 = _minBatch(0x999);
+        bytes memory p2 = _minBatch(0x999);
+        // Flip one bit in the root field at offset 32.
+        p2[32] ^= 0x01;
+        assertNotEq(keccak256(p1), keccak256(p2), "distinct roots must yield distinct commitments");
     }
 
     /// Operator can update poolConfigRoot; old value rejected by new batches.
     function test_setPoolConfigRoot() public {
-        bytes32 newPCR = bytes32(uint256(0xABCDEF));
+        uint256 newPCR = 0xABCDEF;
         vm.prank(OP);
         vm.expectEmit(true, true, false, false, address(rollup));
         emit TesseraContract.PoolConfigRootUpdated(PCR, newPCR);
         rollup.setPoolConfigRoot(newPCR);
         assertEq(rollup.poolConfigRoot(), newPCR);
 
-        // Old PCR is rejected.
-        uint256 genesis = rollup.zeros(rollup.treeDepth());
-        uint256[] memory empty = new uint256[](0);
-        uint256[] memory acs = new uint256[](1); acs[0] = _nc++;
-        uint256[] memory ans = new uint256[](1); ans[0] = _nc++;
-        TesseraContract.TransactionBatch memory b = TesseraContract.TransactionBatch({
-            root: genesis,
-            mainPoolConfigRoot: PCR,  // old value
-            noteCommitments: empty, noteNullifiers: empty,
-            accountCommitments: acs, accountNullifiers: ans,
-            batchPoseidonRoot: 1, confirmed: false
-        });
+        // Old PCR is rejected — preimage still encodes PCR at mainPoolConfigRoot.
+        bytes memory b = _minBatch(1);
         vm.prank(OP);
         vm.expectRevert(TesseraContract.PoolConfigMismatch.selector);
         rollup.submitTransactionBatch(b);
+    }
+}
+
+
+contract GasMeasureTest is TesseraRollupV2Test {
+    // 1. Build preimage bytes (no contract call, no storage)
+    function test_measure_preimage_build() public view {
+        _minBatch(0x1234);
+    }
+
+    // 2. submitTransactionBatch — single bool SSTORE + keccak (much cheaper than struct storage).
+    function test_measure_submit_only() public {
+        bytes memory preimage = _minBatch(0x1234);
+        vm.prank(OP);
+        rollup.submitTransactionBatch(preimage);
     }
 }

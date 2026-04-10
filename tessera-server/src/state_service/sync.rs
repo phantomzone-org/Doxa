@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use alloy::{
-	primitives::{Address, B256, U256},
+	primitives::{Address, B256},
 	providers::Provider,
 	rpc::types::{Filter, Log},
 	sol_types::SolEvent,
@@ -202,11 +202,11 @@ async fn build_deposit_submit_map<P: Provider + Clone>(
 	let logs = fetch_logs(
 		provider,
 		address,
-		ITesseraRollupV2::DepositBatchSubmitted::SIGNATURE_HASH,
+		ITesseraRollupV2::BridgeTxBatchSubmitted::SIGNATURE_HASH,
 		from_block,
 		to_block,
 		chunk_blocks,
-		"DepositBatchSubmitted",
+		"BridgeTxBatchSubmitted",
 	)
 	.await?;
 
@@ -217,7 +217,7 @@ async fn build_deposit_submit_map<P: Provider + Clone>(
 				map.insert(pi, tx_hash);
 			},
 			Err(e) => {
-				warn!(error = %e, "failed to decode DepositBatchSubmitted log; skipping");
+				warn!(error = %e, "failed to decode BridgeTxBatchSubmitted log; skipping");
 			},
 		}
 	}
@@ -236,15 +236,15 @@ fn decode_tx_submitted_log(log: &Log) -> anyhow::Result<(B256, B256)> {
 	Ok((decoded.inner.piCommitment, tx_hash))
 }
 
-/// Decode a `DepositBatchSubmitted` log and return
+/// Decode a `BridgeTxBatchSubmitted` log and return
 /// `(piCommitment, transaction_hash)`.
 fn decode_deposit_submitted_log(log: &Log) -> anyhow::Result<(B256, B256)> {
 	let decoded = log
-		.log_decode::<ITesseraRollupV2::DepositBatchSubmitted>()
-		.context("decode DepositBatchSubmitted")?;
+		.log_decode::<ITesseraRollupV2::BridgeTxBatchSubmitted>()
+		.context("decode BridgeTxBatchSubmitted")?;
 	let tx_hash = log
 		.transaction_hash
-		.context("DepositBatchSubmitted log missing transaction_hash")?;
+		.context("BridgeTxBatchSubmitted log missing transaction_hash")?;
 	Ok((decoded.inner.piCommitment, tx_hash))
 }
 
@@ -275,11 +275,11 @@ async fn collect_proven_batches<P: Provider + Clone>(
 	let dep_proven_logs = fetch_logs(
 		provider,
 		address,
-		ITesseraRollupV2::DepositBatchProven::SIGNATURE_HASH,
+		ITesseraRollupV2::BridgeTxBatchProven::SIGNATURE_HASH,
 		from_block,
 		to_block,
 		chunk_blocks,
-		"DepositBatchProven",
+		"BridgeTxBatchProven",
 	)
 	.await?;
 
@@ -319,11 +319,11 @@ fn decode_tx_proven_log(log: &Log) -> anyhow::Result<ProvenBatchEntry> {
 	})
 }
 
-/// Decode a single `DepositBatchProven` log into a [`ProvenBatchEntry`].
+/// Decode a single `BridgeTxBatchProven` log into a [`ProvenBatchEntry`].
 fn decode_deposit_proven_log(log: &Log) -> anyhow::Result<ProvenBatchEntry> {
 	let decoded = log
-		.log_decode::<ITesseraRollupV2::DepositBatchProven>()
-		.context("decode DepositBatchProven")?;
+		.log_decode::<ITesseraRollupV2::BridgeTxBatchProven>()
+		.context("decode BridgeTxBatchProven")?;
 	let inner = &decoded.inner;
 	Ok(ProvenBatchEntry {
 		pi_commitment: inner.piCommitment,
@@ -373,14 +373,14 @@ async fn replay_batch<P: Provider + Clone>(
 
 	match entry.kind {
 		BatchKind::Transaction => {
-			let call = decode_tx_batch_calldata(&input)
+			let preimage = decode_tx_batch_calldata(&input)
 				.context("decode submitTransactionBatch calldata")?;
-			apply_tx_batch(&call.batch, state)?;
+			apply_tx_preimage(&preimage, state)?;
 		},
 		BatchKind::Deposit => {
-			let call = decode_deposit_batch_calldata(&input)
-				.context("decode submitDepositBatch calldata")?;
-			apply_deposit_batch(&call.batch, state)?;
+			let preimage = decode_bridge_tx_batch_calldata(&input)
+				.context("decode submitBridgeTxBatch calldata")?;
+			apply_bridge_tx_preimage(&preimage, state)?;
 		},
 	}
 
@@ -425,136 +425,155 @@ async fn fetch_transaction_input<P: Provider + Clone>(
 // Calldata decoding
 // ---------------------------------------------------------------------------
 
-/// ABI-decode the calldata of a `submitTransactionBatch` transaction.
-///
-/// # Errors
-/// Returns `Err` if the bytes cannot be decoded as the expected 4-byte
-/// selector followed by an ABI-encoded `TransactionBatch`.
+/// ABI-decode the calldata of a `submitTransactionBatch` transaction and
+/// return the raw preimage bytes.
 fn decode_tx_batch_calldata(
 	input: &alloy::primitives::Bytes,
-) -> anyhow::Result<ITesseraRollupV2::submitTransactionBatchCall> {
+) -> anyhow::Result<alloy::primitives::Bytes> {
 	use alloy::sol_types::SolCall;
-	ITesseraRollupV2::submitTransactionBatchCall::abi_decode(input)
-		.context("ABI decode submitTransactionBatch")
+	let call = ITesseraRollupV2::submitTransactionBatchCall::abi_decode(input)
+		.context("ABI decode submitTransactionBatch")?;
+	Ok(call.batchPreimage)
 }
 
-/// ABI-decode the calldata of a `submitDepositBatch` transaction.
-///
-/// # Errors
-/// Returns `Err` if the bytes cannot be decoded as the expected 4-byte
-/// selector followed by an ABI-encoded `DepositBatch`.
-fn decode_deposit_batch_calldata(
+/// ABI-decode the calldata of a `submitBridgeTxBatch` transaction and
+/// return the raw preimage bytes.
+fn decode_bridge_tx_batch_calldata(
 	input: &alloy::primitives::Bytes,
-) -> anyhow::Result<ITesseraRollupV2::submitDepositBatchCall> {
+) -> anyhow::Result<alloy::primitives::Bytes> {
 	use alloy::sol_types::SolCall;
-	ITesseraRollupV2::submitDepositBatchCall::abi_decode(input)
-		.context("ABI decode submitDepositBatch")
+	let call = ITesseraRollupV2::submitBridgeTxBatchCall::abi_decode(input)
+		.context("ABI decode submitBridgeTxBatch")?;
+	Ok(call.batchPreimage)
 }
 
 // ---------------------------------------------------------------------------
-// Commitment encoding helpers
+// Preimage parsing constants (must match TesseraContract.sol)
 // ---------------------------------------------------------------------------
 
-/// Convert an on-chain `uint256` commitment to the canonical `[u8; 32]`
-/// byte representation used by the sequencer and prover.
+/// TX batch: header size in bytes (batchPoseidonRoot + root + mainPoolConfigRoot).
+const TX_HEADER_SIZE: usize = 96;
+/// TX batch: per-slot size = notFakeTx(8) + accinNull(32) + accoutComm(32) + noteInNull(7×32) + noteOutComm(7×32).
+const TX_SLOT_SIZE: usize = 8 + 32 + 32 + 7 * 32 + 7 * 32; // 520
+/// TX batch: byte offset of accinNullifier within a slot.
+const TX_ACCIN_NULL_OFF: usize = 8;
+/// TX batch: byte offset of the first noteInNullifier within a slot.
+const TX_NOTE_IN_OFF: usize = 8 + 32 + 32; // 72
+/// Number of private-TX slots per batch.
+const PRIV_TX_BATCH_SIZE: usize = 64;
+/// Note nullifiers per TX slot.
+const NOTE_BATCH: usize = 7;
+
+/// Bridge TX: per-withdraw-slot size.
+const W_SLOT_SIZE: usize = 8 + 32 + 32 + 7 * 8 + 7 * 64 + 40; // 616
+/// Bridge TX: per-deposit-slot size.
+const D_SLOT_SIZE: usize = 8 + 32 + 32 + 32 + 40 + 64 + 8; // 216
+/// Bridge TX: byte offset where the deposit section begins.
+const D_SECTION_OFF: usize = 96 + 256 * W_SLOT_SIZE; // 157792
+/// Bridge TX: half-batch size (256 withdraw + 256 deposit slots).
+const BRIDGE_TX_HALF_SIZE: usize = 256;
+/// Bridge TX: byte offset of accinNullifier within a withdraw slot.
+const W_ACCIN_NULL_OFF: usize = 8;
+/// Bridge TX: byte offset of accinNullifier within a deposit slot.
+const D_ACCIN_NULL_OFF: usize = 8;
+
+// ---------------------------------------------------------------------------
+// Preimage parsing helpers
+// ---------------------------------------------------------------------------
+
+/// Read a GL-preimage-encoded bytes32 at `off` in `preimage` and return it as
+/// the raw `[u8; 32]` format used by `StateSnapshot` / `hash_to_bytes32`.
 ///
-/// On-chain commitments are stored as LE-packed Goldilocks uint256 values
-/// (see [`contract::hash_to_u256_le`]).  The sequencer represents the same
-/// commitment as `[u8; 32]` with each of the four Goldilocks limbs in
-/// big-endian byte order (see [`contract::hash_to_bytes32`]).
-///
-/// This function applies the correct inverse:
-///   `limbs[i]` → `u64::to_be_bytes()` at offset `i * 8`.
-///
-/// # Errors
-/// Returns `Err` if any 64-bit limb is ≥ `GOLDILOCKS_PRIME`.
-fn u256_commitment_to_bytes32(v: U256) -> anyhow::Result<[u8; 32]> {
-	let h = contract::u256_le_to_hash(v)?;
-	Ok(contract::hash_to_bytes32(&h).0)
+/// GL-preimage layout:  [lo0_BE4][hi0_BE4][lo1_BE4][hi1_BE4]...
+/// hash_to_bytes32 layout: [hi0_BE4][lo0_BE4][hi1_BE4][lo1_BE4]...
+/// → swap the two 4-byte halves per field element (symmetric — same as
+///   `raw_to_preimage_bytes32` / `preimage_bytes32_to_raw`).
+fn read_gl_b32(preimage: &[u8], off: usize) -> [u8; 32] {
+	let b: alloy::primitives::B256 =
+		preimage[off..off + 32].try_into().expect("slice always 32 bytes");
+	contract::preimage_bytes32_to_raw(&b)
+}
+
+/// Read the 8-byte GL-field at `off` and return `true` iff the value is
+/// non-zero (lo_u32 or hi_u32 non-zero).
+fn read_gl_bool(preimage: &[u8], off: usize) -> bool {
+	let lo = u32::from_be_bytes(preimage[off..off + 4].try_into().unwrap());
+	let hi = u32::from_be_bytes(preimage[off + 4..off + 8].try_into().unwrap());
+	lo != 0 || hi != 0
 }
 
 // ---------------------------------------------------------------------------
-// Leaf / nullifier extraction
+// Leaf / nullifier extraction from preimage
 // ---------------------------------------------------------------------------
 
-/// Extract the leaf commitments from a TX batch in tree-insertion order.
-///
-/// The on-chain IMT appends note commitments before account commitments,
-/// matching the order the SubtreeRootCircuit processes them.
-///
-/// # Errors
-/// Returns `Err` if any commitment limb is out of Goldilocks range.
-fn leaves_from_tx_batch(
-	batch: &ITesseraRollupV2::TransactionBatch,
-) -> anyhow::Result<Vec<[u8; 32]>> {
-	batch
-		.noteCommitments
-		.iter()
-		.chain(batch.accountCommitments.iter())
-		.map(|&v| u256_commitment_to_bytes32(v))
-		.collect()
+/// Extract the single batch leaf (batchPoseidonRoot) from a TX or bridge-TX
+/// preimage.  Each proven batch appends exactly one leaf — the batchPoseidonRoot
+/// at offset 0 in the preimage.
+fn leaf_from_preimage(preimage: &[u8]) -> [u8; 32] {
+	read_gl_b32(preimage, 0)
 }
 
-/// Extract the nullifiers from a TX batch.
+/// Extract all nullifiers committed by a TX-batch preimage.
 ///
-/// Note nullifiers are followed by account nullifiers.
-///
-/// # Errors
-/// Returns `Err` if any nullifier limb is out of Goldilocks range.
-fn nullifiers_from_tx_batch(
-	batch: &ITesseraRollupV2::TransactionBatch,
-) -> anyhow::Result<Vec<[u8; 32]>> {
-	batch
-		.noteNullifiers
-		.iter()
-		.chain(batch.accountNullifiers.iter())
-		.map(|&v| u256_commitment_to_bytes32(v))
-		.collect()
+/// Only real slots (`notFakeTx` non-zero) contribute nullifiers.
+/// Per real slot: 1 account nullifier + 7 note-in nullifiers.
+fn nullifiers_from_tx_preimage(preimage: &[u8]) -> Vec<[u8; 32]> {
+	let mut out = Vec::new();
+	for s in 0..PRIV_TX_BATCH_SIZE {
+		let slot_off = TX_HEADER_SIZE + s * TX_SLOT_SIZE;
+		if !read_gl_bool(preimage, slot_off) {
+			continue;
+		}
+		out.push(read_gl_b32(preimage, slot_off + TX_ACCIN_NULL_OFF));
+		for j in 0..NOTE_BATCH {
+			out.push(read_gl_b32(preimage, slot_off + TX_NOTE_IN_OFF + j * 32));
+		}
+	}
+	out
 }
 
-/// Extract the leaf commitments from a deposit batch in tree-insertion order.
+/// Extract all nullifiers committed by a bridge-TX-batch preimage.
 ///
-/// Deposit note commitments are stored on-chain as raw `bytes32` values,
-/// matching the sequencer's `[u8; 32]` representation directly.
-fn leaves_from_deposit_batch(batch: &ITesseraRollupV2::DepositBatch) -> Vec<[u8; 32]> {
-	batch.depositNoteCommitments.iter().map(|b| b.0).collect()
+/// Real withdraw slots contribute 1 account nullifier each.
+/// Real deposit slots contribute 1 account nullifier each.
+/// (No per-note nullifiers in bridge TX slots.)
+fn nullifiers_from_bridge_tx_preimage(preimage: &[u8]) -> Vec<[u8; 32]> {
+	let mut out = Vec::new();
+	for s in 0..BRIDGE_TX_HALF_SIZE {
+		let w_off = 96 + s * W_SLOT_SIZE;
+		if read_gl_bool(preimage, w_off) {
+			out.push(read_gl_b32(preimage, w_off + W_ACCIN_NULL_OFF));
+		}
+		let d_off = D_SECTION_OFF + s * D_SLOT_SIZE;
+		if read_gl_bool(preimage, d_off) {
+			out.push(read_gl_b32(preimage, d_off + D_ACCIN_NULL_OFF));
+		}
+	}
+	out
 }
 
 // ---------------------------------------------------------------------------
 // State application
 // ---------------------------------------------------------------------------
 
-/// Insert all leaves and nullifiers from a TX batch into `state`.
-///
-/// Leaves are inserted in the order returned by [`leaves_from_tx_batch`].
-///
-/// # Errors
-/// Propagates any commitment-encoding or tree-insertion error.
-fn apply_tx_batch(
-	batch: &ITesseraRollupV2::TransactionBatch,
-	state: &mut StateSnapshot,
-) -> anyhow::Result<()> {
-	for leaf in leaves_from_tx_batch(batch)? {
-		state.insert_leaf(leaf)?;
-	}
-	for nullifier in nullifiers_from_tx_batch(batch)? {
+/// Apply a proven TX-batch preimage to `state`:
+///   - Insert the batchPoseidonRoot as a tree leaf (confirmed state).
+///   - Insert all nullifiers from real slots (confirmed state).
+fn apply_tx_preimage(preimage: &[u8], state: &mut StateSnapshot) -> anyhow::Result<()> {
+	state.insert_leaf(leaf_from_preimage(preimage))?;
+	for nullifier in nullifiers_from_tx_preimage(preimage) {
 		state.insert_nullifier(nullifier);
 	}
 	Ok(())
 }
 
-/// Insert all deposit note commitments from a deposit batch into `state`.
-///
-/// Deposit batches carry no nullifiers.
-///
-/// # Errors
-/// Propagates any tree-insertion error.
-fn apply_deposit_batch(
-	batch: &ITesseraRollupV2::DepositBatch,
-	state: &mut StateSnapshot,
-) -> anyhow::Result<()> {
-	for leaf in leaves_from_deposit_batch(batch) {
-		state.insert_leaf(leaf)?;
+/// Apply a proven bridge-TX-batch preimage to `state`:
+///   - Insert the batchPoseidonRoot as a tree leaf.
+///   - Insert account nullifiers from all real withdraw and deposit slots.
+fn apply_bridge_tx_preimage(preimage: &[u8], state: &mut StateSnapshot) -> anyhow::Result<()> {
+	state.insert_leaf(leaf_from_preimage(preimage))?;
+	for nullifier in nullifiers_from_bridge_tx_preimage(preimage) {
+		state.insert_nullifier(nullifier);
 	}
 	Ok(())
 }

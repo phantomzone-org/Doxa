@@ -100,6 +100,54 @@ pub fn u256_le_to_hash(v: alloy::primitives::U256) -> anyhow::Result<HashOutput>
 	Ok(HashOutput(elems))
 }
 
+/// Convert a `HashOutput` to the 32-byte GL-preimage format used by the contract's
+/// Keccak piCommitment computation.
+///
+/// Encoding per field element `f` (canonical u64):
+///   `[lo_u32_BE(4B), hi_u32_BE(4B)]`
+/// where `lo = f & 0xFFFF_FFFF`, `hi = f >> 32`.
+///
+/// This is the inverse of `_glHashToU256` in `TesseraContract.sol`.
+pub fn hash_to_preimage_bytes32(h: &HashOutput) -> B256 {
+	let mut out = [0u8; 32];
+	for (i, &f) in h.0.iter().enumerate() {
+		let v: u64 = f.0; // GoldilocksField inner u64 (canonical value)
+		let lo = (v & 0xFFFF_FFFF) as u32;
+		let hi = (v >> 32) as u32;
+		out[i * 8..i * 8 + 4].copy_from_slice(&lo.to_be_bytes());
+		out[i * 8 + 4..i * 8 + 8].copy_from_slice(&hi.to_be_bytes());
+	}
+	B256::from(out)
+}
+
+/// Convert a raw `[u8; 32]` leaf (4 × u64 big-endian, as written by `hash_to_bytes32`)
+/// to the GL-preimage bytes32 format expected by the contract structs.
+///
+/// `hash_to_bytes32` layout: `[hi_BE4][lo_BE4]` per field element.
+/// GL-preimage layout:        `[lo_BE4][hi_BE4]` per field element.
+/// → swap the two 4-byte halves for each of the 4 elements.
+///
+/// Note: this function is its own inverse (the swap is symmetric), so applying
+/// it twice restores the original bytes.  Use `preimage_bytes32_to_raw` when
+/// you want the inverse direction for clarity.
+pub fn raw_to_preimage_bytes32(raw: &[u8; 32]) -> B256 {
+	let mut out = [0u8; 32];
+	for i in 0..4 {
+		out[i * 8..i * 8 + 4].copy_from_slice(&raw[i * 8 + 4..i * 8 + 8]); // lo
+		out[i * 8 + 4..i * 8 + 8].copy_from_slice(&raw[i * 8..i * 8 + 4]); // hi
+	}
+	B256::from(out)
+}
+
+/// Convert a GL-preimage-encoded `B256` (as stored in contract batch structs) back to
+/// the raw `[u8; 32]` format used by the state service and prover (`hash_to_bytes32`).
+///
+/// The swap is symmetric, so this is identical to `raw_to_preimage_bytes32` in
+/// implementation — it just exists for naming clarity at call sites.
+pub fn preimage_bytes32_to_raw(b: &B256) -> [u8; 32] {
+	raw_to_preimage_bytes32(&b.0).0
+}
+
 // ---------------------------------------------------------------------------
 // V2 Alloy bindings — TesseraContract
 // ---------------------------------------------------------------------------
@@ -115,49 +163,41 @@ sol! {
 			DepositStatus status;
 		}
 
-		struct TransactionBatch {
-			uint256   root;
-			bytes32   mainPoolConfigRoot;
-			uint256[] noteCommitments;
-			uint256[] noteNullifiers;
-			uint256[] accountCommitments;
-			uint256[] accountNullifiers;
-			uint256   batchPoseidonRoot;
-			bool      confirmed;
-		}
-
-		struct DepositBatch {
-			uint256   root;
-			bytes32   mainPoolConfigRoot;
-			bytes32[] depositNoteCommitments;
-			uint256   batchPoseidonRoot;
-			bool      confirmed;
-		}
-
 		struct Proof {
 			uint256[8] proof;
 			uint256[2] commitments;
 			uint256[2] commitmentPok;
 		}
 
-		function submitTransactionBatch(TransactionBatch calldata batch) external;
-		function proveTransactionBatch(bytes32 piCommitment, Proof calldata proof) external;
-		function submitDepositBatch(DepositBatch calldata batch) external;
-		function proveDepositBatch(bytes32 piCommitment, Proof calldata proof) external;
-		function depositAndRegister(bytes32 noteCommitment, uint256 maxAmount) external returns (bytes32);
+		function submitTransactionBatch(bytes calldata batchPreimage) external;
+		function proveTransactionBatch(bytes calldata batchPreimage, Proof calldata proof) external;
+		function submitBridgeTxBatch(bytes calldata batchPreimage) external;
+		function proveBridgeTxBatch(bytes calldata batchPreimage, Proof calldata proof) external;
+		function depositAndRegister(bytes32 noteCommitment, uint256 maxAmount) external;
+		function withdrawPendingDeposit(bytes32 noteCommitment) external;
 		function currentRoot() external view returns (uint256);
 		function confirmedRoots(uint256 root) external view returns (bool);
-		function poolConfigRoot() external view returns (bytes32);
+		function poolConfigRoot() external view returns (uint256);
+		function nullifiers(uint256 nullifier) external view returns (bool);
+		function leaves(uint256 index) external view returns (uint256);
+		function validatedBatchRoots(uint256 batchRoot) external view returns (bool);
 		function leafCount() external view returns (uint256);
 		function zeros(uint256 level) external view returns (uint256);
 		function treeDepth() external view returns (uint256);
+		function verifyBatchLeaf(uint256 batchRoot, uint256 leaf, uint256 leafIndex, uint256[] calldata siblings) external view returns (bool);
 		function getDeposit(bytes32 noteCommitment) external view returns (Deposit memory);
+		function keccakToPublicInputs(bytes32 piCommitment) external pure returns (uint256[8] memory);
+		function operator() external view returns (address);
+		function paused() external view returns (bool);
+		function setOperator(address newOperator) external;
+		function setPaused(bool _paused) external;
+		function setPoolConfigRoot(uint256 newRoot) external;
 
-		event TransactionBatchSubmitted(bytes32 indexed piCommitment, uint256 batchPoseidonRoot);
+		event TransactionBatchSubmitted(bytes32 indexed piCommitment, bytes32 batchPoseidonRoot);
 		event TransactionBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
-		event DepositBatchSubmitted(bytes32 indexed piCommitment, uint256 batchPoseidonRoot);
-		event DepositBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
-		event DebugDepositPreimage(bytes preimage, bytes32 result);
-		event DebugTxPreimage(bytes preimage, bytes32 result);
+		event BridgeTxBatchSubmitted(bytes32 indexed piCommitment, bytes32 batchPoseidonRoot);
+		event BridgeTxBatchProven(bytes32 indexed piCommitment, uint256 newTreeRoot, uint256 leafIndex);
+		event DepositAvailable(bytes32 indexed noteCommitment, uint256 value, address recipient);
+		event DepositValidated(bytes32 indexed noteCommitment);
 	}
 }

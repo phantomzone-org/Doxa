@@ -30,7 +30,7 @@ import {ToyUser} from "../src/ToyUser.sol";
 ///   TESSERA_OPERATOR         -- operator address (defaults to msg.sender)
 contract DeployScript is Script {
     function run() external {
-        bytes32 poolConfigRoot = vm.envBytes32("TESSERA_POOL_CONFIG_ROOT");
+        uint256 poolConfigRoot = vm.envUint("TESSERA_POOL_CONFIG_ROOT");
         uint256 treeDepth      = vm.envUint("TESSERA_TREE_DEPTH");
 
         address txVerifier      = vm.envOr("TESSERA_TX_VERIFIER",      address(0));

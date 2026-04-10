@@ -102,7 +102,7 @@ pub(crate) struct DepositTxSignatureTargets {
 ///
 /// Held by [`DepositTxCircuit`] and passed to the witness-filling functions
 /// so the same compilation can generate many proofs without rebuilding.
-pub(crate) struct DepositTxTargets {
+pub struct DepositTxTargets {
 	pub public_targets: DepositTxPublicTargets,
 	pub private_targets: DepositTxPrivateTargets,
 }

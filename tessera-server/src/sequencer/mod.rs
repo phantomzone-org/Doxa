@@ -42,8 +42,10 @@ const MAX_PENDING_BATCHES: usize = 128;
 
 /// A batch submitted on-chain and awaiting a Groth16 proof via `proveTransactionBatch`.
 struct SolidityTransactionBatchCommitment {
-	/// On-chain piCommitment (keccak256 of batch public inputs).
-	pi_commitment: [u8; 32],
+	/// The full preimage bytes passed to `submitTransactionBatch`.
+	/// Must be re-submitted verbatim to `proveTransactionBatch`.
+	/// `keccak256(batch_preimage)` == on-chain piCommitment.
+	batch_preimage: Vec<u8>,
 }
 
 /// A private transaction submitted via [`SequencerHandle::submit_private_tx`].

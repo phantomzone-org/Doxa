@@ -1,4 +1,6 @@
 use anyhow::Result;
+use plonky2::{iop::target::Target, plonk::circuit_builder::CircuitBuilder};
+use tessera_utils::{D, F, plonky2_gadgets::keccak256::field_decompose::decompose_field_to_u32_pair};
 
 use crate::types::SolidityProof;
 
@@ -38,4 +40,32 @@ pub(crate) fn parse_solidity_proof_json(json: &str) -> Result<SolidityProof> {
 			.try_into()
 			.map_err(|_| anyhow::anyhow!("commitmentPok: expected 2 elements"))?,
 	})
+}
+
+
+// ---------------------------------------------------------------------------
+// Shared circuit helpers
+// ---------------------------------------------------------------------------
+
+/// Encode one Goldilocks field target as `[lo_u32, hi_u32]`, matching
+/// `BatchHelper::push_fields` encoding.
+pub(crate) fn field_to_u32_pair(
+	builder: &mut CircuitBuilder<F, D>,
+	f: Target,
+	lut: usize,
+) -> [Target; 2] {
+	let [hi, lo] = decompose_field_to_u32_pair(builder, f, lut);
+	[lo.0, hi.0]
+}
+
+/// Encode a slice of Goldilocks field targets as flat `[lo, hi, lo, hi, …]` u32 words.
+pub(crate) fn fields_to_u32_words(
+	builder: &mut CircuitBuilder<F, D>,
+	fields: &[Target],
+	lut: usize,
+) -> Vec<Target> {
+	fields
+		.iter()
+		.flat_map(|&f| field_to_u32_pair(builder, f, lut))
+		.collect()
 }
