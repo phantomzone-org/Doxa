@@ -90,6 +90,8 @@ impl BatchHelper for BridgeTxBatch {
 	}
 
 	fn is_full(&self) -> bool {
+		// Intentional: the batch is considered full once either half is full.
+		// This allows flushing when withdrawals or deposits alone reach capacity.
 		(self.withdraw_proofs == Self::PROOF_BATCH_SIZE >> 1)
 			| (self.deposit_proofs == Self::PROOF_BATCH_SIZE >> 1)
 	}

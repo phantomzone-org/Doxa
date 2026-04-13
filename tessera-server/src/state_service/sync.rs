@@ -106,14 +106,28 @@ pub async fn sync_range<P: Provider + Clone>(
 	to_block: u64,
 	state: &mut StateSnapshot,
 ) -> anyhow::Result<()> {
-	let tx_submit_map =
+	let mut tx_submit_map =
 		build_tx_submit_map(provider, address, from_block, to_block, chunk_blocks).await?;
-	let dep_submit_map =
+	let mut dep_submit_map =
 		build_deposit_submit_map(provider, address, from_block, to_block, chunk_blocks).await?;
 
 	let mut ordered_batches =
 		collect_proven_batches(provider, address, from_block, to_block, chunk_blocks).await?;
 	ordered_batches.sort_by_key(|b| b.leaf_index);
+
+	// Proven batches often refer to submissions from earlier blocks. If the
+	// submission isn't in the current polling window, look it up explicitly
+	// by piCommitment so we can still replay the batch.
+	fill_missing_submission_txs(
+		provider,
+		address,
+		&ordered_batches,
+		&mut tx_submit_map,
+		&mut dep_submit_map,
+		to_block,
+		chunk_blocks,
+	)
+	.await?;
 
 	for batch_entry in &ordered_batches {
 		replay_batch(
@@ -222,6 +236,101 @@ async fn build_deposit_submit_map<P: Provider + Clone>(
 		}
 	}
 	Ok(map)
+}
+
+// ---------------------------------------------------------------------------
+// Submission lookup by piCommitment (fallback for polling window gaps)
+// ---------------------------------------------------------------------------
+
+async fn fill_missing_submission_txs<P: Provider + Clone>(
+	provider: &P,
+	address: Address,
+	ordered_batches: &[ProvenBatchEntry],
+	tx_submit_map: &mut HashMap<B256, B256>,
+	dep_submit_map: &mut HashMap<B256, B256>,
+	to_block: u64,
+	chunk_blocks: u64,
+) -> anyhow::Result<()> {
+	for entry in ordered_batches {
+		let (map, sig, name) = match entry.kind {
+			BatchKind::Transaction => (
+				tx_submit_map,
+				ITesseraRollupV2::TransactionBatchSubmitted::SIGNATURE_HASH,
+				"TransactionBatchSubmitted",
+			),
+			BatchKind::Deposit => (
+				dep_submit_map,
+				ITesseraRollupV2::BridgeTxBatchSubmitted::SIGNATURE_HASH,
+				"BridgeTxBatchSubmitted",
+			),
+		};
+
+		if map.contains_key(&entry.pi_commitment) {
+			continue;
+		}
+
+		let tx_hash = find_submission_tx_hash(
+			provider,
+			address,
+			sig,
+			entry.pi_commitment,
+			0,
+			to_block,
+			chunk_blocks,
+			name,
+		)
+		.await?;
+
+		map.insert(entry.pi_commitment, tx_hash);
+	}
+
+	Ok(())
+}
+
+async fn find_submission_tx_hash<P: Provider + Clone>(
+	provider: &P,
+	address: Address,
+	event_sig: B256,
+	pi_commitment: B256,
+	from_block: u64,
+	to_block: u64,
+	chunk_blocks: u64,
+	event_name: &str,
+) -> anyhow::Result<B256> {
+	let mut chunk_start = from_block;
+
+	while chunk_start <= to_block {
+		let chunk_end = (chunk_start + chunk_blocks - 1).min(to_block);
+
+		let filter = Filter::new()
+			.address(address)
+			.event_signature(event_sig)
+			.topic1(pi_commitment)
+			.from_block(chunk_start)
+			.to_block(chunk_end);
+
+		let logs = provider
+			.get_logs(&filter)
+			.await
+			.with_context(|| {
+				format!(
+					"eth_getLogs({event_name}, {chunk_start}..{chunk_end}, piCommitment={pi_commitment:?})"
+				)
+			})?;
+
+		if let Some(log) = logs.first() {
+			let tx_hash = log
+				.transaction_hash
+				.context("submission log missing transaction_hash")?;
+			return Ok(tx_hash);
+		}
+
+		chunk_start = chunk_end + 1;
+	}
+
+	anyhow::bail!(
+		"no {event_name} log found for piCommitment {pi_commitment:?} in blocks {from_block}..{to_block}"
+	);
 }
 
 /// Decode a `TransactionBatchSubmitted` log and return
@@ -463,6 +572,8 @@ const TX_NOTE_IN_OFF: usize = 8 + 32 + 32; // 72
 const PRIV_TX_BATCH_SIZE: usize = 64;
 /// Note nullifiers per TX slot.
 const NOTE_BATCH: usize = 7;
+/// TX batch: total preimage length in bytes.
+const TX_PREIMAGE_LEN: usize = TX_HEADER_SIZE + PRIV_TX_BATCH_SIZE * TX_SLOT_SIZE;
 
 /// Bridge TX: per-withdraw-slot size.
 const W_SLOT_SIZE: usize = 8 + 32 + 32 + 7 * 8 + 7 * 64 + 40; // 616
@@ -476,6 +587,33 @@ const BRIDGE_TX_HALF_SIZE: usize = 256;
 const W_ACCIN_NULL_OFF: usize = 8;
 /// Bridge TX: byte offset of accinNullifier within a deposit slot.
 const D_ACCIN_NULL_OFF: usize = 8;
+/// Bridge TX: total preimage length in bytes.
+const BRIDGE_TX_PREIMAGE_LEN: usize =
+	D_SECTION_OFF + BRIDGE_TX_HALF_SIZE * D_SLOT_SIZE;
+
+// ---------------------------------------------------------------------------
+// Preimage validation
+// ---------------------------------------------------------------------------
+
+fn validate_tx_preimage_len(preimage: &[u8]) -> anyhow::Result<()> {
+	anyhow::ensure!(
+		preimage.len() >= TX_PREIMAGE_LEN,
+		"tx batch preimage too short: got {} bytes, expected at least {}",
+		preimage.len(),
+		TX_PREIMAGE_LEN
+	);
+	Ok(())
+}
+
+fn validate_bridge_tx_preimage_len(preimage: &[u8]) -> anyhow::Result<()> {
+	anyhow::ensure!(
+		preimage.len() >= BRIDGE_TX_PREIMAGE_LEN,
+		"bridge tx batch preimage too short: got {} bytes, expected at least {}",
+		preimage.len(),
+		BRIDGE_TX_PREIMAGE_LEN
+	);
+	Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Preimage parsing helpers
@@ -560,6 +698,7 @@ fn nullifiers_from_bridge_tx_preimage(preimage: &[u8]) -> Vec<[u8; 32]> {
 ///   - Insert the batchPoseidonRoot as a tree leaf (confirmed state).
 ///   - Insert all nullifiers from real slots (confirmed state).
 fn apply_tx_preimage(preimage: &[u8], state: &mut StateSnapshot) -> anyhow::Result<()> {
+	validate_tx_preimage_len(preimage)?;
 	state.insert_leaf(leaf_from_preimage(preimage))?;
 	for nullifier in nullifiers_from_tx_preimage(preimage) {
 		state.insert_nullifier(nullifier);
@@ -571,6 +710,7 @@ fn apply_tx_preimage(preimage: &[u8], state: &mut StateSnapshot) -> anyhow::Resu
 ///   - Insert the batchPoseidonRoot as a tree leaf.
 ///   - Insert account nullifiers from all real withdraw and deposit slots.
 fn apply_bridge_tx_preimage(preimage: &[u8], state: &mut StateSnapshot) -> anyhow::Result<()> {
+	validate_bridge_tx_preimage_len(preimage)?;
 	state.insert_leaf(leaf_from_preimage(preimage))?;
 	for nullifier in nullifiers_from_bridge_tx_preimage(preimage) {
 		state.insert_nullifier(nullifier);
