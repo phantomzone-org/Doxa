@@ -252,7 +252,7 @@ async fn fill_missing_submission_txs<P: Provider + Clone>(
 	chunk_blocks: u64,
 ) -> anyhow::Result<()> {
 	for entry in ordered_batches {
-		let (map, sig, name) = match entry.kind {
+		let (map, sig, name): (&mut HashMap<B256, B256>, _, &str) = match entry.kind {
 			BatchKind::Transaction => (
 				tx_submit_map,
 				ITesseraRollupV2::TransactionBatchSubmitted::SIGNATURE_HASH,

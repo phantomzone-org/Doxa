@@ -4,9 +4,9 @@
 //!
 //! ```text
 //! <TESSERA_BRIDGE_TX_ARTIFACTS_PATH>/
-//! ├── withdraw-agg/     ← Withdraw GenericAggregator (arity=4, depth=4, 256 slots)
-//! ├── deposit-agg/      ← Deposit GenericAggregator (arity=4, depth=4, 256 slots)
-//! ├── subtree-root/     ← SubtreeRootCircuit
+//! ├── pair-agg/         ← Pair GenericAggregator (arity=4, depth=4, 256 (W,D) pair slots)
+//! │   └── pair-leaf/    ← PairLeaf circuit data + inner W/D circuit data
+//! ├── subtree-root/     ← SubtreeRootCircuit (512 leaves)
 //! ├── super-circuit/    ← BridgeTxSuperCircuit
 //! ├── plonky2-proof/    ← BN128Wrapper circuit data (JSON + .bin)
 //! └── groth-artifacts/  ← Groth16 proving key, verifying key, r1cs
@@ -59,9 +59,7 @@ fn main() -> Result<()> {
 			&TesseraGateSerializer,
 		)?
 	} else {
-		info!(
-			"[1] Building BridgeTxAggregator (withdraw arity=4 depth=4, deposit arity=4 depth=4) …"
-		);
+		info!("[1] Building BridgeTxAggregator (pair-based, arity=4, depth=4, 256 W+D pairs) …");
 		let now = Instant::now();
 		let w = build_withdraw_tx_circuit();
 		let d = build_deposit_tx_circuit();

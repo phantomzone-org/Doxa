@@ -40,7 +40,7 @@ pub mod targets;
 
 pub use aggregator::BridgeTxAggregator;
 pub use circuit::BridgeTxSuperCircuit;
-pub use targets::BridgeTxSuperCircuitData;
+pub use targets::{BridgeTxPairLeafData, BridgeTxSuperCircuitData};
 
 #[cfg(test)]
 mod tests;

@@ -18,19 +18,15 @@ use super::{
 // ---------------------------------------------------------------------------
 
 pub(super) const CIRCUIT_DATA_PATH: &str = "circuit_data.bin";
-pub(super) const W_COMMON_PATH: &str = "w_common.bin";
-pub(super) const W_VERIFIER_PATH: &str = "w_verifier.bin";
-pub(super) const D_COMMON_PATH: &str = "d_common.bin";
-pub(super) const D_VERIFIER_PATH: &str = "d_verifier.bin";
+pub(super) const PAIR_COMMON_PATH: &str = "pair_common.bin";
+pub(super) const PAIR_VERIFIER_PATH: &str = "pair_verifier.bin";
 pub(super) const SR_COMMON_PATH: &str = "sr_common.bin";
 pub(super) const SR_VERIFIER_PATH: &str = "sr_verifier.bin";
 
 const ARTIFACT_FILES: &[&str] = &[
 	CIRCUIT_DATA_PATH,
-	W_COMMON_PATH,
-	W_VERIFIER_PATH,
-	D_COMMON_PATH,
-	D_VERIFIER_PATH,
+	PAIR_COMMON_PATH,
+	PAIR_VERIFIER_PATH,
 	SR_COMMON_PATH,
 	SR_VERIFIER_PATH,
 ];
@@ -40,10 +36,11 @@ const ARTIFACT_FILES: &[&str] = &[
 // ---------------------------------------------------------------------------
 
 /// Recursion circuit that:
-/// 1. Verifies withdraw, deposit, and SubtreeRoot aggregation proofs.
-/// 2. Cross-checks SR leaves against TX output commitments.
-/// 3. Asserts uniform `act_root` / `mainpool_config_root` across all slots.
-/// 4. Emits `super_pi_commitment = Keccak256(preimage)` as 8 u32 public inputs.
+/// 1. Verifies the pair-aggregation proof (root of 256 W+D pair proofs).
+/// 2. Verifies the SubtreeRoot (SR) proof over 512 output commitments.
+/// 3. Cross-checks SR leaves against TX output commitments.
+/// 4. Asserts uniform `act_root` / `mainpool_config_root` across all pair slots.
+/// 5. Emits `super_pi_commitment = Keccak256(preimage)` as 8 u32 public inputs.
 pub struct BridgeTxSuperCircuit {
 	pub circuit_data: CircuitDataNative,
 	pub(super) targets: BridgeTxSuperTargets,
@@ -51,29 +48,19 @@ pub struct BridgeTxSuperCircuit {
 }
 
 impl BridgeTxSuperCircuit {
-	/// Build the circuit from the three inner [`CircuitData`] objects.
+	/// Build the circuit from the pair-agg and SR inner [`CircuitData`] objects.
 	pub fn build(inner: BridgeTxSuperCircuitData) -> Result<Self> {
 		let (builder, targets) = setup_super_builder(&inner);
 		let circuit_data = builder.build::<ConfigNative>();
-		Ok(Self {
-			circuit_data,
-			targets,
-			inner,
-		})
+		Ok(Self { circuit_data, targets, inner })
 	}
 
-	/// Prove: verify all three inner proofs and emit the 8-word `super_pi_commitment`.
-	pub fn prove(
-		&self,
-		w_agg: ProofNative,
-		d_agg: ProofNative,
-		sr: ProofNative,
-	) -> Result<ProofNative> {
+	/// Prove: verify pair-aggregation proof + SR proof, emit the 8-word
+	/// `super_pi_commitment`.
+	pub fn prove(&self, pair_agg: ProofNative, sr: ProofNative) -> Result<ProofNative> {
 		let mut pw = PartialWitness::new();
-		pw.set_proof_with_pis_target(&self.targets.withdraw_proof, &w_agg)
-			.map_err(|e| anyhow!("set w_proof: {e}"))?;
-		pw.set_proof_with_pis_target(&self.targets.deposit_proof, &d_agg)
-			.map_err(|e| anyhow!("set d_proof: {e}"))?;
+		pw.set_proof_with_pis_target(&self.targets.pair_proof, &pair_agg)
+			.map_err(|e| anyhow!("set pair_proof: {e}"))?;
 		pw.set_proof_with_pis_target(&self.targets.poseidon_root_proof, &sr)
 			.map_err(|e| anyhow!("set sr_proof: {e}"))?;
 		self.circuit_data
@@ -93,34 +80,33 @@ impl BridgeTxSuperCircuit {
 			.map_err(|_| anyhow!("serialize BridgeTxSuperCircuit circuit_data failed"))?;
 		fs::write(path.join(CIRCUIT_DATA_PATH), cd_bytes)?;
 
-		write_common(path.join(W_COMMON_PATH), &self.inner.withdraw_common, &gate_ser)?;
-		write_verifier(path.join(W_VERIFIER_PATH), &self.inner.withdraw_verifier)?;
-		write_common(path.join(D_COMMON_PATH), &self.inner.deposit_common, &gate_ser)?;
-		write_verifier(path.join(D_VERIFIER_PATH), &self.inner.deposit_verifier)?;
+		write_common(path.join(PAIR_COMMON_PATH), &self.inner.pair_common, &gate_ser)?;
+		write_verifier(path.join(PAIR_VERIFIER_PATH), &self.inner.pair_verifier)?;
 		write_common(path.join(SR_COMMON_PATH), &self.inner.poseidon_root_common, &gate_ser)?;
 		write_verifier(path.join(SR_VERIFIER_PATH), &self.inner.poseidon_root_verifier)?;
 		Ok(())
 	}
 
 	/// Reconstruct from pre-generated artifacts without recompiling.
-	pub fn from_artifacts(path: &Path) -> Result<Self> {
+	///
+	/// `w_unique_size` and `d_unique_size` are derived by the caller from the
+	/// pair-leaf circuit's inner W/D circuit PI counts minus 8 common fields each.
+	pub fn from_artifacts(path: &Path, w_unique_size: usize, d_unique_size: usize) -> Result<Self> {
 		let gate_ser = DefaultGateSerializer;
 		let gen_ser = TesseraGeneratorSerializer;
 
-		let w_common = read_common(path.join(W_COMMON_PATH), &gate_ser, "w_common")?;
-		let w_verifier = read_verifier(path.join(W_VERIFIER_PATH), "w_verifier")?;
-		let d_common = read_common(path.join(D_COMMON_PATH), &gate_ser, "d_common")?;
-		let d_verifier = read_verifier(path.join(D_VERIFIER_PATH), "d_verifier")?;
+		let pair_common = read_common(path.join(PAIR_COMMON_PATH), &gate_ser, "pair_common")?;
+		let pair_verifier = read_verifier(path.join(PAIR_VERIFIER_PATH), "pair_verifier")?;
 		let sr_common = read_common(path.join(SR_COMMON_PATH), &gate_ser, "sr_common")?;
 		let sr_verifier = read_verifier(path.join(SR_VERIFIER_PATH), "sr_verifier")?;
 
 		let inner = BridgeTxSuperCircuitData {
-			withdraw_common: w_common,
-			withdraw_verifier: w_verifier,
-			deposit_common: d_common,
-			deposit_verifier: d_verifier,
+			pair_common,
+			pair_verifier,
 			poseidon_root_common: sr_common,
 			poseidon_root_verifier: sr_verifier,
+			w_unique_size,
+			d_unique_size,
 		};
 		let (_, targets) = setup_super_builder(&inner);
 
@@ -134,11 +120,7 @@ impl BridgeTxSuperCircuit {
 				)
 			})?;
 
-		Ok(Self {
-			circuit_data,
-			targets,
-			inner,
-		})
+		Ok(Self { circuit_data, targets, inner })
 	}
 
 	/// Returns `true` if all artifact files are present under `path`.

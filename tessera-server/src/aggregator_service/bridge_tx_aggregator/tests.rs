@@ -128,28 +128,15 @@ use crate::aggregator_service::generic_aggregator::GenericAggregatorConfig;
 
 const HALF: usize = BRIDGE_TX_BATCH_SIZE / 2;
 
-/// `GenericAggregatorConfig{arity=4, depth=4}` must be valid (`4^4 = 256 slots`).
+/// The pair aggregator config: arity=4, depth=4 → 4^4 = 256 pair slots.
 #[test]
-fn bridge_tx_w_agg_config_is_valid() {
-	let cfg = GenericAggregatorConfig {
-		arity: 4,
-		depth: 4,
-	};
-	assert!(cfg.validate().is_ok(), "withdraw agg config must be valid");
+fn bridge_tx_pair_agg_config_is_valid() {
+	let cfg = GenericAggregatorConfig { arity: 4, depth: 4 };
+	assert!(cfg.validate().is_ok(), "pair agg config must be valid");
 	assert_eq!(cfg.arity.pow(cfg.depth as u32), HALF, "4^4 must equal HALF (256)");
 }
 
-/// The deposit aggregator config is identical — same validation.
-#[test]
-fn bridge_tx_d_agg_config_is_valid() {
-	let cfg = GenericAggregatorConfig {
-		arity: 4,
-		depth: 4,
-	};
-	assert!(cfg.validate().is_ok(), "deposit agg config must be valid");
-}
-
-/// `HALF == 4^4 == 256` — each aggregator handles exactly one half of the batch.
+/// `HALF == 4^4 == 256` — the pair aggregator handles one pair per slot.
 #[test]
 fn bridge_tx_half_is_arity_power() {
 	assert_eq!(HALF, 4_usize.pow(4), "HALF must equal 4^4");
@@ -162,24 +149,34 @@ fn bridge_tx_sr_leaf_count_matches() {
 	assert_eq!(HALF + HALF, SUBTREE_BATCHSIZE, "2*HALF must equal SUBTREE_BATCHSIZE");
 }
 
-/// Verify the expected Keccak preimage word count.
+/// Verify the expected pair PI count and Keccak preimage word count.
+///
+/// Pair PI layout per slot:
+///   common[8] = act_root(4) + mainpool(4)
+///   w_unique  = not_fake_tx(1) + accin_null(4) + accout_comm(4) + asset_ids(7)
+///             + withdrawal_amts(7×8=56) + w_acc_addr(5) = 77
+///   d_unique  = not_fake_tx(1) + accin_null(4) + accout_comm(4) + note_comm(4)
+///             + eth_address(5) + amount(8) + asset_id(1) = 27
+///   pair_pi_size = 8 + 77 + 27 = 112
+///
+/// Pair aggregator root PIs = 256 × 112 = 28672
 ///
 /// Preimage = sr_root[4] + act_root[4] + mcr[4]
-///   + 256 × w_unique_pis + 256 × d_unique_pis
-///
-/// w_unique = not_fake_tx[1] + accin_null[4] + accout_comm[4] + asset_ids[7]
-///          + withdrawal_amts[7*8=56] + w_acc_addr[5] = 77
-/// d_unique = not_fake_tx[1] + accin_null[4] + accout_comm[4] + note_comm[4]
-///          + eth_address[5] + amount[8] + asset_id[1] = 27
-///
-/// Total fields = 12 + 256×77 + 256×27 = 26636 → u32 words = 53272.
+///   + 256 × w_unique + 256 × d_unique
+/// Total fields = 12 + 256×77 + 256×27 = 26636 → u32 words = 53272
+/// (unchanged from the old two-aggregator design).
 #[test]
-fn bridge_tx_preimage_word_count() {
+fn bridge_tx_pair_pi_and_preimage_word_count() {
 	let w_unique = 1 + 4 + 4 + NOTE_BATCH + NOTE_BATCH * 8 + 5; // = 77
 	let d_unique = 1 + 4 + 4 + 4 + 5 + 8 + 1; // = 27
-	let total_fields = 4 + 4 + 4 + HALF * w_unique + HALF * d_unique;
+	let pair_pi_size = 8 + w_unique + d_unique; // = 112
+	let pair_agg_root_pis = HALF * pair_pi_size; // = 28672
+	let total_preimage_fields = 4 + 4 + 4 + HALF * w_unique + HALF * d_unique;
+
 	assert_eq!(w_unique, 77, "w_unique mismatch");
 	assert_eq!(d_unique, 27, "d_unique mismatch");
-	assert_eq!(total_fields, 26636, "total preimage fields");
-	assert_eq!(total_fields * 2, 53272, "total preimage u32 words");
+	assert_eq!(pair_pi_size, 112, "pair_pi_size mismatch");
+	assert_eq!(pair_agg_root_pis, 28672, "pair_agg root PI count mismatch");
+	assert_eq!(total_preimage_fields, 26636, "total preimage fields unchanged");
+	assert_eq!(total_preimage_fields * 2, 53272, "total preimage u32 words unchanged");
 }
