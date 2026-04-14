@@ -45,6 +45,8 @@ const CONSUME_KEY_INDEX: usize = 2;
 ///       node0                           node1
 /// H(approval)  H(rejection)     H(consume)  H(zero×5)
 /// ```
+// TODO SubpoolConfigTree is modified to only consist of approval_key. rejection_key, consume_key
+// are removed.
 pub struct SubpoolConfigTree<H: MerkleHash> {
 	pub approval_key: CompPubKey,
 	pub rejection_key: CompPubKey,
