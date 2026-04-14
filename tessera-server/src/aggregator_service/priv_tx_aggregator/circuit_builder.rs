@@ -1,14 +1,13 @@
 use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
 use tessera_client::{
-	NOTE_BATCH, PRIV_TX_BATCH_SIZE, SUBTREE_BATCHSIZE,
-	plonky2_gadgets::priv_tx::targets::TxCircuitPublicTargets,
+	plonky2_gadgets::priv_tx::targets::TxCircuitPublicTargets, NOTE_BATCH, PRIV_TX_BATCH_SIZE,
+	SUBTREE_BATCHSIZE,
 };
 use tessera_utils::{
-	ConfigNative, D, F,
 	plonky2_gadgets::{
-		keccak256::builder::BuilderKeccak256,
-		u32::gadgets::add_u8_range_check_lookup_table,
+		keccak256::builder::BuilderKeccak256, u32::gadgets::add_u8_range_check_lookup_table,
 	},
+	ConfigNative, D, F,
 };
 
 use super::targets::{PrivTxSuperCircuitData, PrivTxSuperTargets};
@@ -59,9 +58,9 @@ pub(super) fn setup_super_builder(
 		})
 		.collect();
 
-	// 5. Cross-check: SR leaves == TX output_commitments (unconditional — SR is
-	//    built from ALL proofs, including padding).
-	//    SR leaf order per slot: [AC, NC0..NC6] (8 leaves, 1 + NOTE_BATCH).
+	// 5. Cross-check: SR leaves == TX output_commitments (unconditional — SR is built from ALL
+	//    proofs, including padding). SR leaf order per slot: [AC, NC0..NC6] (8 leaves, 1 +
+	//    NOTE_BATCH).
 	let leaves_per_slot = 1 + NOTE_BATCH;
 	for (s, slot) in slots.iter().enumerate() {
 		for (j, tx_comm) in slot.output_commitments().iter().enumerate() {
@@ -74,11 +73,8 @@ pub(super) fn setup_super_builder(
 
 	// 6. Assert uniform common PIs across all slots.
 	for slot in slots.iter().skip(1) {
-		builder.connect_hashes(slot.root.0, slots[0].root.0);
-		builder.connect_hashes(
-			slot.mainpool_config_root.0,
-			slots[0].mainpool_config_root.0,
-		);
+		builder.connect_hashes(slot.state_root.0, slots[0].state_root.0);
+		builder.connect_hashes(slot.mainpool_config_root.0, slots[0].mainpool_config_root.0);
 	}
 
 	// 7. Build Keccak preimage (all via named fields — no raw indices).
@@ -91,7 +87,7 @@ pub(super) fn setup_super_builder(
 	// common PIs once — from slot 0 (all slots asserted equal above)
 	u32_words.extend(fields_to_u32_words(
 		&mut builder,
-		&slots[0].root.0.elements,
+		&slots[0].state_root.0.elements,
 		lut,
 	));
 	u32_words.extend(fields_to_u32_words(
@@ -114,6 +110,9 @@ pub(super) fn setup_super_builder(
 		builder.register_public_input(w);
 	}
 
-	let targets = PrivTxSuperTargets { tx_proof, sr_proof };
+	let targets = PrivTxSuperTargets {
+		tx_proof,
+		sr_proof,
+	};
 	(builder, targets)
 }

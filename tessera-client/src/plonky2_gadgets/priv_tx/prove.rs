@@ -24,7 +24,7 @@ use crate::{
 			targets::{
 				AccountCommitmentTarget, AccountNullifierTarget, AssetIdTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-				RootTarget, SubpoolIdTarget, TxCircuitTargets, TxKindFlags,
+				StateRootTarget, SubpoolIdTarget, TxCircuitTargets, TxKindFlags,
 			},
 		},
 		signature::PubkeyTarget,
@@ -116,7 +116,7 @@ fn prove_priv_tx_inner(
 	use crate::{
 		ConsumeAuth, Nonce, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
 		derive_priv_tx_hash,
-		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+		pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 		schnorr::{PrivateKey, Scalar, schnorr_sign},
 	};
 
@@ -131,11 +131,11 @@ fn prove_priv_tx_inner(
 	let consume_sk = PrivateKey::new(Scalar::sample(&mut rng));
 	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
-	let subpool = SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
+	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
 	let subpool_id = SubpoolId(F::ONE);
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.root())
+		.insert_subpool(subpool_id, subpool.commitment())
 		.unwrap();
 
 	let accin = StandardAccount::sample(&mut rng, subpool_id);
@@ -191,8 +191,6 @@ fn prove_priv_tx_inner(
 			new_consume_auth,
 			HashOutput([F::ZERO; 4]),
 			approval_cpk,
-			rejection_cpk,
-			consume_cpk,
 			subpool_id,
 			&main_pool,
 			approval_sig,
@@ -315,8 +313,6 @@ pub fn prove_priv_tx(
 			i.new_consume_auth,
 			i.root,
 			i.approval_key,
-			i.rejection_key,
-			i.consume_key,
 			i.subpool_id,
 			&i.main_pool,
 			i.approval_sig,
@@ -334,8 +330,6 @@ pub fn prove_priv_tx(
 			&i.onotes,
 			i.dinotes,
 			i.donotes,
-			i.approval_key,
-			i.rejection_key,
 			i.consume_key,
 			i.subpool_id,
 			&i.main_pool,
@@ -355,8 +349,6 @@ pub fn prove_priv_tx(
 			i.dinotes,
 			i.donotes,
 			i.approval_key,
-			i.rejection_key,
-			i.consume_key,
 			i.subpool_id,
 			&i.main_pool,
 			i.consume_sig,

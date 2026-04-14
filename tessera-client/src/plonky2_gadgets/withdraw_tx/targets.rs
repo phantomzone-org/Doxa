@@ -1,6 +1,8 @@
 use plonky2::{
-	hash::hash_types::{HashOutTarget, RichField},
-	hash::poseidon::Poseidon,
+	hash::{
+		hash_types::{HashOutTarget, RichField},
+		poseidon::Poseidon,
+	},
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
@@ -16,12 +18,12 @@ use tessera_utils::{
 };
 
 use crate::{
-	AssetId, COM_TREE_DEPTH, NOTE_BATCH, StandardAccount, SubpoolId, derive_withdraw_tx_hash,
+	AssetId, NOTE_BATCH, STATE_TREE_DEPTH, StandardAccount, SubpoolId, derive_withdraw_tx_hash,
 	plonky2_gadgets::{
 		merkle::MerkleRootTarget,
 		priv_tx::targets::{
 			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
-			MainPoolConfigRootTarget, RootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
+			MainPoolConfigRootTarget, StateRootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
 		},
 		set_hash,
 		signature::{PubkeyTarget, SchnorrTargets},
@@ -38,7 +40,7 @@ use crate::{
 /// Public input targets for the withdrawal transaction circuit.
 pub struct WithdrawTxPublicTargets {
 	/// PI[0..4]: Account Commitment Tree root.
-	pub root: RootTarget,
+	pub root: StateRootTarget,
 	/// PI[4..8]: Main pool configuration tree root.
 	pub mainpool_config_root: MainPoolConfigRootTarget,
 	/// PI[8]: 1 for a real withdrawal, 0 for a dummy/padding proof.
@@ -91,7 +93,7 @@ impl WithdrawTxPublicTargets {
 		let (wamt_s, rest) = rest.split_at(NOTE_BATCH * 8);
 		let (addr_s, _) = rest.split_at(5);
 		Self {
-			root: RootTarget(HashOutTarget {
+			root: StateRootTarget(HashOutTarget {
 				elements: root_s.try_into().unwrap(),
 			}),
 			mainpool_config_root: MainPoolConfigRootTarget(HashOutTarget {
@@ -340,7 +342,7 @@ impl WithdrawTxPrivateTargets {
 		let (_, subpool_proof) = SubpoolConfigTree::fake_instance();
 
 		// Build a minimal ACT containing only accin so the ACT proof is valid.
-		let mut act = MerkleTree::<HashOutput>::new(COM_TREE_DEPTH);
+		let mut act = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
 		let accin_pos_idx = act.insert(accin.commitment().0).unwrap();
 		let accin_act_merkle_proof = act.merkle_proof(accin_pos_idx).unwrap();
 

@@ -14,7 +14,9 @@ use tessera_utils::{
 use crate::{
 	ACC_AST_DEPTH, AST_DEFAULT_LEAF, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
 	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER,
-	DepositNoteCommitment, NOTE_BATCH, NoteCommitment, NoteNullifier, schnorr::CompressedPublicKey,
+	DepositNoteCommitment, NOTE_BATCH, NoteCommitment, NoteNullifier,
+	ecgfp5::CompressedPoint,
+	schnorr::CompressedPublicKey,
 	utils::map_h160_to_f,
 };
 
@@ -384,6 +386,13 @@ impl StandardAccount {
 		let mut next = self.clone();
 		next.nonce = self.nonce.incremented();
 		next
+	}
+
+	/// Return the consume public key, falling back to the default placeholder if unset.
+	pub fn consume_pk_or_default(&self) -> CompressedPublicKey<F> {
+		self.consume_auth.pk.unwrap_or_else(|| {
+			CompressedPublicKey(CompressedPoint::from(DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER))
+		})
 	}
 
 	/// Return the shareable [`AccountAddress`] (subpool_id + public_id).

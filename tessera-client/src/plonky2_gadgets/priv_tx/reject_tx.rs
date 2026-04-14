@@ -6,18 +6,15 @@ use tessera_utils::{F, hasher::HashOutput};
 
 use super::{double_hash_native, targets::TxCircuitTargets};
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier,
-	StandardAccount, SubpoolId,
+	AccountAddress, AssetId, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, NOTE_BATCH, Nonce,
+	NoteCommitment, NoteNullifier, STATE_TREE_DEPTH, StandardAccount, SubpoolId,
 	account::PublicIdentifier,
 	derive_priv_tx_hash,
-	ecgfp5::PointEw,
+	ecgfp5::{CompressedPoint, PointEw},
 	note::{NoteIdentifier, StandardNote},
-	plonky2_gadgets::{
-		set_hash,
-		witness::{set_hash_blocks, set_subpool_full_proof},
-	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
-	schnorr::Signature,
+	plonky2_gadgets::{set_hash, witness::set_hash_blocks},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
+	schnorr::{CompressedPublicKey, Signature},
 };
 
 /// Fill `pw` with a complete reject transaction witness.
@@ -38,11 +35,9 @@ pub(crate) fn set_reject_tx_witness(
 	dinotes: [[F; 4]; NOTE_BATCH],
 	donotes: [[F; 4]; NOTE_BATCH],
 	approval_key: CompPubKey,
-	rejection_key: CompPubKey,
-	consume_key: CompPubKey,
 	subpool_id: SubpoolId,
 	main_pool: &MainPoolConfigTree<HashOutput>,
-	consume_sig: Signature,
+	consume_sig: Option<Signature>,
 	approval_sig: Signature,
 ) {
 	assert!(inotes.len() <= NOTE_BATCH);
@@ -58,7 +53,8 @@ pub(crate) fn set_reject_tx_witness(
 
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = core::array::from_fn(|i| {
 		if i < inotes.len() {
-			StandardNote::nullifier(&inotes[i].commitment(), inotes_nct_proofs[i].pos, &nk)
+			inotes[i]
+				.nullifier(inotes_nct_proofs[i].pos, &nk)
 				.expect("note position must be < F::ORDER")
 		} else {
 			NoteNullifier(HashOutput(double_hash_native(dinotes[i])))
@@ -79,16 +75,7 @@ pub(crate) fn set_reject_tx_witness(
 	);
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	t.set_common_witnesses(
-		pw,
-		main_pool.root(),
-		root,
-		approval_key,
-		rejection_key,
-		consume_key,
-		accin,
-		&accout,
-	);
+	t.set_common_witnesses(pw, main_pool.root(), root, approval_key, accin, &accout);
 
 	set_hash(pw, t.public.accin_null.0, accin_null.0.0);
 	set_hash(pw, t.public.accout_comm.0, accout.commitment().0.0);
@@ -113,11 +100,6 @@ pub(crate) fn set_reject_tx_witness(
 		.unwrap();
 	pw.set_bool_target(t.private.asset_exists_in_accout, asset_exists)
 		.unwrap();
-	pw.set_target(
-		t.private.accin_pos,
-		F::from_canonical_usize(accin_act_merkle_proof.pos),
-	)
-	.unwrap();
 
 	// ── ACT Merkle proof ──────────────────────────────────────────────────────
 	t.private
@@ -185,21 +167,17 @@ pub(crate) fn set_reject_tx_witness(
 	set_hash_blocks(pw, &t.private.dinotes.map(|note| note.0), &dinotes);
 	set_hash_blocks(pw, &t.private.donotes.map(|note| note.0), &donotes);
 
-	let subpool = SubpoolConfigTree::new(approval_key, rejection_key, consume_key);
+	let subpool = SubpoolConfig::new(approval_key);
 	let subpool_proof = main_pool
 		.full_subpool_proof(&subpool, subpool_id)
 		.expect("subpool not registered in main_pool at the given subpool_id");
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
-	set_subpool_full_proof(
+	t.private.subpool_proof_targets.set_witness(
 		pw,
-		&t.private.subpool_proof_targets,
 		subpool_proof,
-		subpool.root(),
+		subpool.commitment(),
 		subpool_id,
-		approval_key,
-		rejection_key,
-		consume_key,
 	);
 
 	// ── Signatures ────────────────────────────────────────────────────────────
@@ -211,11 +189,24 @@ pub(crate) fn set_reject_tx_witness(
 		.expect("accin must have a spend_pk");
 	t.private.sig_targets.spend.set_fake(pw, spend_pk);
 
-	// Consume (real — is_consume_req = has_inotes AND not_is_spend_req = true)
-	t.private
-		.sig_targets
-		.consume
-		.set(pw, consume_key, tx_hash, consume_sig);
+	// Consume (required). Set to real if consume_auth == 1 other set to fake (since note
+	// consumtpion is delegated to approval_key)
+	let consume_public_key = accin.consume_auth.pk.unwrap_or_else(|| {
+		CompressedPublicKey(CompressedPoint::from(
+			DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+		))
+	});
+	if let Some(sig) = consume_sig {
+		t.private
+			.sig_targets
+			.consume
+			.set(pw, consume_public_key, tx_hash, sig);
+	} else {
+		t.private
+			.sig_targets
+			.consume
+			.set_fake(pw, consume_public_key);
+	}
 
 	// Approval (real — always required)
 	t.private

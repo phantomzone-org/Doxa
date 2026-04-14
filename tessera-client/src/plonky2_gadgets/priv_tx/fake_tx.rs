@@ -11,20 +11,18 @@ use tessera_utils::{
 
 use super::{double_hash_native, targets::TxCircuitTargets};
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH,
-	NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, PrivateIdentifier, SpendAuth,
-	StandardAccount, SubpoolId,
+	AccountAddress, AssetId, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce,
+	NoteCommitment, NoteNullifier, PrivateIdentifier, STATE_TREE_DEPTH, SpendAuth, StandardAccount,
+	SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
 	derive_priv_tx_hash,
 	ecgfp5::CompressedPoint,
 	note::{NoteIdentifier, StandardNote},
 	plonky2_gadgets::{
 		set_hash, set_u256_zero,
-		witness::{
-			fake_authority_key, set_authority_keys, set_hash_blocks, set_subpool_full_proof,
-		},
+		witness::{fake_authority_key, set_hash_blocks},
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::{CompressedPublicKey, PrivateKey, Signature},
 };
 
@@ -43,13 +41,15 @@ use crate::{
 pub fn set_fake_tx_witness(
 	pw: &mut PartialWitness<F>,
 	t: &TxCircuitTargets,
-	root: HashOutput,
+	state_root: HashOutput,
 	mainpool_config_root: HashOutput,
 	accin_null_override: [F; 4],
 	accout_comm_override: [F; 4],
 	override_nc: [[F; 4]; crate::NOTE_BATCH],
 ) {
 	// ── Sample accin ────────────────────────────────────────────────────────--
+	// TODO: Why can't we fix Nullifier as `accin`'s nullifier and Commitment as `accout`'s
+	// commitment in fake tx. Why are override values necessary?
 	let accin = StandardAccount::new_with(
 		PrivateIdentifier([F::from_canonical_u64(1), F::from_noncanonical_u64(2)]),
 		SubpoolId(F::ZERO),
@@ -60,16 +60,7 @@ pub fn set_fake_tx_witness(
 
 	// ── Tree roots ─────────────────────────────────────────────────-----------
 	let key = fake_authority_key();
-	t.set_common_witnesses(
-		pw,
-		mainpool_config_root,
-		root,
-		key,
-		key,
-		key,
-		&accin,
-		&accout,
-	);
+	t.set_common_witnesses(pw, mainpool_config_root, state_root, key, &accin, &accout);
 	set_hash(pw, t.public.accin_null.0, accin_null_override);
 	set_hash(pw, t.public.accout_comm.0, accout_comm_override);
 
@@ -81,7 +72,6 @@ pub fn set_fake_tx_witness(
 		.unwrap();
 	pw.set_bool_target(t.private.asset_exists_in_accout, false)
 		.unwrap();
-	pw.set_target(t.private.accin_pos, F::ZERO).unwrap();
 
 	// ── ACT Merkle proof (all zeros) ──────────────────────────────────────────
 	t.private.accin_act_merkle.set_dummy_witness(pw);
@@ -137,41 +127,9 @@ pub fn set_fake_tx_witness(
 	);
 
 	// ── Subpool proof ─────────────────────────────────────────────────────────
-	// The three key-membership proofs are real (reconstructed from the fake keys).
-	// Only the main-pool inclusion proof is zeroed — it is not enforced when
+	// The main-pool inclusion proof is zeroed — it is not enforced when
 	// not_fake_tx = false.
-	let fake_subpool = SubpoolConfigTree::new(key, key, key);
-
-	let fake_subpool_approval_key_proof = fake_subpool.approval_key_proof().unwrap();
-	let fake_subpool_rejection_key_proof = fake_subpool.rejection_key_proof().unwrap();
-	let fake_subpool_consume_key_proof = fake_subpool.consume_key_proof().unwrap();
-
-	t.private
-		.subpool_proof_targets
-		.approval_proof
-		.set_witness(pw, &fake_subpool_approval_key_proof);
-	t.private
-		.subpool_proof_targets
-		.rejection_proof
-		.set_witness(pw, &fake_subpool_rejection_key_proof);
-	t.private
-		.subpool_proof_targets
-		.consume_proof
-		.set_witness(pw, &fake_subpool_consume_key_proof);
-	t.private
-		.subpool_proof_targets
-		.main_pool_proof
-		.set_dummy_witness(pw);
-
-	pw.set_target_arr(
-		&t.private
-			.subpool_proof_targets
-			.subpool_config_root
-			.0
-			.elements,
-		&fake_subpool.root().0,
-	)
-	.unwrap();
+	t.private.subpool_proof_targets.set_fake(pw);
 
 	// ── Signatures (all fake) ─────────────────────────────────────────────────
 	// The spend circuit gate uses accin.spend_auth as cq — must match what

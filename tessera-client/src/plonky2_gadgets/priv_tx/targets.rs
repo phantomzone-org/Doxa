@@ -1,5 +1,5 @@
 use plonky2::{
-	hash::hash_types::{HashOutTarget, RichField},
+	hash::hash_types::{HashOut, HashOutTarget, RichField},
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
@@ -13,15 +13,14 @@ use tessera_utils::{
 };
 
 use crate::{
-	COM_TREE_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, NOTE_BATCH,
-	StandardAccount,
+	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, NOTE_BATCH, STATE_TREE_DEPTH,
+	StandardAccount, SubpoolId,
 	plonky2_gadgets::{
 		merkle::MerkleRootTarget,
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
-		witness::set_authority_keys,
 	},
-	pool_config::CompPubKey,
+	pool_config::{CompPubKey, SubpoolFullProof},
 };
 
 // ----- Account related targets -----
@@ -225,7 +224,8 @@ pub(crate) struct TxHashTarget(pub(crate) HashOutTarget);
 /// The three Schnorr signature targets required for a private transaction.
 ///
 /// - `spend`: signed by the account's spend key (required for spend-kind tx).
-/// - `consume`: signed by own or subpool consume key (required for all real tx).
+/// - `consume`: signed by own (required if consume.auth=1 and tx has >=1 input notes but 0 output
+///   notes).
 /// - `approval`: signed by the subpool approval key (always required).
 #[derive(Clone)]
 pub(crate) struct TxSignatureTargets {
@@ -236,7 +236,7 @@ pub(crate) struct TxSignatureTargets {
 
 /// The Note/Account Commitment Tree root (shared ACT + NCT root in V2).
 #[derive(Clone, Copy)]
-pub struct RootTarget(pub HashOutTarget);
+pub struct StateRootTarget(pub HashOutTarget);
 
 /// Root of the main pool configuration tree (depth [`MAIN_POOL_CONFIG_DEPTH`]).
 #[derive(Clone, Copy)]
@@ -244,7 +244,7 @@ pub struct MainPoolConfigRootTarget(pub HashOutTarget);
 
 /// Root of a single subpool's authority-key tree (depth [`SUBPOOL_CONFIG_DEPTH`]).
 #[derive(Clone, Copy)]
-pub(crate) struct SubpoolConfigRootTarget(pub(crate) HashOutTarget);
+pub(crate) struct SubpoolConfigCommitmentTarget(pub(crate) HashOutTarget);
 
 /// In-circuit representation of an [`AssetId`](crate::account::AssetId).
 #[derive(Clone, Copy)]
@@ -257,16 +257,33 @@ pub struct AssetIdTarget(pub Target);
 /// a leaf in the main pool depth-20 tree.
 #[derive(Clone)]
 pub(crate) struct SubpoolFullProofTargets {
-	/// Depth-2 Merkle proof that `approval_key` is in the subpool config tree.
-	pub(crate) approval_proof: MerkleRootTarget,
-	/// Depth-2 Merkle proof that `rejection_key` is in the subpool config tree.
-	pub(crate) rejection_proof: MerkleRootTarget,
-	/// Depth-2 Merkle proof that `consume_key` is in the subpool config tree.
-	pub(crate) consume_proof: MerkleRootTarget,
 	/// Depth-20 Merkle proof that the subpool config root is in the main pool tree.
 	pub(crate) main_pool_proof: MerkleRootTarget,
-	/// The subpool configuration root (derived from the three key proofs).
-	pub(crate) subpool_config_root: SubpoolConfigRootTarget,
+	/// The subpool configuration commitment target
+	pub(crate) subpool_config_comm: SubpoolConfigCommitmentTarget,
+}
+
+impl SubpoolFullProofTargets {
+	pub fn set_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		subpool_proof: SubpoolFullProof<HashOutput>,
+		subpool_config_comm: HashOutput,
+		subpool_id: SubpoolId,
+	) {
+		self.main_pool_proof
+			.set_witness(pw, &subpool_proof.main_pool_proof);
+		pw.set_hash_target(
+			self.subpool_config_comm.0,
+			subpool_config_comm.to_hash_out(),
+		)
+		.unwrap();
+	}
+
+	pub fn set_fake(&self, pw: &mut PartialWitness<F>) {
+		self.main_pool_proof.set_dummy_witness(pw);
+		pw.set_hash_target(self.subpool_config_comm.0, HashOut::ZERO);
+	}
 }
 
 /// All targets allocated by
@@ -354,10 +371,8 @@ impl TxCircuitTargets {
 		&self,
 		pw: &mut PartialWitness<F>,
 		mainpool_config_root: HashOutput,
-		root: HashOutput,
+		state_root: HashOutput,
 		approval_key: CompPubKey,
-		rejection_key: CompPubKey,
-		consume_key: CompPubKey,
 		accin: &StandardAccount,
 		accout: &StandardAccount,
 	) {
@@ -366,18 +381,10 @@ impl TxCircuitTargets {
 			mainpool_config_root.to_hash_out(),
 		)
 		.unwrap();
-		pw.set_hash_target(self.public.root.0, root.to_hash_out())
+		pw.set_hash_target(self.public.state_root.0, state_root.to_hash_out())
 			.unwrap();
 
-		set_authority_keys(
-			pw,
-			self.private.approval_key,
-			self.private.rejection_key,
-			self.private.subpool_consume_key,
-			approval_key,
-			rejection_key,
-			consume_key,
-		);
+		self.private.approval_key.set_witness(pw, approval_key);
 		self.private.accin.set_witness(pw, accin);
 		self.private.accout.set_witness(pw, accout);
 	}
@@ -385,7 +392,7 @@ impl TxCircuitTargets {
 
 pub struct TxCircuitPublicTargets {
 	/// [0..4]: Combined ACT / NCT Merkle root.
-	pub root: RootTarget,
+	pub state_root: StateRootTarget,
 	/// [4..8]: Main pool configuration tree root.
 	pub mainpool_config_root: MainPoolConfigRootTarget,
 	/// [8]: 1 for a real transaction, 0 for a dummy/padding proof.
@@ -405,7 +412,7 @@ impl TxCircuitPublicTargets {
 	where
 		F: RichField + Extendable<D>,
 	{
-		builder.register_public_inputs(&self.root.0.elements);
+		builder.register_public_inputs(&self.state_root.0.elements);
 		builder.register_public_inputs(&self.mainpool_config_root.0.elements);
 		builder.register_public_input(self.not_fake_tx.target);
 		builder.register_public_inputs(&self.accin_null.0.elements);
@@ -438,7 +445,7 @@ impl TxCircuitPublicTargets {
 		let (inull_s, rest) = rest.split_at(NOTE_BATCH * 4);
 		let (ocomm_s, _) = rest.split_at(NOTE_BATCH * 4);
 		Self {
-			root: RootTarget(HashOutTarget {
+			state_root: StateRootTarget(HashOutTarget {
 				elements: root_s.try_into().unwrap(),
 			}),
 			mainpool_config_root: MainPoolConfigRootTarget(HashOutTarget {
@@ -505,8 +512,6 @@ pub struct TxCircuitPrivateTargets {
 
 	// ── Authority public keys ──────────────────────────────────────────────────
 	pub(crate) approval_key: PubkeyTarget,
-	pub(crate) rejection_key: PubkeyTarget,
-	pub(crate) subpool_consume_key: PubkeyTarget,
 	// ── Accounts ──────────────────────────────────────────────────────────────
 	pub(crate) accin: AccountTarget,
 	pub(crate) accout: AccountTarget,
@@ -517,8 +522,6 @@ pub struct TxCircuitPrivateTargets {
 
 	pub(crate) asset_exists_in_accin: BoolTarget,
 	pub(crate) asset_exists_in_accout: BoolTarget,
-	/// AccIn leaf index in the ACT (prover-supplied for non-FreshAcc tx).
-	pub(crate) accin_pos: Target,
 	// ── Merkle targets ────────────────────────────────────────────────────────
 	/// ACT membership proof for AccIn (conditional on `!is_fresh_acc && not_fake_tx`).
 	pub(crate) accin_act_merkle: MerkleRootTarget,

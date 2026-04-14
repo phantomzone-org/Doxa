@@ -88,7 +88,7 @@ pub const DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER: [u64; 5] = [1u64; 5];
 // TODO: atm the point is a random point but not
 /// Default spend-auth public key used in account commitments before a real
 /// spend key has been set (i.e. nonce = 0 / pre-FreshAcc state).
-/// A random-but-fixed curve point derived from
+/// A random curve point derived from
 /// `H("tessera::account::spend::defaultSpendKey")`.
 pub const DEFAULT_SPEND_AUTH_PK: [u64; 5] = [
 	7613690455422068269,
@@ -122,7 +122,7 @@ pub const SUBTREE_BATCHSIZE: usize = 512;
 pub const ACC_AST_DEPTH: usize = 10;
 
 /// Depth of the global Account Commitment Tree (supports 2^32 accounts).
-pub const COM_TREE_DEPTH: usize = 32;
+pub const STATE_TREE_DEPTH: usize = 32;
 
 /// Depth of each per-subpool authority-key configuration tree
 /// (3 leaves: approval / rejection / consume keys).

@@ -10,7 +10,7 @@ use tessera_utils::{
 };
 
 use crate::{
-	AssetId, COM_TREE_DEPTH, NOTE_BATCH, Nonce, PIHelper, SpendAuth, StandardAccount, SubpoolId,
+	AssetId, STATE_TREE_DEPTH, NOTE_BATCH, Nonce, PIHelper, SpendAuth, StandardAccount, SubpoolId,
 	account::AccountStateTreeLeaf,
 	derive_withdraw_tx_hash,
 	plonky2_gadgets::withdraw_tx::{
@@ -62,7 +62,7 @@ fn test_prove_withdraw_tx() {
 		.unwrap();
 
 	// ── Insert accin into ACT ─────────────────────────────────────────
-	let mut act = MerkleTree::<HashOutput>::new(COM_TREE_DEPTH);
+	let mut act = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
 	let accin_insert = act.insert(accin.commitment().0).unwrap();
 
 	let accin_act_proof = act.merkle_proof(accin_insert).unwrap();

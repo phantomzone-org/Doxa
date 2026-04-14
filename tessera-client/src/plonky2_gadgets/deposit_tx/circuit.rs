@@ -8,6 +8,7 @@ use plonky2::{
 		witness::{PartialWitness, WitnessWrite},
 	},
 	plonk::{circuit_builder::CircuitBuilder, config::Hasher},
+	util::bits_u64,
 };
 use plonky2_field::{
 	extension::Extendable,
@@ -22,7 +23,7 @@ use tessera_utils::{
 };
 
 use crate::{
-	ACC_AST_DEPTH, AccountAddress, AssetId, COM_TREE_DEPTH, MAIN_POOL_CONFIG_DEPTH, Nonce,
+	ACC_AST_DEPTH, AccountAddress, AssetId, MAIN_POOL_CONFIG_DEPTH, Nonce, STATE_TREE_DEPTH,
 	SUBPOOL_CONFIG_DEPTH, StandardAccount, SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
 	derive_deposit_tx_hash,
@@ -41,15 +42,14 @@ use crate::{
 			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
 				AccountNullifierTarget, AssetIdTarget, MainPoolConfigRootTarget,
-				PublicIdentifierTaregt, RootTarget, SubpoolIdTarget,
+				PublicIdentifierTaregt, StateRootTarget, SubpoolIdTarget,
 			},
 		},
 		set_hash, set_u256_zero,
 		signature::{LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget},
 		u256::CircuitBuilderU256,
-		witness::{set_authority_keys, set_subpool_full_proof},
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::{CompressedPublicKey, Signature},
 	utils::map_h160_to_f,
 };
@@ -196,10 +196,10 @@ where
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// Authority keys
-	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
+	let approval_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
 
 	// Tree roots
-	let root = RootTarget(builder.add_virtual_hash());
+	let state_root = StateRootTarget(builder.add_virtual_hash());
 	let mainpool_config_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
 
 	// Accounts
@@ -212,9 +212,6 @@ where
 	let accout_amt = builder.add_virtual_u256_target();
 	let asset_exists_in_accin = builder.add_virtual_bool_target_safe();
 	let asset_exists_in_accout = builder.add_virtual_bool_target_safe();
-
-	// AccIn position in ACT
-	let accin_pos = builder.add_virtual_target();
 
 	// Deposit note fields
 	let deposit_note = DepositNoteTarget {
@@ -247,13 +244,13 @@ where
 	builder.connect(deposit_note.asset_id.0, asset_id.0);
 
 	// Step 1: Verify ACT membership.
-	// Deposit always requires a live account — not gated by tx kind.
+	// Deposit always requires a live account
 	let accin_act_merkle = conditional_merkle_verify_gadget::<F, D>(
 		builder,
 		accin_comm.0,
-		root.0,
+		state_root.0,
 		not_fake_tx,
-		COM_TREE_DEPTH,
+		STATE_TREE_DEPTH,
 	);
 
 	// Step 2: Enforce recipient match — deposit note must target accin.
@@ -294,31 +291,23 @@ where
 	let subpool_proof_targets = builder.assert_subpool_full_proof(
 		SubpoolIdTarget(accin.subpool_id.0),
 		approval_key,
-		rejection_key,
-		subpool_consume_key,
 		mainpool_config_root,
 		not_fake_tx,
 	);
 
 	// Step 9: Verify Schnorr signatures.
-	// Consume: accin.consume_auth.config selects between accin's own key (config=1)
-	//          or the subpool consume key (config=0, delegation mode).
-	let effective_consume_key = PubkeyTarget(LocalQuinticExtension(core::array::from_fn(|i| {
-		builder._if(
-			accin.consume_auth.config,
-			accin.consume_auth.pk.0.0[i],
-			subpool_consume_key.0.0[i],
-		)
-	})));
+	// Consume: real sig from accin.consume_auth.pk is required if accin.consume_auth.config == 1.
+	// Otherwise fake sig.
+	let consume_sig_req = builder.and(accin.consume_auth.config, not_fake_tx);
 	let consume =
-		conditional_schnorr_verify_gadget(builder, tx_hash, effective_consume_key, not_fake_tx);
+		conditional_schnorr_verify_gadget(builder, tx_hash, accin.consume_auth.pk, consume_sig_req);
 	// Approval: always the subpool approval key.
 	let approval = conditional_schnorr_verify_gadget(builder, tx_hash, approval_key, not_fake_tx);
 
 	let public_targets = DepositTxPublicTargets {
 		not_fake_tx,
 		mainpool_config_root,
-		comm_root: root,
+		comm_root: state_root,
 		accin_null,
 		accout_comm,
 		note_comm: deposit_note_comm,
@@ -339,12 +328,9 @@ where
 			accin_ast_merkle,
 			accin_amt,
 			accout_amt,
-			accin_pos,
 			asset_exists_in_accin,
 			asset_exists_in_accout,
-			subpool_consume_key,
 			approval_key,
-			rejection_key,
 			subpool_proof_targets,
 			sig_targets: DepositTxSignatureTargets {
 				consume,

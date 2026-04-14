@@ -14,10 +14,9 @@ use tessera_utils::{
 };
 
 use crate::{
-	ACC_AST_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT, COM_TREE_DEPTH,
-	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF,
-	DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH,
-	SUBPOOL_CONFIG_DEPTH,
+	ACC_AST_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER,
+	MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, STATE_TREE_DEPTH, SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
 		merkle::{MerkleRootTarget, compute_merkle_root_gadget, conditional_merkle_verify_gadget},
 		priv_tx::{
@@ -27,8 +26,8 @@ use crate::{
 				DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
 				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt,
-				RejectCondTarget, RootTarget, SubpoolConfigRootTarget, SubpoolFullProofTargets,
-				SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
+				RejectCondTarget, StateRootTarget, SubpoolConfigCommitmentTarget,
+				SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
 			},
 			utils::double_hash,
 		},
@@ -99,7 +98,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
-		root: RootTarget,
+		root: StateRootTarget,
 		condition: BoolTarget,
 	) -> MerkleRootTarget;
 
@@ -207,7 +206,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
-		root: RootTarget,
+		root: StateRootTarget,
 	) -> [MerkleRootTarget; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
@@ -218,8 +217,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		&mut self,
 		subpool_id: SubpoolIdTarget,
 		approval_key: PubkeyTarget,
-		rejection_key: PubkeyTarget,
-		consume_key: PubkeyTarget,
 		mainpoolconfig_root: MainPoolConfigRootTarget,
 		not_fake_tx: BoolTarget,
 	) -> SubpoolFullProofTargets;
@@ -278,7 +275,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 		accin: AccountTarget,
-		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
 		not_is_rjct: BoolTarget,
 		not_fake_tx: BoolTarget,
@@ -369,7 +365,7 @@ where
 	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
-		root: RootTarget,
+		root: StateRootTarget,
 		condition: BoolTarget,
 	) -> MerkleRootTarget {
 		conditional_merkle_verify_gadget::<F, D>(
@@ -377,7 +373,7 @@ where
 			acc_comm.0,
 			root.0,
 			condition,
-			COM_TREE_DEPTH,
+			STATE_TREE_DEPTH,
 		)
 	}
 
@@ -533,38 +529,18 @@ where
 		&mut self,
 		subpool_id: SubpoolIdTarget,
 		approval_key: PubkeyTarget,
-		rejection_key: PubkeyTarget,
-		consume_key: PubkeyTarget,
 		mainpool_config_root: MainPoolConfigRootTarget,
 		not_fake_tx: BoolTarget,
 	) -> SubpoolFullProofTargets {
-		// Step A: Allocate the shared subpool config root target.
-		// All three per-key proofs verify against this same root.
-		let subpool_config_root = self.add_virtual_hash();
+		// Step A: SubpoolConfig Commitment = H(approval_key)
+		let subpool_config_comm =
+			self.hash_n_to_hash_no_pad::<PoseidonHash>(approval_key.0.0.to_vec());
 
-		// Step B: Verify each authority key is a leaf in the depth-2 subpool config tree.
-		// Leaf = H(key_as_5_targets).  The root is the shared subpool_config_root.
-		let mut verify_key_proof = |key: PubkeyTarget| -> MerkleRootTarget {
-			let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
-			// TODO: change this from conditional to compute
-			conditional_merkle_verify_gadget::<F, D>(
-				self,
-				leaf_hash,
-				subpool_config_root,
-				not_fake_tx,
-				SUBPOOL_CONFIG_DEPTH,
-			)
-		};
-
-		let approval_proof = verify_key_proof(approval_key);
-		let rejection_proof = verify_key_proof(rejection_key);
-		let consume_proof = verify_key_proof(consume_key);
-
-		// Step C: Verify the subpool config root is a leaf in the depth-20 main pool tree.
-		// Main pool leaf = H(subpool_config_root[4] || subpool_id[1]).
+		// Step B: Verify the subpool config commitment is a leaf in the depth-20 main pool tree.
+		// Main pool leaf = H(subpool_config_comm[4] || subpool_id[1]).
 		// TODO: add a DS in the derivation of the leaf?
 		let main_pool_leaf_hash = {
-			let mut inputs = subpool_config_root.elements.to_vec();
+			let mut inputs = subpool_config_comm.elements.to_vec();
 			inputs.push(subpool_id.0);
 			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs)
 		};
@@ -577,11 +553,8 @@ where
 		);
 
 		SubpoolFullProofTargets {
-			approval_proof,
-			rejection_proof,
-			consume_proof,
 			main_pool_proof,
-			subpool_config_root: SubpoolConfigRootTarget(subpool_config_root),
+			subpool_config_comm: SubpoolConfigCommitmentTarget(subpool_config_comm),
 		}
 	}
 
@@ -631,7 +604,7 @@ where
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		public_identifier: PublicIdentifierTaregt,
 		subpool_id: SubpoolIdTarget,
-		root: RootTarget,
+		root: StateRootTarget,
 	) -> [MerkleRootTarget; NOTE_BATCH] {
 		let merkle_proofs: [MerkleRootTarget; NOTE_BATCH] = core::array::from_fn(|i| {
 			conditional_merkle_verify_gadget::<F, D>(
@@ -639,7 +612,7 @@ where
 				inotes_comm[i].0,
 				root.0,
 				inote_isactive[i],
-				COM_TREE_DEPTH,
+				STATE_TREE_DEPTH,
 			)
 		});
 
@@ -855,7 +828,6 @@ where
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 		accin: AccountTarget,
-		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
 		not_is_rjct: BoolTarget,
 		not_fake_tx: BoolTarget,
@@ -877,24 +849,21 @@ where
 			conditional_schnorr_verify_gadget(self, tx_hash.0, accin.spend_auth, is_spend_req);
 
 		// ── Consume signature ─────────────────────────────────────────────────
-		// Required when ≥1 input note is active AND no output note is active
-		// (pure consume, no outgoing transfer).
-		// Key: accin.consume_auth.config selects own key (1) or subpool key (0).
+		// Required when ≥1 input note is active AND no output note is active AND
+		// consume_auth.config = 1 (pure consume, no outgoing transfer).
 		let mut has_inotes = inotes_isactive[0];
 		for sel in inotes_isactive.iter().skip(1) {
 			has_inotes = self.or(*sel, has_inotes);
 		}
 		let not_is_spend_req = self.not(is_spend_req);
 		let is_consume_req = self.and(has_inotes, not_is_spend_req);
-		let consume_key = PubkeyTarget(LocalQuinticExtension(core::array::from_fn(|i| {
-			self._if(
-				accin.consume_auth.config,
-				accin.consume_auth.pk.0.0[i],
-				subpool_consume_key.0.0[i],
-			)
-		})));
-		let consume =
-			conditional_schnorr_verify_gadget(self, tx_hash.0, consume_key, is_consume_req);
+		let check_consume_sig = self.and(is_consume_req, accin.consume_auth.config);
+		let consume = conditional_schnorr_verify_gadget(
+			self,
+			tx_hash.0,
+			accin.consume_auth.pk,
+			check_consume_sig,
+		);
 
 		// ── Approval signature ────────────────────────────────────────────────
 		// Always required for real transactions; bypassed for dummy proofs.

@@ -16,13 +16,13 @@ use tessera_utils::{
 };
 
 use crate::{
-	AssetId, COM_TREE_DEPTH, NOTE_BATCH,
+	AssetId, NOTE_BATCH, STATE_TREE_DEPTH,
 	plonky2_gadgets::{
 		merkle::conditional_merkle_verify_gadget,
 		priv_tx::{
 			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
-				AccountNullifierTarget, AssetIdTarget, MainPoolConfigRootTarget, RootTarget,
+				AccountNullifierTarget, AssetIdTarget, MainPoolConfigRootTarget, StateRootTarget,
 				SubpoolIdTarget,
 			},
 		},
@@ -74,7 +74,7 @@ where
 	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	let act_root = RootTarget(builder.add_virtual_hash());
+	let act_root = StateRootTarget(builder.add_virtual_hash());
 	let mainpool_config_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
 
 	// ── Accounts ──────────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ where
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
-		COM_TREE_DEPTH,
+		STATE_TREE_DEPTH,
 	);
 
 	// ── Account invariants ───────────────────────────────────────────────────

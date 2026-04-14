@@ -11,20 +11,18 @@ use tessera_utils::{
 
 use super::{double_hash_native, targets::TxCircuitTargets};
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH,
-	NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, PrivateIdentifier, SpendAuth,
-	StandardAccount, SubpoolId,
+	AccountAddress, AssetId, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK,
+	MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, PrivateIdentifier,
+	STATE_TREE_DEPTH, SpendAuth, StandardAccount, SubpoolId,
 	account::{AccountStateTreeLeaf, PublicIdentifier},
 	derive_priv_tx_hash,
 	ecgfp5::CompressedPoint,
 	note::{NoteIdentifier, StandardNote},
 	plonky2_gadgets::{
 		set_hash, set_u256_zero,
-		witness::{
-			fake_authority_key, set_authority_keys, set_hash_blocks, set_subpool_full_proof,
-		},
+		witness::{fake_authority_key, set_hash_blocks},
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::{CompressedPublicKey, PrivateKey, Signature},
 };
 
@@ -52,13 +50,11 @@ pub fn set_spend_tx_witness(
 	dinotes: [[F; 4]; NOTE_BATCH],
 	donotes: [[F; 4]; NOTE_BATCH],
 	approval_key: CompPubKey,
-	rejection_key: CompPubKey,
-	consume_key: CompPubKey,
 	subpool_id: SubpoolId,
 	main_pool: &MainPoolConfigTree<HashOutput>,
 	// Some(sig) if there are active output notes requiring spend auth; None → fake.
 	spend_sig: Option<Signature>,
-	// Some(sig) if there are active input notes and not active output notes requiring consume
+	// Some(sig) if there are active input notes and no active output notes requiring consume
 	// auth; None → fake.
 	consume_sig: Option<Signature>,
 	approval_sig: Signature,
@@ -102,7 +98,8 @@ pub fn set_spend_tx_witness(
 	let nk = accin.nk();
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = array::from_fn(|i| {
 		if i < inotes.len() {
-			StandardNote::nullifier(&inotes[i].commitment(), inotes_nct_proofs[i].pos, &nk)
+			inotes[i]
+				.nullifier(inotes_nct_proofs[i].pos, &nk)
 				.expect("note position must be < F::ORDER")
 		} else {
 			NoteNullifier(HashOutput(double_hash_native(dinotes[i])))
@@ -124,16 +121,7 @@ pub fn set_spend_tx_witness(
 	);
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	t.set_common_witnesses(
-		pw,
-		main_pool.root(),
-		root,
-		approval_key,
-		rejection_key,
-		consume_key,
-		accin,
-		&accout,
-	);
+	t.set_common_witnesses(pw, main_pool.root(), root, approval_key, accin, &accout);
 
 	set_hash(pw, t.public.accin_null.0, accin_null.0.0);
 	set_hash(pw, t.public.accout_comm.0, accout.commitment().0.0);
@@ -147,11 +135,6 @@ pub fn set_spend_tx_witness(
 		.unwrap();
 	pw.set_bool_target(t.private.asset_exists_in_accout, asset_exists_in_accout)
 		.unwrap();
-	pw.set_target(
-		t.private.accin_pos,
-		F::from_canonical_usize(accin_merkle_proof.pos),
-	)
-	.unwrap();
 
 	// ── ACT Merkle proof ──────────────────────────────────────────────────────
 	t.private
@@ -220,27 +203,24 @@ pub fn set_spend_tx_witness(
 	set_hash_blocks(pw, &t.private.dinotes.map(|note| note.0), &dinotes);
 	set_hash_blocks(pw, &t.private.donotes.map(|note| note.0), &donotes);
 
-	let subpool = SubpoolConfigTree::new(approval_key, rejection_key, consume_key);
+	let subpool = SubpoolConfig::new(approval_key);
 	let subpool_proof = main_pool
 		.full_subpool_proof(&subpool, subpool_id)
 		.expect("subpool not registered in main_pool at the given subpool_id");
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
-	set_subpool_full_proof(
+	t.private.subpool_proof_targets.set_witness(
 		pw,
-		&t.private.subpool_proof_targets,
 		subpool_proof,
-		subpool.root(),
+		subpool.commitment(),
 		subpool_id,
-		approval_key,
-		rejection_key,
-		consume_key,
 	);
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 
 	// Spend signature
 	{
+		// TODO: I think one should return an error here saying that spend_key must exist
 		let spend_pk = accin
 			.spend_auth
 			.spend_pk
@@ -254,11 +234,12 @@ pub fn set_spend_tx_witness(
 
 	// Consume signature
 	{
-		let consume_public_key = if accin.consume_auth.config {
-			accin.consume_auth.pk.unwrap()
-		} else {
-			consume_key
-		};
+		// TODO: return an error if consume_auth.config == 1 and consume_auth.pk is None
+		let consume_public_key = accin.consume_auth.pk.unwrap_or_else(|| {
+			CompressedPublicKey(CompressedPoint::from(
+				DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+			))
+		});
 		if let Some(sig) = consume_sig {
 			t.private
 				.sig_targets

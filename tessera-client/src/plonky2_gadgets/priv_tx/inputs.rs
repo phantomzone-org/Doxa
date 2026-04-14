@@ -82,7 +82,7 @@ pub struct RejectTxInputs {
 	pub consume_key: CompPubKey,
 	pub subpool_id: SubpoolId,
 	pub main_pool: MainPoolConfigTree<HashOutput>,
-	pub consume_sig: Signature,
+	pub consume_sig: Option<Signature>,
 	pub approval_sig: Signature,
 }
 

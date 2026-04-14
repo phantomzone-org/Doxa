@@ -20,8 +20,8 @@ use tessera_utils::{ConfigNative, D, F, hasher::HashOutput};
 
 use super::*;
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, DS_PUBLIC_IDENTIFIER, NOTE_BATCH, Nonce,
-	NoteCommitment, NoteIdentifier, NoteNullifier, PIHelper, PublicIdentifier, SpendAuth,
+	AccountAddress, AssetId, DS_PUBLIC_IDENTIFIER, NOTE_BATCH, Nonce, NoteCommitment,
+	NoteIdentifier, NoteNullifier, PIHelper, PublicIdentifier, STATE_TREE_DEPTH, SpendAuth,
 	StandardAccount, StandardNote, SubpoolId, derive_priv_tx_hash,
 	plonky2_gadgets::{
 		priv_tx::{
@@ -30,7 +30,7 @@ use crate::{
 		},
 		tests::print_common_data,
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, schnorr_sign},
 	time,
 };
@@ -56,17 +56,17 @@ fn test_prove_priv_tx() {
 	let consume_sk = PrivateKey::from_raw([9, 10, 11, 12, 0]);
 	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
-	let subpool = SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
+	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
 	let subpool_id = SubpoolId(F::ONE);
 
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.root())
+		.insert_subpool(subpool_id, subpool.commitment())
 		.unwrap();
 
 	// ── Single unified IMT (V2: accounts and notes share one on-chain tree) ─
 	// Insert all commitments first, then generate all proofs against the final root.
-	let mut tree = MerkleTree::<HashOutput>::new(crate::COM_TREE_DEPTH);
+	let mut tree = MerkleTree::<HashOutput>::new(crate::STATE_TREE_DEPTH);
 
 	// ── Sample accounts ───────────────────────────────────────────────────
 	let mut rng = ChaCha8Rng::seed_from_u64(1);
@@ -133,8 +133,8 @@ fn test_prove_priv_tx() {
 	// ── Compute note nullifiers and tx_hash ───────────────────────────────
 	let nk0 = acc0.nk();
 	// After Part 1 fix, native order matches circuit: commitment || position || nk
-	let n0_null_arr: [F; 4] = StandardNote::nullifier(&n0.commitment(), n0_pos, &nk0).unwrap().0.0;
-	let n1_null_arr: [F; 4] = StandardNote::nullifier(&n1.commitment(), n1_pos, &nk0).unwrap().0.0;
+	let n0_null_arr: [F; 4] = n0.nullifier(n0_pos, &nk0).unwrap().0.0;
+	let n1_null_arr: [F; 4] = n1.nullifier(n1_pos, &nk0).unwrap().0.0;
 
 	// tx_hash: real nullifiers for active notes (0, 1), dummy for rest
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = array::from_fn(|i| {
@@ -193,8 +193,6 @@ fn test_prove_priv_tx() {
 		dinotes,
 		donotes,
 		approval_cpk,
-		rejection_cpk,
-		consume_cpk,
 		subpool_id,
 		&main_pool,
 		None,
@@ -335,18 +333,12 @@ fn test_prove_fresh_acc_tx() {
 	let approval_sk = sample_sk(&mut rng);
 	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
 
-	let rejection_sk = sample_sk(&mut rng);
-	let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
-
-	let consume_sk = sample_sk(&mut rng);
-	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
-
-	let subpool = SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
+	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
 	let subpool_id = SubpoolId(F::ONE);
 
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.root())
+		.insert_subpool(subpool_id, subpool.commitment())
 		.unwrap();
 
 	// ── Accounts ─────────────────────────────────────────────────────────
@@ -397,8 +389,6 @@ fn test_prove_fresh_acc_tx() {
 		new_consume_auth,
 		HashOutput([F::ZERO; 4]), // root: not in IMT yet; no notes for FreshAcc
 		approval_cpk,
-		rejection_cpk,
-		consume_cpk,
 		subpool_id,
 		&main_pool,
 		approval_sig,
@@ -482,18 +472,12 @@ fn test_prove_reject_tx() {
 	let approval_sk = PrivateKey::from_raw([2, 3, 4, 5, 6]);
 	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
 
-	let rejection_sk = PrivateKey::from_raw([5, 6, 7, 8, 0]);
-	let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
-
-	let consume_sk = PrivateKey::from_raw([9, 10, 11, 12, 0]);
-	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
-
-	let subpool = SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
+	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
 	let subpool_id = SubpoolId(F::ONE);
 
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.root())
+		.insert_subpool(subpool_id, subpool.commitment())
 		.unwrap();
 
 	// ── Account (simulate post-FreshAcc) ──────────────────────────────────
@@ -508,8 +492,8 @@ fn test_prove_reject_tx() {
 
 	// ── Single unified IMT (V2: accounts and notes share one on-chain tree) ─
 	// Insert all commitments first, then generate all proofs against the final root.
-	let mut tree = MerkleTree::<HashOutput>::new(COM_TREE_DEPTH);
-	let acc_pos = tree.insert(acc.commitment().0).unwrap();
+	let mut state_tree = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
+	let acc_pos = state_tree.insert(acc.commitment().0).unwrap();
 
 	// ── Sender address ────────────────────────────────────────────────────
 	let sender_priv = [F::from_canonical_u64(77), F::from_canonical_u64(88)];
@@ -546,15 +530,15 @@ fn test_prove_reject_tx() {
 	};
 
 	// Insert notes into the same unified tree, then generate all proofs against final root
-	let n0_pos = tree.insert(note0.commitment().0).unwrap();
-	let n1_pos = tree.insert(note1.commitment().0).unwrap();
+	let n0_pos = state_tree.insert(note0.commitment().0).unwrap();
+	let n1_pos = state_tree.insert(note1.commitment().0).unwrap();
 
-	let acc_act_proof = tree.merkle_proof(acc_pos).unwrap();
+	let acc_act_proof = state_tree.merkle_proof(acc_pos).unwrap();
 	assert!(acc_act_proof.verify());
 
 	let inotes_nct_proofs = [
-		tree.merkle_proof(n0_pos).unwrap(),
-		tree.merkle_proof(n1_pos).unwrap(),
+		state_tree.merkle_proof(n0_pos).unwrap(),
+		state_tree.merkle_proof(n1_pos).unwrap(),
 	];
 
 	// ── Output notes (reject — send back to sender) ───────────────────────
@@ -585,8 +569,8 @@ fn test_prove_reject_tx() {
 	accout.nonce = Nonce(F::from_canonical_u64(2));
 
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = core::array::from_fn(|i| match i {
-		0 => NoteNullifier(StandardNote::nullifier(&note0.commitment(), n0_pos, &nk).unwrap().0),
-		1 => NoteNullifier(StandardNote::nullifier(&note1.commitment(), n1_pos, &nk).unwrap().0),
+		0 => NoteNullifier(note0.nullifier(n0_pos, &nk).unwrap().0),
+		1 => NoteNullifier(note1.nullifier(n1_pos, &nk).unwrap().0),
 		_ => NoteNullifier(HashOutput(double_hash_native(dinotes[i]))),
 	});
 	let tx_onote_comms: [NoteCommitment; NOTE_BATCH] = core::array::from_fn(|i| match i {
@@ -602,7 +586,6 @@ fn test_prove_reject_tx() {
 	);
 
 	// ── Signatures ────────────────────────────────────────────────────────
-	let consume_sig = schnorr_sign(&consume_sk, &tx_hash.0, Scalar::from_raw([7, 8, 9, 10, 11]));
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, Scalar::from_raw([1, 2, 3, 4, 5]));
 
 	// ── Build circuit ──────────────────────────────────────────────────────
@@ -619,18 +602,16 @@ fn test_prove_reject_tx() {
 		&t,
 		&acc,
 		acc_act_proof,
-		tree.root(),
+		state_tree.root(),
 		&[note0, note1],
 		&inotes_nct_proofs,
 		&[onote0, onote1],
 		dinotes,
 		donotes,
 		approval_cpk,
-		rejection_cpk,
-		consume_cpk,
 		subpool_id,
 		&main_pool,
-		consume_sig,
+		None,
 		approval_sig,
 	);
 

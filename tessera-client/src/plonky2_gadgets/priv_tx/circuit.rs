@@ -21,10 +21,11 @@ use crate::{
 			targets::{
 				AccountCommitmentTarget, AccountNullifierTarget, AssetIdTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-				RootTarget, SubpoolIdTarget, TxCircuitPrivateTargets, TxCircuitPublicTargets,
+				StateRootTarget, SubpoolIdTarget, TxCircuitPrivateTargets, TxCircuitPublicTargets,
 				TxCircuitTargets,
 			},
 		},
+		signature::{LocalQuinticExtension, PubkeyTarget},
 		u256::CircuitBuilderU256,
 	},
 };
@@ -86,11 +87,13 @@ where
 	let is_update_auth = builder.add_virtual_bool_target_safe();
 	let is_priv_tx = builder.add_virtual_bool_target_safe();
 
-	let root = RootTarget(builder.add_virtual_hash());
+	let root = StateRootTarget(builder.add_virtual_hash());
 	let mainpool_config_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
 
 	// Subpool authority keys
-	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
+	// let (approval_key, rejection_key, subpool_consume_key) =
+	// builder.add_virtual_authority_keys();
+	let approval_key = PubkeyTarget(LocalQuinticExtension(builder.add_virtual_target_arr()));
 
 	let asset_id = AssetIdTarget(builder.add_virtual_target());
 	let accin_amt = builder.add_virtual_u256_target();
@@ -131,7 +134,6 @@ where
 
 	// Step 4: ACT membership — verify accin's commitment is in the ACT.
 	// Condition: only for non-fresh accounts and real transactions.
-	let accin_pos = builder.add_virtual_target();
 	let not_is_fresh_acc = builder.not(is_fresh_acc);
 	let check_act = builder.and(not_is_fresh_acc, not_fake_tx);
 	let accin_merkletrgts = builder
@@ -251,8 +253,6 @@ where
 	let subpool_proof_targets = builder.assert_subpool_full_proof(
 		SubpoolIdTarget(accin.subpool_id.0),
 		approval_key,
-		rejection_key,
-		subpool_consume_key,
 		mainpool_config_root,
 		not_fake_tx,
 	);
@@ -264,7 +264,6 @@ where
 		inotes_isactive,
 		onotes_isactive,
 		accin,
-		subpool_consume_key,
 		approval_key,
 		not_is_rjct,
 		not_fake_tx,
@@ -273,7 +272,7 @@ where
 	// Step 14: Register public inputs.
 	let public_targets = TxCircuitPublicTargets {
 		not_fake_tx,
-		root,
+		state_root: root,
 		mainpool_config_root,
 		accin_null,
 		accout_comm,
@@ -291,15 +290,12 @@ where
 			is_update_auth,
 			is_priv_tx,
 			approval_key,
-			rejection_key,
-			subpool_consume_key,
 			accin,
 			accout,
 			accin_amt,
 			accout_amt,
 			asset_exists_in_accin,
 			asset_exists_in_accout,
-			accin_pos,
 			accin_act_merkle: accin_merkletrgts,
 			accin_ast_merkle,
 			inotes,

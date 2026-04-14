@@ -10,18 +10,15 @@ use tessera_utils::{F, hasher::HashOutput};
 
 use super::{double_hash_native, targets::TxCircuitTargets};
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, ConsumeAuth, DEFAULT_SPEND_AUTH_PK,
-	MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment, NoteNullifier, SUBPOOL_CONFIG_DEPTH,
-	SpendAuth, StandardAccount, SubpoolId,
+	AccountAddress, AssetId, ConsumeAuth, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+	DEFAULT_SPEND_AUTH_PK, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, Nonce, NoteCommitment,
+	NoteNullifier, STATE_TREE_DEPTH, SUBPOOL_CONFIG_DEPTH, SpendAuth, StandardAccount, SubpoolId,
 	account::PublicIdentifier,
 	derive_priv_tx_hash,
 	ecgfp5::{CompressedPoint, PointEw},
 	note::{NoteIdentifier, StandardNote},
-	plonky2_gadgets::{
-		set_hash, set_u256_zero,
-		witness::{set_hash_blocks, set_subpool_full_proof},
-	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+	plonky2_gadgets::{set_hash, set_u256_zero, witness::set_hash_blocks},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::{CompressedPublicKey, Signature},
 };
 
@@ -50,8 +47,6 @@ pub(crate) fn set_freshacc_tx_witness(
 	new_consume_auth: ConsumeAuth,
 	root: HashOutput,
 	approval_key: CompPubKey,
-	rejection_key: CompPubKey,
-	consume_key: CompPubKey,
 	subpool_id: SubpoolId,
 	main_pool: &MainPoolConfigTree<HashOutput>,
 	approval_sig: Signature,
@@ -76,16 +71,7 @@ pub(crate) fn set_freshacc_tx_witness(
 	);
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	t.set_common_witnesses(
-		pw,
-		main_pool.root(),
-		root,
-		approval_key,
-		rejection_key,
-		consume_key,
-		accin,
-		&accout,
-	);
+	t.set_common_witnesses(pw, main_pool.root(), root, approval_key, accin, &accout);
 
 	// ── Asset / amounts (all zeros for FreshAcc) ──────────────────────────────
 	pw.set_target(t.private.asset_id.0, F::ZERO).unwrap();
@@ -95,7 +81,6 @@ pub(crate) fn set_freshacc_tx_witness(
 		.unwrap();
 	pw.set_bool_target(t.private.asset_exists_in_accout, false)
 		.unwrap();
-	pw.set_target(t.private.accin_pos, F::ZERO).unwrap();
 
 	// ── Merkle proofs ─────────────────────────────────────────────────────────
 
@@ -151,33 +136,34 @@ pub(crate) fn set_freshacc_tx_witness(
 	set_hash(pw, t.public.accin_null.0, accin.nullifier().0.0);
 	set_hash(pw, t.public.accout_comm.0, accout.commitment().0.0);
 
-	let subpool = SubpoolConfigTree::new(approval_key, rejection_key, consume_key);
+	let subpool = SubpoolConfig::new(approval_key);
 	let subpool_proof = main_pool
 		.full_subpool_proof(&subpool, subpool_id)
 		.expect("subpool not registered in main_pool at the given subpool_id");
 
 	// ── Subpool full proof ────────────────────────────────────────────────────
-	set_subpool_full_proof(
+	t.private.subpool_proof_targets.set_witness(
 		pw,
-		&t.private.subpool_proof_targets,
 		subpool_proof,
-		subpool.root(),
+		subpool.commitment(),
 		subpool_id,
-		approval_key,
-		rejection_key,
-		consume_key,
 	);
 
 	// ── Signatures ────────────────────────────────────────────────────────────
 
-	// Spend (fake): is_spend_req = false → apply_check = false.
+	// Spend (fake)
 	t.private.sig_targets.spend.set_fake(
 		pw,
 		CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)),
 	);
 
-	// Consume (fake): consume_auth.config = false → circuit uses subpool_consume_key.
-	t.private.sig_targets.consume.set_fake(pw, consume_key);
+	// Consume (fake)
+	t.private.sig_targets.consume.set_fake(
+		pw,
+		CompressedPublicKey(CompressedPoint::from(
+			DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+		)),
+	);
 
 	// Approval (real): always enforced for FreshAcc.
 	t.private

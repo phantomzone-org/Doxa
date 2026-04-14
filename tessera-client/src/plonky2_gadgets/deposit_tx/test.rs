@@ -15,11 +15,11 @@ use tessera_utils::hasher::HashOutput;
 
 use super::*;
 use crate::{
-	AccountAddress, AssetId, COM_TREE_DEPTH, Nonce, PIHelper, StandardAccount, SubpoolId,
+	AccountAddress, AssetId, Nonce, PIHelper, STATE_TREE_DEPTH, StandardAccount, SubpoolId,
 	account::AccountStateTreeLeaf,
 	derive_deposit_tx_hash,
 	note::DepositNote,
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::{PrivateKey, Scalar, schnorr_sign},
 };
 
@@ -38,10 +38,10 @@ fn test_prove_deposit_tx() {
 	let consume_key: CompPubKey = consume_sk.public_key::<F>().into();
 
 	let subpool_id = SubpoolId(F::ONE);
-	let subpool = SubpoolConfigTree::<HashOutput>::new(approval_key, rejection_key, consume_key);
+	let subpool = SubpoolConfig::<HashOutput>::new(approval_key);
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.root())
+		.insert_subpool(subpool_id, subpool.commitment())
 		.unwrap();
 
 	// ── Sample accin ──────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ fn test_prove_deposit_tx() {
 	};
 
 	// ── Insert accin into ACT ─────────────────────────────────────────────
-	let mut act = MerkleTree::<HashOutput>::new(COM_TREE_DEPTH);
+	let mut act = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
 	let accin_pos = act.insert(accin.commitment().0).unwrap();
 	let accin_act_merkle_proof = act.merkle_proof(accin_pos).unwrap();
 

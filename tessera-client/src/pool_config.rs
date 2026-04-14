@@ -1,6 +1,7 @@
 use std::{
 	collections::{BTreeMap, HashMap},
 	hash::Hash,
+	marker::PhantomData,
 };
 
 use plonky2::{
@@ -38,64 +39,35 @@ const REJECTION_KEY_INDEX: usize = 1;
 const CONSUME_KEY_INDEX: usize = 2;
 
 /// A depth-2 Merkle tree holding the three authority public keys for a subpool.
-///
-/// Layout:
-/// ```text
-///                   SubpoolConfigRoot
-///       node0                           node1
-/// H(approval)  H(rejection)     H(consume)  H(zero×5)
-/// ```
-pub struct SubpoolConfigTree<H: MerkleHash> {
-	pub approval_key: CompPubKey,
-	pub rejection_key: CompPubKey,
-	pub consume_key: CompPubKey,
-	inner: MerkleTree<H>,
+pub struct SubpoolConfig<H: MerkleHash<Digest = HashOutput>> {
+	approval_key: CompPubKey,
+	_phantom: PhantomData<H>,
 }
 
-impl<H> SubpoolConfigTree<H>
-where
-	H: MerkleHash<Digest = HashOutput>,
-{
+impl<H: MerkleHash<Digest = HashOutput>> SubpoolConfig<H> {
 	/// Build the tree from the three authority keys.
 	/// Keys are inserted at fixed positions 0, 1, 2 via `insert` (in order).
 	/// Position 3 remains the default empty leaf.
-	pub fn new(approval: CompPubKey, rejection: CompPubKey, consume: CompPubKey) -> Self {
-		let mut inner = MerkleTree::new(SUBPOOL_CONFIG_DEPTH);
-		inner.insert(approval.commit::<H>()).unwrap();
-		inner.insert(rejection.commit::<H>()).unwrap();
-		inner.insert(consume.commit::<H>()).unwrap();
+	pub fn new(approval_key: CompPubKey) -> Self {
 		Self {
-			approval_key: approval,
-			rejection_key: rejection,
-			consume_key: consume,
-			inner,
+			approval_key,
+			_phantom: PhantomData,
 		}
 	}
 
-	pub fn root(&self) -> H::Digest {
-		self.inner.root()
-	}
-
-	pub fn approval_key_proof(&self) -> MerkleTreeResult<MerkleProof<H>> {
-		self.inner.merkle_proof(APPROVAL_KEY_INDEX)
-	}
-
-	pub fn rejection_key_proof(&self) -> MerkleTreeResult<MerkleProof<H>> {
-		self.inner.merkle_proof(REJECTION_KEY_INDEX)
-	}
-
-	pub fn consume_key_proof(&self) -> MerkleTreeResult<MerkleProof<H>> {
-		self.inner.merkle_proof(CONSUME_KEY_INDEX)
+	pub fn commitment(&self) -> H::Digest {
+		self.approval_key.commit::<H>()
 	}
 }
 
-impl SubpoolConfigTree<HashOutput> {
-	pub fn fake_instance() -> (SubpoolConfigTree<HashOutput>, SubpoolFullProof<HashOutput>) {
+// TODO: move such methods somehwere inside plonky2_gadgets
+impl SubpoolConfig<HashOutput> {
+	pub fn fake_instance() -> (Self, SubpoolFullProof<HashOutput>) {
 		let key = fake_authority_key();
 		let mut main_pool = MainPoolConfigTree::<HashOutput>::new();
-		let subpool = SubpoolConfigTree::new(key, key, key);
+		let subpool = SubpoolConfig::new(key);
 		main_pool
-			.insert_subpool(SubpoolId::ZERO, subpool.root())
+			.insert_subpool(SubpoolId::ZERO, subpool.commitment())
 			.unwrap();
 		let subpool_proof = main_pool
 			.full_subpool_proof(&subpool, SubpoolId::ZERO)
@@ -110,17 +82,17 @@ impl SubpoolConfigTree<HashOutput> {
 ///
 /// `Hash` is implemented by converting each `F` to its canonical `u64` representation —
 /// no Poseidon involved. Poseidon is only used in `From<MainPoolConfigLeaf> for Node`
-/// to compute the on-tree node value `H(subpool_root || subpool_id)`.
+/// to compute the on-tree node value `H(subpool_config_comm|| subpool_id)`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MainPoolConfigLeaf<H: MerkleHash> {
-	pub subpool_root: H::Digest,
+	pub subpool_config_comm: H::Digest,
 	pub subpool_id: SubpoolId,
 }
 
 impl<H: MerkleHash> MainPoolConfigLeaf<H> {
 	pub fn new(subpool_root: H::Digest, subpool_id: SubpoolId) -> Self where {
 		Self {
-			subpool_root,
+			subpool_config_comm: subpool_root,
 			subpool_id,
 		}
 	}
@@ -132,7 +104,7 @@ where
 {
 	pub fn commit(&self) -> H::Digest {
 		let mut input = [F::ZERO; HASH_SIZE + 1];
-		input[..HASH_SIZE].copy_from_slice(&self.subpool_root.0);
+		input[..HASH_SIZE].copy_from_slice(&self.subpool_config_comm.0);
 		input[HASH_SIZE] = self.subpool_id.0;
 		let hash = <PoseidonHash as Hasher<F>>::hash_no_pad(&input).elements;
 		HashOutput(hash)
@@ -180,9 +152,9 @@ where
 	pub fn subpool_proof(
 		&self,
 		subpool_id: SubpoolId,
-		subpool_root: H::Digest,
+		subpool_config_comm: H::Digest,
 	) -> MerkleTreeResult<MerkleProof<H>> {
-		let leaf = MainPoolConfigLeaf::<H>::new(subpool_root, subpool_id);
+		let leaf = MainPoolConfigLeaf::<H>::new(subpool_config_comm, subpool_id);
 		let digest = leaf.commit();
 		let index = *self
 			.leaf_index_map
@@ -195,17 +167,11 @@ where
 	/// own proof inside this main pool tree.
 	pub fn full_subpool_proof(
 		&self,
-		subpool: &SubpoolConfigTree<H>,
+		subpool: &SubpoolConfig<H>,
 		subpool_id: SubpoolId,
 	) -> MerkleTreeResult<SubpoolFullProof<H>> {
-		let main_pool_proof = self.subpool_proof(subpool_id, subpool.root())?;
-		let approval_proof = subpool.approval_key_proof()?;
-		let rejection_proof = subpool.rejection_key_proof()?;
-		let consume_proof = subpool.consume_key_proof()?;
+		let main_pool_proof = self.subpool_proof(subpool_id, subpool.commitment())?;
 		Ok(SubpoolFullProof {
-			approval_proof,
-			rejection_proof,
-			consume_proof,
 			main_pool_proof,
 		})
 	}
@@ -216,9 +182,6 @@ where
 /// All three subpool authority-key proofs (relative to the SubpoolConfigRoot)
 /// together with the subpool's proof inside the MainPoolConfigTree.
 pub struct SubpoolFullProof<H: MerkleHash> {
-	pub approval_proof: MerkleProof<H>,
-	pub rejection_proof: MerkleProof<H>,
-	pub consume_proof: MerkleProof<H>,
 	pub main_pool_proof: MerkleProof<H>,
 }
 
@@ -239,24 +202,19 @@ mod tests {
 	#[test]
 	fn test_full_subpool_proof() {
 		let approval = dummy_key(1);
-		let rejection = dummy_key(2);
-		let consume = dummy_key(3);
 
-		let subpool = SubpoolConfigTree::<HashOutput>::new(approval, rejection, consume);
+		let subpool = SubpoolConfig::<HashOutput>::new(approval);
 
 		let mut main_tree = MainPoolConfigTree::new();
 		let subpool_id = SubpoolId(F::from_canonical_u64(5));
 		main_tree
-			.insert_subpool(subpool_id, subpool.root())
+			.insert_subpool(subpool_id, subpool.commitment())
 			.unwrap();
 
 		let proof = main_tree
 			.full_subpool_proof(&subpool, subpool_id)
 			.expect("proof must be Some");
 
-		assert!(proof.approval_proof.verify(), "approval proof invalid");
-		assert!(proof.rejection_proof.verify(), "rejection proof invalid");
-		assert!(proof.consume_proof.verify(), "consume proof invalid");
 		assert!(proof.main_pool_proof.verify(), "main pool proof invalid");
 	}
 }

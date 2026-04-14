@@ -29,6 +29,7 @@ pub(crate) fn set_gfp5<F: Field>(pw: &mut PartialWitness<F>, targets: [Target; 5
 	}
 }
 
+// TODO: replace this with something better
 pub(crate) fn set_u256_zero<F: Field>(
 	pw: &mut PartialWitness<F>,
 	t: &crate::plonky2_gadgets::u256::U256Target,
