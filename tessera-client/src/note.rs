@@ -232,10 +232,6 @@ impl StandardNote {
 			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
 		)))
 	}
-
-	pub fn dummy_nullifier(commitment: &NoteCommitment) -> NoteNullifier {
-		NoteNullifier(HashOutput::new(double_hash_native(commitment.0.0)))
-	}
 }
 
 #[cfg(test)]
