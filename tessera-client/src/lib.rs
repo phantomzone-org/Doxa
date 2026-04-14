@@ -15,7 +15,6 @@
 
 #![allow(dead_code, unused_imports, unused_variables)]
 pub(crate) mod account;
-pub(crate) mod commitment;
 pub(crate) mod ecgfp5;
 pub(crate) mod note;
 pub mod plonky2_gadgets;

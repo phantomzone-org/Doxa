@@ -342,6 +342,7 @@ pub struct StandardAccount {
 }
 
 impl StandardAccount {
+	// TODO: why is this here?
 	pub fn fake() -> Self {
 		Self::new_with(
 			crate::PrivateIdentifier([F::from_canonical_u64(1), F::from_noncanonical_u64(2)]),
@@ -516,14 +517,23 @@ impl AccountAddress {
 		}
 	}
 
-	/// Decode from the 80-hex-char encoding produced by [`Self::to_hex`].
+	/// Serialize to a 40-byte little-endian representation.
 	///
-	/// Layout (little-endian bytes):
-	/// - bytes `[0..8]`  → `subpool_id` (u64 LE) → 16 hex chars
-	/// - bytes `[8..40]` → `public_id`  (4 × u64 LE) → 64 hex chars
-	pub fn from_hex(s: &str) -> anyhow::Result<Self> {
-		anyhow::ensure!(s.len() == 80, "expected 80 hex chars, got {}", s.len());
-		let bytes = hex::decode(s)?;
+	/// Layout:
+	/// - bytes `[0..8]`  → `subpool_id` (u64 LE)
+	/// - bytes `[8..40]` → `public_id`  (4 × u64 LE)
+	pub fn to_bytes(&self) -> [u8; 40] {
+		let mut bytes = [0u8; 40];
+		bytes[..8].copy_from_slice(&self.subpool_id.0.to_canonical_u64().to_le_bytes());
+		for (i, f) in self.public_id.0.0.iter().enumerate() {
+			bytes[8 + i * 8..8 + (i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
+		}
+		bytes
+	}
+
+	/// Deserialize from the 40-byte representation produced by [`Self::to_bytes`].
+	pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+		anyhow::ensure!(bytes.len() == 40, "expected 40 bytes, got {}", bytes.len());
 		let subpool_raw = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
 		let mut pub_id = [F::ZERO; 4];
 		for i in 0..4 {
@@ -541,12 +551,13 @@ impl AccountAddress {
 	///
 	/// Layout: `subpool_id (16 hex) || public_id (64 hex)`.
 	pub fn to_hex(&self) -> String {
-		let mut bytes = [0u8; 40];
-		bytes[..8].copy_from_slice(&self.subpool_id.0.to_canonical_u64().to_le_bytes());
-		for (i, f) in self.public_id.0.0.iter().enumerate() {
-			bytes[8 + i * 8..8 + (i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
-		}
-		bytes.iter().map(|b| format!("{b:02x}")).collect()
+		hex::encode(self.to_bytes())
+	}
+
+	/// Decode from the 80-hex-char encoding produced by [`Self::to_hex`].
+	pub fn from_hex(s: &str) -> anyhow::Result<Self> {
+		anyhow::ensure!(s.len() == 80, "expected 80 hex chars, got {}", s.len());
+		Self::from_bytes(&hex::decode(s)?)
 	}
 }
 
@@ -635,7 +646,7 @@ pub fn derive_withdraw_tx_hash(
 
 /// Compute the actual root of the default empty Account State Tree (depth `ACC_AST_DEPTH`,
 /// all leaves = `AST_DEFAULT_LEAF`)
-pub(crate) fn ast_default_root() -> [u64; HASH_SIZE] {
+pub(crate) fn ast_default_root() -> HashOutput {
 	use plonky2::{
 		hash::{hash_types::HashOut, poseidon::PoseidonHash},
 		plonk::config::Hasher,
@@ -654,7 +665,7 @@ pub(crate) fn ast_default_root() -> [u64; HASH_SIZE] {
 		);
 		cur = r.elements;
 	}
-	cur.map(|f| f.to_canonical_u64())
+	cur.into()
 }
 
 #[cfg(test)]

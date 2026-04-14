@@ -12,8 +12,7 @@ use tessera_utils::{
 use crate::{AccountAddress, AssetId, account::NullifierKey, double_hash_native};
 
 #[derive(Debug, Clone, Copy)]
-/// Commitment to a [`DepositNote`], inserted into the Note Commitment Tree
-/// by the deposit transaction circuit.
+/// Commitment to a [`DepositNote`]
 pub struct DepositNoteCommitment(pub HashOutput);
 
 #[derive(Debug, Clone, Copy)]
@@ -68,7 +67,7 @@ impl DepositNote {
 	}
 }
 
-/// Commitment to a [`StandardNote`], inserted into the Note Commitment Tree (NCT).
+/// Commitment to a [`StandardNote`]
 ///
 /// Computed as a Poseidon hash over all note fields (see [`StandardNote::commitment`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
