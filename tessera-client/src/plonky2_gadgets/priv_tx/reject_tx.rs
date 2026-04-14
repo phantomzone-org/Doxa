@@ -59,6 +59,7 @@ pub(crate) fn set_reject_tx_witness(
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = core::array::from_fn(|i| {
 		if i < inotes.len() {
 			StandardNote::nullifier(&inotes[i].commitment(), inotes_nct_proofs[i].pos, &nk)
+				.expect("note position must be < F::ORDER")
 		} else {
 			NoteNullifier(HashOutput(double_hash_native(dinotes[i])))
 		}

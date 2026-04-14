@@ -219,14 +219,18 @@ impl StandardNote {
 		commitment: &NoteCommitment,
 		position: usize,
 		nk: &NullifierKey,
-	) -> NoteNullifier {
+	) -> anyhow::Result<NoteNullifier> {
+		anyhow::ensure!(
+			(position as u64) < F::ORDER,
+			"position {position} exceeds field order"
+		);
 		let mut input = [F::ZERO; 9];
 		input[..4].copy_from_slice(&commitment.0.0);
 		input[4] = F::from_canonical_u64(position as u64);
 		input[5..9].copy_from_slice(nk.0.as_slice());
-		NoteNullifier(HashOutput(
+		Ok(NoteNullifier(HashOutput(
 			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
-		))
+		)))
 	}
 
 	pub fn dummy_nullifier(commitment: &NoteCommitment) -> NoteNullifier {

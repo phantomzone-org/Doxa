@@ -133,8 +133,8 @@ fn test_prove_priv_tx() {
 	// ── Compute note nullifiers and tx_hash ───────────────────────────────
 	let nk0 = acc0.nk();
 	// After Part 1 fix, native order matches circuit: commitment || position || nk
-	let n0_null_arr: [F; 4] = StandardNote::nullifier(&n0.commitment(), n0_pos, &nk0).0.0;
-	let n1_null_arr: [F; 4] = StandardNote::nullifier(&n1.commitment(), n1_pos, &nk0).0.0;
+	let n0_null_arr: [F; 4] = StandardNote::nullifier(&n0.commitment(), n0_pos, &nk0).unwrap().0.0;
+	let n1_null_arr: [F; 4] = StandardNote::nullifier(&n1.commitment(), n1_pos, &nk0).unwrap().0.0;
 
 	// tx_hash: real nullifiers for active notes (0, 1), dummy for rest
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = array::from_fn(|i| {
@@ -585,8 +585,8 @@ fn test_prove_reject_tx() {
 	accout.nonce = Nonce(F::from_canonical_u64(2));
 
 	let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = core::array::from_fn(|i| match i {
-		0 => NoteNullifier(StandardNote::nullifier(&note0.commitment(), n0_pos, &nk).0),
-		1 => NoteNullifier(StandardNote::nullifier(&note1.commitment(), n1_pos, &nk).0),
+		0 => NoteNullifier(StandardNote::nullifier(&note0.commitment(), n0_pos, &nk).unwrap().0),
+		1 => NoteNullifier(StandardNote::nullifier(&note1.commitment(), n1_pos, &nk).unwrap().0),
 		_ => NoteNullifier(HashOutput(double_hash_native(dinotes[i]))),
 	});
 	let tx_onote_comms: [NoteCommitment; NOTE_BATCH] = core::array::from_fn(|i| match i {
