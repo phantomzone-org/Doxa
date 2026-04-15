@@ -152,13 +152,13 @@ pub(crate) fn set_freshacc_tx_witness(
 	// ── Signatures ────────────────────────────────────────────────────────────
 
 	// Spend (fake)
-	t.private.sig_targets.spend.set_fake(
+	t.private.sig_targets.spend.set_dummy(
 		pw,
 		CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)),
 	);
 
 	// Consume (fake)
-	t.private.sig_targets.consume.set_fake(
+	t.private.sig_targets.consume.set_dummy(
 		pw,
 		CompressedPublicKey(CompressedPoint::from(
 			DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,

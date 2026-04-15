@@ -94,8 +94,8 @@ pub(crate) fn set_reject_tx_witness(
 		.unwrap_or_else(|| (accin.ast.next_index(), U256::zero()));
 	let asset_exists = accin.ast.amount_for(asset_id).is_some();
 	// Reject tx does not modify the AST, so accout amounts mirror accin
-	t.private.accin_amt.set_witness(pw, accin_amt);
-	t.private.accout_amt.set_witness(pw, accin_amt);
+	t.private.accin_amt.set(pw, accin_amt);
+	t.private.accout_amt.set(pw, accin_amt);
 	pw.set_bool_target(t.private.asset_exists_in_accin, asset_exists)
 		.unwrap();
 	pw.set_bool_target(t.private.asset_exists_in_accout, asset_exists)
@@ -187,7 +187,7 @@ pub(crate) fn set_reject_tx_witness(
 		.spend_auth
 		.spend_pk
 		.expect("accin must have a spend_pk");
-	t.private.sig_targets.spend.set_fake(pw, spend_pk);
+	t.private.sig_targets.spend.set_dummy(pw, spend_pk);
 
 	// Consume (required). Set to real if consume_auth == 1 other set to fake (since note
 	// consumtpion is delegated to approval_key)
@@ -205,7 +205,7 @@ pub(crate) fn set_reject_tx_witness(
 		t.private
 			.sig_targets
 			.consume
-			.set_fake(pw, consume_public_key);
+			.set_dummy(pw, consume_public_key);
 	}
 
 	// Approval (real — always required)

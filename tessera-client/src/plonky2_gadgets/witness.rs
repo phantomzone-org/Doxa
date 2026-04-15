@@ -45,7 +45,7 @@ impl SchnorrTargets {
 		set_schnorr_witness(pw, self, PointEw::decode(pk.0).unwrap(), cr, e, signature.s);
 	}
 
-	pub(crate) fn set_fake(&self, pw: &mut PartialWitness<F>, pk: CompPubKey) {
+	pub(crate) fn set_dummy(&self, pw: &mut PartialWitness<F>, pk: CompPubKey) {
 		let q = PointEw::decode(pk.0).unwrap();
 		let e = Scalar::ONE;
 		let s = Scalar::ONE;

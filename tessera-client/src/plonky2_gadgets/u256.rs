@@ -25,7 +25,7 @@ impl U256Target {
 	/// Sets the witness for this target from a `primitive_types::U256`.
 	///
 	/// `value.0` is `[u64; 4]` little-endian; each u64 is split into two u32 limbs.
-	pub(crate) fn set_witness<F: Field>(
+	pub(crate) fn set<F: Field>(
 		&self,
 		pw: &mut PartialWitness<F>,
 		value: primitive_types::U256,

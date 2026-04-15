@@ -162,7 +162,7 @@ impl NoteTarget {
 			.unwrap();
 		pw.set_target(self.identifier[1], note.identifier.0[1])
 			.unwrap();
-		self.amount.set_witness(pw, note.amt);
+		self.amount.set(pw, note.amt);
 		pw.set_target(self.asset_id.0, note.asset_id.0).unwrap();
 		pw.set_target(self.spend_cond.subpool_id.0, note.recipient.subpool_id.0)
 			.unwrap();
@@ -282,7 +282,8 @@ impl SubpoolFullProofTargets {
 
 	pub fn set_fake(&self, pw: &mut PartialWitness<F>) {
 		self.main_pool_proof.set_dummy_witness(pw);
-		pw.set_hash_target(self.subpool_config_comm.0, HashOut::ZERO);
+		pw.set_hash_target(self.subpool_config_comm.0, HashOut::ZERO)
+			.unwrap();
 	}
 }
 

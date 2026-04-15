@@ -58,7 +58,7 @@ pub(crate) struct DepositNoteTarget {
 
 impl DepositNoteTarget {
 	/// Fill all note targets from a concrete [`DepositNote`].
-	pub(crate) fn set_witness(&self, pw: &mut PartialWitness<F>, note: DepositNote) {
+	pub(crate) fn set(&self, pw: &mut PartialWitness<F>, note: DepositNote) {
 		pw.set_target(self.identifier[0], note.identifier.0[0])
 			.unwrap();
 		pw.set_target(self.identifier[1], note.identifier.0[1])
@@ -71,7 +71,7 @@ impl DepositNoteTarget {
 		)
 		.unwrap();
 
-		self.amount.set_witness(pw, note.amount);
+		self.amount.set(pw, note.amount);
 		pw.set_target(self.asset_id.0, note.asset_id.0).unwrap();
 	}
 }
@@ -114,7 +114,7 @@ pub struct DepositTxTargets {
 /// AST updated with `deposit_note.amount` credited to `deposit_note.asset_id`.
 #[allow(clippy::too_many_arguments)]
 impl DepositTxTargets {
-	pub(crate) fn set_real(
+	pub(crate) fn set(
 		&self,
 		pw: &mut PartialWitness<F>,
 		act_root: HashOutput,
@@ -125,10 +125,8 @@ impl DepositTxTargets {
 		deposit_note: DepositNote,
 		eth_address: H160,
 		approval_key: CompPubKey,
-		rejection_key: CompPubKey,
-		consume_key: CompPubKey,
 		subpool_id: SubpoolId,
-		consume_sig: Signature,
+		consume_sig: Option<Signature>,
 		approval_sig: Signature,
 	) {
 		self.public_targets.set_real(
@@ -156,12 +154,12 @@ impl DepositTxTargets {
 		);
 	}
 
-	pub(crate) fn set_fake(&self, pw: &mut PartialWitness<F>) {
+	pub(crate) fn set_dummy(&self, pw: &mut PartialWitness<F>) {
 		self.public_targets.set_fake(pw);
 		self.private_targets.set_fake(pw);
 	}
 
-	pub(crate) fn set_fake_with_roots(
+	pub(crate) fn set_dummy_with_roots(
 		&self,
 		pw: &mut PartialWitness<F>,
 		act_root: HashOutput,
@@ -174,8 +172,8 @@ impl DepositTxTargets {
 }
 
 pub struct DepositTxPublicTargets {
-	/// PI[0..4]: Account Commitment Tree root.
-	pub comm_root: StateRootTarget,
+	/// PI[0..4]: State Tree root.
+	pub state_root: StateRootTarget,
 	/// PI[4..8]: Main pool configuration tree root.
 	pub mainpool_config_root: MainPoolConfigRootTarget,
 	/// PI[8]: 1 for a real transaction, 0 for a dummy/padding proof.
@@ -199,7 +197,7 @@ impl DepositTxPublicTargets {
 	where
 		F: RichField + Extendable<D> + Poseidon,
 	{
-		builder.register_public_inputs(&self.comm_root.0.elements);
+		builder.register_public_inputs(&self.state_root.0.elements);
 		builder.register_public_inputs(&self.mainpool_config_root.0.elements);
 		builder.register_public_input(self.not_fake_tx.target);
 		builder.register_public_inputs(&self.accin_null.0.elements);
@@ -223,7 +221,7 @@ impl DepositTxPublicTargets {
 		let (amt_s, rest) = rest.split_at(8);
 		let (aid_s, _) = rest.split_at(1);
 		Self {
-			comm_root: StateRootTarget(HashOutTarget {
+			state_root: StateRootTarget(HashOutTarget {
 				elements: root_s.try_into().unwrap(),
 			}),
 			mainpool_config_root: MainPoolConfigRootTarget(HashOutTarget {
@@ -313,7 +311,7 @@ impl DepositTxPublicTargets {
 			mainpool_config_root.to_hash_out(),
 		)
 		.unwrap();
-		pw.set_hash_target(self.comm_root.0, act_root.to_hash_out())
+		pw.set_hash_target(self.state_root.0, act_root.to_hash_out())
 			.unwrap();
 		pw.set_target_arr(&self.eth_address, &map_h160_to_f(H160::zero()))
 			.unwrap();
@@ -334,7 +332,7 @@ impl DepositTxPublicTargets {
 		pw.set_bool_target(self.not_fake_tx, not_fake_tx).unwrap();
 		pw.set_hash_target(self.mainpool_config_root.0, main_pool_root.to_hash_out())
 			.unwrap();
-		pw.set_hash_target(self.comm_root.0, act_root.to_hash_out())
+		pw.set_hash_target(self.state_root.0, act_root.to_hash_out())
 			.unwrap();
 		pw.set_hash_target(self.accin_null.0, accin_null.to_hash_out())
 			.unwrap();
@@ -342,12 +340,12 @@ impl DepositTxPublicTargets {
 			.unwrap();
 		pw.set_target_arr(&self.eth_address, &map_h160_to_f(eth_address))
 			.unwrap();
-		self.amount.set_witness(pw, amount);
+		self.amount.set(pw, amount);
 		pw.set_target(self.asset_id.0, asset_id).unwrap();
 	}
 }
 
-pub(crate) struct DepositTxPrivateTargets {
+pub struct DepositTxPrivateTargets {
 	/// The deposit note fields.
 	pub(crate) deposit_note: DepositNoteTarget,
 	/// Pre-transaction account state.
@@ -369,7 +367,7 @@ pub(crate) struct DepositTxPrivateTargets {
 	/// Subpool approval authority public key.
 	pub(crate) approval_key: PubkeyTarget,
 	/// Authority key membership proofs for the subpool.
-	pub subpool_proof_targets: SubpoolFullProofTargets,
+	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	/// Schnorr signature targets for consume and approval.
 	pub(crate) sig_targets: DepositTxSignatureTargets,
 }
@@ -385,7 +383,7 @@ impl DepositTxPrivateTargets {
 		approval_key: CompPubKey,
 		eth_address: H160,
 		subpool_id: SubpoolId,
-		consume_sig: Signature,
+		consume_sig: Option<Signature>,
 		approval_sig: Signature,
 	) {
 		let subpool = SubpoolConfig::new(approval_key);
@@ -434,8 +432,8 @@ impl DepositTxPrivateTargets {
 		self.deposit_note.set_witness(pw, deposit_note);
 
 		// ── Amounts and exists flags ───────────────────────────────────────────────
-		self.accin_amt.set_witness(pw, U256::zero());
-		self.accout_amt.set_witness(pw, U256::zero());
+		self.accin_amt.set(pw, U256::zero());
+		self.accout_amt.set(pw, U256::zero());
 		pw.set_bool_target(self.asset_exists_in_accin, false)
 			.unwrap();
 		pw.set_bool_target(self.asset_exists_in_accout, false)
@@ -462,8 +460,8 @@ impl DepositTxPrivateTargets {
 		// Q must match the key used at the time of verification.
 		self.sig_targets
 			.consume
-			.set_fake(pw, accin.consume_pk_or_default());
-		self.sig_targets.approval.set_fake(pw, key);
+			.set_dummy(pw, accin.consume_pk_or_default());
+		self.sig_targets.approval.set_dummy(pw, key);
 	}
 
 	fn set_witnesses(
@@ -477,7 +475,7 @@ impl DepositTxPrivateTargets {
 		approval_key: CompPubKey,
 		eth_address: H160,
 		subpool_id: SubpoolId,
-		consume_sig: Signature,
+		consume_sig: Option<Signature>,
 		approval_sig: Signature,
 	) {
 		let asset_id = deposit_note.asset_id;
@@ -495,11 +493,11 @@ impl DepositTxPrivateTargets {
 		let asset_exists_in_accout = true; // always true after deposit
 
 		// ── Deposit note ─────────────────────────────────────────────────────────
-		self.deposit_note.set_witness(pw, deposit_note.clone());
+		self.deposit_note.set(pw, deposit_note.clone());
 
 		// ── Asset / amounts ───────────────────────────────────────────────────────
-		self.accin_amt.set_witness(pw, accin_amt);
-		self.accout_amt.set_witness(pw, accout_amt);
+		self.accin_amt.set(pw, accin_amt);
+		self.accout_amt.set(pw, accout_amt);
 		pw.set_bool_target(self.asset_exists_in_accin, asset_exists_in_accin)
 			.unwrap();
 		pw.set_bool_target(self.asset_exists_in_accout, asset_exists_in_accout)
@@ -538,10 +536,13 @@ impl DepositTxPrivateTargets {
 
 		// ── Signatures ────────────────────────────────────────────────────────────
 
-		// Consume: uses accin.consume_auth.config to pick key (same as circuit)
-		self.sig_targets
-			.consume
-			.set(pw, accin.consume_pk_or_default(), tx_hash, consume_sig);
+		// Consume: real sig if accin.consume_auth.config=1 otherwise fake sig
+		let consume_pk = accin.consume_pk_or_default();
+		if let Some(sig) = consume_sig {
+			self.sig_targets.consume.set(pw, consume_pk, tx_hash, sig);
+		} else {
+			self.sig_targets.consume.set_dummy(pw, consume_pk);
+		}
 
 		// Approval
 		self.sig_targets

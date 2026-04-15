@@ -137,11 +137,11 @@ pub fn set_fake_tx_witness(
 	let default_spend_pk = CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK));
 
 	// Spend (fake)
-	t.private.sig_targets.spend.set_fake(pw, default_spend_pk);
+	t.private.sig_targets.spend.set_dummy(pw, default_spend_pk);
 
 	// Consume (fake) — circuit uses the subpool consume key (consume_auth.config=false)
-	t.private.sig_targets.consume.set_fake(pw, key);
+	t.private.sig_targets.consume.set_dummy(pw, key);
 
 	// Approval (fake)
-	t.private.sig_targets.approval.set_fake(pw, key);
+	t.private.sig_targets.approval.set_dummy(pw, key);
 }

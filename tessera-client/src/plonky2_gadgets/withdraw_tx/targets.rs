@@ -160,7 +160,7 @@ impl WithdrawTxPublicTargets {
 			pw.set_target(self.asset_ids[i].0, id.0).unwrap();
 		}
 		for (i, amt) in slot_withdrawal_amts.iter().enumerate() {
-			self.withdrawal_amts[i].set_witness(pw, *amt);
+			self.withdrawal_amts[i].set(pw, *amt);
 		}
 		pw.set_target_arr(&self.w_acc_addr, &map_h160_to_f(w_acc_addr))
 			.unwrap();
@@ -189,7 +189,7 @@ impl WithdrawTxPublicTargets {
 		set_hash(pw, self.mainpool_config_root.0, mainpool_config_root.0);
 		for i in 0..NOTE_BATCH {
 			pw.set_target(self.asset_ids[i].0, F::ZERO).unwrap();
-			self.withdrawal_amts[i].set_witness(pw, U256::zero());
+			self.withdrawal_amts[i].set(pw, U256::zero());
 		}
 		pw.set_target_arr(&self.w_acc_addr, &map_h160_to_f(H160::zero()))
 			.unwrap();
@@ -269,8 +269,8 @@ impl WithdrawTxPrivateTargets {
 
 		// ── Per-slot witnesses ────────────────────────────────────────────────────
 		for i in 0..NOTE_BATCH {
-			self.accin_amts[i].set_witness(pw, slot_accin_amts[i]);
-			self.accout_amts[i].set_witness(pw, slot_accout_amts[i]);
+			self.accin_amts[i].set(pw, slot_accin_amts[i]);
+			self.accout_amts[i].set(pw, slot_accout_amts[i]);
 			pw.set_bool_target(self.asset_exists_in_accin[i], slot_exists_in[i])
 				.unwrap();
 			pw.set_bool_target(self.asset_exists_in_accout[i], slot_exists_out[i])
@@ -321,8 +321,8 @@ impl WithdrawTxPrivateTargets {
 		// With exists_in=false and exists_out=false, the AST root is unchanged
 		// across all slots, which is consistent with accin.acc_ast_root == accout.acc_ast_root.
 		for i in 0..NOTE_BATCH {
-			self.accin_amts[i].set_witness(pw, U256::zero());
-			self.accout_amts[i].set_witness(pw, U256::zero());
+			self.accin_amts[i].set(pw, U256::zero());
+			self.accout_amts[i].set(pw, U256::zero());
 			pw.set_bool_target(self.asset_exists_in_accin[i], false)
 				.unwrap();
 			pw.set_bool_target(self.asset_exists_in_accout[i], false)
@@ -339,7 +339,7 @@ impl WithdrawTxPrivateTargets {
 		self.subpool_proof_targets.set_fake(pw);
 
 		// ── Approval signature (fake — not enforced when not_fake_tx = 0) ─────────
-		self.approval_sig.set_fake(pw, key);
+		self.approval_sig.set_dummy(pw, key);
 	}
 }
 

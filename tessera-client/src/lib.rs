@@ -82,7 +82,13 @@ pub const AST_DEFAULT_ROOT: [u64; HASH_SIZE] = [
 /// `consume_auth.config = false` (subpool-delegated consume).
 /// This is **not** a valid curve point — it only pads the commitment hash to a
 /// fixed width and must never be used as an actual public key.
-pub const DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER: [u64; 5] = [1u64; 5];
+pub const DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER: [u64; 5] = [
+	7613690455422068269,
+	12930951591626745075,
+	16103143792840800039,
+	4657200339622395349,
+	3857357297380158342,
+];
 
 // this is set to random point on the curve with seed H("tesseta::account::spend::defaultSpendKey").
 // TODO: atm the point is a random point but not

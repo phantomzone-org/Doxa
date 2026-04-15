@@ -128,8 +128,8 @@ pub fn set_spend_tx_witness(
 
 	// ── Asset / amounts ───────────────────────────────────────────────────────
 	pw.set_target(t.private.asset_id.0, asset_id.0).unwrap();
-	t.private.accin_amt.set_witness(pw, accin_amt);
-	t.private.accout_amt.set_witness(pw, accout_amt);
+	t.private.accin_amt.set(pw, accin_amt);
+	t.private.accout_amt.set(pw, accout_amt);
 
 	pw.set_bool_target(t.private.asset_exists_in_accin, asset_exists_in_accin)
 		.unwrap();
@@ -228,7 +228,7 @@ pub fn set_spend_tx_witness(
 		if let Some(sig) = spend_sig {
 			t.private.sig_targets.spend.set(pw, spend_pk, tx_hash, sig);
 		} else {
-			t.private.sig_targets.spend.set_fake(pw, spend_pk);
+			t.private.sig_targets.spend.set_dummy(pw, spend_pk);
 		}
 	}
 
@@ -249,7 +249,7 @@ pub fn set_spend_tx_witness(
 			t.private
 				.sig_targets
 				.consume
-				.set_fake(pw, consume_public_key);
+				.set_dummy(pw, consume_public_key);
 		}
 	}
 

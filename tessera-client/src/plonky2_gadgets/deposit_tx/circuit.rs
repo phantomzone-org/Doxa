@@ -75,7 +75,7 @@ impl DepositTxCircuit {
 		use tessera_utils::hasher::HashOutput;
 
 		let mut pw = PartialWitness::new();
-		self.targets.set_fake(&mut pw);
+		self.targets.set_dummy(&mut pw);
 		self.circuit_data
 			.prove(pw)
 			.expect("dummy deposit_tx proof generation failed")
@@ -93,7 +93,7 @@ impl DepositTxCircuit {
 
 		let mut pw = PartialWitness::new();
 		self.targets
-			.set_fake_with_roots(&mut pw, act_root, mainpool_config_root);
+			.set_dummy_with_roots(&mut pw, act_root, mainpool_config_root);
 		self.circuit_data
 			.prove(pw)
 			.expect("padding deposit_tx proof generation failed")
@@ -114,14 +114,12 @@ impl DepositTxCircuit {
 		deposit_note: DepositNote,
 		eth_address: H160,
 		approval_key: CompPubKey,
-		rejection_key: CompPubKey,
-		consume_key: CompPubKey,
 		subpool_id: SubpoolId,
-		consume_sig: Signature,
+		consume_sig: Option<Signature>,
 		approval_sig: Signature,
 	) -> tessera_utils::ProofNative {
 		let mut pw = PartialWitness::new();
-		self.targets.set_real(
+		self.targets.set(
 			&mut pw,
 			act_root,
 			main_pool,
@@ -131,8 +129,6 @@ impl DepositTxCircuit {
 			deposit_note,
 			eth_address,
 			approval_key,
-			rejection_key,
-			consume_key,
 			subpool_id,
 			consume_sig,
 			approval_sig,
@@ -307,7 +303,7 @@ where
 	let public_targets = DepositTxPublicTargets {
 		not_fake_tx,
 		mainpool_config_root,
-		comm_root: state_root,
+		state_root,
 		accin_null,
 		accout_comm,
 		note_comm: deposit_note_comm,

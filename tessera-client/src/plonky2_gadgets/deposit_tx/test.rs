@@ -32,10 +32,6 @@ fn test_prove_deposit_tx() {
 	// ── Keys for subpool ──────────────────────────────────────────────────
 	let approval_sk = PrivateKey::from_raw([1, 2, 3, 4, 5]);
 	let approval_key: CompPubKey = approval_sk.public_key::<F>().into();
-	let rejection_sk = PrivateKey::from_raw([5, 6, 7, 8, 0]);
-	let rejection_key: CompPubKey = rejection_sk.public_key::<F>().into();
-	let consume_sk = PrivateKey::from_raw([9, 10, 11, 12, 0]);
-	let consume_key: CompPubKey = consume_sk.public_key::<F>().into();
 
 	let subpool_id = SubpoolId(F::ONE);
 	let subpool = SubpoolConfig::<HashOutput>::new(approval_key);
@@ -59,7 +55,7 @@ fn test_prove_deposit_tx() {
 	let accin_pos = act.insert(accin.commitment().0).unwrap();
 	let accin_act_merkle_proof = act.merkle_proof(accin_pos).unwrap();
 
-	// ── DepositNote targeting accin ───────────────────────────────────────
+	// ── DepositNote for accin ──────────────────────────────────────-------
 	let asset_id = AssetId(F::from_canonical_u64(7));
 	let deposit_note = DepositNote {
 		identifier: crate::NoteIdentifier([F::from_canonical_u64(11), F::from_canonical_u64(22)]),
@@ -70,8 +66,7 @@ fn test_prove_deposit_tx() {
 	let eth_address = H160::random();
 
 	// ── Compute native TxHash ─────────────────────────────────────────────
-	let mut accout = accin.clone();
-	accout.nonce = Nonce(F::from_canonical_u64(accin.nonce.0.to_canonical_u64() + 1));
+	let mut accout = accin.clone_with_incremented_nonce();
 	accout
 		.ast
 		.insert_or_update_asset(asset_id, deposit_note.amount);
@@ -87,7 +82,6 @@ fn test_prove_deposit_tx() {
 
 	// ── Sign ──────────────────────────────────────────────────────────────
 	let k = Scalar::from_raw([1, 2, 3, 4, 5]);
-	let consume_sig = schnorr_sign(&consume_sk, &tx_hash.0, k);
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 	// ── Build circuit ─────────────────────────────────────────────────────
@@ -103,7 +97,7 @@ fn test_prove_deposit_tx() {
 
 	let mut pw = PartialWitness::new();
 
-	t.set_real(
+	t.set(
 		&mut pw,
 		act_root,
 		main_pool,
@@ -113,10 +107,8 @@ fn test_prove_deposit_tx() {
 		deposit_note,
 		eth_address,
 		approval_key,
-		rejection_key,
-		consume_key,
 		subpool_id,
-		consume_sig,
+		None,
 		approval_sig,
 	);
 
@@ -135,11 +127,7 @@ fn test_prove_deposit_tx() {
 		main_pool_root,
 		"mainpool_config_root mismatch"
 	);
-	assert_eq!(
-		dp.not_fake_tx().to_canonical_u64(),
-		1,
-		"not_fake_tx should be 1"
-	);
+	assert_eq!(dp.not_fake_tx(), F::ONE, "not_fake_tx should be 1");
 	assert_eq!(
 		dp.accin_nullifier(),
 		accin_null.0,
@@ -169,7 +157,7 @@ fn test_fake_tx() {
 	let data = builder.build::<C>();
 	let mut pw = PartialWitness::new();
 
-	t.set_fake(&mut pw);
+	t.set_dummy(&mut pw);
 
 	// ── Prove & verify ─────────────────────────────────────────────────────
 	let proof = data.prove(pw).expect("prove failed");
