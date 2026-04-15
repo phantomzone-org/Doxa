@@ -118,7 +118,7 @@ impl DepositTxTargets {
 		&self,
 		pw: &mut PartialWitness<F>,
 		act_root: HashOutput,
-		main_pool: MainPoolConfigTree<HashOutput>,
+		main_pool: &MainPoolConfigTree<HashOutput>,
 		accin: &StandardAccount,
 		accout: &StandardAccount,
 		accin_act_merkle_proof: MerkleProof<HashOutput>,
@@ -129,7 +129,7 @@ impl DepositTxTargets {
 		consume_sig: Option<Signature>,
 		approval_sig: Signature,
 	) {
-		self.public_targets.set_real(
+		self.public_targets.set(
 			pw,
 			true,
 			main_pool.root(),
@@ -140,7 +140,7 @@ impl DepositTxTargets {
 			deposit_note.amount,
 			deposit_note.asset_id,
 		);
-		self.private_targets.set_real(
+		self.private_targets.set(
 			pw,
 			main_pool,
 			accin,
@@ -155,8 +155,8 @@ impl DepositTxTargets {
 	}
 
 	pub(crate) fn set_dummy(&self, pw: &mut PartialWitness<F>) {
-		self.public_targets.set_fake(pw);
-		self.private_targets.set_fake(pw);
+		self.public_targets.set_dummy(pw);
+		self.private_targets.set_dummy(pw);
 	}
 
 	pub(crate) fn set_dummy_with_roots(
@@ -166,8 +166,8 @@ impl DepositTxTargets {
 		mainpool_config_root: HashOutput,
 	) {
 		self.public_targets
-			.set_fake_with_roots(pw, act_root, mainpool_config_root);
-		self.private_targets.set_fake(pw);
+			.set_dummy_with_roots(pw, act_root, mainpool_config_root);
+		self.private_targets.set_dummy(pw);
 	}
 }
 
@@ -263,7 +263,7 @@ impl DepositTxPublicTargets {
 }
 
 impl DepositTxPublicTargets {
-	pub fn set_real(
+	pub fn set(
 		&self,
 		pw: &mut PartialWitness<F>,
 		not_fake_tx: bool,
@@ -275,27 +275,29 @@ impl DepositTxPublicTargets {
 		amount: U256,
 		asset_id: AssetId,
 	) {
-		self.set_witnesses(
-			pw,
-			not_fake_tx,
-			main_pool_root,
-			act_root,
-			accin_null.0,
-			accout_comm.0,
-			eth_address,
-			amount,
-			asset_id.0,
-		);
+		pw.set_bool_target(self.not_fake_tx, not_fake_tx).unwrap();
+		pw.set_hash_target(self.mainpool_config_root.0, main_pool_root.to_hash_out())
+			.unwrap();
+		pw.set_hash_target(self.state_root.0, act_root.to_hash_out())
+			.unwrap();
+		pw.set_hash_target(self.accin_null.0, accin_null.0.to_hash_out())
+			.unwrap();
+		pw.set_hash_target(self.accout_comm.0, accout_comm.0.to_hash_out())
+			.unwrap();
+		pw.set_target_arr(&self.eth_address, &map_h160_to_f(eth_address))
+			.unwrap();
+		self.amount.set(pw, amount);
+		pw.set_target(self.asset_id.0, asset_id.0).unwrap();
 	}
 
-	pub fn set_fake(&self, pw: &mut PartialWitness<F>) {
-		self.set_fake_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
+	pub fn set_dummy(&self, pw: &mut PartialWitness<F>) {
+		self.set_dummy_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
 	}
 
 	/// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
 	/// `mainpool_config_root`, so that padding proofs share the same common PIs
 	/// as the real proofs in their batch.
-	pub fn set_fake_with_roots(
+	pub fn set_dummy_with_roots(
 		&self,
 		pw: &mut PartialWitness<F>,
 		act_root: HashOutput,
@@ -315,33 +317,6 @@ impl DepositTxPublicTargets {
 			.unwrap();
 		pw.set_target_arr(&self.eth_address, &map_h160_to_f(H160::zero()))
 			.unwrap();
-	}
-
-	fn set_witnesses(
-		&self,
-		pw: &mut PartialWitness<F>,
-		not_fake_tx: bool,
-		main_pool_root: HashOutput,
-		act_root: HashOutput,
-		accin_null: HashOutput,
-		accout_comm: HashOutput,
-		eth_address: H160,
-		amount: U256,
-		asset_id: F,
-	) {
-		pw.set_bool_target(self.not_fake_tx, not_fake_tx).unwrap();
-		pw.set_hash_target(self.mainpool_config_root.0, main_pool_root.to_hash_out())
-			.unwrap();
-		pw.set_hash_target(self.state_root.0, act_root.to_hash_out())
-			.unwrap();
-		pw.set_hash_target(self.accin_null.0, accin_null.to_hash_out())
-			.unwrap();
-		pw.set_hash_target(self.accout_comm.0, accout_comm.to_hash_out())
-			.unwrap();
-		pw.set_target_arr(&self.eth_address, &map_h160_to_f(eth_address))
-			.unwrap();
-		self.amount.set(pw, amount);
-		pw.set_target(self.asset_id.0, asset_id).unwrap();
 	}
 }
 
@@ -373,10 +348,10 @@ pub struct DepositTxPrivateTargets {
 }
 
 impl DepositTxPrivateTargets {
-	fn set_real(
+	fn set(
 		&self,
 		pw: &mut PartialWitness<F>,
-		main_pool: MainPoolConfigTree<HashOutput>,
+		main_pool: &MainPoolConfigTree<HashOutput>,
 		accin: &StandardAccount,
 		accin_act_merkle_proof: MerkleProof<HashOutput>,
 		deposit_note: DepositNote,
@@ -386,27 +361,83 @@ impl DepositTxPrivateTargets {
 		consume_sig: Option<Signature>,
 		approval_sig: Signature,
 	) {
+		let asset_id = deposit_note.asset_id;
+		let deposit_amt = deposit_note.amount;
+
+		// ── Build accout ──────────────────────────────────────────────────────────
+		let (ast_index, accin_amt, asset_exists_in_accin) = accin
+			.ast
+			.amount_for(asset_id)
+			.map(|(i, b)| (i, b, true))
+			.unwrap_or_else(|| (accin.ast.next_index(), U256::zero(), false));
+		let accout_amt = accin_amt + deposit_amt;
+		let mut accout = accin.clone_with_incremented_nonce();
+		accout.ast.insert_or_update_asset(asset_id, accout_amt);
+		let asset_exists_in_accout = true; // always true after deposit
+
+		// ── Deposit note ─────────────────────────────────────────────────────────
+		self.deposit_note.set(pw, deposit_note.clone());
+
+		// ── Asset / amounts ───────────────────────────────────────────────────────
+		self.accin_amt.set(pw, accin_amt);
+		self.accout_amt.set(pw, accout_amt);
+		pw.set_bool_target(self.asset_exists_in_accin, asset_exists_in_accin)
+			.unwrap();
+		pw.set_bool_target(self.asset_exists_in_accout, asset_exists_in_accout)
+			.unwrap();
+
+		// ── ACT Merkle proof ──────────────────────────────────────────────────────
+		self.accin_act_merkle
+			.set_witness(pw, &accin_act_merkle_proof);
+
+		// ── AccIn AST Merkle proof ────────────────────────────────────────────────
+		self.accin_ast_merkle
+			.set_witness(pw, &accin.ast.merkle_proof_at(ast_index));
+
+		// ── Subpool full proof ────────────────────────────────────────────────────
 		let subpool = SubpoolConfig::new(approval_key);
 		let subpool_proof = main_pool
 			.full_subpool_proof(&subpool, subpool_id)
 			.expect("subpool not registered in main_pool at the given subpool_id");
+		self.subpool_proof_targets
+			.set_witness(pw, subpool_proof, subpool.commitment(), subpool_id);
 
-		self.set_witnesses(
-			pw,
-			subpool_proof,
-			subpool.commitment(),
-			accin,
-			accin_act_merkle_proof,
-			deposit_note,
-			approval_key,
+		// ── Authority keys ────────────────────────────────────────────────────────
+		self.approval_key.set_witness(pw, approval_key);
+
+		// ── Native TxHash ─────────────────────────────────────────────────────────
+		// H(accin_null[4] || accout_comm[4] || deposit_note_comm[4] || eth_address[5])
+		let accin_null = accin.nullifier();
+		let deposit_note_comm_native = deposit_note.commitment();
+
+		// ── Accounts ──────────────────────────────────────────────────────────────
+		self.accin.set_witness(pw, accin);
+		self.accout.set_witness(pw, &accout);
+
+		let tx_hash = derive_deposit_tx_hash(
+			accin_null,
+			accout.commitment(),
+			deposit_note_comm_native,
 			eth_address,
-			subpool_id,
-			consume_sig,
-			approval_sig,
 		);
+
+		// ── Signatures ────────────────────────────────────────────────────────────
+
+		// Consume: real sig if accin.consume_auth.config=1 otherwise fake sig
+		let consume_pk = accin.consume_pk_or_default();
+		if let Some(sig) = consume_sig {
+			self.sig_targets.consume.set(pw, consume_pk, tx_hash, sig);
+		} else {
+			self.sig_targets.consume.set_dummy(pw, consume_pk);
+		}
+
+		// Approval
+		self.sig_targets
+			.approval
+			.set(pw, approval_key, tx_hash, approval_sig);
 	}
 
-	fn set_fake(&self, pw: &mut PartialWitness<F>) {
+	fn set_dummy(&self, pw: &mut PartialWitness<F>) {
 		use tessera_trees::MerkleTree;
 
 		// Use non-zero private identifier so the derived public_identifier is
@@ -460,91 +491,5 @@ impl DepositTxPrivateTargets {
 			.consume
 			.set_dummy(pw, accin.consume_pk_or_default());
 		self.sig_targets.approval.set_dummy(pw, key);
-	}
-
-	fn set_witnesses(
-		&self,
-		pw: &mut PartialWitness<F>,
-		subpool_proof: SubpoolFullProof<HashOutput>,
-		subpool_root: HashOutput,
-		accin: &StandardAccount,
-		accin_act_merkle_proof: MerkleProof<HashOutput>,
-		deposit_note: DepositNote,
-		approval_key: CompPubKey,
-		eth_address: H160,
-		subpool_id: SubpoolId,
-		consume_sig: Option<Signature>,
-		approval_sig: Signature,
-	) {
-		let asset_id = deposit_note.asset_id;
-		let deposit_amt = deposit_note.amount;
-
-		// ── Build accout ──────────────────────────────────────────────────────────
-		let (ast_index, accin_amt, asset_exists_in_accin) = accin
-			.ast
-			.amount_for(asset_id)
-			.map(|(i, b)| (i, b, true))
-			.unwrap_or_else(|| (accin.ast.next_index(), U256::zero(), false));
-		let accout_amt = accin_amt + deposit_amt;
-		let mut accout = accin.clone_with_incremented_nonce();
-		accout.ast.insert_or_update_asset(asset_id, accout_amt);
-		let asset_exists_in_accout = true; // always true after deposit
-
-		// ── Deposit note ─────────────────────────────────────────────────────────
-		self.deposit_note.set(pw, deposit_note.clone());
-
-		// ── Asset / amounts ───────────────────────────────────────────────────────
-		self.accin_amt.set(pw, accin_amt);
-		self.accout_amt.set(pw, accout_amt);
-		pw.set_bool_target(self.asset_exists_in_accin, asset_exists_in_accin)
-			.unwrap();
-		pw.set_bool_target(self.asset_exists_in_accout, asset_exists_in_accout)
-			.unwrap();
-
-		// ── ACT Merkle proof ──────────────────────────────────────────────────────
-		self.accin_act_merkle
-			.set_witness(pw, &accin_act_merkle_proof);
-
-		// ── AccIn AST Merkle proof ────────────────────────────────────────────────
-		self.accin_ast_merkle
-			.set_witness(pw, &accin.ast.merkle_proof_at(ast_index));
-
-		// ── Subpool full proof ────────────────────────────────────────────────────
-		self.subpool_proof_targets
-			.set_witness(pw, subpool_proof, subpool_root, subpool_id);
-
-		// ── Authority keys ────────────────────────────────────────────────────────
-		self.approval_key.set_witness(pw, approval_key);
-
-		// ── Native TxHash ─────────────────────────────────────────────────────────
-		// H(accin_null[4] || accout_comm[4] || deposit_note_comm[4] || eth_address[5])
-		let accin_null = accin.nullifier();
-		let deposit_note_comm_native = deposit_note.commitment();
-
-		// ── Accounts ──────────────────────────────────────────────────────────────
-		self.accin.set_witness(pw, accin);
-		self.accout.set_witness(pw, &accout);
-
-		let tx_hash = derive_deposit_tx_hash(
-			accin_null,
-			accout.commitment(),
-			deposit_note_comm_native,
-			eth_address,
-		);
-
-		// ── Signatures ────────────────────────────────────────────────────────────
-
-		// Consume: real sig if accin.consume_auth.config=1 otherwise fake sig
-		let consume_pk = accin.consume_pk_or_default();
-		if let Some(sig) = consume_sig {
-			self.sig_targets.consume.set(pw, consume_pk, tx_hash, sig);
-		} else {
-			self.sig_targets.consume.set_dummy(pw, consume_pk);
-		}
-
-		// Approval
-		self.sig_targets
-			.approval
-			.set(pw, approval_key, tx_hash, approval_sig);
 	}
 }

@@ -122,7 +122,7 @@ impl DepositTxCircuit {
 		self.targets.set(
 			&mut pw,
 			act_root,
-			main_pool,
+			&main_pool,
 			accin,
 			accout,
 			accin_act_merkle_proof,
