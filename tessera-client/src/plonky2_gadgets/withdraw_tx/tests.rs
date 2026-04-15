@@ -10,13 +10,13 @@ use tessera_utils::{
 };
 
 use crate::{
-	AssetId, STATE_TREE_DEPTH, NOTE_BATCH, Nonce, PIHelper, SpendAuth, StandardAccount, SubpoolId,
+	AssetId, NOTE_BATCH, Nonce, PIHelper, STATE_TREE_DEPTH, SpendAuth, StandardAccount, SubpoolId,
 	account::AccountStateTreeLeaf,
 	derive_withdraw_tx_hash,
 	plonky2_gadgets::withdraw_tx::{
 		circuit::withdraw_tx_circuit, targets::compute_withdrawal_slots,
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::{PrivateKey, Scalar, schnorr_sign},
 };
 
@@ -31,10 +31,10 @@ fn test_prove_withdraw_tx() {
 	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
 	let subpool_id = SubpoolId(F::ONE);
-	let subpool = SubpoolConfigTree::<HashOutput>::new(approval_cpk, rejection_cpk, consume_cpk);
+	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.root())
+		.insert_subpool(subpool_id, subpool.commitment())
 		.unwrap();
 
 	// ── Sample accin ──────────────────────────────────────────────────
@@ -101,7 +101,7 @@ fn test_prove_withdraw_tx() {
 
 	// ── Fill witness ──────────────────────────────────────────────────
 	let mut pw = plonky2::iop::witness::PartialWitness::new();
-	t.set_real(
+	t.set(
 		&mut pw,
 		&accin,
 		accin_act_proof,
@@ -110,8 +110,6 @@ fn test_prove_withdraw_tx() {
 		&withdrawals,
 		H160::zero(),
 		approval_cpk,
-		rejection_cpk,
-		consume_cpk,
 		subpool_id,
 		approval_sig,
 	);

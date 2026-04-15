@@ -28,9 +28,9 @@ use crate::{
 		set_hash,
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
-		witness::{fake_authority_key, set_authority_keys, set_subpool_full_proof},
+		witness::fake_authority_key,
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfigTree},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::Signature,
 	utils::map_h160_to_f,
 };
@@ -144,7 +144,7 @@ impl WithdrawTxPublicTargets {
 	/// `acc_in_subpool_id` and `acc_out_subpool_id` are set here (same wire as
 	/// `private.accin.subpool_id` / `private.accout.subpool_id`); the private
 	/// witness sets the same wire to a consistent value.
-	pub(crate) fn set_real(
+	pub(crate) fn set(
 		&self,
 		pw: &mut PartialWitness<F>,
 		act_root: HashOutput,
@@ -171,14 +171,14 @@ impl WithdrawTxPublicTargets {
 	/// `acc_in_subpool_id`, `acc_out_subpool_id`, `accin_null`, and `accout_comm`
 	/// are **not** set here — they are computed from the private witnesses in
 	/// [`WithdrawTxPrivateTargets::set_fake`].
-	pub(crate) fn set_fake(&self, pw: &mut PartialWitness<F>) {
-		self.set_fake_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
+	pub(crate) fn set_dummy(&self, pw: &mut PartialWitness<F>) {
+		self.set_dummy_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
 	}
 
 	/// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
 	/// `mainpool_config_root`, so that padding proofs share the same common PIs
 	/// as the real proofs in their batch.
-	pub(crate) fn set_fake_with_roots(
+	pub(crate) fn set_dummy_with_roots(
 		&self,
 		pw: &mut PartialWitness<F>,
 		act_root: HashOutput,
@@ -206,16 +206,10 @@ pub(crate) struct WithdrawTxPrivateTargets {
 	pub(crate) acc_out_subpool_id: SubpoolIdTarget,
 	/// Subpool approval authority public key.
 	pub(crate) approval_key: PubkeyTarget,
-	/// Subpool rejection authority public key.
-	pub(crate) rejection_key: PubkeyTarget,
-	/// Subpool consume authority public key.
-	pub(crate) subpool_consume_key: PubkeyTarget,
 	/// Pre-withdrawal account state.
 	pub(crate) accin: AccountTarget,
 	/// Post-withdrawal account state (nonce+1, AST updated for each slot).
 	pub(crate) accout: AccountTarget,
-	/// AccIn leaf index in the ACT (prover-supplied for nullifier derivation).
-	pub(crate) accin_pos: Target,
 	/// AccIn asset balances per slot (before withdrawal).
 	pub(crate) accin_amts: [U256Target; NOTE_BATCH],
 	/// AccOut asset balances per slot (after withdrawal).
@@ -240,7 +234,7 @@ impl WithdrawTxPrivateTargets {
 	/// Called by [`WithdrawTxTargets::set_real`] after slot data has been
 	/// derived from the raw withdrawal inputs.
 	#[allow(clippy::too_many_arguments)]
-	fn set_witnesses(
+	fn set(
 		&self,
 		pw: &mut PartialWitness<F>,
 		accin: &StandardAccount,
@@ -255,8 +249,6 @@ impl WithdrawTxPrivateTargets {
 		slot_proofs: Vec<MerkleProof<HashOutput>>,
 		w_acc_addr: H160,
 		approval_key: CompPubKey,
-		rejection_key: CompPubKey,
-		consume_key: CompPubKey,
 		subpool_id: SubpoolId,
 		main_pool: &MainPoolConfigTree<HashOutput>,
 		approval_sig: Signature,
@@ -274,11 +266,6 @@ impl WithdrawTxPrivateTargets {
 		// ── Accounts ──────────────────────────────────────────────────────────────
 		self.accin.set_witness(pw, accin);
 		self.accout.set_witness(pw, accout);
-		pw.set_target(
-			self.accin_pos,
-			F::from_canonical_usize(accin_act_merkle_proof.pos),
-		)
-		.unwrap();
 
 		// ── Per-slot witnesses ────────────────────────────────────────────────────
 		for i in 0..NOTE_BATCH {
@@ -296,31 +283,15 @@ impl WithdrawTxPrivateTargets {
 			.set_witness(pw, &accin_act_merkle_proof);
 
 		// ── Authority keys ────────────────────────────────────────────────────────
-		set_authority_keys(
-			pw,
-			self.approval_key,
-			self.rejection_key,
-			self.subpool_consume_key,
-			approval_key,
-			rejection_key,
-			consume_key,
-		);
+		self.approval_key.set_witness(pw, approval_key);
 
 		// ── Subpool full proof ────────────────────────────────────────────────────
-		let subpool = SubpoolConfigTree::new(approval_key, rejection_key, consume_key);
+		let subpool = SubpoolConfig::new(approval_key);
 		let subpool_proof = main_pool
 			.full_subpool_proof(&subpool, subpool_id)
 			.expect("subpool not registered in main_pool at the given subpool_id");
-		set_subpool_full_proof(
-			pw,
-			&self.subpool_proof_targets,
-			subpool_proof,
-			subpool.root(),
-			subpool_id,
-			approval_key,
-			rejection_key,
-			consume_key,
-		);
+		self.subpool_proof_targets
+			.set_witness(pw, subpool_proof, subpool.commitment(), subpool_id);
 
 		// ── Approval signature ────────────────────────────────────────────────────
 		self.approval_sig
@@ -339,21 +310,11 @@ impl WithdrawTxPrivateTargets {
 		let accout = accin.clone_with_incremented_nonce();
 
 		let key = fake_authority_key();
-		let (_, subpool_proof) = SubpoolConfigTree::fake_instance();
-
-		// Build a minimal ACT containing only accin so the ACT proof is valid.
-		let mut act = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
-		let accin_pos_idx = act.insert(accin.commitment().0).unwrap();
-		let accin_act_merkle_proof = act.merkle_proof(accin_pos_idx).unwrap();
+		let (_, subpool_proof) = SubpoolConfig::fake_instance();
 
 		// ── Accounts ──────────────────────────────────────────────────────────────
 		self.accin.set_witness(pw, &accin);
 		self.accout.set_witness(pw, &accout);
-		pw.set_target(
-			self.accin_pos,
-			F::from_canonical_usize(accin_act_merkle_proof.pos),
-		)
-		.unwrap();
 
 		// ── Per-slot witnesses (all zero, no withdrawals) ─────────────────────────
 		// Each slot's AST proof uses index 0 (the default leaf in an empty AST).
@@ -370,29 +331,12 @@ impl WithdrawTxPrivateTargets {
 		}
 
 		// ── ACT Merkle proof ──────────────────────────────────────────────────────
-		self.accin_act_merkle
-			.set_witness(pw, &accin_act_merkle_proof);
+		self.accin_act_merkle.set_dummy_witness(pw);
 
 		// ── Authority keys and subpool proof ──────────────────────────────────────
-		set_authority_keys(
-			pw,
-			self.approval_key,
-			self.rejection_key,
-			self.subpool_consume_key,
-			key,
-			key,
-			key,
-		);
-		set_subpool_full_proof(
-			pw,
-			&self.subpool_proof_targets,
-			subpool_proof,
-			HashOutput::ZERO,
-			SubpoolId::ZERO,
-			key,
-			key,
-			key,
-		);
+		self.approval_key.set_witness(pw, key);
+
+		self.subpool_proof_targets.set_fake(pw);
 
 		// ── Approval signature (fake — not enforced when not_fake_tx = 0) ─────────
 		self.approval_sig.set_fake(pw, key);
@@ -403,7 +347,7 @@ impl WithdrawTxPrivateTargets {
 
 /// All targets allocated by
 /// [`withdraw_tx_circuit`](crate::plonky2_gadgets::withdraw_tx::circuit::withdraw_tx_circuit).
-pub(crate) struct WithdrawTxTargets {
+pub struct WithdrawTxTargets {
 	pub(crate) public: WithdrawTxPublicTargets,
 	pub(crate) private: WithdrawTxPrivateTargets,
 }
@@ -415,7 +359,7 @@ impl WithdrawTxTargets {
 	/// `withdrawals`; computes the native tx hash; then fills both public and
 	/// private targets.
 	#[allow(clippy::too_many_arguments)]
-	pub(crate) fn set_real(
+	pub(crate) fn set(
 		&self,
 		pw: &mut PartialWitness<F>,
 		accin: &StandardAccount,
@@ -425,8 +369,6 @@ impl WithdrawTxTargets {
 		withdrawals: &[(AssetId, U256)],
 		w_acc_addr: H160,
 		approval_key: CompPubKey,
-		rejection_key: CompPubKey,
-		consume_key: CompPubKey,
 		subpool_id: SubpoolId,
 		approval_sig: Signature,
 	) {
@@ -443,7 +385,7 @@ impl WithdrawTxTargets {
 			accout,
 		) = compute_withdrawal_slots(accin, withdrawals);
 
-		self.public.set_real(
+		self.public.set(
 			pw,
 			act_root,
 			main_pool.root(),
@@ -452,7 +394,7 @@ impl WithdrawTxTargets {
 			w_acc_addr,
 		);
 
-		self.private.set_witnesses(
+		self.private.set(
 			pw,
 			accin,
 			&accout,
@@ -466,8 +408,6 @@ impl WithdrawTxTargets {
 			slot_proofs,
 			w_acc_addr,
 			approval_key,
-			rejection_key,
-			consume_key,
 			subpool_id,
 			main_pool,
 			approval_sig,
@@ -475,22 +415,22 @@ impl WithdrawTxTargets {
 	}
 
 	/// Fill the complete witness for a fake (dummy) withdrawal (`not_fake_tx = 0`).
-	pub(crate) fn set_fake(&self, pw: &mut PartialWitness<F>) {
-		self.public.set_fake(pw);
+	pub(crate) fn set_dummy(&self, pw: &mut PartialWitness<F>) {
+		self.public.set_dummy(pw);
 		self.private.set_fake(pw);
 	}
 
 	/// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
 	/// `mainpool_config_root`, so that padding proofs share the same common PIs
 	/// as the real proofs in their batch.
-	pub(crate) fn set_fake_with_roots(
+	pub(crate) fn set_dummy_with_roots(
 		&self,
 		pw: &mut PartialWitness<F>,
 		act_root: HashOutput,
 		mainpool_config_root: HashOutput,
 	) {
 		self.public
-			.set_fake_with_roots(pw, act_root, mainpool_config_root);
+			.set_dummy_with_roots(pw, act_root, mainpool_config_root);
 		self.private.set_fake(pw);
 	}
 }
@@ -533,6 +473,7 @@ pub(crate) fn compute_withdrawal_slots(
 			let (asset_id, withdrawal_amt) = withdrawals[i];
 			slot_asset_ids[i] = asset_id;
 			slot_withdrawal_amts[i] = withdrawal_amt;
+			// TODO: retun error if asset does not already exists (why withdraw then?)
 			let (ast_index, old_bal) = current_ast.amount_for(asset_id).unwrap();
 			slot_accin_amts[i] = old_bal;
 			slot_exists_in[i] = true;
@@ -540,10 +481,12 @@ pub(crate) fn compute_withdrawal_slots(
 			slot_proofs.push(current_ast.merkle_proof_at(ast_index));
 			let new_bal = old_bal - withdrawal_amt;
 			slot_accout_amts[i] = new_bal;
+			// TODO: by dfault never reset the leaf to default leaf even when asset amount is zero.
+			// Hence, remove slot_exists_out and in the circuit set slot_exists_out = slot_exists_in
 			slot_exists_out[i] = new_bal > U256::zero();
 			current_ast
 				.insert_or_update_asset(asset_id, new_bal)
-				.unwrap();
+				.unwrap(); //TODO: return an error if if inset_or_update_asset returns None
 		} else {
 			// Padding slot: proof at the next unused leaf (default leaf, no change).
 			slot_proofs.push(current_ast.merkle_proof_at(current_ast.next_index()));

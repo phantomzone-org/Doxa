@@ -287,6 +287,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 where
 	HashOutput: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 {
+	// TODO: change this to only return pubkey target
 	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget) {
 		let approval = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
 		let rejection = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));

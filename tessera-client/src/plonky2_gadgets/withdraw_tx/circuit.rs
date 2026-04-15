@@ -71,7 +71,7 @@ where
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// ── Authority keys ────────────────────────────────────────────────────────
-	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
+	let (approval_key, _, _) = builder.add_virtual_authority_keys();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
 	let act_root = StateRootTarget(builder.add_virtual_hash());
@@ -80,7 +80,6 @@ where
 	// ── Accounts ──────────────────────────────────────────────────────────────
 	let accin = builder.add_virtual_account_target();
 	let accout = builder.add_virtual_account_target();
-	let accin_pos = builder.add_virtual_target();
 
 	// ── Per-asset withdrawal fields ───────────────────────────────────────────
 	let asset_ids: [AssetIdTarget; NOTE_BATCH] =
@@ -88,6 +87,8 @@ where
 	let withdrawal_amts = core::array::from_fn(|_| builder.add_virtual_u256_target());
 	let accin_amts = core::array::from_fn(|_| builder.add_virtual_u256_target());
 	let accout_amts = core::array::from_fn(|_| builder.add_virtual_u256_target());
+	// TODO: it's reasonable to assume that the assets will always exist. Hence, no need for does
+	// exist kind of variables.
 	let asset_exists_in_accin: [BoolTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 	let asset_exists_in_accout: [BoolTarget; NOTE_BATCH] =
@@ -179,8 +180,6 @@ where
 	let subpool_proof_targets = builder.assert_subpool_full_proof(
 		SubpoolIdTarget(accin.subpool_id.0),
 		approval_key,
-		rejection_key,
-		subpool_consume_key,
 		mainpool_config_root,
 		not_fake_tx,
 	);
@@ -206,11 +205,8 @@ where
 		public,
 		private: WithdrawTxPrivateTargets {
 			approval_key,
-			rejection_key,
-			subpool_consume_key,
 			accin,
 			accout,
-			accin_pos,
 			accin_amts,
 			accout_amts,
 			asset_exists_in_accin,
@@ -241,7 +237,7 @@ impl WithdrawTxCircuit {
 	/// Generate a dummy withdrawal proof (`not_fake_tx=0`) with zero roots.
 	pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
 		let mut pw = PartialWitness::new();
-		self.targets.set_fake(&mut pw);
+		self.targets.set_dummy(&mut pw);
 		self.circuit_data
 			.prove(pw)
 			.expect("dummy withdraw_tx proof generation failed")
@@ -257,7 +253,7 @@ impl WithdrawTxCircuit {
 	) -> tessera_utils::ProofNative {
 		let mut pw = PartialWitness::new();
 		self.targets
-			.set_fake_with_roots(&mut pw, act_root, mainpool_config_root);
+			.set_dummy_with_roots(&mut pw, act_root, mainpool_config_root);
 		self.circuit_data
 			.prove(pw)
 			.expect("padding withdraw_tx proof generation failed")
