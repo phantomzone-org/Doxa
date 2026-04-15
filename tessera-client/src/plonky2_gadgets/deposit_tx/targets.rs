@@ -416,8 +416,6 @@ impl DepositTxPrivateTargets {
 
 		let key = fake_authority_key();
 
-		let (subpool, subpool_proof) = SubpoolConfig::fake_instance();
-
 		// Recipient must match accin's public identifier (circuit enforces this
 		// via connect_array), and asset_exists_in_accout must be false so that
 		// the accout AST leaf uses AST_DEFAULT_LEAF (consistent with empty AST root).
@@ -429,7 +427,7 @@ impl DepositTxPrivateTargets {
 		};
 
 		// ── Deposit note ──────────────────────────────────────────────────────────
-		self.deposit_note.set_witness(pw, deposit_note);
+		self.deposit_note.set(pw, deposit_note);
 
 		// ── Amounts and exists flags ───────────────────────────────────────────────
 		self.accin_amt.set(pw, U256::zero());

@@ -15,8 +15,8 @@ use tessera_utils::{
 };
 
 use crate::{
-	SubpoolId,
-	ecgfp5::{Legendre, PointEw},
+	DEFAULT_SPEND_AUTH_PK, SubpoolId,
+	ecgfp5::{CompressedPoint, Legendre, PointEw},
 	plonky2_gadgets::{
 		priv_tx::targets::SubpoolFullProofTargets,
 		signature::{PubkeyTarget, SchnorrTargets, set_schnorr_witness},
@@ -29,7 +29,7 @@ pub(crate) fn fake_authority_key<F>() -> CompressedPublicKey<F>
 where
 	F: PrimeField64 + Extendable<5> + Legendre,
 {
-	CompressedPublicKey(PointEw::generator().encode())
+	CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK))
 }
 
 impl SchnorrTargets {

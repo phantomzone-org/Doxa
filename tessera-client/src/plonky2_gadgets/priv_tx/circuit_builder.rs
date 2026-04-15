@@ -555,7 +555,6 @@ where
 
 		SubpoolFullProofTargets {
 			main_pool_proof,
-			subpool_config_comm: SubpoolConfigCommitmentTarget(subpool_config_comm),
 		}
 	}
 

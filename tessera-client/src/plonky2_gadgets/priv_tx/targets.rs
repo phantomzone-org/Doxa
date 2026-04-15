@@ -259,8 +259,6 @@ pub struct AssetIdTarget(pub Target);
 pub(crate) struct SubpoolFullProofTargets {
 	/// Depth-20 Merkle proof that the subpool config root is in the main pool tree.
 	pub(crate) main_pool_proof: MerkleRootTarget,
-	/// The subpool configuration commitment target
-	pub(crate) subpool_config_comm: SubpoolConfigCommitmentTarget,
 }
 
 impl SubpoolFullProofTargets {
@@ -273,17 +271,10 @@ impl SubpoolFullProofTargets {
 	) {
 		self.main_pool_proof
 			.set_witness(pw, &subpool_proof.main_pool_proof);
-		pw.set_hash_target(
-			self.subpool_config_comm.0,
-			subpool_config_comm.to_hash_out(),
-		)
-		.unwrap();
 	}
 
 	pub fn set_fake(&self, pw: &mut PartialWitness<F>) {
 		self.main_pool_proof.set_dummy_witness(pw);
-		pw.set_hash_target(self.subpool_config_comm.0, HashOut::ZERO)
-			.unwrap();
 	}
 }
 
