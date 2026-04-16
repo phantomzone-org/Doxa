@@ -42,7 +42,7 @@ use crate::{
 			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
 				AccountNullifierTarget, AssetIdTarget, MainPoolConfigRootTarget,
-				PublicIdentifierTaregt, StateRootTarget, SubpoolIdTarget,
+				PublicIdentifierTarget, StateRootTarget, SubpoolIdTarget,
 			},
 		},
 		set_hash, set_u256_zero,
@@ -213,7 +213,7 @@ where
 	let deposit_note = DepositNoteTarget {
 		identifier: builder.add_virtual_target_arr(),
 		recipient_subpool_id: SubpoolIdTarget(builder.add_virtual_target()),
-		recipient_public_id: PublicIdentifierTaregt(builder.add_virtual_hash()),
+		recipient_public_id: PublicIdentifierTarget(builder.add_virtual_hash()),
 		amount: builder.add_virtual_u256_target(),
 		asset_id: AssetIdTarget(builder.add_virtual_target()),
 	};

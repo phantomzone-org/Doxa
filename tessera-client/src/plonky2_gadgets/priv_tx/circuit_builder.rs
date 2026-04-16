@@ -25,7 +25,7 @@ use crate::{
 				ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment,
 				DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt,
+				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTarget,
 				RejectCondTarget, StateRootTarget, SubpoolConfigCommitmentTarget,
 				SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
 			},
@@ -49,10 +49,6 @@ use crate::{
 pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	// ---- Add virtual methods ----
 
-	/// Allocate the three subpool authority key targets (approval, rejection, consume)
-	/// that appear in every transaction circuit.
-	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget);
-
 	/// Allocate a single dummy note target (an opaque 4-element hash).
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
 	/// Allocate a single dummy account target (an opaque 4-element hash).
@@ -66,6 +62,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget;
 	/// Allocate all targets for a full note.
 	fn add_virtual_note_target(&mut self) -> NoteTarget;
+	/// Allocate a pubkey target
+	fn add_virtual_public_key_target(&mut self) -> PubkeyTarget;
 
 	// ---- Account related methods ----
 
@@ -116,7 +114,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	fn derive_public_identifier(
 		&mut self,
 		priv_id: PrivateIdentifierTarget,
-	) -> PublicIdentifierTaregt;
+	) -> PublicIdentifierTarget;
 
 	/// When `condition=1`, assert that `acc` is in a fresh (pre-activation) state:
 	/// `nonce=0`, default spend/consume keys, and empty AST root.
@@ -204,7 +202,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		inotes: [NoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
-		public_identifier: PublicIdentifierTaregt,
+		public_identifier: PublicIdentifierTarget,
 		subpool_id: SubpoolIdTarget,
 		root: StateRootTarget,
 	) -> [MerkleRootTarget; NOTE_BATCH];
@@ -288,11 +286,8 @@ where
 	HashOutput: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 {
 	// TODO: change this to only return pubkey target
-	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget) {
-		let approval = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
-		let rejection = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
-		let consume = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
-		(approval, rejection, consume)
+	fn add_virtual_public_key_target(&mut self) -> PubkeyTarget {
+		PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()))
 	}
 
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
@@ -320,14 +315,14 @@ where
 	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget {
 		ConsumeCondTarget {
 			subpool_id: SubpoolIdTarget(self.add_virtual_target()),
-			public_identifier: PublicIdentifierTaregt(self.add_virtual_hash()),
+			public_identifier: PublicIdentifierTarget(self.add_virtual_hash()),
 		}
 	}
 
 	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget {
 		RejectCondTarget {
 			subpool_id: SubpoolIdTarget(self.add_virtual_target()),
-			public_identifier: PublicIdentifierTaregt(self.add_virtual_hash()),
+			public_identifier: PublicIdentifierTarget(self.add_virtual_hash()),
 		}
 	}
 
@@ -451,11 +446,11 @@ where
 	fn derive_public_identifier(
 		&mut self,
 		priv_id: PrivateIdentifierTarget,
-	) -> PublicIdentifierTaregt {
+	) -> PublicIdentifierTarget {
 		let ds = self.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 		let mut input = vec![ds];
 		input.extend(priv_id.0);
-		PublicIdentifierTaregt(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
+		PublicIdentifierTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
 	}
 
 	fn derive_dummy_note_nullifier(&mut self, dnote: DummyNoteTarget) -> NoteNullifierTarget {
@@ -602,7 +597,7 @@ where
 		inotes: [NoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
-		public_identifier: PublicIdentifierTaregt,
+		public_identifier: PublicIdentifierTarget,
 		subpool_id: SubpoolIdTarget,
 		root: StateRootTarget,
 	) -> [MerkleRootTarget; NOTE_BATCH] {

@@ -71,7 +71,7 @@ where
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// ── Authority keys ────────────────────────────────────────────────────────
-	let (approval_key, _, _) = builder.add_virtual_authority_keys();
+	let approval_key = builder.add_virtual_public_key_target();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
 	let act_root = StateRootTarget(builder.add_virtual_hash());

@@ -55,12 +55,6 @@ impl Scalar {
 	// 64-bit limbs.
 	pub const ZERO: Self = Self([0, 0, 0, 0, 0]);
 
-	/// Create a scalar from raw limbs (for testing purposes).
-	/// The caller must ensure the value is less than n.
-	pub const fn from_raw(limbs: [u64; 5]) -> Self {
-		Self(limbs)
-	}
-
 	pub(crate) fn to_bit_arr(self) -> [bool; Self::BITS] {
 		let mut bits = [false; Self::BITS];
 		for (i, b) in bits.iter_mut().enumerate() {
@@ -264,11 +258,6 @@ impl PrivateKey {
 		Self(scalar)
 	}
 
-	/// Create a private key from raw limbs.
-	pub const fn from_raw(limbs: [u64; 5]) -> Self {
-		Self(Scalar::from_raw(limbs))
-	}
-
 	/// Get the underlying scalar value.
 	pub fn as_scalar(&self) -> Scalar {
 		self.0
@@ -430,6 +419,9 @@ pub(crate) fn schnorr_verify(
 
 #[cfg(test)]
 mod tests {
+	use rand::SeedableRng;
+	use rand_chacha::ChaCha8Rng;
+
 	use super::*;
 
 	type F = GoldilocksField;
@@ -437,13 +429,8 @@ mod tests {
 	#[test]
 	fn test_schnorr_sign_verify() {
 		// Private key d (a random scalar < N)
-		let d = Scalar::from_raw([
-			5400142491657709732,
-			15846706413025839610,
-			1661266468596303141,
-			17577886881415715269,
-			7270009582106593884,
-		]);
+		let mut rng = ChaCha8Rng::seed_from_u64(42);
+		let d = Scalar::sample(&mut rng);
 
 		// Public key Q = d*G
 		let privkey = PrivateKey::new(d);
@@ -456,13 +443,7 @@ mod tests {
 			.collect();
 
 		// Nonce k
-		let k = Scalar::from_raw([
-			12539254003028696409,
-			15524144070600887654,
-			15092036948424041984,
-			11398871370327264211,
-			958391180505708567,
-		]);
+		let k = Scalar::sample(&mut rng);
 
 		// Sign
 		let sig = schnorr_sign(&privkey, &message, k);

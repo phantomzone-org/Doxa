@@ -11,15 +11,16 @@ use tessera_client::{NOTE_BATCH, PRIV_TX_BATCH_SIZE, SUBTREE_BATCHSIZE};
 #[ignore]
 fn priv_tx_batch_to_groth16_e2e() {
 	use std::path::Path;
+
 	use plonky2::field::types::{Field, PrimeField64};
 	use tessera_client::{
-		FakeTxInputs, PrivTxInputs, PrivateTransactionProof, TesseraGateSerializer,
-		build_priv_tx_circuit, prove_priv_tx,
+		build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PrivTxInputs, PrivateTransactionProof,
+		TesseraGateSerializer,
 	};
 	use tessera_utils::{
-		F,
 		groth::{BN128Wrapper, Groth16Wrapper},
 		hasher::HashOutput,
+		F,
 	};
 
 	use super::PrivTxAggregator;
@@ -34,8 +35,7 @@ fn priv_tx_batch_to_groth16_e2e() {
 	let plonky2_path = agg_path.join("plonky2-proof");
 	let groth_path = agg_path.join("groth-artifacts");
 
-	const GEN_CMD: &str =
-		"  cargo run -p tessera-e2e --bin priv_tx_artifacts --release";
+	const GEN_CMD: &str = "  cargo run -p tessera-e2e --bin priv_tx_artifacts --release";
 
 	if !PrivTxAggregator::has_full_artifacts(&agg_path).unwrap_or(false) {
 		panic!(
@@ -72,7 +72,7 @@ fn priv_tx_batch_to_groth16_e2e() {
 		&circuit,
 		&targets,
 		PrivTxInputs::Fake(FakeTxInputs {
-			root: zero,
+			state_root: zero,
 			mainpool_config_root: zero,
 			override_an: zero4,
 			override_ac: zero4,
@@ -119,7 +119,9 @@ fn priv_tx_batch_to_groth16_e2e() {
 	Groth16Wrapper::init_with_label(label, &plonky2_path, &groth_path)
 		.expect("Groth16Wrapper::init_with_label");
 
-	let bn128_proof = bn128.wrap_proof_to_bn128(super_proof).expect("wrap_proof_to_bn128");
+	let bn128_proof = bn128
+		.wrap_proof_to_bn128(super_proof)
+		.expect("wrap_proof_to_bn128");
 	let (g16_proof, g16_pub_inp) =
 		Groth16Wrapper::prove_with_label(label, bn128_proof).expect("Groth16 prove");
 	Groth16Wrapper::verify_with_label(label, g16_proof, g16_pub_inp).expect("Groth16 verify");

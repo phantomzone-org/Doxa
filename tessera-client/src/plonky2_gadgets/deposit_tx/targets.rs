@@ -27,7 +27,7 @@ use crate::{
 		merkle::MerkleRootTarget,
 		priv_tx::targets::{
 			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
-			MainPoolConfigRootTarget, PublicIdentifierTaregt, StateRootTarget,
+			MainPoolConfigRootTarget, PublicIdentifierTarget, StateRootTarget,
 			SubpoolFullProofTargets, SubpoolIdTarget,
 		},
 		set_hash,
@@ -51,7 +51,7 @@ pub(crate) struct DepositNoteTarget {
 	/// Random 2-element note identifier.
 	pub(crate) identifier: [Target; 2],
 	pub(crate) recipient_subpool_id: SubpoolIdTarget,
-	pub(crate) recipient_public_id: PublicIdentifierTaregt,
+	pub(crate) recipient_public_id: PublicIdentifierTarget,
 	pub(crate) amount: U256Target,
 	pub(crate) asset_id: AssetIdTarget,
 }

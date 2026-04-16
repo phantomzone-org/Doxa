@@ -259,7 +259,7 @@ mod tests {
 			&circuit,
 			&targets,
 			PrivTxInputs::Fake(FakeTxInputs {
-				root: HashOutput([F::ZERO; 4]),
+				state_root: HashOutput([F::ZERO; 4]),
 				mainpool_config_root: HashOutput([F::ZERO; 4]),
 				override_an: zero4,
 				override_ac: zero4,

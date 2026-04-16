@@ -107,7 +107,7 @@ impl BatchHelper for PrivateTxBatch {
 				&self.circuit,
 				&self.targets,
 				PrivTxInputs::Fake(FakeTxInputs {
-					root: act_root,
+					state_root: act_root,
 					mainpool_config_root,
 					override_an: zero4,
 					override_ac: zero4,
@@ -167,7 +167,7 @@ mod tests {
 			&circuit,
 			&targets,
 			PrivTxInputs::Fake(FakeTxInputs {
-				root: act_root,
+				state_root: act_root,
 				mainpool_config_root: config_root,
 				override_an: zero4,
 				override_ac: zero4,

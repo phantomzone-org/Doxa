@@ -99,6 +99,7 @@ fn build_circuit_and_proof_seeded(
 ///
 /// Different seeds produce different accounts, notes, nullifiers, and commitments,
 /// ensuring each proof is unique.
+// TODO: is this used anywhere?
 fn prove_priv_tx_inner(
 	circuit: &tessera_utils::CircuitDataNative,
 	t: &PrivTxTargets<{ tessera_utils::D }>,
@@ -169,7 +170,8 @@ fn prove_priv_tx_inner(
 		dinote_nulls,
 		donote_comms,
 	);
-	let k = Scalar::from_raw(array::from_fn(|_| 1u64));
+	let karr = [1u8; 40];
+	let k = Scalar::decode_reduce(&karr);
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 	let mut pw = PartialWitness::new();
@@ -311,7 +313,7 @@ pub fn prove_priv_tx(
 			&i.accin,
 			i.new_spend_auth,
 			i.new_consume_auth,
-			i.root,
+			i.state_root,
 			i.approval_key,
 			i.subpool_id,
 			&i.main_pool,
@@ -323,14 +325,14 @@ pub fn prove_priv_tx(
 			&mut pw,
 			targets,
 			&i.accin,
-			i.root,
+			i.state_root,
 			i.accin_merkle_proof,
 			&i.inotes,
 			&i.inotes_nct_proofs,
 			&i.onotes,
 			i.dinotes,
 			i.donotes,
-			i.consume_key,
+			i.approval_key,
 			i.subpool_id,
 			&i.main_pool,
 			i.spend_sig,
@@ -343,7 +345,7 @@ pub fn prove_priv_tx(
 			&i.accin,
 			i.accin_act_merkle_proof,
 			i.root,
-			&i.inotes,
+			&i.state_root,
 			&i.inotes_nct_proofs,
 			&i.onotes,
 			i.dinotes,
@@ -358,7 +360,7 @@ pub fn prove_priv_tx(
 			set_fake_tx_witness(
 				&mut pw,
 				targets,
-				i.root,
+				i.state_root,
 				i.mainpool_config_root,
 				i.override_an,
 				i.override_ac,
@@ -397,7 +399,7 @@ pub fn prove_dummy_priv_tx(
 		circuit,
 		targets,
 		PrivTxInputs::Fake(FakeTxInputs {
-			root: HashOutput([F::ZERO; 4]),
+			state_root: HashOutput([F::ZERO; 4]),
 			mainpool_config_root: HashOutput([F::ZERO; 4]),
 			override_an,
 			override_ac,
@@ -413,6 +415,7 @@ pub fn prove_dummy_priv_tx(
 /// membership constraints).
 ///
 /// For production proofs provide a proper [`PrivTxInputs`] to [`prove_priv_tx`].
+// TODO: why is this here?
 pub fn prove_priv_tx_seeded(
 	circuit: &tessera_utils::CircuitDataNative,
 	targets: &PrivTxTargets<{ tessera_utils::D }>,

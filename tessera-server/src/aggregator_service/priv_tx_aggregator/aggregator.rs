@@ -1,15 +1,14 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use plonky2::plonk::circuit_data::{CommonCircuitData, VerifierOnlyCircuitData};
-use plonky2::util::serialization::GateSerializer;
+use plonky2::{
+	plonk::circuit_data::{CommonCircuitData, VerifierOnlyCircuitData},
+	util::serialization::GateSerializer,
+};
 use tessera_client::{PIHelper, SUBTREE_BATCHSIZE};
 use tessera_utils::{hasher::HashOutput, CircuitDataNative, ConfigNative, ProofNative, D, F};
 
-use super::{
-	circuit::{PrivTxSuperCircuit},
-	targets::PrivTxSuperCircuitData,
-};
+use super::{circuit::PrivTxSuperCircuit, targets::PrivTxSuperCircuitData};
 use crate::{
 	aggregator_service::generic_aggregator::{GenericAggregator, GenericAggregatorConfig},
 	batch_helper::BatchHelper,
@@ -133,16 +132,12 @@ impl PrivTxAggregator {
 	}
 
 	/// Reconstruct from pre-generated artifacts without recompiling any circuit.
-	pub fn from_artifacts(
-		path: &Path,
-		leaf_gate_ser: &dyn GateSerializer<F, D>,
-	) -> Result<Self> {
+	pub fn from_artifacts(path: &Path, leaf_gate_ser: &dyn GateSerializer<F, D>) -> Result<Self> {
 		let tx_aggregator =
 			GenericAggregator::from_artifacts(&path.join(GENERIC_AGG_DIR), leaf_gate_ser)?;
 		let subtree_root =
 			SubtreeRootCircuit::from_artifacts(&path.join(SUBTREE_ROOT_DIR), SUBTREE_BATCHSIZE)?;
-		let super_circuit =
-			PrivTxSuperCircuit::from_artifacts(&path.join(SUPER_CIRCUIT_DIR))?;
+		let super_circuit = PrivTxSuperCircuit::from_artifacts(&path.join(SUPER_CIRCUIT_DIR))?;
 		Ok(Self {
 			tx_aggregator,
 			subtree_root,
@@ -166,8 +161,8 @@ impl PrivTxAggregator {
 	pub fn prove_dummy(&self) -> Result<ProofNative> {
 		use plonky2::field::types::Field;
 		use tessera_client::{
-			FakeTxInputs, NOTE_BATCH, PIHelper, PrivTxInputs, PrivateTransactionProof,
-			build_priv_tx_circuit, prove_priv_tx,
+			build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PIHelper, PrivTxInputs,
+			PrivateTransactionProof, NOTE_BATCH,
 		};
 		use tessera_utils::hasher::HashOutput;
 
@@ -178,7 +173,7 @@ impl PrivTxAggregator {
 			&cd,
 			&tgts,
 			PrivTxInputs::Fake(FakeTxInputs {
-				root: zero,
+				state_root: zero,
 				mainpool_config_root: zero,
 				override_an: zero4,
 				override_ac: zero4,

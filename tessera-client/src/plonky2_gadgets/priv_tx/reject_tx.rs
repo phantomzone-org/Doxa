@@ -82,6 +82,7 @@ pub(crate) fn set_reject_tx_witness(
 
 	// ── Asset / amounts ───────────────────────────────────────────────────────
 	// Use the asset_id from active inotes (all notes must share the same asset_id in the circuit)
+	// TODO: don't unwrap to AssetID zero. Panic here or return an error!
 	let asset_id = inotes
 		.first()
 		.map(|n| n.asset_id)
@@ -191,11 +192,7 @@ pub(crate) fn set_reject_tx_witness(
 
 	// Consume (required). Set to real if consume_auth == 1 other set to fake (since note
 	// consumtpion is delegated to approval_key)
-	let consume_public_key = accin.consume_auth.pk.unwrap_or_else(|| {
-		CompressedPublicKey(CompressedPoint::from(
-			DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
-		))
-	});
+	let consume_public_key = accin.consume_pk_or_default();
 	if let Some(sig) = consume_sig {
 		t.private
 			.sig_targets

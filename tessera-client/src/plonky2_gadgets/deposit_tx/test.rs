@@ -81,7 +81,7 @@ fn test_prove_deposit_tx() {
 	);
 
 	// ── Sign ──────────────────────────────────────────────────────────────
-	let k = Scalar::from_raw([1, 2, 3, 4, 5]);
+	let k = Scalar::sample(&mut rng);
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 	// ── Build circuit ─────────────────────────────────────────────────────

@@ -35,7 +35,7 @@ pub(crate) struct PrivateIdentifierTarget(pub(crate) [Target; 2]);
 ///
 /// Derived from `PrivateIdentifierTarget` via `derive_public_identifier`.
 #[derive(Clone, Copy)]
-pub(crate) struct PublicIdentifierTaregt(pub(crate) HashOutTarget);
+pub(crate) struct PublicIdentifierTarget(pub(crate) HashOutTarget);
 
 /// In-circuit representation of [`NullifierKey`](crate::account::NullifierKey).
 ///
@@ -186,7 +186,7 @@ impl NoteTarget {
 #[derive(Clone, Copy)]
 pub(crate) struct ConsumeCondTarget {
 	pub(crate) subpool_id: SubpoolIdTarget,
-	pub(crate) public_identifier: PublicIdentifierTaregt,
+	pub(crate) public_identifier: PublicIdentifierTarget,
 }
 
 /// Note reject condition: `(subpool_id, public_identifier)` of the original sender.
@@ -195,7 +195,7 @@ pub(crate) struct ConsumeCondTarget {
 #[derive(Clone, Copy)]
 pub(crate) struct RejectCondTarget {
 	pub(crate) subpool_id: SubpoolIdTarget,
-	pub(crate) public_identifier: PublicIdentifierTaregt,
+	pub(crate) public_identifier: PublicIdentifierTarget,
 }
 
 /// In-circuit type for a note commitment (`H(note_fields)`).

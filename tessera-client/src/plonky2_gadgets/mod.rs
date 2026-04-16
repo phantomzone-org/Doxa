@@ -17,12 +17,14 @@ pub(crate) mod witness;
 
 pub mod serialization;
 
+// TODO: replace this with something better
 pub(crate) fn set_hash<F: Field>(pw: &mut PartialWitness<F>, t: HashOutTarget, v: [F; 4]) {
 	for (i, &x) in v.iter().enumerate() {
 		pw.set_target(t.elements[i], x).unwrap();
 	}
 }
 
+// TODO: replace this with something better
 pub(crate) fn set_gfp5<F: Field>(pw: &mut PartialWitness<F>, targets: [Target; 5], v: [F; 5]) {
 	for (t, x) in targets.iter().zip(v.iter()) {
 		pw.set_target(*t, *x).unwrap();
