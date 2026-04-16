@@ -29,8 +29,10 @@ type F = <C as GenericConfig<D>>::F;
 
 #[test]
 fn test_prove_deposit_tx() {
+	let mut rng = ChaCha8Rng::seed_from_u64(42);
+
 	// ── Keys for subpool ──────────────────────────────────────────────────
-	let approval_sk = PrivateKey::from_raw([1, 2, 3, 4, 5]);
+	let approval_sk = PrivateKey::sample(&mut rng);
 	let approval_key: CompPubKey = approval_sk.public_key::<F>().into();
 
 	let subpool_id = SubpoolId(F::ONE);
@@ -41,14 +43,11 @@ fn test_prove_deposit_tx() {
 		.unwrap();
 
 	// ── Sample accin ──────────────────────────────────────────────────────
-	let mut rng = ChaCha8Rng::seed_from_u64(42);
 	let mut accin = StandardAccount::sample(&mut rng, subpool_id);
 
 	// --- Simulate FreshAcc ------------------------------------------------
 	accin.nonce = Nonce(F::ONE);
-	accin.spend_auth = crate::SpendAuth {
-		spend_pk: Some(PrivateKey::from_raw([8, 7, 6, 5, 4]).public_key().into()),
-	};
+	accin.spend_auth = crate::SpendAuth::new(PrivateKey::sample(&mut rng).public_key().into());
 
 	// ── Insert accin into ACT ─────────────────────────────────────────────
 	let mut act = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);

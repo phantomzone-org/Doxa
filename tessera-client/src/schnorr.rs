@@ -268,6 +268,11 @@ impl PrivateKey {
 		Self(Scalar::decode_reduce(buf))
 	}
 
+	/// Sample a uniformly random private key.
+	pub fn sample<R: rand::Rng>(rng: &mut R) -> Self {
+		Self(Scalar::sample(rng))
+	}
+
 	/// Derive the corresponding public key.
 	pub fn public_key<F: Extendable<5>>(&self) -> PublicKey<F> {
 		PublicKey(PointEw::generator().scalar_mul(&self.0))

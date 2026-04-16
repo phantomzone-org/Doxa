@@ -105,6 +105,15 @@ pub struct SpendAuth {
 	pub spend_pk: Option<CompressedPublicKey<F>>,
 }
 
+impl SpendAuth {
+	/// Create a new `SpendAuth` with the given spend public key.
+	pub fn new(spend_pk: CompressedPublicKey<F>) -> Self {
+		Self {
+			spend_pk: Some(spend_pk),
+		}
+	}
+}
+
 /// Authorization data for *consuming* (depositing into) an account.
 #[derive(Debug, Clone, Default)]
 pub struct ConsumeAuth {

@@ -22,12 +22,15 @@ use crate::{
 
 #[test]
 fn test_prove_withdraw_tx() {
+	const SEED: u64 = 42;
+	let mut rng = ChaCha8Rng::seed_from_u64(SEED);
+
 	// ── Keys for subpool ──────────────────────────────────────────────
-	let approval_sk = PrivateKey::from_raw([1, 2, 3, 4, 5]);
+	let approval_sk = PrivateKey::sample(&mut rng);
 	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
-	let rejection_sk = PrivateKey::from_raw([5, 6, 7, 8, 0]);
+	let rejection_sk = PrivateKey::sample(&mut rng);
 	let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
-	let consume_sk = PrivateKey::from_raw([9, 10, 11, 12, 0]);
+	let consume_sk = PrivateKey::sample(&mut rng);
 	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
 	let subpool_id = SubpoolId(F::ONE);
@@ -38,14 +41,11 @@ fn test_prove_withdraw_tx() {
 		.unwrap();
 
 	// ── Sample accin ──────────────────────────────────────────────────
-	let mut rng = ChaCha8Rng::seed_from_u64(2);
 	let mut accin = StandardAccount::sample(&mut rng, subpool_id);
 
 	// ── Simulate FreshAcc: nonce = 1, set spend_pk ────────────────────
 	accin.nonce = Nonce(F::ONE);
-	accin.spend_auth = SpendAuth {
-		spend_pk: Some(PrivateKey::from_raw([8, 7, 6, 5, 4]).public_key().into()),
-	};
+	accin.spend_auth = SpendAuth::new(PrivateKey::sample(&mut rng).public_key().into());
 
 	// ── Mutate AST: set balances (asset_id=1 → 100, 2 → 200, 3 → 300) ─
 	accin
@@ -90,7 +90,7 @@ fn test_prove_withdraw_tx() {
 		H160::zero(),
 	);
 
-	let k = Scalar::from_raw([1, 2, 3, 4, 5]);
+	let k = Scalar::sample(&mut rng);
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 	// ── Build circuit ─────────────────────────────────────────────────

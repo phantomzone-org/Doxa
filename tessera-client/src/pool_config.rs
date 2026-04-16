@@ -189,19 +189,16 @@ pub struct SubpoolFullProof<H: MerkleHash> {
 
 #[cfg(test)]
 mod tests {
+	use rand::SeedableRng;
+	use rand_chacha::ChaCha8Rng;
+
 	use super::*;
 	use crate::schnorr::{PrivateKey, PublicKey, Scalar};
 
-	fn dummy_key(seed: u64) -> CompPubKey {
-		let scalar = Scalar::from_raw([seed, seed + 1, seed + 2, seed + 3, seed & 0x7F]);
-		let privkey = PrivateKey::new(scalar);
-		let pubkey: PublicKey<F> = privkey.public_key();
-		pubkey.into()
-	}
-
 	#[test]
 	fn test_full_subpool_proof() {
-		let approval = dummy_key(1);
+		let mut rng = ChaCha8Rng::seed_from_u64(42);
+		let approval = PrivateKey::sample(&mut rng).public_key().into();
 
 		let subpool = SubpoolConfig::<HashOutput>::new(approval);
 

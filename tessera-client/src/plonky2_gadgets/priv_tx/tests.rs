@@ -40,21 +40,13 @@ fn double_hash_native(elems: [F; 4]) -> [F; 4] {
 	<PoseidonHash as Hasher<F>>::hash_no_pad(&h0).elements
 }
 
-fn sample_sk(rng: &mut impl Rng) -> PrivateKey {
-	PrivateKey::from_raw(array::from_fn(|_| rng.next_u64()))
-}
-
 #[test]
-fn test_prove_priv_tx() {
+fn test_prove_spend_tx() {
+	let mut rng = ChaCha8Rng::seed_from_u64(42);
+
 	// ── Keys for subpool ──────────────────────────────────────────────────
-	let approval_sk = PrivateKey::from_raw([2, 3, 4, 5, 6]);
+	let approval_sk = PrivateKey::sample(&mut rng);
 	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
-
-	let rejection_sk = PrivateKey::from_raw([5, 6, 7, 8, 0]);
-	let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
-
-	let consume_sk = PrivateKey::from_raw([9, 10, 11, 12, 0]);
-	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
 
 	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
 	let subpool_id = SubpoolId(F::ONE);
@@ -66,21 +58,18 @@ fn test_prove_priv_tx() {
 
 	// ── Single unified IMT (V2: accounts and notes share one on-chain tree) ─
 	// Insert all commitments first, then generate all proofs against the final root.
-	let mut tree = MerkleTree::<HashOutput>::new(crate::STATE_TREE_DEPTH);
+	let mut state_tree = MerkleTree::<HashOutput>::new(crate::STATE_TREE_DEPTH);
 
 	// ── Sample accounts ───────────────────────────────────────────────────
-	let mut rng = ChaCha8Rng::seed_from_u64(1);
 	let mut acc0 = StandardAccount::sample(&mut rng, subpool_id);
 	let acc1 = StandardAccount::sample(&mut rng, SubpoolId(F::from_canonical_u64(2)));
 
 	// ── Simulate FreshAcc for acc0 ────────────────────────────────────────
 	// Advance acc0 to post-FreshAcc state (nonce=1, spend_auth set, consume_auth unchanged)
-	let spend_sk = PrivateKey::from_raw([999, 1000, 1001, 1002, 0]);
-	let spend_cpk = CompressedPublicKey::from(spend_sk.public_key::<F>());
-	acc0.nonce = Nonce(F::ONE);
-	acc0.spend_auth = SpendAuth {
-		spend_pk: Some(spend_cpk),
-	};
+	let spend_sk = PrivateKey::sample(&mut rng);
+	let spend_cpk = spend_sk.public_key().into();
+	acc0 = acc0.clone_with_incremented_nonce();
+	acc0.spend_auth = SpendAuth::new(spend_cpk);
 
 	// ── Create notes N0, N1 ───────────────────────────────────────────────
 	let asset_id_val = crate::AssetId(F::ONE);
@@ -102,8 +91,7 @@ fn test_prove_priv_tx() {
 	};
 
 	// ── Build accout (post-consume state) ─────────────────────────────────
-	let mut accout = acc0.clone();
-	accout.nonce = Nonce(F::from_canonical_u64(2));
+	let mut accout = acc0.clone_with_incremented_nonce();
 	// spend_auth and consume_auth are immutable in PrivTx — kept from acc0
 	// Update AST: position 0 gets asset_id=1 with amount=150
 	accout
@@ -111,18 +99,18 @@ fn test_prove_priv_tx() {
 		.insert_or_update_asset(asset_id_val, U256::from(150u64));
 
 	// Insert all commitments into the unified tree before generating proofs
-	let acc0_pos = tree.insert(acc0.commitment().0).unwrap();
-	let n0_pos = tree.insert(n0.commitment().0).unwrap();
-	let n1_pos = tree.insert(n1.commitment().0).unwrap();
+	let acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
+	let n0_pos = state_tree.insert(n0.commitment().0).unwrap();
+	let n1_pos = state_tree.insert(n1.commitment().0).unwrap();
 
 	// Generate all Merkle proofs against the FINAL tree root
-	let acc0_act_proof = tree.merkle_proof(acc0_pos).unwrap();
+	let acc0_act_proof = state_tree.merkle_proof(acc0_pos).unwrap();
 	assert!(acc0_act_proof.verify());
 
 	let inotes = [n0, n1];
 	let inotes_nct_proofs = [
-		tree.merkle_proof(n0_pos).unwrap(),
-		tree.merkle_proof(n1_pos).unwrap(),
+		state_tree.merkle_proof(n0_pos).unwrap(),
+		state_tree.merkle_proof(n1_pos).unwrap(),
 	];
 
 	// Dummy notes (same pattern as freshacc)
@@ -161,13 +149,13 @@ fn test_prove_priv_tx() {
 	// Consume (REAL): is_consume_req = true (N0+N1 active, no onotes)
 	// consume_auth.config = false → circuit uses subpool consume key (consume_cpk)
 	let consume_sig = {
-		let k_c = Scalar::from_raw([7, 8, 9, 10, 11]);
+		let k_c = Scalar::sample(&mut rng);
 		schnorr_sign(&consume_sk, &tx_hash.0, k_c)
 	};
 
 	// Approval (REAL): always required
 	let approval_sig = {
-		let k = Scalar::from_raw([1, 2, 3, 4, 5]);
+		let k = Scalar::sample(&mut rng);
 		schnorr_sign(&approval_sk, &tx_hash.0, k)
 	};
 
@@ -185,7 +173,7 @@ fn test_prove_priv_tx() {
 		&mut pw,
 		&t,
 		&acc0,
-		tree.root(),
+		state_tree.root(),
 		acc0_act_proof,
 		&inotes,
 		&inotes_nct_proofs,
@@ -196,7 +184,7 @@ fn test_prove_priv_tx() {
 		subpool_id,
 		&main_pool,
 		None,
-		Some(consume_sig),
+		None,
 		approval_sig,
 	);
 
@@ -217,7 +205,7 @@ fn test_prove_priv_tx() {
 
 	// ── PI accessor checks ─────────────────────────────────────────────────
 	let tp = crate::PrivateTransactionProof(inner_proof.clone());
-	assert_eq!(tp.act_root(), tree.root(), "act_root mismatch");
+	assert_eq!(tp.act_root(), state_tree.root(), "act_root mismatch");
 	assert_eq!(
 		tp.mainpool_config_root(),
 		main_pool.root(),
@@ -330,7 +318,7 @@ fn test_prove_fresh_acc_tx() {
 	let mut rng = ChaCha8Rng::seed_from_u64(42);
 
 	// ── Keys for one subpool ──────────────────────────────────────────────
-	let approval_sk = sample_sk(&mut rng);
+	let approval_sk = PrivateKey::sample(&mut rng);
 	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
 
 	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
@@ -344,11 +332,9 @@ fn test_prove_fresh_acc_tx() {
 	// ── Accounts ─────────────────────────────────────────────────────────
 	let accin = StandardAccount::sample(&mut rng, subpool_id);
 
-	let nspend_sk = sample_sk(&mut rng);
+	let nspend_sk = PrivateKey::sample(&mut rng);
 	let spend_cpk: CompressedPublicKey<F> = nspend_sk.public_key().into();
-	let new_spend_auth = SpendAuth {
-		spend_pk: Some(spend_cpk),
-	};
+	let new_spend_auth = SpendAuth::new(spend_cpk);
 	let new_consume_auth = accin.consume_auth.clone();
 
 	// ── Compute tx_hash to produce the approval signature ─────────────────
@@ -368,8 +354,7 @@ fn test_prove_fresh_acc_tx() {
 		donote_comms,
 	);
 
-	// TODO: sample randomly and reduce mod n
-	let k = Scalar::from_raw(array::from_fn(|_| 1));
+	let k = Scalar::sample(&mut rng);
 	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
 
 	// ── Build circuit ─────────────────────────────────────────────────────
@@ -468,8 +453,10 @@ fn dummy_proof_an_override_matches_pi() {
 
 #[test]
 fn test_prove_reject_tx() {
+	let mut rng = ChaCha8Rng::seed_from_u64(43);
+
 	// ── Keys for subpool ──────────────────────────────────────────────────
-	let approval_sk = PrivateKey::from_raw([2, 3, 4, 5, 6]);
+	let approval_sk = PrivateKey::sample(&mut rng);
 	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
 
 	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
@@ -481,14 +468,11 @@ fn test_prove_reject_tx() {
 		.unwrap();
 
 	// ── Account (simulate post-FreshAcc) ──────────────────────────────────
-	let mut rng = ChaCha8Rng::seed_from_u64(99);
-	let spend_sk = PrivateKey::from_raw([999, 1000, 1001, 1002, 0]);
+	let spend_sk = PrivateKey::sample(&mut rng);
 	let spend_cpk = CompressedPublicKey::from(spend_sk.public_key::<F>());
 	let mut acc = StandardAccount::sample(&mut rng, subpool_id);
 	acc.nonce = Nonce(F::ONE);
-	acc.spend_auth = SpendAuth {
-		spend_pk: Some(spend_cpk),
-	};
+	acc.spend_auth = SpendAuth::new(spend_cpk);
 
 	// ── Single unified IMT (V2: accounts and notes share one on-chain tree) ─
 	// Insert all commitments first, then generate all proofs against the final root.
@@ -586,7 +570,7 @@ fn test_prove_reject_tx() {
 	);
 
 	// ── Signatures ────────────────────────────────────────────────────────
-	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, Scalar::from_raw([1, 2, 3, 4, 5]));
+	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, Scalar::sample(&mut rng));
 
 	// ── Build circuit ──────────────────────────────────────────────────────
 	let config = CircuitConfig::standard_recursion_config();

@@ -145,12 +145,7 @@ fn prove_priv_tx_inner(
 	let (new_spend_auth, new_consume_auth) = if not_fake_tx {
 		let nspend_sk = PrivateKey::new(Scalar::sample(&mut rng));
 		let spend_cpk = nspend_sk.public_key::<F>().into();
-		(
-			SpendAuth {
-				spend_pk: Some(spend_cpk),
-			},
-			accin.consume_auth.clone(),
-		)
+		(SpendAuth::new(spend_cpk), accin.consume_auth.clone())
 	} else {
 		(SpendAuth::default(), ConsumeAuth::default())
 	};
