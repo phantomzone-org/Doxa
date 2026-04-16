@@ -168,6 +168,21 @@ impl From<anyhow::Error> for FreshAccTxBuilderError {
 	}
 }
 
+/// Errors that can occur while building a fake transaction.
+///
+/// Currently has no variants — fake tx construction is infallible. Defined for
+/// pattern consistency and future extensibility.
+#[derive(Debug)]
+pub enum FakeTxBuilderError {}
+
+impl fmt::Display for FakeTxBuilderError {
+	fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match *self {}
+	}
+}
+
+impl std::error::Error for FakeTxBuilderError {}
+
 /// Errors that can occur while signing a transaction.
 #[derive(Debug)]
 pub enum TxSignError {

@@ -104,10 +104,14 @@
 
 mod built_priv_tx;
 mod errors;
+mod fake_builder;
 mod freshacc_builder;
 mod spend_builder;
 
 pub use built_priv_tx::{BuiltPrivTx, PrivTxPublicInputs, ProvenPrivTx};
-pub use errors::{FreshAccTxBuilderError, PrivTxProveError, SpendTxBuilderError, TxSignError};
+pub use errors::{
+	FakeTxBuilderError, FreshAccTxBuilderError, PrivTxProveError, SpendTxBuilderError, TxSignError,
+};
+pub use fake_builder::{BuiltFakeTx, FakeTxBuilder};
 pub use freshacc_builder::{BuiltFreshAccTx, FreshAccTxBuilder};
 pub use spend_builder::{BuiltSpendTx, RequiredSignatures, SpendTxBuilder, SpendTxSignatures};
