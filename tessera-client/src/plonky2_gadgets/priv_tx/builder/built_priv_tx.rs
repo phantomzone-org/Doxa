@@ -86,6 +86,16 @@ pub struct BuiltPrivTx {
 	/// Merkle proof of accin commitment in state tree
 	pub accin_merkle_proof: MerkleProof<HashOutput>,
 
+	/// Rejected input notes (empty unless tx contains reject pairs).
+	///
+	/// Reject pairs occupy the first slots (0..rejected_inotes.len()); regular
+	/// inotes/onotes follow.  The corresponding rejected onotes are derived on-the-fly:
+	/// `rejected_onote[i] = rejected_inotes[i]` with `recipient` set to `sender`.
+	pub rejected_inotes: Vec<StandardNote>,
+
+	/// Merkle proofs of rejected input note commitments in state tree
+	pub rejected_inotes_nct_proofs: Vec<MerkleProof<HashOutput>>,
+
 	/// Input notes (empty for FreshAcc)
 	pub inotes: Vec<StandardNote>,
 
@@ -95,11 +105,11 @@ pub struct BuiltPrivTx {
 	/// Output notes (empty for FreshAcc)
 	pub onotes: Vec<StandardNote>,
 
-	/// Dummy input note seeds (for padding to NOTE_BATCH)
-	pub dinotes: [[F; 4]; NOTE_BATCH],
+	/// Dummy input note seeds (for padding inactive inote slots)
+	pub dinotes: Vec<[F; 4]>,
 
-	/// Dummy output note seeds (for padding to NOTE_BATCH)
-	pub donotes: [[F; 4]; NOTE_BATCH],
+	/// Dummy output note seeds (for padding inactive onote slots)
+	pub donotes: Vec<[F; 4]>,
 
 	/// Transaction hash (computed from nullifiers and commitments)
 	pub tx_hash: HashOutput,
@@ -346,40 +356,98 @@ impl BuiltPrivTx {
 	}
 
 	/// Set note-related witness values (inputs and outputs).
+	///
+	/// Slot layout:
+	///   0 .. n_rjct          — reject pairs (`is_note_pair_rjct[i] = true`, both active)
+	///   n_rjct .. NOTE_BATCH — regular inotes / onotes (independent lengths), then dummies
 	fn set_notes_witness(
 		&self,
 		pw: &mut PartialWitness<F>,
 		t: &TxCircuitTargets,
 	) -> Result<(), PrivTxProveError> {
-		// Set input notes
-		for i in 0..NOTE_BATCH {
-			if i < self.inotes.len() {
-				// Real input note
-				let note = &self.inotes[i];
-				let proof = &self.inotes_nct_proofs[i];
-				t.set_input_note_witness(pw, i, note, proof);
-			} else {
-				// Dummy input note
-				t.set_dummy_input_note_witness(pw, i, self.dinotes[i]);
-			}
+		let n_rjct = self.rejected_inotes.len();
+		let n_in = self.inotes.len();
+		let n_out = self.onotes.len();
+
+		if n_rjct + n_in.max(n_out) >= NOTE_BATCH {
+			return Err(PrivTxProveError::ProofGenerationFailed(anyhow::anyhow!(
+				"note batch overflow: rejected={n_rjct}, inotes={n_in}, onotes={n_out}, limit={NOTE_BATCH}"
+			)));
+		}
+		let expected_dinotes = NOTE_BATCH - n_in - n_rjct;
+		if self.dinotes.len() != expected_dinotes {
+			return Err(PrivTxProveError::ProofGenerationFailed(anyhow::anyhow!(
+				"dinotes length mismatch: expected {expected_dinotes}, got {}",
+				self.dinotes.len()
+			)));
+		}
+		let expected_donotes = NOTE_BATCH - n_out - n_rjct;
+		if self.donotes.len() != expected_donotes {
+			return Err(PrivTxProveError::ProofGenerationFailed(anyhow::anyhow!(
+				"donotes length mismatch: expected {expected_donotes}, got {}",
+				self.donotes.len()
+			)));
 		}
 
-		// Set output notes
-		for i in 0..NOTE_BATCH {
-			if i < self.onotes.len() {
-				// Real output note
-				let note = &self.onotes[i];
-				t.set_output_note_witness(pw, i, note);
-			} else {
-				// Dummy output note
-				t.set_dummy_output_note_witness(pw, i, self.donotes[i]);
-			}
-		}
+		// ── Reject pair slots (0..n_rjct) ────────────────────────────────────────
+		for i in 0..n_rjct {
+			let inote = &self.rejected_inotes[i];
+			let proof = &self.rejected_inotes_nct_proofs[i];
 
-		// Spend/FreshAcc transactions have no reject pairs.
-		for i in 0..NOTE_BATCH {
-			pw.set_bool_target(t.private.is_note_pair_rjct[i], false)
+			// Derive rejected onote: return note to original sender
+			let mut onote = inote.clone();
+			onote.recipient = inote.sender;
+
+			// Input note
+			t.private.inotes[i].set_witness(pw, inote);
+			t.private.inotes_nct_merkle[i].set_witness(pw, proof);
+			pw.set_target(t.private.inotes_pos[i], F::from_canonical_u64(proof.pos as u64))
 				.unwrap();
+			pw.set_bool_target(t.private.inotes_isactive[i], true).unwrap();
+			t.private.dinotes[i].set_zero(pw); // active slot — value unused but target must be set
+
+			// Output note
+			t.private.onotes[i].set_witness(pw, &onote);
+			pw.set_bool_target(t.private.onotes_isactive[i], true).unwrap();
+			t.private.donotes[i].set_zero(pw);
+
+			pw.set_bool_target(t.private.is_note_pair_rjct[i], true).unwrap();
+		}
+
+		// ── Regular / dummy slots (n_rjct..NOTE_BATCH) ───────────────────────────
+		for slot in n_rjct..NOTE_BATCH {
+			let j = slot - n_rjct;
+
+			// Input note
+			if j < self.inotes.len() {
+				let note = &self.inotes[j];
+				let proof = &self.inotes_nct_proofs[j];
+				t.private.inotes[slot].set_witness(pw, note);
+				t.private.inotes_nct_merkle[slot].set_witness(pw, proof);
+				pw.set_target(
+					t.private.inotes_pos[slot],
+					F::from_canonical_u64(proof.pos as u64),
+				)
+				.unwrap();
+				pw.set_bool_target(t.private.inotes_isactive[slot], true).unwrap();
+				t.private.dinotes[slot].set_zero(pw); // active slot — value unused
+			} else {
+				pw.set_target(t.private.inotes_pos[slot], F::ZERO).unwrap();
+				pw.set_bool_target(t.private.inotes_isactive[slot], false).unwrap();
+				t.private.dinotes[slot].set(pw, self.dinotes[j - n_in]);
+			}
+
+			// Output note
+			if j < self.onotes.len() {
+				t.private.onotes[slot].set_witness(pw, &self.onotes[j]);
+				pw.set_bool_target(t.private.onotes_isactive[slot], true).unwrap();
+				t.private.donotes[slot].set_zero(pw); // active slot — value unused
+			} else {
+				pw.set_bool_target(t.private.onotes_isactive[slot], false).unwrap();
+				t.private.donotes[slot].set(pw, self.donotes[j - n_out]);
+			}
+
+			pw.set_bool_target(t.private.is_note_pair_rjct[slot], false).unwrap();
 		}
 
 		Ok(())
@@ -399,25 +467,50 @@ impl BuiltPrivTx {
 	}
 
 	/// Compute input note nullifiers for all NOTE_BATCH slots.
+	///
+	/// Mirrors the slot layout in `set_notes_witness`:
+	///   slots 0..n_rjct              → rejected input note nullifiers
+	///   slots n_rjct..n_rjct+n_in   → regular input note nullifiers
+	///   remaining                    → dummy nullifiers
 	fn compute_input_nullifiers(&self) -> [NoteNullifier; NOTE_BATCH] {
 		let nk = self.accin.nk();
+		let n_rjct = self.rejected_inotes.len();
 		array::from_fn(|i| {
-			if i < self.inotes.len() {
-				let pos = self.inotes_nct_proofs[i].pos;
-				self.inotes[i].nullifier(pos, &nk).unwrap()
+			if i < n_rjct {
+				let pos = self.rejected_inotes_nct_proofs[i].pos;
+				self.rejected_inotes[i].nullifier(pos, &nk).unwrap()
 			} else {
-				NoteNullifier(HashOutput(double_hash_native(self.dinotes[i])))
+				let j = i - n_rjct;
+				if j < self.inotes.len() {
+					let pos = self.inotes_nct_proofs[j].pos;
+					self.inotes[j].nullifier(pos, &nk).unwrap()
+				} else {
+					NoteNullifier(HashOutput(double_hash_native(self.dinotes[j - self.inotes.len()])))
+				}
 			}
 		})
 	}
 
 	/// Compute output note commitments for all NOTE_BATCH slots.
+	///
+	/// Mirrors the slot layout in `set_notes_witness`:
+	///   slots 0..n_rjct              → rejected onote commitments (derived from rejected_inotes)
+	///   slots n_rjct..n_rjct+n_out  → regular output note commitments
+	///   remaining                    → dummy commitments
 	fn compute_output_commitments(&self) -> [NoteCommitment; NOTE_BATCH] {
+		let n_rjct = self.rejected_inotes.len();
 		array::from_fn(|i| {
-			if i < self.onotes.len() {
-				self.onotes[i].commitment()
+			if i < n_rjct {
+				let mut onote = self.rejected_inotes[i].clone();
+				onote.recipient = self.rejected_inotes[i].sender;
+				onote.commitment()
 			} else {
-				NoteCommitment(HashOutput(double_hash_native(self.donotes[i])))
+				let j = i - n_rjct;
+				if j < self.onotes.len() {
+					self.onotes[j].commitment()
+				} else {
+					NoteCommitment(HashOutput(double_hash_native(self.donotes[j - self.onotes.len()])))
+				}
 			}
 		})
 	}

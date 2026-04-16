@@ -213,6 +213,16 @@ pub struct NoteNullifierTarget(pub HashOutTarget);
 #[derive(Clone, Copy)]
 pub(crate) struct DummyNoteTarget(pub(crate) HashOutTarget);
 
+impl DummyNoteTarget {
+	pub(crate) fn set(&self, pw: &mut PartialWitness<F>, seed: [F; 4]) {
+		pw.set_hash_target(self.0, HashOut { elements: seed }).unwrap();
+	}
+
+	pub(crate) fn set_zero(&self, pw: &mut PartialWitness<F>) {
+		self.set(pw, [F::ZERO; 4]);
+	}
+}
+
 // ---- Other tx related targets ----
 
 /// The transaction hash signed by spend / consume / approval keys.
@@ -434,11 +444,7 @@ impl TxCircuitTargets {
 		index: usize,
 		seed: [F; 4],
 	) {
-		use plonky2::iop::witness::WitnessWrite;
-		// Set the dummy note seed
-		for (i, &val) in seed.iter().enumerate() {
-			pw.set_target(self.private.dinotes[index][i], val).unwrap();
-		}
+		self.private.dinotes[index].set(pw, seed);
 	}
 
 	/// Set witness for an output note at the given index.
@@ -458,11 +464,7 @@ impl TxCircuitTargets {
 		index: usize,
 		seed: [F; 4],
 	) {
-		use plonky2::iop::witness::WitnessWrite;
-		// Set the dummy note seed
-		for (i, &val) in seed.iter().enumerate() {
-			pw.set_target(self.private.donotes[index][i], val).unwrap();
-		}
+		self.private.donotes[index].set(pw, seed);
 	}
 }
 

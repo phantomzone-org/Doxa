@@ -92,14 +92,16 @@ impl BuiltFakeTx {
 			accout,
 			accin_merkle_proof: dummy_merkle_proof,
 
-			// No real notes
+			// No real notes or reject pairs
+			rejected_inotes: Vec::new(),
+			rejected_inotes_nct_proofs: Vec::new(),
 			inotes: Vec::new(),
 			inotes_nct_proofs: Vec::new(),
 			onotes: Vec::new(),
 
 			// Zero dummy note seeds
-			dinotes: [[F::ZERO; 4]; NOTE_BATCH],
-			donotes: [[F::ZERO; 4]; NOTE_BATCH],
+			dinotes: vec![[F::ZERO; 4]; NOTE_BATCH],
+			donotes: vec![[F::ZERO; 4]; NOTE_BATCH],
 
 			// Zero tx hash (not enforced)
 			tx_hash: HashOutput([F::ZERO; 4]),

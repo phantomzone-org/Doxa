@@ -537,6 +537,14 @@ impl BuiltSpendTx {
 		let spend_pk = self.accin.spend_pk_or_default();
 		let consume_pk = self.accin.consume_pk_or_default();
 
+		// Compute dummy seed slices before consuming self.inotes / self.onotes.
+		// dinotes/donotes in BuiltPrivTx only cover the dummy (inactive) slots,
+		// starting after the active notes.
+		let n_in = self.inotes.len();
+		let n_out = self.onotes.len();
+		let dinotes = self.dinotes[n_in..].to_vec();
+		let donotes = self.donotes[n_out..].to_vec();
+
 		Ok(BuiltPrivTx {
 			tx_kind_flags: TxKindFlags::SPEND,
 
@@ -545,14 +553,18 @@ impl BuiltSpendTx {
 			accout: self.accout,
 			accin_merkle_proof,
 
+			// No reject pairs for spend transactions
+			rejected_inotes: Vec::new(),
+			rejected_inotes_nct_proofs: Vec::new(),
+
 			// Notes (extract just the notes, positions already used for proofs)
 			inotes: self.inotes.into_iter().map(|(n, _)| n).collect(),
 			inotes_nct_proofs,
 			onotes: self.onotes,
 
-			// Dummy notes
-			dinotes: self.dinotes,
-			donotes: self.donotes,
+			// Dummy notes (only dummy slots — active slots are handled separately)
+			dinotes,
+			donotes,
 
 			// Computed values
 			tx_hash: self.tx_hash,

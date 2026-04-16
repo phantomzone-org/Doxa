@@ -269,14 +269,16 @@ impl BuiltFreshAccTx {
 			accout: self.accout,
 			accin_merkle_proof: dummy_merkle_proof,
 
-			// Note data (FreshAcc has no real notes)
+			// No reject pairs or regular notes for FreshAcc
+			rejected_inotes: Vec::new(),
+			rejected_inotes_nct_proofs: Vec::new(),
 			inotes: Vec::new(),
 			inotes_nct_proofs: Vec::new(),
 			onotes: Vec::new(),
 
 			// Dummy notes
-			dinotes: self.dinotes,
-			donotes: self.donotes,
+			dinotes: self.dinotes.to_vec(),
+			donotes: self.donotes.to_vec(),
 
 			// Computed values
 			tx_hash: self.tx_hash,
