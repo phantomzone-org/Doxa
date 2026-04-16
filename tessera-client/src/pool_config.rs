@@ -55,6 +55,11 @@ impl<H: MerkleHash<Digest = HashOutput>> SubpoolConfig<H> {
 		}
 	}
 
+	/// Get the approval key for this subpool.
+	pub fn approval_key(&self) -> CompPubKey {
+		self.approval_key
+	}
+
 	pub fn commitment(&self) -> H::Digest {
 		self.approval_key.commit::<H>()
 	}

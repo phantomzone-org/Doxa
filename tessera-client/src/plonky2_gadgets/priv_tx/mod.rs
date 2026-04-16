@@ -1,3 +1,4 @@
+pub mod builder;
 mod circuit;
 pub(crate) mod circuit_builder;
 mod fake_tx;

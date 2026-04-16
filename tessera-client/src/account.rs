@@ -395,6 +395,13 @@ impl StandardAccount {
 		next
 	}
 
+	/// Return the spend public key, falling back to the default placeholder if unset.
+	pub fn spend_pk_or_default(&self) -> CompressedPublicKey<F> {
+		self.spend_auth
+			.spend_pk
+			.unwrap_or_else(|| CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)))
+	}
+
 	/// Return the consume public key, falling back to the default placeholder if unset.
 	pub fn consume_pk_or_default(&self) -> CompressedPublicKey<F> {
 		self.consume_auth.pk.unwrap_or_else(|| {
@@ -507,7 +514,7 @@ impl StandardAccount {
 /// Contains only public fields (`subpool_id` + `public_id`); the private
 /// identifier is never included.  Encoded as an 80-character hex string for
 /// transport.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountAddress {
 	pub subpool_id: SubpoolId,
 	pub(crate) public_id: PublicIdentifier,

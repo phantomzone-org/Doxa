@@ -265,9 +265,7 @@ impl SubpoolFullProofTargets {
 	pub fn set_witness(
 		&self,
 		pw: &mut PartialWitness<F>,
-		subpool_proof: SubpoolFullProof<HashOutput>,
-		subpool_config_comm: HashOutput,
-		subpool_id: SubpoolId,
+		subpool_proof: &SubpoolFullProof<HashOutput>,
 	) {
 		self.main_pool_proof
 			.set_witness(pw, &subpool_proof.main_pool_proof);
@@ -301,7 +299,7 @@ pub struct TxCircuitTargets {
 	pub(crate) private: TxCircuitPrivateTargets,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TxKindFlags {
 	pub(crate) is_rjct: bool,
 	pub(crate) is_fresh_acc: bool,
@@ -365,20 +363,111 @@ impl TxCircuitTargets {
 		mainpool_config_root: HashOutput,
 		state_root: HashOutput,
 		approval_key: CompPubKey,
+		subpool_proof: &crate::pool_config::SubpoolFullProof<HashOutput>,
 		accin: &StandardAccount,
 		accout: &StandardAccount,
 	) {
+		pw.set_hash_target(self.public.state_root.0, state_root.to_hash_out())
+			.unwrap();
 		pw.set_hash_target(
 			self.public.mainpool_config_root.0,
 			mainpool_config_root.to_hash_out(),
 		)
 		.unwrap();
-		pw.set_hash_target(self.public.state_root.0, state_root.to_hash_out())
-			.unwrap();
 
 		self.private.approval_key.set_witness(pw, approval_key);
+		self.private
+			.subpool_proof_targets
+			.set_witness(pw, &subpool_proof);
 		self.private.accin.set_witness(pw, accin);
 		self.private.accout.set_witness(pw, accout);
+	}
+
+	/// Set witness for a spend signature.
+	pub(crate) fn set_spend_sig_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		sig: &crate::schnorr::Signature,
+	) {
+		self.private.spend_sig.set_witness(pw, sig);
+	}
+
+	/// Set witness for a fake/dummy spend signature.
+	pub(crate) fn set_fake_spend_sig_witness(&self, pw: &mut PartialWitness<F>) {
+		self.private.spend_sig.set_fake_witness(pw);
+	}
+
+	/// Set witness for a consume signature.
+	pub(crate) fn set_consume_sig_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		sig: &crate::schnorr::Signature,
+	) {
+		self.private.consume_sig.set_witness(pw, sig);
+	}
+
+	/// Set witness for a fake/dummy consume signature.
+	pub(crate) fn set_fake_consume_sig_witness(&self, pw: &mut PartialWitness<F>) {
+		self.private.consume_sig.set_fake_witness(pw);
+	}
+
+	/// Set witness for an approval signature.
+	pub(crate) fn set_approval_sig_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		sig: &crate::schnorr::Signature,
+	) {
+		self.private.approval_sig.set_witness(pw, sig);
+	}
+
+	/// Set witness for an input note at the given index.
+	pub(crate) fn set_input_note_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		index: usize,
+		note: &crate::StandardNote,
+		proof: &tessera_trees::MerkleProof<HashOutput>,
+	) {
+		self.private.inotes[index].set_witness(pw, note);
+		self.private.inotes_nct_merkle[index].set_witness(pw, proof);
+	}
+
+	/// Set witness for a dummy input note at the given index.
+	pub(crate) fn set_dummy_input_note_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		index: usize,
+		seed: [F; 4],
+	) {
+		use plonky2::iop::witness::WitnessWrite;
+		// Set the dummy note seed
+		for (i, &val) in seed.iter().enumerate() {
+			pw.set_target(self.private.dinotes[index][i], val).unwrap();
+		}
+	}
+
+	/// Set witness for an output note at the given index.
+	pub(crate) fn set_output_note_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		index: usize,
+		note: &crate::StandardNote,
+	) {
+		self.private.onotes[index].set_witness(pw, note);
+	}
+
+	/// Set witness for a dummy output note at the given index.
+	pub(crate) fn set_dummy_output_note_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		index: usize,
+		seed: [F; 4],
+	) {
+		use plonky2::iop::witness::WitnessWrite;
+		// Set the dummy note seed
+		for (i, &val) in seed.iter().enumerate() {
+			pw.set_target(self.private.donotes[index][i], val).unwrap();
+		}
 	}
 }
 
