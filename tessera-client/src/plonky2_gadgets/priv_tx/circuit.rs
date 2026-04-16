@@ -32,14 +32,16 @@ use crate::{
 
 /// Build the Plonky2 private transaction circuit.
 ///
-/// A single circuit handles four transaction kinds selected by boolean flags:
+/// A single circuit handles transaction kinds selected by boolean flags:
 ///
-/// | Kind          | `is_fresh_acc` | `is_rjct` | `is_update_auth` | `is_priv_tx` |
-/// |---------------|:--------------:|:---------:|:----------------:|:------------:|
-/// | FreshAcc      | 1              | 0         | 0                | 0            |
-/// | Reject        | 0              | 1         | 0                | 0            |
-/// | UpdateAuth    | 0              | 0         | 1                | 0            |
-/// | Spend/transfer| 0              | 0         | 0                | 1            |
+/// | Kind          | `is_fresh_acc` | `is_update_auth` | `is_priv_tx` |
+/// |---------------|:--------------:|:----------------:|:------------:|
+/// | FreshAcc      | 1              | 0                | 0            |
+/// | UpdateAuth    | 0              | 1                | 0            |
+/// | Spend/transfer| 0              | 0                | 1            |
+///
+/// Per-note-pair reject behavior is controlled by `is_note_pair_rjct[i]` rather than a
+/// global transaction-kind flag.
 ///
 /// # Constraints enforced
 /// 1. **Account commitment / nullifier** — derived from account witness; for real txs constrained
@@ -82,7 +84,6 @@ where
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// Tx kinds
-	let is_rjct = builder.add_virtual_bool_target_safe();
 	let is_fresh_acc = builder.add_virtual_bool_target_safe();
 	let is_update_auth = builder.add_virtual_bool_target_safe();
 	let is_priv_tx = builder.add_virtual_bool_target_safe();
@@ -123,14 +124,7 @@ where
 	// Step 3: Account transition invariants (per-kind rules for immutable fields + nonce).
 	// private_identifier and subpool_id are immutable for all tx kinds — enforced by sharing
 	// the same wires in derive_account_commitment for both accin and accout.
-	builder.assert_account_invariants(
-		accin,
-		accout,
-		is_rjct,
-		is_fresh_acc,
-		is_update_auth,
-		is_priv_tx,
-	);
+	builder.assert_account_invariants(accin, accout, is_fresh_acc, is_update_auth, is_priv_tx);
 
 	// Step 4: ACT membership — verify accin's commitment is in the ACT.
 	// Condition: only for non-fresh accounts and real transactions.
@@ -174,6 +168,12 @@ where
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 	let onotes_comm = onotes.map(|n| builder.derive_note_commitment(n));
 
+	// Per-pair reject flag: pair i is a reject pair iff is_note_pair_rjct[i] = true.
+	// When true, the circuit enforces the note-return conditions for that pair and
+	// excludes it from the spend-signature requirement.
+	let is_note_pair_rjct: [BoolTarget; NOTE_BATCH] =
+		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
+
 	// Dummy notes provide deterministic padding nullifiers / commitments for inactive slots.
 	let dinotes: [DummyNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
@@ -184,9 +184,9 @@ where
 		core::array::from_fn(|_| builder.add_virtual_dummy_note_target());
 	let donotes_comm = donotes.map(|dn| builder.derive_dummy_note_commitment(dn));
 
-	// Step 8: Reject check — when is_rjct, each onote is the mirror of the corresponding
-	// inote with spend/reject conditions swapped (note returns to sender).
-	builder.assert_is_reject(is_rjct, inotes, inotes_isactive, onotes, onotes_isactive);
+	// Step 8: Reject check — for each pair i where is_note_pair_rjct[i]=1, the onote must
+	// mirror the corresponding inote with spend/reject conditions swapped (note returns to sender).
+	builder.assert_reject_note_pairs(inotes, onotes, inotes_isactive, is_note_pair_rjct);
 
 	// All inotes and onotes must share the same asset_id as the transaction.
 	for note in inotes.iter().chain(onotes.iter()) {
@@ -258,14 +258,13 @@ where
 	);
 
 	// Step 13: Signature verification.
-	let not_is_rjct = builder.not(is_rjct);
 	let sig_targets = builder.assert_tx_signatures(
 		tx_hash,
 		inotes_isactive,
 		onotes_isactive,
 		accin,
 		approval_key,
-		not_is_rjct,
+		is_note_pair_rjct,
 		not_fake_tx,
 	);
 
@@ -285,7 +284,6 @@ where
 	TxCircuitTargets {
 		public: public_targets,
 		private: TxCircuitPrivateTargets {
-			is_rjct,
 			is_fresh_acc,
 			is_update_auth,
 			is_priv_tx,
@@ -303,6 +301,7 @@ where
 			inotes_isactive,
 			onotes,
 			onotes_isactive,
+			is_note_pair_rjct,
 			dinotes,
 			donotes,
 			subpool_proof_targets,

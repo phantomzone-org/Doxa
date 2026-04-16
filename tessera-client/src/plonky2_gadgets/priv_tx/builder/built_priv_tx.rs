@@ -328,7 +328,7 @@ impl BuiltPrivTx {
 
 		// Set account merkle proof
 		// The conversion from transaction-specific builders ensures this is
-		// populated correctly (real proof for Spend/Reject, dummy for FreshAcc)
+		// populated correctly (real proof for Spend, dummy for FreshAcc)
 		t.private
 			.accin_act_merkle
 			.set_witness(pw, &self.accin_merkle_proof);
@@ -374,6 +374,12 @@ impl BuiltPrivTx {
 				// Dummy output note
 				t.set_dummy_output_note_witness(pw, i, self.donotes[i]);
 			}
+		}
+
+		// Spend/FreshAcc transactions have no reject pairs.
+		for i in 0..NOTE_BATCH {
+			pw.set_bool_target(t.private.is_note_pair_rjct[i], false)
+				.unwrap();
 		}
 
 		Ok(())

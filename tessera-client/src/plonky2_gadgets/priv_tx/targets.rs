@@ -301,7 +301,6 @@ pub struct TxCircuitTargets {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TxKindFlags {
-	pub(crate) is_rjct: bool,
 	pub(crate) is_fresh_acc: bool,
 	pub(crate) is_update_auth: bool,
 	pub(crate) is_priv_tx: bool,
@@ -311,7 +310,6 @@ pub(crate) struct TxKindFlags {
 impl TxKindFlags {
 	/// Flags for a Fake (dummy) transaction.
 	pub(crate) const FAKE: Self = Self {
-		is_rjct: false,
 		is_fresh_acc: false,
 		is_update_auth: false,
 		is_priv_tx: false,
@@ -319,15 +317,15 @@ impl TxKindFlags {
 	};
 	/// Flags for a FreshAcc real transaction.
 	pub(crate) const FRESH_ACC: Self = Self {
-		is_rjct: false,
 		is_fresh_acc: true,
 		is_update_auth: false,
 		is_priv_tx: false,
 		not_fake_tx: true,
 	};
 	/// Flags for a Reject real transaction.
+	/// Reject behavior is now per-note-pair via `is_note_pair_rjct`; this constant
+	/// exists for backward compatibility until callers are updated.
 	pub(crate) const REJECT: Self = Self {
-		is_rjct: true,
 		is_fresh_acc: false,
 		is_update_auth: false,
 		is_priv_tx: false,
@@ -335,7 +333,6 @@ impl TxKindFlags {
 	};
 	/// Flags for a Spend (private) real transaction.
 	pub(crate) const SPEND: Self = Self {
-		is_rjct: false,
 		is_fresh_acc: false,
 		is_update_auth: false,
 		is_priv_tx: true,
@@ -345,8 +342,6 @@ impl TxKindFlags {
 
 impl TxCircuitTargets {
 	pub(crate) fn set_tx_kind_flags(&self, pw: &mut PartialWitness<F>, flags: TxKindFlags) {
-		pw.set_bool_target(self.private.is_rjct, flags.is_rjct)
-			.unwrap();
 		pw.set_bool_target(self.private.is_fresh_acc, flags.is_fresh_acc)
 			.unwrap();
 		pw.set_bool_target(self.private.is_update_auth, flags.is_update_auth)
@@ -581,8 +576,6 @@ impl TxCircuitPublicTargets {
 
 pub struct TxCircuitPrivateTargets {
 	// ── Tx kind flags ─────────────────────────────────────────────────────────
-	/// Reject transaction: operator reclaims notes on behalf of the sender.
-	pub(crate) is_rjct: BoolTarget,
 	/// FreshAcc transaction: account creation, sets initial auth keys.
 	pub(crate) is_fresh_acc: BoolTarget,
 	/// UpdateAuth transaction: rotates spend or consume keys.
@@ -622,6 +615,10 @@ pub struct TxCircuitPrivateTargets {
 	pub(crate) onotes: [NoteTarget; NOTE_BATCH],
 	/// Whether each output note slot is active (being created).
 	pub(crate) onotes_isactive: [BoolTarget; NOTE_BATCH],
+	/// Whether each (inote[i], onote[i]) pair is a reject pair.
+	/// When true for pair i, the circuit enforces the note-return conditions for that pair
+	/// and excludes it from the spend-signature requirement.
+	pub(crate) is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 	/// Dummy input note hashes (used for nullifiers in inactive inote slots).
 	pub(crate) dinotes: [DummyNoteTarget; NOTE_BATCH],
 	/// Dummy output note hashes (used for commitments in inactive onote slots).

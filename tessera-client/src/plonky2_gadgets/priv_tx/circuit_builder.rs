@@ -138,7 +138,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		&mut self,
 		accin: AccountTarget,
 		accout: AccountTarget,
-		is_rjct: BoolTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
 		is_priv_tx: BoolTarget,
@@ -232,16 +231,15 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accout_comm: AccountCommitmentTarget,
 	) -> TxHashTarget;
 
-	/// When `is_rjct=1`, enforce that each active output note is a mirror of the
-	/// corresponding input note with the spend/reject conditions swapped (i.e. the
-	/// note is returned to the sender).
-	fn assert_is_reject(
+	/// For each pair `i` where `is_note_pair_rjct[i]=1`, enforce that the output note is a
+	/// mirror of the corresponding input note with the spend/reject conditions swapped (i.e.
+	/// the note is returned to the sender).
+	fn assert_reject_note_pairs(
 		&mut self,
-		is_rjct: BoolTarget,
 		inotes: [NoteTarget; NOTE_BATCH],
-		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes: [NoteTarget; NOTE_BATCH],
-		onotes_isactive: [BoolTarget; NOTE_BATCH],
+		inote_isactive: [BoolTarget; NOTE_BATCH],
+		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 	);
 
 	/// Enforce the asset conservation law:
@@ -260,7 +258,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 
 	/// Verify the three Schnorr signatures required for a private transaction.
 	///
-	/// - **Spend** — required when any output note is active and tx is not a reject. Signed by
+	/// - **Spend** — required when any output note is active and not a reject pair. Signed by
 	///   `accin.spend_auth`.
 	/// - **Consume** — required when any input note is active and no output note is active (pure
 	///   consume).  Key selected by `accin.consume_auth.config`.
@@ -274,7 +272,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 		accin: AccountTarget,
 		approval_key: PubkeyTarget,
-		not_is_rjct: BoolTarget,
+		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets;
 }
@@ -641,7 +639,6 @@ where
 		&mut self,
 		accin: AccountTarget,
 		accout: AccountTarget,
-		is_rjct: BoolTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
 		is_priv_tx: BoolTarget,
@@ -657,8 +654,8 @@ where
 
 		// acc_ast_root is immutable for FreshAccTx and UpdateAuthTx; PrivTx may update it
 		//
-		// not_spend = !is_priv_tx = is_rjct | is_fresh_acc | is_update_auth, because we constrain
-		// elsewhere that only 1 flag of the set is set to true at any time
+		// not_spend = !is_priv_tx = is_fresh_acc | is_update_auth | (reject pairs), because we
+		// constrain elsewhere that only 1 flag of the set is set to true at any time
 		let not_spend = self.not(is_priv_tx);
 		for i in 0..HASH_SIZE {
 			// TODO: use is_fresh_acc | is_update_auth here instead of not_spend
@@ -694,25 +691,34 @@ where
 		);
 	}
 
-	fn assert_is_reject(
+	fn assert_reject_note_pairs(
 		&mut self,
-		is_rjct: BoolTarget,
 		inotes: [NoteTarget; NOTE_BATCH],
-		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes: [NoteTarget; NOTE_BATCH],
-		onotes_isactive: [BoolTarget; NOTE_BATCH],
+		inotes_isactive: [BoolTarget; NOTE_BATCH],
+		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 	) {
 		for i in 0..NOTE_BATCH {
+			// if pair is rjct kind, the input note must be asserted to be active, otherwise in
+			// situations where user has delegated consumption to the subpool owner, owner can
+			// perform arbitrary spends without user's approval with configuration: inotes_acitve[i]
+			// = false, is_note_pair_rjct[i] = true, onotes_active[i] = true. This is because
+			// spend signature check is skipped for output notes part of rjct note pairs.
+			//
+			// Same is not required for output notes, however. Because when an output note is
+			// inactive but corresponding input note and rjct flag is active, then the only action
+			// possible is to consume the input note.
+			let tr = self._true();
 			self.conditional_assert_eq(
-				is_rjct.target,
+				is_note_pair_rjct[i].target,
 				inotes_isactive[i].target,
-				onotes_isactive[i].target,
+				tr.target,
 			);
 
 			// identifier
 			for j in 0..2 {
 				self.conditional_assert_eq(
-					is_rjct.target,
+					is_note_pair_rjct[i].target,
 					inotes[i].identifier[j],
 					onotes[i].identifier[j],
 				);
@@ -721,24 +727,28 @@ where
 			// amount (8 u32 limbs)
 			for j in 0..8 {
 				self.conditional_assert_eq(
-					is_rjct.target,
+					is_note_pair_rjct[i].target,
 					inotes[i].amount.0[j].0,
 					onotes[i].amount.0[j].0,
 				);
 			}
 
 			// asset_id
-			self.conditional_assert_eq(is_rjct.target, inotes[i].asset_id.0, onotes[i].asset_id.0);
+			self.conditional_assert_eq(
+				is_note_pair_rjct[i].target,
+				inotes[i].asset_id.0,
+				onotes[i].asset_id.0,
+			);
 
 			// spend_cond of onote == reject_cond of inote (note returns to sender)
 			self.conditional_assert_eq(
-				is_rjct.target,
+				is_note_pair_rjct[i].target,
 				inotes[i].reject_cond.subpool_id.0,
 				onotes[i].spend_cond.subpool_id.0,
 			);
 			for j in 0..HASH_SIZE {
 				self.conditional_assert_eq(
-					is_rjct.target,
+					is_note_pair_rjct[i].target,
 					inotes[i].reject_cond.public_identifier.0.elements[j],
 					onotes[i].spend_cond.public_identifier.0.elements[j],
 				);
@@ -746,13 +756,13 @@ where
 
 			// reject_cond of onote == reject_cond of inote (sender unchanged)
 			self.conditional_assert_eq(
-				is_rjct.target,
+				is_note_pair_rjct[i].target,
 				inotes[i].reject_cond.subpool_id.0,
 				onotes[i].reject_cond.subpool_id.0,
 			);
 			for j in 0..HASH_SIZE {
 				self.conditional_assert_eq(
-					is_rjct.target,
+					is_note_pair_rjct[i].target,
 					inotes[i].reject_cond.public_identifier.0.elements[j],
 					onotes[i].reject_cond.public_identifier.0.elements[j],
 				);
@@ -824,18 +834,19 @@ where
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 		accin: AccountTarget,
 		approval_key: PubkeyTarget,
-		not_is_rjct: BoolTarget,
+		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets {
 		// ── Spend signature ───────────────────────────────────────────────────
-		// Required when ≥1 output note is active (a spend is happening) AND the
-		// tx is not a reject.  Signed by accin.spend_auth.
-		let mut is_spend_req = onotes_isactive[0];
-		for sel in onotes_isactive.iter().skip(1) {
-			is_spend_req = self.or(*sel, is_spend_req);
+		// Required when ≥1 output note is active AND that note is not a reject pair.
+		// Reject pairs do not require a spend signature.
+		let not_pair_rjct_0 = self.not(is_note_pair_rjct[0]);
+		let mut is_spend_req = self.and(onotes_isactive[0], not_pair_rjct_0);
+		for (i, sel) in onotes_isactive.iter().enumerate().skip(1) {
+			let not_pair_rjct_i = self.not(is_note_pair_rjct[i]);
+			let contributes = self.and(*sel, not_pair_rjct_i);
+			is_spend_req = self.or(contributes, is_spend_req);
 		}
-		// Reject does not need a spend signature even though onotes are active.
-		is_spend_req = self.and(is_spend_req, not_is_rjct);
 
 		// Note: the public key used in verification must match the key stored in accin —
 		// even for "fake" signatures the key must be correct or the proof will fail.

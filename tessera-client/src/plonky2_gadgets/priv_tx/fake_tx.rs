@@ -131,6 +131,12 @@ pub fn set_fake_tx_witness(
 	// not_fake_tx = false.
 	t.private.subpool_proof_targets.set_fake(pw);
 
+	// ── Reject pair flags (all false) ────────────────────────────────────────
+	for i in 0..NOTE_BATCH {
+		pw.set_bool_target(t.private.is_note_pair_rjct[i], false)
+			.unwrap();
+	}
+
 	// ── Signatures (all fake) ─────────────────────────────────────────────────
 	// The spend circuit gate uses accin.spend_auth as cq — must match what
 	// accin.set_witness stored (DEFAULT_SPEND_AUTH_PK when no spend_pk is set).
