@@ -14,7 +14,7 @@ use super::{
 use crate::{
 	ConsumeAuth, NOTE_BATCH, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
 	derive_priv_tx_hash,
-	plonky2_gadgets::priv_tx::{double_hash_native, targets::TxKindFlags},
+	plonky2_gadgets::priv_tx::targets::TxKindFlags,
 	pool_config::MainPoolConfigTree,
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_sign},
 };
@@ -30,11 +30,11 @@ pub struct FreshAccTxBuilder {
 	/// New consume authorization (set via with_new_consume_key or with_delegated_consume)
 	new_consume_auth: Option<ConsumeAuth>,
 
-	/// Optional custom dummy input notes (defaults to deterministic seeds)
-	custom_dinotes: Option<[[F; 4]; NOTE_BATCH]>,
+	/// Pre-sampled dummy input note seeds (None → deterministic defaults in build())
+	dinotes: Option<Vec<[F; 4]>>,
 
-	/// Optional custom dummy output notes (defaults to deterministic seeds)
-	custom_donotes: Option<[[F; 4]; NOTE_BATCH]>,
+	/// Pre-sampled dummy output note seeds (None → deterministic defaults in build())
+	donotes: Option<Vec<[F; 4]>>,
 }
 
 /// Validated, ready-to-prove FreshAcc transaction.
@@ -45,11 +45,11 @@ pub struct BuiltFreshAccTx {
 	/// Output account (nonce=1, with new auth keys)
 	accout: StandardAccount,
 
-	/// Dummy input note seeds
-	dinotes: [[F; 4]; NOTE_BATCH],
+	/// Dummy input note seeds (length = NOTE_BATCH)
+	dinotes: Vec<[F; 4]>,
 
-	/// Dummy output note seeds
-	donotes: [[F; 4]; NOTE_BATCH],
+	/// Dummy output note seeds (length = NOTE_BATCH)
+	donotes: Vec<[F; 4]>,
 
 	/// Transaction hash
 	tx_hash: HashOutput,
@@ -78,8 +78,8 @@ impl FreshAccTxBuilder {
 			accin,
 			new_spend_auth: None,
 			new_consume_auth: None,
-			custom_dinotes: None,
-			custom_donotes: None,
+			dinotes: None,
+			donotes: None,
 		})
 	}
 
@@ -115,19 +115,23 @@ impl FreshAccTxBuilder {
 		self
 	}
 
-	/// Set custom dummy input note seeds (advanced usage).
-	///
-	/// By default, deterministic seeds are used. Use this to override.
-	pub fn with_custom_dinotes(mut self, dinotes: [[F; 4]; NOTE_BATCH]) -> Self {
-		self.custom_dinotes = Some(dinotes);
+	/// Sample random dummy input note seeds for all NOTE_BATCH inactive inote slots.
+	pub fn fill_dinotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
+		self.dinotes = Some(
+			(0..NOTE_BATCH)
+				.map(|_| core::array::from_fn(|_| F::from_noncanonical_u64(rng.next_u64())))
+				.collect(),
+		);
 		self
 	}
 
-	/// Set custom dummy output note seeds (advanced usage).
-	///
-	/// By default, deterministic seeds are used. Use this to override.
-	pub fn with_custom_donotes(mut self, donotes: [[F; 4]; NOTE_BATCH]) -> Self {
-		self.custom_donotes = Some(donotes);
+	/// Sample random dummy output note seeds for all NOTE_BATCH inactive onote slots.
+	pub fn fill_donotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
+		self.donotes = Some(
+			(0..NOTE_BATCH)
+				.map(|_| core::array::from_fn(|_| F::from_noncanonical_u64(rng.next_u64())))
+				.collect(),
+		);
 		self
 	}
 
@@ -162,18 +166,22 @@ impl FreshAccTxBuilder {
 		accout.spend_auth = new_spend_auth.clone();
 		accout.consume_auth = new_consume_auth.clone();
 
-		// Generate dummy notes
-		let dinotes = self
-			.custom_dinotes
-			.unwrap_or_else(|| array::from_fn(|i| [F::from_canonical_usize(i); 4]));
-		let donotes = self
-			.custom_donotes
-			.unwrap_or_else(|| array::from_fn(|i| [F::from_canonical_usize(i + NOTE_BATCH); 4]));
+		// Generate dummy notes (all NOTE_BATCH slots are inactive for FreshAcc)
+		let dinotes = self.dinotes.unwrap_or_else(|| {
+			(0..NOTE_BATCH)
+				.map(|i| [F::from_canonical_usize(i); 4])
+				.collect()
+		});
+		let donotes = self.donotes.unwrap_or_else(|| {
+			(0..NOTE_BATCH)
+				.map(|i| [F::from_canonical_usize(i + NOTE_BATCH); 4])
+				.collect()
+		});
 
 		// Compute tx_hash
-		let dinote_nulls =
+		let dinote_nulls: [NoteNullifier; NOTE_BATCH] =
 			array::from_fn(|i| NoteNullifier(HashOutput(double_hash_native(dinotes[i]))));
-		let donote_comms =
+		let donote_comms: [NoteCommitment; NOTE_BATCH] =
 			array::from_fn(|i| NoteCommitment(HashOutput(double_hash_native(donotes[i]))));
 
 		let accin_null = self.accin.nullifier();
@@ -276,9 +284,9 @@ impl BuiltFreshAccTx {
 			inotes_nct_proofs: Vec::new(),
 			onotes: Vec::new(),
 
-			// Dummy notes
-			dinotes: self.dinotes.to_vec(),
-			donotes: self.donotes.to_vec(),
+			// Dummy notes (Vec already, no conversion needed)
+			dinotes: self.dinotes,
+			donotes: self.donotes,
 
 			// Computed values
 			tx_hash: self.tx_hash,

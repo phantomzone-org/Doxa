@@ -19,8 +19,7 @@ use crate::{
 	plonky2_gadgets::{
 		priv_tx::{
 			circuit_builder::PrivTxCircuitBuilder,
-			fake_tx::set_fake_tx_witness,
-			freshacc_tx, priv_tx_circuit, reject_tx, spend_tx,
+			priv_tx_circuit,
 			targets::{
 				AccountCommitmentTarget, AccountNullifierTarget, AssetIdTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,

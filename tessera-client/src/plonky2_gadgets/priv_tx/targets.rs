@@ -215,7 +215,13 @@ pub(crate) struct DummyNoteTarget(pub(crate) HashOutTarget);
 
 impl DummyNoteTarget {
 	pub(crate) fn set(&self, pw: &mut PartialWitness<F>, seed: [F; 4]) {
-		pw.set_hash_target(self.0, HashOut { elements: seed }).unwrap();
+		pw.set_hash_target(
+			self.0,
+			HashOut {
+				elements: seed,
+			},
+		)
+		.unwrap();
 	}
 
 	pub(crate) fn set_zero(&self, pw: &mut PartialWitness<F>) {
@@ -386,43 +392,6 @@ impl TxCircuitTargets {
 			.set_witness(pw, &subpool_proof);
 		self.private.accin.set_witness(pw, accin);
 		self.private.accout.set_witness(pw, accout);
-	}
-
-	/// Set witness for a spend signature.
-	pub(crate) fn set_spend_sig_witness(
-		&self,
-		pw: &mut PartialWitness<F>,
-		sig: &crate::schnorr::Signature,
-	) {
-		self.private.spend_sig.set_witness(pw, sig);
-	}
-
-	/// Set witness for a fake/dummy spend signature.
-	pub(crate) fn set_fake_spend_sig_witness(&self, pw: &mut PartialWitness<F>) {
-		self.private.spend_sig.set_fake_witness(pw);
-	}
-
-	/// Set witness for a consume signature.
-	pub(crate) fn set_consume_sig_witness(
-		&self,
-		pw: &mut PartialWitness<F>,
-		sig: &crate::schnorr::Signature,
-	) {
-		self.private.consume_sig.set_witness(pw, sig);
-	}
-
-	/// Set witness for a fake/dummy consume signature.
-	pub(crate) fn set_fake_consume_sig_witness(&self, pw: &mut PartialWitness<F>) {
-		self.private.consume_sig.set_fake_witness(pw);
-	}
-
-	/// Set witness for an approval signature.
-	pub(crate) fn set_approval_sig_witness(
-		&self,
-		pw: &mut PartialWitness<F>,
-		sig: &crate::schnorr::Signature,
-	) {
-		self.private.approval_sig.set_witness(pw, sig);
 	}
 
 	/// Set witness for an input note at the given index.

@@ -38,7 +38,7 @@ impl SchnorrTargets {
 		pw: &mut PartialWitness<F>,
 		pk: CompPubKey,
 		tx_hash: HashOutput,
-		signature: Signature,
+		signature: &Signature,
 	) {
 		let cr = signature.r.encode();
 		let e = schnorr_challenge(&cr, &pk.0, &tx_hash.0);

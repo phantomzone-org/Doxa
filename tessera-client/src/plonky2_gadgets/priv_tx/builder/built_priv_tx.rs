@@ -41,10 +41,7 @@ use tessera_utils::{CircuitDataNative, F, ProofNative, hasher::HashOutput};
 use super::errors::PrivTxProveError;
 use crate::{
 	NOTE_BATCH, NoteCommitment, NoteNullifier, StandardAccount, StandardNote, SubpoolId,
-	plonky2_gadgets::priv_tx::{
-		double_hash_native,
-		targets::{TxCircuitTargets, TxKindFlags},
-	},
+	plonky2_gadgets::priv_tx::targets::{TxCircuitTargets, TxKindFlags},
 	pool_config::{MainPoolConfigTree, SubpoolFullProof},
 	schnorr::Signature,
 };
@@ -241,13 +238,26 @@ impl BuiltPrivTx {
 		t: &TxCircuitTargets,
 	) -> Result<(), PrivTxProveError> {
 		// Set spend signature (real or fake/dummy)
-		t.set_spend_sig_witness(pw, &self.spend_sig);
+		t.private.sig_targets.spend.set(
+			pw,
+			self.accin.spend_pk_or_default(),
+			self.tx_hash,
+			&self.spend_sig,
+		);
 
 		// Set consume signature (real or fake/dummy)
-		t.set_consume_sig_witness(pw, &self.consume_sig);
+		t.private.sig_targets.consume.set(
+			pw,
+			self.accin.consume_pk_or_default(),
+			self.tx_hash,
+			&self.consume_sig,
+		);
 
 		// Set approval signature (always real)
-		t.set_approval_sig_witness(pw, &self.approval_sig);
+		t.private
+			.sig_targets
+			.approval
+			.set(pw, self.approval_key, self.tx_hash, &self.approval_sig);
 
 		Ok(())
 	}
@@ -401,17 +411,23 @@ impl BuiltPrivTx {
 			// Input note
 			t.private.inotes[i].set_witness(pw, inote);
 			t.private.inotes_nct_merkle[i].set_witness(pw, proof);
-			pw.set_target(t.private.inotes_pos[i], F::from_canonical_u64(proof.pos as u64))
+			pw.set_target(
+				t.private.inotes_pos[i],
+				F::from_canonical_u64(proof.pos as u64),
+			)
+			.unwrap();
+			pw.set_bool_target(t.private.inotes_isactive[i], true)
 				.unwrap();
-			pw.set_bool_target(t.private.inotes_isactive[i], true).unwrap();
 			t.private.dinotes[i].set_zero(pw); // active slot — value unused but target must be set
 
 			// Output note
 			t.private.onotes[i].set_witness(pw, &onote);
-			pw.set_bool_target(t.private.onotes_isactive[i], true).unwrap();
+			pw.set_bool_target(t.private.onotes_isactive[i], true)
+				.unwrap();
 			t.private.donotes[i].set_zero(pw);
 
-			pw.set_bool_target(t.private.is_note_pair_rjct[i], true).unwrap();
+			pw.set_bool_target(t.private.is_note_pair_rjct[i], true)
+				.unwrap();
 		}
 
 		// ── Regular / dummy slots (n_rjct..NOTE_BATCH) ───────────────────────────
@@ -429,25 +445,30 @@ impl BuiltPrivTx {
 					F::from_canonical_u64(proof.pos as u64),
 				)
 				.unwrap();
-				pw.set_bool_target(t.private.inotes_isactive[slot], true).unwrap();
+				pw.set_bool_target(t.private.inotes_isactive[slot], true)
+					.unwrap();
 				t.private.dinotes[slot].set_zero(pw); // active slot — value unused
 			} else {
 				pw.set_target(t.private.inotes_pos[slot], F::ZERO).unwrap();
-				pw.set_bool_target(t.private.inotes_isactive[slot], false).unwrap();
+				pw.set_bool_target(t.private.inotes_isactive[slot], false)
+					.unwrap();
 				t.private.dinotes[slot].set(pw, self.dinotes[j - n_in]);
 			}
 
 			// Output note
 			if j < self.onotes.len() {
 				t.private.onotes[slot].set_witness(pw, &self.onotes[j]);
-				pw.set_bool_target(t.private.onotes_isactive[slot], true).unwrap();
+				pw.set_bool_target(t.private.onotes_isactive[slot], true)
+					.unwrap();
 				t.private.donotes[slot].set_zero(pw); // active slot — value unused
 			} else {
-				pw.set_bool_target(t.private.onotes_isactive[slot], false).unwrap();
+				pw.set_bool_target(t.private.onotes_isactive[slot], false)
+					.unwrap();
 				t.private.donotes[slot].set(pw, self.donotes[j - n_out]);
 			}
 
-			pw.set_bool_target(t.private.is_note_pair_rjct[slot], false).unwrap();
+			pw.set_bool_target(t.private.is_note_pair_rjct[slot], false)
+				.unwrap();
 		}
 
 		Ok(())
@@ -485,7 +506,9 @@ impl BuiltPrivTx {
 					let pos = self.inotes_nct_proofs[j].pos;
 					self.inotes[j].nullifier(pos, &nk).unwrap()
 				} else {
-					NoteNullifier(HashOutput(double_hash_native(self.dinotes[j - self.inotes.len()])))
+					NoteNullifier(HashOutput(double_hash_native(
+						self.dinotes[j - self.inotes.len()],
+					)))
 				}
 			}
 		})
@@ -509,7 +532,9 @@ impl BuiltPrivTx {
 				if j < self.onotes.len() {
 					self.onotes[j].commitment()
 				} else {
-					NoteCommitment(HashOutput(double_hash_native(self.donotes[j - self.onotes.len()])))
+					NoteCommitment(HashOutput(double_hash_native(
+						self.donotes[j - self.onotes.len()],
+					)))
 				}
 			}
 		})

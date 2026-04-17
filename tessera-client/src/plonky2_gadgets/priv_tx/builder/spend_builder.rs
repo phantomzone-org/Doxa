@@ -15,7 +15,7 @@ use super::{
 use crate::{
 	AccountAddress, AssetId, NOTE_BATCH, NoteCommitment, NoteNullifier, StandardAccount,
 	StandardNote, SubpoolId, derive_priv_tx_hash,
-	plonky2_gadgets::priv_tx::{double_hash_native, targets::TxKindFlags},
+	plonky2_gadgets::priv_tx::targets::TxKindFlags,
 	pool_config::MainPoolConfigTree,
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_sign},
 };
@@ -37,11 +37,14 @@ pub struct SpendTxBuilder {
 	/// Accumulated output notes
 	output_notes: Vec<StandardNote>,
 
-	/// Optional custom dummy input notes (defaults to deterministic seeds)
-	custom_dinotes: Option<[[F; 4]; NOTE_BATCH]>,
+	/// Rejected input notes with their state-tree positions (returned to sender)
+	rejected_notes: Vec<(StandardNote, usize)>,
 
-	/// Optional custom dummy output notes (defaults to deterministic seeds)
-	custom_donotes: Option<[[F; 4]; NOTE_BATCH]>,
+	/// Pre-sampled dummy input note seeds (must be set via fill_dinotes before build())
+	dinotes: Option<Vec<[F; 4]>>,
+
+	/// Pre-sampled dummy output note seeds (must be set via fill_donotes before build())
+	donotes: Option<Vec<[F; 4]>>,
 }
 
 /// Validated, ready-to-prove spend transaction.
@@ -52,17 +55,20 @@ pub struct BuiltSpendTx {
 	/// Derived output account (nonce+1, AST updated)
 	accout: StandardAccount,
 
+	/// Rejected input notes with their state-tree positions
+	rejected_inotes: Vec<(StandardNote, usize)>,
+
 	/// Input notes with their positions in the state tree
 	inotes: Vec<(StandardNote, usize)>,
 
 	/// Output notes
 	onotes: Vec<StandardNote>,
 
-	/// Dummy input note seeds
-	dinotes: [[F; 4]; NOTE_BATCH],
+	/// Dummy input note seeds (length = NOTE_BATCH - inotes.len() - rejected_inotes.len())
+	dinotes: Vec<[F; 4]>,
 
-	/// Dummy output note seeds
-	donotes: [[F; 4]; NOTE_BATCH],
+	/// Dummy output note seeds (length = NOTE_BATCH - onotes.len() - rejected_inotes.len())
+	donotes: Vec<[F; 4]>,
 
 	/// Transaction hash (computed with placeholder nullifiers)
 	tx_hash: HashOutput,
@@ -118,8 +124,9 @@ impl SpendTxBuilder {
 			approval_key,
 			input_notes: Vec::new(),
 			output_notes: Vec::new(),
-			custom_dinotes: None,
-			custom_donotes: None,
+			rejected_notes: Vec::new(),
+			dinotes: None,
+			donotes: None,
 		})
 	}
 
@@ -138,8 +145,8 @@ impl SpendTxBuilder {
 		note: StandardNote,
 		position: usize,
 	) -> Result<Self, SpendTxBuilderError> {
-		// Validate note batch limit
-		if self.input_notes.len() >= NOTE_BATCH {
+		// Validate note batch limit: rejected + input slots must not exceed NOTE_BATCH
+		if self.rejected_notes.len() + self.input_notes.len() + 1 > NOTE_BATCH {
 			return Err(SpendTxBuilderError::NoteBatchLimitReached {
 				kind: "input",
 				limit: NOTE_BATCH,
@@ -177,7 +184,8 @@ impl SpendTxBuilder {
 		memo: [u8; 512],
 		rng: &mut R,
 	) -> Result<Self, SpendTxBuilderError> {
-		if self.output_notes.len() >= NOTE_BATCH {
+		// Validate note batch limit: rejected + output slots must not exceed NOTE_BATCH
+		if self.rejected_notes.len() + self.output_notes.len() + 1 > NOTE_BATCH {
 			return Err(SpendTxBuilderError::NoteBatchLimitReached {
 				kind: "output",
 				limit: NOTE_BATCH,
@@ -191,19 +199,70 @@ impl SpendTxBuilder {
 		Ok(self)
 	}
 
-	/// Set custom dummy input note seeds (advanced usage).
+	/// Add a rejected input note (will be returned to its original sender).
 	///
-	/// By default, deterministic seeds are used. Use this to override.
-	pub fn with_custom_dinotes(mut self, dinotes: [[F; 4]; NOTE_BATCH]) -> Self {
-		self.custom_dinotes = Some(dinotes);
+	/// The note is consumed from the input side and a mirror output note
+	/// (recipient = sender) is generated automatically by the proving layer.
+	///
+	/// # Errors
+	/// - `NoteBatchLimitReached`: Adding this note would exceed NOTE_BATCH slots
+	/// - `AssetMismatch`: Note asset_id doesn't match transaction asset_id
+	/// - `RecipientMismatch`: Note recipient doesn't match accin
+	pub fn add_rejected_note(
+		mut self,
+		note: StandardNote,
+		position: usize,
+	) -> Result<Self, SpendTxBuilderError> {
+		// Validate note batch limit: each reject pair occupies one inote and one onote slot,
+		// so both rejected+input and rejected+output must stay within NOTE_BATCH.
+		if self.rejected_notes.len() + 1 + self.input_notes.len().max(self.output_notes.len())
+			> NOTE_BATCH
+		{
+			return Err(SpendTxBuilderError::NoteBatchLimitReached {
+				kind: "rejected",
+				limit: NOTE_BATCH,
+			});
+		}
+		if note.asset_id != self.asset_id {
+			return Err(SpendTxBuilderError::AssetMismatch {
+				expected: self.asset_id,
+				got: note.asset_id,
+			});
+		}
+		if note.recipient != AccountAddress::from_acc(&self.accin) {
+			return Err(SpendTxBuilderError::RecipientMismatch);
+		}
+		self.rejected_notes.push((note, position));
+		Ok(self)
+	}
+
+	/// Sample random dummy input note seeds for the inactive inote slots.
+	///
+	/// Must be called after all input notes and rejected notes have been added
+	/// (seed count = `NOTE_BATCH - input_notes.len() - rejected_notes.len()`),
+	/// and before `build()` — which will error if dinotes are absent.
+	pub fn fill_dinotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
+		let count = NOTE_BATCH - self.input_notes.len() - self.rejected_notes.len();
+		self.dinotes = Some(
+			(0..count)
+				.map(|_| core::array::from_fn(|_| F::from_noncanonical_u64(rng.next_u64())))
+				.collect(),
+		);
 		self
 	}
 
-	/// Set custom dummy output note seeds (advanced usage).
+	/// Sample random dummy output note seeds for the inactive onote slots.
 	///
-	/// By default, deterministic seeds are used. Use this to override.
-	pub fn with_custom_donotes(mut self, donotes: [[F; 4]; NOTE_BATCH]) -> Self {
-		self.custom_donotes = Some(donotes);
+	/// Must be called after all output notes and rejected notes have been added
+	/// (seed count = `NOTE_BATCH - output_notes.len() - rejected_notes.len()`),
+	/// and before `build()` — which will error if donotes are absent.
+	pub fn fill_donotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
+		let count = NOTE_BATCH - self.output_notes.len() - self.rejected_notes.len();
+		self.donotes = Some(
+			(0..count)
+				.map(|_| core::array::from_fn(|_| F::from_noncanonical_u64(rng.next_u64())))
+				.collect(),
+		);
 		self
 	}
 
@@ -219,18 +278,26 @@ impl SpendTxBuilder {
 	/// in `into_priv_tx_with_signatures()` when the state tree is available.
 	///
 	/// # Errors
-	/// - `NoActiveNotes`: Must have at least one input or output note
+	/// - `NoActiveNotes`: Must have at least one input, output, or rejected note
 	/// - `InsufficientBalance`: Outputs exceed inputs + existing balance
+	/// - `DummyNotesNotFilled`: `fill_dinotes()` or `fill_donotes()` was not called
 	pub fn build(self) -> Result<BuiltSpendTx, SpendTxBuilderError> {
 		// Validation
-		if self.input_notes.is_empty() && self.output_notes.is_empty() {
+		if self.input_notes.is_empty()
+			&& self.output_notes.is_empty()
+			&& self.rejected_notes.is_empty()
+		{
 			return Err(SpendTxBuilderError::NoActiveNotes);
 		}
+
+		let n_rjct = self.rejected_notes.len();
+		let n_in = self.input_notes.len();
+		let n_out = self.output_notes.len();
 
 		// Extract subpool_id from accin
 		let subpool_id = self.accin.subpool_id;
 
-		// Compute balance changes
+		// Compute balance changes (rejected notes cancel out: consumed then re-emitted)
 		let delta_in: U256 = self
 			.input_notes
 			.iter()
@@ -262,31 +329,49 @@ impl SpendTxBuilder {
 		let mut accout = self.accin.clone_with_incremented_nonce();
 		accout.ast.insert_or_update_asset(self.asset_id, new_bal);
 
-		// Generate dummy notes
+		// Require that dummy note seeds have been explicitly sampled via fill_dinotes/fill_donotes
 		let dinotes = self
-			.custom_dinotes
-			.unwrap_or_else(|| array::from_fn(|i| [F::from_canonical_usize(i); 4]));
+			.dinotes
+			.ok_or(SpendTxBuilderError::DummyNotesNotFilled {
+				kind: "input",
+			})?;
 		let donotes = self
-			.custom_donotes
-			.unwrap_or_else(|| array::from_fn(|i| [F::from_canonical_usize(i + NOTE_BATCH); 4]));
+			.donotes
+			.ok_or(SpendTxBuilderError::DummyNotesNotFilled {
+				kind: "output",
+			})?;
 
-		// Compute tx_hash with placeholder nullifiers (position 0)
-		// Actual nullifiers will be computed in into_priv_tx_with_signatures()
+		// Compute tx_hash: reject pairs occupy slots 0..n_rjct,
+		// regular notes follow, then dummy seeds.
 		let nk = self.accin.nk();
 		let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = array::from_fn(|i| {
-			if i < self.input_notes.len() {
-				let (note, pos) = &self.input_notes[i];
+			if i < n_rjct {
+				let (note, pos) = &self.rejected_notes[i];
 				note.nullifier(*pos, &nk).unwrap()
 			} else {
-				NoteNullifier(HashOutput(double_hash_native(dinotes[i])))
+				let j = i - n_rjct;
+				if j < n_in {
+					let (note, pos) = &self.input_notes[j];
+					note.nullifier(*pos, &nk).unwrap()
+				} else {
+					NoteNullifier(HashOutput(double_hash_native(dinotes[j - n_in])))
+				}
 			}
 		});
 
 		let tx_onote_comms: [NoteCommitment; NOTE_BATCH] = array::from_fn(|i| {
-			if i < self.output_notes.len() {
-				self.output_notes[i].commitment()
+			if i < n_rjct {
+				let (inote, _) = &self.rejected_notes[i];
+				let mut onote = inote.clone();
+				onote.recipient = inote.sender;
+				onote.commitment()
 			} else {
-				NoteCommitment(HashOutput(double_hash_native(donotes[i])))
+				let j = i - n_rjct;
+				if j < n_out {
+					self.output_notes[j].commitment()
+				} else {
+					NoteCommitment(HashOutput(double_hash_native(donotes[j - n_out])))
+				}
 			}
 		});
 
@@ -301,6 +386,7 @@ impl SpendTxBuilder {
 		Ok(BuiltSpendTx {
 			accin: self.accin,
 			accout,
+			rejected_inotes: self.rejected_notes,
 			inotes: self.input_notes,
 			onotes: self.output_notes,
 			dinotes,
@@ -525,7 +611,13 @@ impl BuiltSpendTx {
 			.ok_or(SpendTxBuilderError::AccountNotInTree)?;
 		let accin_merkle_proof = state_tree.merkle_proof(accin_pos)?;
 
-		// Generate merkle proofs for input notes using stored positions
+		// Generate merkle proofs for rejected input notes
+		let mut rejected_inotes_nct_proofs = Vec::with_capacity(self.rejected_inotes.len());
+		for (_note, pos) in &self.rejected_inotes {
+			rejected_inotes_nct_proofs.push(state_tree.merkle_proof(*pos)?);
+		}
+
+		// Generate merkle proofs for regular input notes using stored positions
 		let mut inotes_nct_proofs = Vec::with_capacity(self.inotes.len());
 		for (_note, pos) in &self.inotes {
 			// TODO: verify that position of the input note is indeed correct
@@ -537,13 +629,7 @@ impl BuiltSpendTx {
 		let spend_pk = self.accin.spend_pk_or_default();
 		let consume_pk = self.accin.consume_pk_or_default();
 
-		// Compute dummy seed slices before consuming self.inotes / self.onotes.
-		// dinotes/donotes in BuiltPrivTx only cover the dummy (inactive) slots,
-		// starting after the active notes.
-		let n_in = self.inotes.len();
-		let n_out = self.onotes.len();
-		let dinotes = self.dinotes[n_in..].to_vec();
-		let donotes = self.donotes[n_out..].to_vec();
+		// dinotes/donotes are already correctly sized from build() — no slicing needed.
 
 		Ok(BuiltPrivTx {
 			tx_kind_flags: TxKindFlags::SPEND,
@@ -553,18 +639,18 @@ impl BuiltSpendTx {
 			accout: self.accout,
 			accin_merkle_proof,
 
-			// No reject pairs for spend transactions
-			rejected_inotes: Vec::new(),
-			rejected_inotes_nct_proofs: Vec::new(),
+			// Reject pairs
+			rejected_inotes: self.rejected_inotes.into_iter().map(|(n, _)| n).collect(),
+			rejected_inotes_nct_proofs,
 
 			// Notes (extract just the notes, positions already used for proofs)
 			inotes: self.inotes.into_iter().map(|(n, _)| n).collect(),
 			inotes_nct_proofs,
 			onotes: self.onotes,
 
-			// Dummy notes (only dummy slots — active slots are handled separately)
-			dinotes,
-			donotes,
+			// Dummy notes (already correctly sized from build())
+			dinotes: self.dinotes,
+			donotes: self.donotes,
 
 			// Computed values
 			tx_hash: self.tx_hash,

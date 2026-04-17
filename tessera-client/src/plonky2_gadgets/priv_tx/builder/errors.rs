@@ -37,6 +37,9 @@ pub enum SpendTxBuilderError {
 	SubpoolNotFound {
 		subpool_id: SubpoolId,
 	},
+	DummyNotesNotFilled {
+		kind: &'static str,
+	},
 	TreeError(anyhow::Error),
 }
 
@@ -95,6 +98,14 @@ impl fmt::Display for SpendTxBuilderError {
 				subpool_id,
 			} => {
 				write!(f, "Subpool {subpool_id:?} not found in main pool config")
+			},
+			Self::DummyNotesNotFilled {
+				kind,
+			} => {
+				write!(
+					f,
+					"Dummy {kind} notes not filled. Call fill_dinotes()/fill_donotes() before build()"
+				)
 			},
 			Self::TreeError(e) => write!(f, "Tree error: {e}"),
 		}

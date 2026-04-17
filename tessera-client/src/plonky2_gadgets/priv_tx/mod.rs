@@ -1,12 +1,8 @@
 pub mod builder;
 mod circuit;
 pub(crate) mod circuit_builder;
-mod fake_tx;
-mod freshacc_tx;
 pub mod inputs;
-mod prove;
-mod reject_tx;
-mod spend_tx;
+// mod prove;
 pub mod targets;
 pub(crate) mod utils;
 
