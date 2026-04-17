@@ -29,10 +29,8 @@ pub use note::*;
 pub use plonky2_gadgets::{
 	deposit_tx::{DepositProof, DepositTxCircuit, build_deposit_tx_circuit},
 	priv_tx::{
-		FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivTxTargets, PrivateTransactionProof,
-		RejectTxInputs, SpendTxInputs, build_circuit_and_dummy_proof, build_circuit_and_real_proof,
-		build_priv_tx_circuit, double_hash_native, prove_dummy_priv_tx, prove_priv_tx,
-		prove_priv_tx_seeded, sample_dummy_notes,
+		FakeTxInputs, FreshAccInputs, PrivTxInputs, PrivateTransactionProof, RejectTxInputs,
+		SpendTxInputs,
 	},
 	withdraw_tx::{WithdrawProof, WithdrawTxCircuit, build_withdraw_tx_circuit},
 };

@@ -110,12 +110,12 @@ where
 	let nk = builder.derive_nullifier_key(accin.private_identifier);
 
 	let accin_comm = builder.derive_account_commitment(accin);
-	let derived_accout_comm = builder.derive_account_commitment(accout);
+	let accout_comm = builder.derive_account_commitment(accout);
 	// Step 1: AccOut commitment — free PI target.
 	// For real txs (not_fake_tx=1) the circuit enforces accout_comm == derived_accout_comm.
 	// For dummy proofs the prover may supply any value (constraints are bypassed).
-	let accout_comm = AccountCommitmentTarget(builder.add_virtual_hash());
-	builder.conditionally_assert_hash_equal(not_fake_tx, accout_comm.0, derived_accout_comm.0);
+	// let accout_comm = AccountCommitmentTarget(builder.add_virtual_hash());
+	// builder.conditionally_assert_hash_equal(not_fake_tx, accout_comm.0, derived_accout_comm.0);
 
 	// Step 2: FreshAcc check — when is_fresh_acc, accin must be in the default state
 	// (nonce=0, default keys, empty AST).
@@ -135,9 +135,9 @@ where
 
 	// Step 5: AccIn nullifier — free PI target.
 	// For real txs enforced == derived_null; for dummy proofs any value is accepted.
-	let derived_null = builder.derive_account_nullifier(accin_comm, nk);
-	let accin_null = AccountNullifierTarget(builder.add_virtual_hash());
-	builder.conditionally_assert_hash_equal(not_fake_tx, accin_null.0, derived_null.0);
+	let accin_null = builder.derive_account_nullifier(accin_comm, nk);
+	// let accin_null = AccountNullifierTarget(builder.add_virtual_hash());
+	// builder.conditionally_assert_hash_equal(not_fake_tx, accin_null.0, derived_null.0);
 
 	// Step 6: AST update — prove accin and accout ASTs both contain the asset at the same
 	// leaf position, with amounts differing by the transferred value.
@@ -307,8 +307,6 @@ where
 			subpool_proof_targets,
 			sig_targets,
 			inotes_nct_merkle: inotes_mrkltrgt,
-			accin_subpool_id: accin.subpool_id,
-			accout_subpool_id: accout.subpool_id,
 			asset_id,
 		},
 	}

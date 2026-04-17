@@ -10,7 +10,7 @@ pub use circuit::*;
 pub use inputs::{FakeTxInputs, FreshAccInputs, PrivTxInputs, RejectTxInputs, SpendTxInputs};
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use plonky2_field::types::PrimeField64;
-pub use prove::*;
+// pub use prove::*;
 use tessera_utils::{ConfigNative, D, F, hasher::HashOutput};
 
 use crate::{NOTE_BATCH, PIHelper};

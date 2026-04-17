@@ -9,7 +9,7 @@ use tessera_utils::{
 	hasher::{HashOutput, MerkleHash},
 };
 
-use crate::{AccountAddress, AssetId, account::NullifierKey, double_hash_native};
+use crate::{AccountAddress, AssetId, account::NullifierKey};
 
 #[derive(Debug, Clone, Copy)]
 /// Commitment to a [`DepositNote`]

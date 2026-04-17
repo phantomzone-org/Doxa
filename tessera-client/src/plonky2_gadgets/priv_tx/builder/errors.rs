@@ -132,6 +132,7 @@ pub enum FreshAccTxBuilderError {
 	AccountAlreadyInitialized,
 	SpendKeyNotSet,
 	ConsumeKeyNotSet,
+	DummyNotesNotFilled { kind: &'static str },
 	SubpoolNotFound { subpool_id: SubpoolId },
 	TreeError(anyhow::Error),
 }
@@ -155,6 +156,14 @@ impl fmt::Display for FreshAccTxBuilderError {
 				f,
 				"Consume key not set. Call with_new_consume_key() or with_delegated_consume() before building"
 			),
+			Self::DummyNotesNotFilled {
+				kind,
+			} => {
+				write!(
+					f,
+					"Dummy {kind} notes not filled. Call fill_dinotes()/fill_donotes() before build()"
+				)
+			},
 			Self::SubpoolNotFound {
 				subpool_id,
 			} => {

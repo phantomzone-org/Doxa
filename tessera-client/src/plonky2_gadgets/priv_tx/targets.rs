@@ -177,6 +177,46 @@ impl NoteTarget {
 				.unwrap();
 		}
 	}
+
+	/// Zero-fill the free targets for an inactive **input** note slot.
+	///
+	/// Skips targets that are wired to other partitions by the circuit:
+	/// - `asset_id` is connected to the global `asset_id` target (set in
+	///   `set_transaction_witnesses`)
+	/// - `spend_cond.subpool_id` is connected to `accin.subpool_id` (set via account witness)
+	/// - `spend_cond.public_identifier` is connected to the derived `public_identifier` (computed
+	///   by the circuit generator from `private_identifier` — must not be set by the prover)
+	pub(crate) fn set_dummy_inote(&self, pw: &mut PartialWitness<F>) {
+		pw.set_target(self.identifier[0], F::ZERO).unwrap();
+		pw.set_target(self.identifier[1], F::ZERO).unwrap();
+		crate::plonky2_gadgets::set_u256_zero(pw, &self.amount);
+		pw.set_target(self.reject_cond.subpool_id.0, F::ZERO)
+			.unwrap();
+		for e in self.reject_cond.public_identifier.0.elements {
+			pw.set_target(e, F::ZERO).unwrap();
+		}
+	}
+
+	/// Zero-fill the free targets for an inactive **output** note slot.
+	///
+	/// Output note spend conditions are free targets (not wired to the account's identity),
+	/// so they must be explicitly zeroed. `asset_id` is still skipped (connected to global
+	/// `asset_id` which is already set).
+	pub(crate) fn set_dummy_onote(&self, pw: &mut PartialWitness<F>) {
+		pw.set_target(self.identifier[0], F::ZERO).unwrap();
+		pw.set_target(self.identifier[1], F::ZERO).unwrap();
+		crate::plonky2_gadgets::set_u256_zero(pw, &self.amount);
+		pw.set_target(self.spend_cond.subpool_id.0, F::ZERO)
+			.unwrap();
+		for e in self.spend_cond.public_identifier.0.elements {
+			pw.set_target(e, F::ZERO).unwrap();
+		}
+		pw.set_target(self.reject_cond.subpool_id.0, F::ZERO)
+			.unwrap();
+		for e in self.reject_cond.public_identifier.0.elements {
+			pw.set_target(e, F::ZERO).unwrap();
+		}
+	}
 }
 
 /// Note spend condition: `(subpool_id, public_identifier)` of the recipient.
@@ -597,10 +637,6 @@ pub struct TxCircuitPrivateTargets {
 	/// Authority key membership proofs.
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	pub(crate) sig_targets: TxSignatureTargets,
-	/// Input account subpool ID
-	pub(crate) accin_subpool_id: SubpoolIdTarget,
-	/// Output account subpool ID
-	pub(crate) accout_subpool_id: SubpoolIdTarget,
 	/// Asset ID
 	pub(crate) asset_id: AssetIdTarget,
 }

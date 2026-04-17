@@ -399,8 +399,7 @@ impl DepositTxPrivateTargets {
 		let subpool_proof = main_pool
 			.full_subpool_proof(&subpool, subpool_id)
 			.expect("subpool not registered in main_pool at the given subpool_id");
-		self.subpool_proof_targets
-			.set_witness(pw, subpool_proof, subpool.commitment(), subpool_id);
+		self.subpool_proof_targets.set_witness(pw, &subpool_proof);
 
 		// ── Authority keys ────────────────────────────────────────────────────────
 		self.approval_key.set_witness(pw, approval_key);
@@ -426,7 +425,7 @@ impl DepositTxPrivateTargets {
 		// Consume: real sig if accin.consume_auth.config=1 otherwise fake sig
 		let consume_pk = accin.consume_pk_or_default();
 		if let Some(sig) = consume_sig {
-			self.sig_targets.consume.set(pw, consume_pk, tx_hash, sig);
+			self.sig_targets.consume.set(pw, consume_pk, tx_hash, &sig);
 		} else {
 			self.sig_targets.consume.set_dummy(pw, consume_pk);
 		}
@@ -434,7 +433,7 @@ impl DepositTxPrivateTargets {
 		// Approval
 		self.sig_targets
 			.approval
-			.set(pw, approval_key, tx_hash, approval_sig);
+			.set(pw, approval_key, tx_hash, &approval_sig);
 	}
 
 	fn set_dummy(&self, pw: &mut PartialWitness<F>) {

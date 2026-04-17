@@ -15,7 +15,7 @@ use super::{
 use crate::{
 	AccountAddress, AssetId, NOTE_BATCH, NoteCommitment, NoteNullifier, StandardAccount,
 	StandardNote, SubpoolId, derive_priv_tx_hash,
-	plonky2_gadgets::priv_tx::targets::TxKindFlags,
+	plonky2_gadgets::priv_tx::{targets::TxKindFlags, utils::double_hash_native},
 	pool_config::MainPoolConfigTree,
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_sign},
 };

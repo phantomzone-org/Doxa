@@ -41,7 +41,10 @@ use tessera_utils::{CircuitDataNative, F, ProofNative, hasher::HashOutput};
 use super::errors::PrivTxProveError;
 use crate::{
 	NOTE_BATCH, NoteCommitment, NoteNullifier, StandardAccount, StandardNote, SubpoolId,
-	plonky2_gadgets::priv_tx::targets::{TxCircuitTargets, TxKindFlags},
+	plonky2_gadgets::priv_tx::{
+		targets::{TxCircuitTargets, TxKindFlags},
+		utils::double_hash_native,
+	},
 	pool_config::{MainPoolConfigTree, SubpoolFullProof},
 	schnorr::Signature,
 };
@@ -453,6 +456,8 @@ impl BuiltPrivTx {
 				pw.set_bool_target(t.private.inotes_isactive[slot], false)
 					.unwrap();
 				t.private.dinotes[slot].set(pw, self.dinotes[j - n_in]);
+				t.private.inotes[slot].set_dummy_inote(pw);
+				t.private.inotes_nct_merkle[slot].set_dummy_witness(pw);
 			}
 
 			// Output note
@@ -465,6 +470,7 @@ impl BuiltPrivTx {
 				pw.set_bool_target(t.private.onotes_isactive[slot], false)
 					.unwrap();
 				t.private.donotes[slot].set(pw, self.donotes[j - n_out]);
+				t.private.onotes[slot].set_dummy_onote(pw);
 			}
 
 			pw.set_bool_target(t.private.is_note_pair_rjct[slot], false)

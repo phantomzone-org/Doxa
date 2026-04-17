@@ -290,12 +290,11 @@ impl WithdrawTxPrivateTargets {
 		let subpool_proof = main_pool
 			.full_subpool_proof(&subpool, subpool_id)
 			.expect("subpool not registered in main_pool at the given subpool_id");
-		self.subpool_proof_targets
-			.set_witness(pw, subpool_proof, subpool.commitment(), subpool_id);
+		self.subpool_proof_targets.set_witness(pw, &subpool_proof);
 
 		// ── Approval signature ────────────────────────────────────────────────────
 		self.approval_sig
-			.set(pw, approval_key, tx_hash, approval_sig);
+			.set(pw, approval_key, tx_hash, &approval_sig);
 	}
 
 	/// Fill all private targets for a fake (dummy) withdrawal (`not_fake_tx = 0`).

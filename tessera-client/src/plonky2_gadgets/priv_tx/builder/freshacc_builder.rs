@@ -14,7 +14,7 @@ use super::{
 use crate::{
 	ConsumeAuth, NOTE_BATCH, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
 	derive_priv_tx_hash,
-	plonky2_gadgets::priv_tx::targets::TxKindFlags,
+	plonky2_gadgets::priv_tx::{targets::TxKindFlags, utils::double_hash_native},
 	pool_config::MainPoolConfigTree,
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_sign},
 };
@@ -116,6 +116,8 @@ impl FreshAccTxBuilder {
 	}
 
 	/// Sample random dummy input note seeds for all NOTE_BATCH inactive inote slots.
+	///
+	/// Must be called before `build()` — which will error if dinotes are absent.
 	pub fn fill_dinotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
 		self.dinotes = Some(
 			(0..NOTE_BATCH)
@@ -126,6 +128,8 @@ impl FreshAccTxBuilder {
 	}
 
 	/// Sample random dummy output note seeds for all NOTE_BATCH inactive onote slots.
+	///
+	/// Must be called before `build()` — which will error if donotes are absent.
 	pub fn fill_donotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
 		self.donotes = Some(
 			(0..NOTE_BATCH)
@@ -149,6 +153,7 @@ impl FreshAccTxBuilder {
 	/// # Errors
 	/// - `SpendKeyNotSet`: Must call with_new_spend_key() first
 	/// - `ConsumeKeyNotSet`: Must call with_new_consume_key() or with_delegated_consume() first
+	/// - `DummyNotesNotFilled`: `fill_dinotes()` or `fill_donotes()` was not called
 	pub fn build(self) -> Result<BuiltFreshAccTx, FreshAccTxBuilderError> {
 		// Validate that required keys are set
 		let new_spend_auth = self
@@ -166,17 +171,13 @@ impl FreshAccTxBuilder {
 		accout.spend_auth = new_spend_auth.clone();
 		accout.consume_auth = new_consume_auth.clone();
 
-		// Generate dummy notes (all NOTE_BATCH slots are inactive for FreshAcc)
-		let dinotes = self.dinotes.unwrap_or_else(|| {
-			(0..NOTE_BATCH)
-				.map(|i| [F::from_canonical_usize(i); 4])
-				.collect()
-		});
-		let donotes = self.donotes.unwrap_or_else(|| {
-			(0..NOTE_BATCH)
-				.map(|i| [F::from_canonical_usize(i + NOTE_BATCH); 4])
-				.collect()
-		});
+		// Require that dummy note seeds have been explicitly sampled via fill_dinotes/fill_donotes
+		let dinotes = self
+			.dinotes
+			.ok_or(FreshAccTxBuilderError::DummyNotesNotFilled { kind: "input" })?;
+		let donotes = self
+			.donotes
+			.ok_or(FreshAccTxBuilderError::DummyNotesNotFilled { kind: "output" })?;
 
 		// Compute tx_hash
 		let dinote_nulls: [NoteNullifier; NOTE_BATCH] =
