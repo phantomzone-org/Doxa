@@ -24,7 +24,6 @@ use plonky2_field::{
 
 use crate::{
 	ecgfp5::{CompressedPoint, GENERATOR, Legendre, PointEw},
-	plonky2_gadgets::set_gfp5,
 	schnorr::Scalar,
 };
 
@@ -1537,6 +1536,12 @@ fn compute_gate_witness<F: RichField + Extendable<5>>(
 		lambda2,
 		lambda3,
 		lambda4,
+	}
+}
+
+fn set_gfp5<F: Field>(pw: &mut PartialWitness<F>, targets: [Target; 5], v: [F; 5]) {
+	for (t, x) in targets.iter().zip(v.iter()) {
+		pw.set_target(*t, *x).unwrap();
 	}
 }
 

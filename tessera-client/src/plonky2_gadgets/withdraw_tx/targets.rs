@@ -14,7 +14,7 @@ use primitive_types::{H160, U256};
 use tessera_trees::MerkleProof;
 use tessera_utils::{
 	F,
-	hasher::{HashOutput, MerkleHash},
+	hasher::{HashOutput, MerkleHash, ToHashOut},
 };
 
 use crate::{
@@ -25,7 +25,6 @@ use crate::{
 			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
 			MainPoolConfigRootTarget, StateRootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
 		},
-		set_hash,
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
 		witness::fake_authority_key,
@@ -154,8 +153,9 @@ impl WithdrawTxPublicTargets {
 		w_acc_addr: H160,
 	) {
 		pw.set_bool_target(self.not_fake_tx, true).unwrap();
-		set_hash(pw, self.root.0, act_root.0);
-		set_hash(pw, self.mainpool_config_root.0, main_pool_root.0);
+		pw.set_hash_target(self.root.0, act_root.to_hash_out())
+			.unwrap();
+		pw.set_hash_target(self.mainpool_config_root.0, main_pool_root.to_hash_out());
 		for (i, id) in slot_asset_ids.iter().enumerate() {
 			pw.set_target(self.asset_ids[i].0, id.0).unwrap();
 		}
@@ -185,8 +185,13 @@ impl WithdrawTxPublicTargets {
 		mainpool_config_root: HashOutput,
 	) {
 		pw.set_bool_target(self.not_fake_tx, false).unwrap();
-		set_hash(pw, self.root.0, act_root.0);
-		set_hash(pw, self.mainpool_config_root.0, mainpool_config_root.0);
+		pw.set_hash_target(self.root.0, act_root.to_hash_out())
+			.unwrap();
+		pw.set_hash_target(
+			self.mainpool_config_root.0,
+			mainpool_config_root.to_hash_out(),
+		)
+		.unwrap();
 		for i in 0..NOTE_BATCH {
 			pw.set_target(self.asset_ids[i].0, F::ZERO).unwrap();
 			self.withdrawal_amts[i].set(pw, U256::zero());

@@ -36,11 +36,6 @@ use crate::{
 	time,
 };
 
-fn double_hash_native(elems: [F; 4]) -> [F; 4] {
-	let h0 = <PoseidonHash as Hasher<F>>::hash_no_pad(&elems).elements;
-	<PoseidonHash as Hasher<F>>::hash_no_pad(&h0).elements
-}
-
 /// Set up a subpool environment for spend transaction tests.
 ///
 /// Returns `(approval_sk, approval_cpk, subpool_id, main_pool)`.

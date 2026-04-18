@@ -20,9 +20,9 @@ use crate::{
 			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
 				AccountCommitmentTarget, AccountNullifierTarget, AssetIdTarget, DummyNoteTarget,
-				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-				StateRootTarget, SubpoolIdTarget, TxCircuitPrivateTargets, TxCircuitPublicTargets,
-				TxCircuitTargets,
+				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
+				StandardNoteTarget, StateRootTarget, SubpoolIdTarget, TxCircuitPrivateTargets,
+				TxCircuitPublicTargets, TxCircuitTargets,
 			},
 		},
 		signature::{LocalQuinticExtension, PubkeyTarget},
@@ -153,7 +153,7 @@ where
 
 	// Step 7: Allocate NOTE_BATCH input and output note slots.
 	// Inactive slots are filled with dummy values; all are padded to NOTE_BATCH.
-	let inotes: [NoteTarget; NOTE_BATCH] =
+	let inotes: [StandardNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_note_target());
 	let inotes_pos: [Target; NOTE_BATCH] = core::array::from_fn(|_| builder.add_virtual_target());
 	let inotes_isactive: [BoolTarget; NOTE_BATCH] =
@@ -162,7 +162,7 @@ where
 	let inotes_null: [NoteNullifierTarget; NOTE_BATCH] =
 		core::array::from_fn(|i| builder.derive_note_nullifier(inotes_comm[i], inotes_pos[i], nk));
 
-	let onotes: [NoteTarget; NOTE_BATCH] =
+	let onotes: [StandardNoteTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_note_target());
 	let onotes_isactive: [BoolTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());

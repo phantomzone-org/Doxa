@@ -24,10 +24,11 @@ use crate::{
 				AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
 				ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment,
 				DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
-				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
+				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
 				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTarget,
-				RejectCondTarget, StateRootTarget, SubpoolConfigCommitmentTarget,
-				SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
+				RejectCondTarget, StandardNoteTarget, StateRootTarget,
+				SubpoolConfigCommitmentTarget, SubpoolFullProofTargets, SubpoolIdTarget,
+				TxHashTarget, TxSignatureTargets,
 			},
 			utils::double_hash,
 		},
@@ -61,7 +62,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	/// Allocate a note reject-condition target (sender address).
 	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget;
 	/// Allocate all targets for a full note.
-	fn add_virtual_note_target(&mut self) -> NoteTarget;
+	fn add_virtual_note_target(&mut self) -> StandardNoteTarget;
 	/// Allocate a pubkey target
 	fn add_virtual_public_key_target(&mut self) -> PubkeyTarget;
 
@@ -177,7 +178,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	/// Derive the note commitment in-circuit.
 	///
 	/// Matches [`StandardNote::commitment`](crate::note::StandardNote::commitment) natively.
-	fn derive_note_commitment(&mut self, note: NoteTarget) -> NoteCommitmentTarget;
+	fn derive_note_commitment(&mut self, note: StandardNoteTarget) -> NoteCommitmentTarget;
 
 	/// Derive the note nullifier: `H(note_commitment || pos || nk)`.
 	fn derive_note_nullifier(
@@ -198,7 +199,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	#[allow(clippy::too_many_arguments)]
 	fn assert_inotes_valid<H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>>(
 		&mut self,
-		inotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		public_identifier: PublicIdentifierTarget,
@@ -236,8 +237,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	/// the note is returned to the sender).
 	fn assert_reject_note_pairs(
 		&mut self,
-		inotes: [NoteTarget; NOTE_BATCH],
-		onotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
+		onotes: [StandardNoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
 		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 	);
@@ -250,8 +251,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		&mut self,
 		accin_amt: U256Target,
 		accout_amt: U256Target,
-		inotes: [NoteTarget; NOTE_BATCH],
-		onotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
+		onotes: [StandardNoteTarget; NOTE_BATCH],
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 	);
@@ -324,18 +325,18 @@ where
 		}
 	}
 
-	fn add_virtual_note_target(&mut self) -> NoteTarget {
+	fn add_virtual_note_target(&mut self) -> StandardNoteTarget {
 		let identifier = self.add_virtual_target_arr();
 		let amount = self.add_virtual_u256_target();
 		let asset_id = AssetIdTarget(self.add_virtual_target());
 		let spend_cond = self.add_virtual_consume_cond_target();
 		let reject_cond = self.add_virtual_reject_cond_target();
-		NoteTarget {
+		StandardNoteTarget {
 			identifier,
 			amount,
 			asset_id,
-			spend_cond,
-			reject_cond,
+			recipient: spend_cond,
+			sender: reject_cond,
 		}
 	}
 
@@ -407,7 +408,7 @@ where
 		DummyAccountNullifier(double_hash(self, dacc.0))
 	}
 
-	fn derive_note_commitment(&mut self, note: NoteTarget) -> NoteCommitmentTarget {
+	fn derive_note_commitment(&mut self, note: StandardNoteTarget) -> NoteCommitmentTarget {
 		// Matches StandardNote::commitment(): 21-element flat hash
 		// identifier[2] || amount[8]  || asset_id || spend_cond.subpool_id[1] ||
 		// spend_cond.pub_id[4]              || reject_cond.subpool_id[1] || reject_cond.pub_id[4]
@@ -415,10 +416,10 @@ where
 		input.extend_from_slice(&note.identifier);
 		input.extend(note.amount.0.map(|u| u.0));
 		input.push(note.asset_id.0);
-		input.push(note.spend_cond.subpool_id.0);
-		input.extend_from_slice(&note.spend_cond.public_identifier.0.elements);
-		input.push(note.reject_cond.subpool_id.0);
-		input.extend_from_slice(&note.reject_cond.public_identifier.0.elements);
+		input.push(note.recipient.subpool_id.0);
+		input.extend_from_slice(&note.recipient.public_identifier.0.elements);
+		input.push(note.sender.subpool_id.0);
+		input.extend_from_slice(&note.sender.public_identifier.0.elements);
 		NoteCommitmentTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
 	}
 
@@ -592,7 +593,7 @@ where
 
 	fn assert_inotes_valid<H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>>(
 		&mut self,
-		inotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
 		public_identifier: PublicIdentifierTarget,
@@ -612,10 +613,10 @@ where
 		// each note must be spendable by the account
 		for note in inotes.iter() {
 			self.connect_array(
-				note.spend_cond.public_identifier.0.elements,
+				note.recipient.public_identifier.0.elements,
 				public_identifier.0.elements,
 			);
-			self.connect(note.spend_cond.subpool_id.0, subpool_id.0);
+			self.connect(note.recipient.subpool_id.0, subpool_id.0);
 		}
 
 		merkle_proofs
@@ -693,8 +694,8 @@ where
 
 	fn assert_reject_note_pairs(
 		&mut self,
-		inotes: [NoteTarget; NOTE_BATCH],
-		onotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
+		onotes: [StandardNoteTarget; NOTE_BATCH],
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 	) {
@@ -743,28 +744,28 @@ where
 			// spend_cond of onote == reject_cond of inote (note returns to sender)
 			self.conditional_assert_eq(
 				is_note_pair_rjct[i].target,
-				inotes[i].reject_cond.subpool_id.0,
-				onotes[i].spend_cond.subpool_id.0,
+				inotes[i].sender.subpool_id.0,
+				onotes[i].recipient.subpool_id.0,
 			);
 			for j in 0..HASH_SIZE {
 				self.conditional_assert_eq(
 					is_note_pair_rjct[i].target,
-					inotes[i].reject_cond.public_identifier.0.elements[j],
-					onotes[i].spend_cond.public_identifier.0.elements[j],
+					inotes[i].sender.public_identifier.0.elements[j],
+					onotes[i].recipient.public_identifier.0.elements[j],
 				);
 			}
 
 			// reject_cond of onote == reject_cond of inote (sender unchanged)
 			self.conditional_assert_eq(
 				is_note_pair_rjct[i].target,
-				inotes[i].reject_cond.subpool_id.0,
-				onotes[i].reject_cond.subpool_id.0,
+				inotes[i].sender.subpool_id.0,
+				onotes[i].sender.subpool_id.0,
 			);
 			for j in 0..HASH_SIZE {
 				self.conditional_assert_eq(
 					is_note_pair_rjct[i].target,
-					inotes[i].reject_cond.public_identifier.0.elements[j],
-					onotes[i].reject_cond.public_identifier.0.elements[j],
+					inotes[i].sender.public_identifier.0.elements[j],
+					onotes[i].sender.public_identifier.0.elements[j],
 				);
 			}
 		}
@@ -774,8 +775,8 @@ where
 		&mut self,
 		accin_amt: U256Target,
 		accout_amt: U256Target,
-		inotes: [NoteTarget; NOTE_BATCH],
-		onotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
+		onotes: [StandardNoteTarget; NOTE_BATCH],
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 	) {

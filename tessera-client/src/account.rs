@@ -112,6 +112,12 @@ impl SpendAuth {
 			spend_pk: Some(spend_pk),
 		}
 	}
+
+	/// Return the spend public key, falling back to the default placeholder if unset.
+	pub fn pk_or_default(&self) -> CompressedPublicKey<F> {
+		self.spend_pk
+			.unwrap_or_else(|| CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)))
+	}
 }
 
 /// Authorization data for *consuming* (depositing into) an account.
@@ -123,6 +129,17 @@ pub struct ConsumeAuth {
 	/// The account's own consume public key.
 	/// `None` only when `config == false` (delegation mode).
 	pub pk: Option<CompressedPublicKey<F>>,
+}
+
+impl ConsumeAuth {
+	/// Return the consume public key, falling back to the default placeholder if unset.
+	pub fn pk_or_default(&self) -> CompressedPublicKey<F> {
+		self.pk.unwrap_or_else(|| {
+			CompressedPublicKey(CompressedPoint::from(
+				DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+			))
+		})
+	}
 }
 
 /// A field-element identifier for a fungible asset type.
@@ -417,18 +434,12 @@ impl StandardAccount {
 
 	/// Return the spend public key, falling back to the default placeholder if unset.
 	pub fn spend_pk_or_default(&self) -> CompressedPublicKey<F> {
-		self.spend_auth
-			.spend_pk
-			.unwrap_or_else(|| CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)))
+		self.spend_auth.pk_or_default()
 	}
 
 	/// Return the consume public key, falling back to the default placeholder if unset.
 	pub fn consume_pk_or_default(&self) -> CompressedPublicKey<F> {
-		self.consume_auth.pk.unwrap_or_else(|| {
-			CompressedPublicKey(CompressedPoint::from(
-				DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
-			))
-		})
+		self.consume_auth.pk_or_default()
 	}
 
 	/// Return the shareable [`AccountAddress`] (subpool_id + public_id).

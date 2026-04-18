@@ -7,7 +7,10 @@ pub mod targets;
 pub(crate) mod utils;
 
 pub use circuit::*;
-pub use inputs::{FakeTxInputs, FreshAccInputs, PrivTxInputs, RejectTxInputs, SpendTxInputs};
+// TODO: remove input.rs after confirming that tessera-server uses it unecessarily. Likewise
+// for prove.rs
+//
+// pub use inputs::{FakeTxInputs, FreshAccInputs, PrivTxInputs, RejectTxInputs, SpendTxInputs};
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use plonky2_field::types::PrimeField64;
 // pub use prove::*;

@@ -361,31 +361,8 @@ impl BuiltPrivTx {
 			)));
 		}
 
-		// Set amounts (convert U256 to [u32; 8])
-		// U256.0 is [u64; 4] little-endian; each u64 splits into two u32 limbs
-		// TODO: add helper for U256 -> u8;32
-		let accin_amt_u32: [u32; 8] = [
-			accin_amt.0[0] as u32,
-			(accin_amt.0[0] >> 32) as u32,
-			accin_amt.0[1] as u32,
-			(accin_amt.0[1] >> 32) as u32,
-			accin_amt.0[2] as u32,
-			(accin_amt.0[2] >> 32) as u32,
-			accin_amt.0[3] as u32,
-			(accin_amt.0[3] >> 32) as u32,
-		];
-		let accout_amt_u32: [u32; 8] = [
-			accout_amt.0[0] as u32,
-			(accout_amt.0[0] >> 32) as u32,
-			accout_amt.0[1] as u32,
-			(accout_amt.0[1] >> 32) as u32,
-			accout_amt.0[2] as u32,
-			(accout_amt.0[2] >> 32) as u32,
-			accout_amt.0[3] as u32,
-			(accout_amt.0[3] >> 32) as u32,
-		];
-		crate::plonky2_gadgets::set_u256(pw, &t.private.accin_amt, accin_amt_u32);
-		crate::plonky2_gadgets::set_u256(pw, &t.private.accout_amt, accout_amt_u32);
+		t.private.accin_amt.set(pw, accin_amt);
+		t.private.accout_amt.set(pw, accout_amt);
 		pw.set_bool_target(t.private.asset_exists_in_accin, asset_exists_in_accin)
 			.unwrap();
 		pw.set_bool_target(t.private.asset_exists_in_accout, asset_exists_in_accout)

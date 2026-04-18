@@ -45,7 +45,6 @@ use crate::{
 				PublicIdentifierTarget, StateRootTarget, SubpoolIdTarget,
 			},
 		},
-		set_hash, set_u256_zero,
 		signature::{LocalQuinticExtension, PubkeyTarget, conditional_schnorr_verify_gadget},
 		u256::CircuitBuilderU256,
 	},

@@ -30,7 +30,6 @@ use crate::{
 			MainPoolConfigRootTarget, PublicIdentifierTarget, StateRootTarget,
 			SubpoolFullProofTargets, SubpoolIdTarget,
 		},
-		set_hash,
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
 		witness::fake_authority_key,
