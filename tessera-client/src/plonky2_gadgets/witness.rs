@@ -42,6 +42,7 @@ impl SchnorrTargets {
 	) {
 		let cr = signature.r.encode();
 		let e = schnorr_challenge(&cr, &pk.0, &tx_hash.0);
+		// let e = Scalar::ONE;
 		set_schnorr_witness(pw, self, PointEw::decode(pk.0).unwrap(), cr, e, signature.s);
 	}
 

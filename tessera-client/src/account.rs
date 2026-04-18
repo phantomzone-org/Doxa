@@ -132,8 +132,14 @@ pub struct ConsumeAuth {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct AssetId(pub F);
 
+impl Default for AssetId {
+	fn default() -> Self {
+		Self(F::ZERO)
+	}
+}
+
 impl AssetId {
-	pub(crate) const ZERO: Self = Self(F::ZERO);
+	pub const ZERO: Self = Self(F::ZERO);
 
 	/// Construct an `AssetId` from a `u64`, returning an error if the value
 	/// exceeds the Goldilocks field order.
@@ -218,10 +224,12 @@ where
 {
 	/// Create an empty AST.  All leaves are initialised to [`AST_DEFAULT_LEAF`].
 	pub fn new() -> Self {
-		Self {
+		let mut s = Self {
 			tree: MerkleTree::new(ACC_AST_DEPTH),
 			assets: HashMap::new(),
-		}
+		};
+		s._insert_asset(AssetId::default(), U256::zero()).unwrap();
+		s
 	}
 
 	/// Reconstruct an AST from a saved asset map.
@@ -260,11 +268,8 @@ where
 		self.tree.num_leaves()
 	}
 
-	/// Insert a new asset. Returns `Err` if `asset_id` is already tracked.
-	pub fn insert_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<(), String> {
-		if self.assets.contains_key(&asset_id) {
-			return Err(format!("asset {:?} already exists", asset_id));
-		}
+	/// Private insert asset method
+	fn _insert_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<(), String> {
 		let index = self.tree.num_leaves();
 		let leaf = AccountStateTreeLeaf {
 			asset_id,
@@ -277,8 +282,23 @@ where
 		Ok(())
 	}
 
-	/// Update an existing asset's amount. Returns `Ok(previous_amount)` or `Err` if not found.
+	/// Insert a new asset. Returns `Err` if `asset_id` is already tracked or is the default.
+	pub fn insert_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<(), String> {
+		if asset_id == AssetId::default() {
+			return Err("inserting the default asset id (0) is not allowed".to_string());
+		}
+		if self.assets.contains_key(&asset_id) {
+			return Err(format!("asset {:?} already exists", asset_id));
+		}
+		self._insert_asset(asset_id, amount)
+	}
+
+	/// Update an existing asset's amount. Returns `Ok(previous_amount)` or `Err` if not found or
+	/// default.
 	pub fn update_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<U256, String> {
+		if asset_id == AssetId::default() {
+			return Err("updating the default asset id (0) is not allowed".to_string());
+		}
 		let &(index, prev_amount) = self
 			.assets
 			.get(&asset_id)
@@ -669,29 +689,13 @@ pub fn derive_withdraw_tx_hash(
 	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements)
 }
 
-/// Compute the actual root of the default empty Account State Tree (depth `ACC_AST_DEPTH`,
-/// all leaves = `AST_DEFAULT_LEAF`)
-pub(crate) fn ast_default_root() -> HashOutput {
-	use plonky2::{
-		hash::{hash_types::HashOut, poseidon::PoseidonHash},
-		plonk::config::Hasher,
-	};
-	use plonky2_field::types::Field;
-
-	let mut cur: [F; HASH_SIZE] = AST_DEFAULT_LEAF.map(F::from_canonical_u64);
-	for _ in 0..ACC_AST_DEPTH {
-		let r = <PoseidonHash as Hasher<F>>::two_to_one(
-			HashOut {
-				elements: cur,
-			},
-			HashOut {
-				elements: cur,
-			},
-		);
-		cur = r.elements;
-	}
-	cur.into()
-}
-
 #[cfg(test)]
-mod tests {}
+mod tests {
+	use super::*;
+
+	// #[test]
+	// fn trial() {
+	// 	let ast = AccountStateTree::<HashOutput>::new();
+	// 	dbg!(ast.root());
+	// }
+}

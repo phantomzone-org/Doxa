@@ -1580,7 +1580,7 @@ pub(crate) fn set_schnorr_witness<F: RichField + Legendre + Extendable<5>>(
 		set_dbladd4x_gate_witness(pw, gate_targets, q, accin, sp, sg, gate_idx == 79, &w);
 		accin = w.acco4;
 	}
-	// assert_eq!(accin.encode(), cr);
+	assert_eq!(accin.encode(), cr);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1993,8 +1993,7 @@ mod tests {
 		let mut rng = ChaCha8Rng::seed_from_u64(44);
 
 		// Use a known private key to get a valid curve point Q.
-		let d = Scalar::sample(&mut rng);
-		let privkey = PrivateKey::new(d);
+		let privkey = PrivateKey::sample(&mut rng);
 		let pubkey = privkey.public_key::<F>();
 		let q = pubkey.as_point();
 		let cq = q.encode();

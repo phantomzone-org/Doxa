@@ -6,12 +6,8 @@ use tessera_utils::{F, hasher::HashOutput};
 use super::{BuiltPrivTx, errors::FakeTxBuilderError};
 use crate::{
 	NOTE_BATCH, StandardAccount, SubpoolId,
-	plonky2_gadgets::{
-		priv_tx::targets::TxKindFlags,
-		witness::fake_authority_key,
-	},
+	plonky2_gadgets::{priv_tx::targets::TxKindFlags, witness::fake_authority_key},
 	pool_config::SubpoolConfig,
-	schnorr::generate_fake_signature,
 };
 
 /// Builder for constructing fake (dummy) transactions.
@@ -115,10 +111,9 @@ impl BuiltFakeTx {
 			subpool_proof,
 			approval_key,
 
-			// Fake signatures
-			spend_sig: generate_fake_signature(&spend_pk),
-			consume_sig: generate_fake_signature(&consume_pk),
-			approval_sig: generate_fake_signature(&approval_key),
+			spend_sig: None,
+			consume_sig: None,
+			approval_sig: None,
 		}
 	}
 }

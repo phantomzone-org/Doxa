@@ -45,7 +45,7 @@ use crate::{
 		targets::{TxCircuitTargets, TxKindFlags},
 		utils::double_hash_native,
 	},
-	pool_config::{MainPoolConfigTree, SubpoolFullProof},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolFullProof},
 	schnorr::Signature,
 };
 
@@ -118,6 +118,7 @@ pub struct BuiltPrivTx {
 	pub state_root: HashOutput,
 
 	/// Subpool ID (extracted from accin)
+	// TODO: remove subpool_id
 	pub subpool_id: SubpoolId,
 
 	/// Main pool configuration tree root
@@ -127,26 +128,26 @@ pub struct BuiltPrivTx {
 	pub subpool_proof: SubpoolFullProof<HashOutput>,
 
 	/// Subpool approval key
-	pub approval_key: crate::pool_config::CompPubKey,
+	pub approval_key: CompPubKey,
 
 	/// Spend signature.
 	///
-	/// - For Spend with output notes: real signature from spend key
-	/// - For other cases: fake/dummy signature (`Signature::ZERO`)
-	/// - Never `None` - always present
-	pub spend_sig: Signature,
+	/// - `Some`: real signature required (Spend with active non-reject output notes)
+	/// - `None`: not required; witness sets a dummy via `set_dummy`
+	pub spend_sig: Option<Signature>,
 
 	/// Consume signature.
 	///
-	/// - For Spend with input notes and no output notes (non-delegated): real signature
-	/// - For other cases: fake/dummy signature (`Signature::ZERO`)
-	/// - Never `None` - always present
-	pub consume_sig: Signature,
+	/// - `Some`: real signature required (Spend with active input notes, no output notes,
+	///   non-delegated consume auth)
+	/// - `None`: not required; witness sets a dummy via `set_dummy`
+	pub consume_sig: Option<Signature>,
 
-	/// Approval signature (always real, never fake).
+	/// Approval signature.
 	///
-	/// Required for all transaction types.
-	pub approval_sig: Signature,
+	/// - `Some`: real signature (all real transaction types)
+	/// - `None`: not required; witness sets a dummy via `set_dummy`
+	pub approval_sig: Option<Signature>,
 }
 
 /// Final proven transaction ready for submission.
@@ -240,27 +241,49 @@ impl BuiltPrivTx {
 		pw: &mut PartialWitness<F>,
 		t: &TxCircuitTargets,
 	) -> Result<(), PrivTxProveError> {
-		// Set spend signature (real or fake/dummy)
-		t.private.sig_targets.spend.set(
-			pw,
-			self.accin.spend_pk_or_default(),
-			self.tx_hash,
-			&self.spend_sig,
-		);
+		// Set spend signature (real) or dummy when not required
+		match &self.spend_sig {
+			Some(sig) => t.private.sig_targets.spend.set(
+				pw,
+				self.accin.spend_pk_or_default(),
+				self.tx_hash,
+				sig,
+			),
+			None => t
+				.private
+				.sig_targets
+				.spend
+				.set_dummy(pw, self.accin.spend_pk_or_default()),
+		}
 
-		// Set consume signature (real or fake/dummy)
-		t.private.sig_targets.consume.set(
-			pw,
-			self.accin.consume_pk_or_default(),
-			self.tx_hash,
-			&self.consume_sig,
-		);
+		// Set consume signature (real) or dummy when not required
+		match &self.consume_sig {
+			Some(sig) => t.private.sig_targets.consume.set(
+				pw,
+				self.accin.consume_pk_or_default(),
+				self.tx_hash,
+				sig,
+			),
+			None => t
+				.private
+				.sig_targets
+				.consume
+				.set_dummy(pw, self.accin.consume_pk_or_default()),
+		}
 
-		// Set approval signature (always real)
-		t.private
-			.sig_targets
-			.approval
-			.set(pw, self.approval_key, self.tx_hash, &self.approval_sig);
+		match &self.approval_sig {
+			Some(sig) => {
+				t.private
+					.sig_targets
+					.approval
+					.set(pw, self.approval_key, self.tx_hash, sig)
+			},
+			None => t
+				.private
+				.sig_targets
+				.approval
+				.set_dummy(pw, self.approval_key),
+		}
 
 		Ok(())
 	}
@@ -299,25 +322,44 @@ impl BuiltPrivTx {
 		// Determine asset_id based on presence of notes
 		// If we have active notes, use their asset_id; otherwise use zero
 		let asset_id = self
-			.inotes
+			.rejected_inotes
 			.first()
-			.or(self.onotes.first())
+			.or(self.inotes.first().or(self.onotes.first()))
 			.map(|n| n.asset_id)
-			.unwrap_or(crate::AssetId(F::ZERO));
+			.unwrap_or(crate::AssetId::default());
 
 		// Set asset_id
 		pw.set_target(t.private.asset_id.0, asset_id.0).unwrap();
 
 		// Derive amounts from AST at the asset_id
-		let accin_result = self.accin.ast.amount_for(asset_id);
-		let accout_result = self.accout.ast.amount_for(asset_id);
-
-		let (ast_index, accin_amt) = accin_result.unwrap_or((0, primitive_types::U256::zero()));
-		let (_, accout_amt) = accout_result.unwrap_or((0, primitive_types::U256::zero()));
-
-		// Set asset_exists flags based on the lookup results
-		let asset_exists_in_accin = accin_result.is_some();
-		let asset_exists_in_accout = accout_result.is_some();
+		let (ast_index, accin_amt, asset_exists_in_accin) = self
+			.accin
+			.ast
+			.amount_for(asset_id)
+			.map(|(idx, amt)| (idx, amt, true))
+			.unwrap_or((
+				self.accin.ast.next_index(),
+				primitive_types::U256::zero(),
+				false,
+			));
+		let (accout_ast_index, accout_amt, asset_exists_in_accout) = self
+			.accout
+			.ast
+			.amount_for(asset_id)
+			.map(|(idx, amt)| (idx, amt, true))
+			.unwrap_or((
+				self.accout.ast.next_index(),
+				primitive_types::U256::zero(),
+				false,
+			));
+		if ast_index != accout_ast_index {
+			return Err(PrivTxProveError::ProofGenerationFailed(anyhow::anyhow!(
+				"asset {:?} has different AST indices in accin ({}) and accout ({})",
+				asset_id,
+				ast_index,
+				accout_ast_index,
+			)));
+		}
 
 		// Set amounts (convert U256 to [u32; 8])
 		// U256.0 is [u64; 4] little-endian; each u64 splits into two u32 limbs
@@ -481,6 +523,7 @@ impl BuiltPrivTx {
 	}
 
 	/// Extract public inputs from this built transaction.
+	// TODO: why is this method required?
 	fn extract_public_inputs(&self) -> PrivTxPublicInputs {
 		PrivTxPublicInputs {
 			state_root: self.state_root,

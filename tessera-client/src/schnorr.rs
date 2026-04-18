@@ -423,24 +423,6 @@ pub(crate) fn schnorr_verify(
 	result.encode() == sig.r.encode()
 }
 
-/// Generate a fake/dummy signature for a given public key.
-///
-/// This creates a signature that satisfies the algebraic structure (s*G + e*Q = R)
-/// where e = 1 and s = 1, so R = G + Q. This signature is not secure and should
-/// only be used as a placeholder in witness generation when a real signature is
-/// not available.
-pub(crate) fn generate_fake_signature(pk: &CompressedPublicKey<F>) -> Signature {
-	let q = PointEw::decode(pk.0).unwrap();
-	let e = Scalar::ONE;
-	let s = Scalar::ONE;
-	let r = PointEw::generator().scalar_mul(&s).add(&q.scalar_mul(&e));
-
-	Signature {
-		r,
-		s,
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use rand::SeedableRng;
@@ -494,36 +476,5 @@ mod tests {
 			!schnorr_verify(&wrong_pubkey, &message, &sig),
 			"wrong pubkey should not verify"
 		);
-	}
-
-	#[test]
-	fn test_generate_fake_signature() {
-		// Create a public key
-		let mut rng = ChaCha8Rng::seed_from_u64(123);
-		let d = Scalar::sample(&mut rng);
-		let privkey = PrivateKey::new(d);
-		let pubkey = privkey.public_key();
-		let compressed_pk = pubkey.into();
-
-		// Generate a fake signature
-		let fake_sig = generate_fake_signature(&compressed_pk);
-
-		// Verify that the fake signature has the expected structure:
-		// s = 1, e = 1, so R = G + Q
-		assert_eq!(fake_sig.s, Scalar::ONE, "s should be ONE");
-
-		// Verify algebraic property: s*G + e*Q == R where s=1, e=1
-		let g = PointEw::generator();
-		let q = pubkey.0;
-		let expected_r = g.scalar_mul(&Scalar::ONE).add(&q.scalar_mul(&Scalar::ONE));
-
-		assert_eq!(
-			fake_sig.r.encode(),
-			expected_r.encode(),
-			"R should equal G + Q"
-		);
-
-		// Note: This is NOT a valid signature for any real message
-		// It's only used as a placeholder in witness generation
 	}
 }

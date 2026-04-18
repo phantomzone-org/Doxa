@@ -60,16 +60,13 @@ pub const DS_ACC_AST_LEAF: u64 = 1312;
 /// Used as the default leaf for uninitialised asset slots.
 pub const AST_DEFAULT_LEAF: [u64; HASH_SIZE] = [0u64; HASH_SIZE];
 
-// TODO: set this to root of merkle tree with depth `ACC_AST_DEPTH` with leafs set to
-// `AST_DEFAULT_LEAF`
-/// Root of an empty Account State Tree of depth [`ACC_AST_DEPTH`] where every
-/// leaf is [`AST_DEFAULT_LEAF`]. Pre-computed so circuits can start from a
-/// known initial root without rebuilding the whole tree.
+/// Root of a default Account State Tree of depth [`ACC_AST_DEPTH`]. Pre-computed so circuits can
+/// start from a known initial root without rebuilding the whole tree.
 pub const AST_DEFAULT_ROOT: [u64; HASH_SIZE] = [
-	14769473886748754115,
-	10513963056908986963,
-	8105478726930894327,
-	14014796621245524545,
+	2537328717772714990,
+	1534150781011785517,
+	14977255124160483673,
+	9325839111461431495,
 ];
 
 // ── Placeholder / default authority values ────────────────────────────────────

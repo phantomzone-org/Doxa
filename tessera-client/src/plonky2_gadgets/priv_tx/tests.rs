@@ -140,6 +140,7 @@ fn test_spend_tx_consume_delegated() {
 		.expect("prove failed");
 
 	// Basic PI assertions
+	// TODO: improve PI assertions
 	let tp = crate::PrivateTransactionProof(proven.proof.clone());
 	assert_eq!(tp.not_fake_tx().to_canonical_u64(), 1);
 	assert_eq!(tp.act_root(), state_tree.root());

@@ -299,10 +299,9 @@ impl BuiltFreshAccTx {
 			subpool_proof,
 			approval_key,
 
-			// Signatures (fake/dummy for spend and consume, real for approval)
-			spend_sig: crate::schnorr::generate_fake_signature(&spend_pk),
-			consume_sig: crate::schnorr::generate_fake_signature(&consume_pk),
-			approval_sig,
+			spend_sig: None,
+			consume_sig: None,
+			approval_sig: Some(approval_sig),
 		})
 	}
 }

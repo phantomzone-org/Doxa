@@ -16,7 +16,7 @@ use crate::{
 	AccountAddress, AssetId, NOTE_BATCH, NoteCommitment, NoteNullifier, StandardAccount,
 	StandardNote, SubpoolId, derive_priv_tx_hash,
 	plonky2_gadgets::priv_tx::{targets::TxKindFlags, utils::double_hash_native},
-	pool_config::MainPoolConfigTree,
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_sign},
 };
 
@@ -29,7 +29,7 @@ pub struct SpendTxBuilder {
 	asset_id: AssetId,
 
 	/// Subpool approval key
-	approval_key: crate::pool_config::CompPubKey,
+	approval_key: CompPubKey,
 
 	/// Accumulated input notes with their positions
 	input_notes: Vec<(StandardNote, usize)>,
@@ -77,7 +77,7 @@ pub struct BuiltSpendTx {
 	subpool_id: SubpoolId,
 
 	/// Subpool approval key
-	approval_key: crate::pool_config::CompPubKey,
+	approval_key: CompPubKey,
 }
 
 /// Spend-specific signature bundle.
@@ -111,7 +111,7 @@ impl SpendTxBuilder {
 	pub fn new(
 		accin: StandardAccount,
 		asset_id: AssetId,
-		approval_key: crate::pool_config::CompPubKey,
+		approval_key: crate::pool_config::CompPubKey, // TODO: why is approval_key provided here?
 	) -> Result<Self, SpendTxBuilderError> {
 		// Validate preconditions
 		if accin.nonce.0 == F::ZERO {
@@ -330,6 +330,8 @@ impl SpendTxBuilder {
 		accout.ast.insert_or_update_asset(self.asset_id, new_bal);
 
 		// Require that dummy note seeds have been explicitly sampled via fill_dinotes/fill_donotes
+		// TODO: I find it better to store dinotes, donotes as Vec::new() and throw error when
+		// vector length is 0, instead of setting them to an option
 		let dinotes = self
 			.dinotes
 			.ok_or(SpendTxBuilderError::DummyNotesNotFilled {
@@ -423,19 +425,19 @@ impl BuiltSpendTx {
 		consume_sk: &PrivateKey,
 		rng: &mut R,
 	) -> Result<Option<Signature>, TxSignError> {
-		// Check if consume signature is needed
-		let has_input_notes = !self.inotes.is_empty();
+		// Check if consume signature is needed.
+		// Rejected notes count as active input notes for this check.
+		let no_input_notes = self.inotes.is_empty() && self.rejected_inotes.is_empty();
 		let has_output_notes = !self.onotes.is_empty();
-		let consume_delegated = !self.accin.consume_auth.config;
 
-		if !has_input_notes || has_output_notes {
+		if no_input_notes || has_output_notes {
 			return Err(TxSignError::ConsumeNotRequired {
-				has_input_notes,
+				has_input_notes: !no_input_notes,
 				has_output_notes,
 			});
 		}
 
-		if consume_delegated {
+		if !self.accin.consume_auth.config {
 			return Err(TxSignError::ConsumeDelegated);
 		}
 
@@ -596,7 +598,7 @@ impl BuiltSpendTx {
 		let main_pool_root = main_pool.root();
 
 		// Create a temporary SubpoolConfig to get the subpool proof
-		let subpool_config = crate::pool_config::SubpoolConfig::new(self.approval_key);
+		let subpool_config = SubpoolConfig::new(self.approval_key);
 		let subpool_full_proof = main_pool.full_subpool_proof(&subpool_config, self.subpool_id)?;
 
 		// Generate merkle proof for accin
@@ -621,8 +623,7 @@ impl BuiltSpendTx {
 		let mut inotes_nct_proofs = Vec::with_capacity(self.inotes.len());
 		for (_note, pos) in &self.inotes {
 			// TODO: verify that position of the input note is indeed correct
-			let note_proof = state_tree.merkle_proof(*pos)?;
-			inotes_nct_proofs.push(note_proof);
+			inotes_nct_proofs.push(state_tree.merkle_proof(*pos)?);
 		}
 
 		// Extract public keys before moving self.accin
@@ -662,14 +663,9 @@ impl BuiltSpendTx {
 			subpool_proof: subpool_full_proof,
 			approval_key: self.approval_key,
 
-			// Signatures (use provided or generate fake/dummy)
-			spend_sig: signatures
-				.spend_sig
-				.unwrap_or_else(|| crate::schnorr::generate_fake_signature(&spend_pk)),
-			consume_sig: signatures
-				.consume_sig
-				.unwrap_or_else(|| crate::schnorr::generate_fake_signature(&consume_pk)),
-			approval_sig: signatures.approval_sig,
+			spend_sig: signatures.spend_sig,
+			consume_sig: signatures.consume_sig,
+			approval_sig: Some(signatures.approval_sig),
 		})
 	}
 }

@@ -356,7 +356,7 @@ pub struct TxCircuitTargets {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TxKindFlags {
+pub struct TxKindFlags {
 	pub(crate) is_fresh_acc: bool,
 	pub(crate) is_update_auth: bool,
 	pub(crate) is_priv_tx: bool,
