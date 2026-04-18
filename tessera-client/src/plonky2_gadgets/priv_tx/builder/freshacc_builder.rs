@@ -174,10 +174,14 @@ impl FreshAccTxBuilder {
 		// Require that dummy note seeds have been explicitly sampled via fill_dinotes/fill_donotes
 		let dinotes = self
 			.dinotes
-			.ok_or(FreshAccTxBuilderError::DummyNotesNotFilled { kind: "input" })?;
+			.ok_or(FreshAccTxBuilderError::DummyNotesNotFilled {
+				kind: "input",
+			})?;
 		let donotes = self
 			.donotes
-			.ok_or(FreshAccTxBuilderError::DummyNotesNotFilled { kind: "output" })?;
+			.ok_or(FreshAccTxBuilderError::DummyNotesNotFilled {
+				kind: "output",
+			})?;
 
 		// Compute tx_hash
 		let dinote_nulls: [NoteNullifier; NOTE_BATCH] =
@@ -295,7 +299,7 @@ impl BuiltFreshAccTx {
 
 			// Pool config
 			subpool_id: self.subpool_id,
-			main_pool_root,
+			mainpool_config_root: main_pool_root,
 			subpool_proof,
 			approval_key,
 

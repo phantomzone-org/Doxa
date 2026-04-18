@@ -36,7 +36,10 @@ use std::{array, hash::Hash, sync::Arc};
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2_field::types::{Field, PrimeField64};
 use tessera_trees::MerkleProof;
-use tessera_utils::{CircuitDataNative, F, ProofNative, hasher::HashOutput};
+use tessera_utils::{
+	CircuitDataNative, F, ProofNative,
+	hasher::{HashOutput, ToHashOut},
+};
 
 use super::errors::PrivTxProveError;
 use crate::{
@@ -122,7 +125,7 @@ pub struct BuiltPrivTx {
 	pub subpool_id: SubpoolId,
 
 	/// Main pool configuration tree root
-	pub main_pool_root: HashOutput,
+	pub mainpool_config_root: HashOutput,
 
 	/// Subpool merkle proof in the main pool config tree
 	pub subpool_proof: SubpoolFullProof<HashOutput>,
@@ -212,15 +215,20 @@ impl BuiltPrivTx {
 		t: &TxCircuitTargets,
 	) -> Result<(), PrivTxProveError> {
 		// Set common witnesses (roots, keys, account nullifier/commitment)
-		t.set_common_witnesses(
-			pw,
-			self.main_pool_root,
-			self.state_root,
-			self.approval_key,
-			&self.subpool_proof,
-			&self.accin,
-			&self.accout,
-		);
+		pw.set_hash_target(t.public.state_root.0, self.state_root.to_hash_out())
+			.unwrap();
+		pw.set_hash_target(
+			t.public.mainpool_config_root.0,
+			self.mainpool_config_root.to_hash_out(),
+		)
+		.unwrap();
+
+		t.private.approval_key.set_witness(pw, self.approval_key);
+		t.private
+			.subpool_proof_targets
+			.set_witness(pw, &self.subpool_proof);
+		t.private.accin.set_witness(pw, &self.accin);
+		t.private.accout.set_witness(pw, &self.accout);
 
 		// Set authorization signatures
 		self.set_authorization_witness(pw, t)?;
@@ -440,13 +448,13 @@ impl BuiltPrivTx {
 			.unwrap();
 			pw.set_bool_target(t.private.inotes_isactive[i], true)
 				.unwrap();
-			t.private.dinotes[i].set_zero(pw); // active slot — value unused but target must be set
+			t.private.dinotes[i].set(pw, Default::default()); // active slot — value unused but target must be set
 
 			// Output note
 			t.private.onotes[i].set_witness(pw, &onote);
 			pw.set_bool_target(t.private.onotes_isactive[i], true)
 				.unwrap();
-			t.private.donotes[i].set_zero(pw);
+			t.private.donotes[i].set(pw, Default::default());
 
 			pw.set_bool_target(t.private.is_note_pair_rjct[i], true)
 				.unwrap();
@@ -469,7 +477,7 @@ impl BuiltPrivTx {
 				.unwrap();
 				pw.set_bool_target(t.private.inotes_isactive[slot], true)
 					.unwrap();
-				t.private.dinotes[slot].set_zero(pw); // active slot — value unused
+				t.private.dinotes[slot].set(pw, Default::default()); // active slot — value unused
 			} else {
 				pw.set_target(t.private.inotes_pos[slot], F::ZERO).unwrap();
 				pw.set_bool_target(t.private.inotes_isactive[slot], false)
@@ -484,7 +492,7 @@ impl BuiltPrivTx {
 				t.private.onotes[slot].set_witness(pw, &self.onotes[j]);
 				pw.set_bool_target(t.private.onotes_isactive[slot], true)
 					.unwrap();
-				t.private.donotes[slot].set_zero(pw); // active slot — value unused
+				t.private.donotes[slot].set(pw, Default::default()); // active slot — value unused
 			} else {
 				pw.set_bool_target(t.private.onotes_isactive[slot], false)
 					.unwrap();
@@ -504,7 +512,7 @@ impl BuiltPrivTx {
 	fn extract_public_inputs(&self) -> PrivTxPublicInputs {
 		PrivTxPublicInputs {
 			state_root: self.state_root,
-			mainpool_config_root: self.main_pool_root,
+			mainpool_config_root: self.mainpool_config_root,
 			accin_nullifier: self.accin.nullifier().0,
 			accout_commitment: self.accout.commitment().0,
 			input_note_nullifiers: self.compute_input_nullifiers(),

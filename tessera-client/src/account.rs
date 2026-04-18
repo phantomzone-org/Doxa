@@ -551,12 +551,16 @@ pub struct AccountAddress {
 	pub(crate) public_id: PublicIdentifier,
 }
 
-impl AccountAddress {
-	pub(crate) const ZERO: Self = Self {
-		subpool_id: SubpoolId::ZERO,
-		public_id: PublicIdentifier::ZERO,
-	};
+impl Default for AccountAddress {
+	fn default() -> Self {
+		Self {
+			subpool_id: SubpoolId::ZERO,
+			public_id: PublicIdentifier::ZERO,
+		}
+	}
+}
 
+impl AccountAddress {
 	/// Construct an address from its components.
 	pub fn new(subpool_id: SubpoolId, public_id: PublicIdentifier) -> Self {
 		Self {

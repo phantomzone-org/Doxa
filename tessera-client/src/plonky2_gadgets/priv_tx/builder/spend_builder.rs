@@ -659,7 +659,7 @@ impl BuiltSpendTx {
 
 			// Pool config
 			subpool_id: self.subpool_id,
-			main_pool_root,
+			mainpool_config_root: main_pool_root,
 			subpool_proof: subpool_full_proof,
 			approval_key: self.approval_key,
 

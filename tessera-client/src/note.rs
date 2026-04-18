@@ -33,13 +33,18 @@ pub struct DepositNote {
 	pub asset_id: AssetId,
 }
 
+impl Default for DepositNote {
+	fn default() -> Self {
+		Self {
+			identifier: NoteIdentifier::ZERO,
+			recipient: AccountAddress::default(),
+			amount: U256::zero(),
+			asset_id: AssetId::ZERO,
+		}
+	}
+}
+
 impl DepositNote {
-	pub(crate) const ZERO: Self = Self {
-		identifier: NoteIdentifier::ZERO,
-		recipient: AccountAddress::ZERO,
-		amount: U256::zero(),
-		asset_id: AssetId::ZERO,
-	};
 
 	/// Compute the Poseidon commitment to this deposit note.
 	///

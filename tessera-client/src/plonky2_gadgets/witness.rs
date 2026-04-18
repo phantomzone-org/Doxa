@@ -25,13 +25,6 @@ use crate::{
 	schnorr::{CompressedPublicKey, Scalar, Signature, schnorr_challenge},
 };
 
-pub(crate) fn fake_authority_key<F>() -> CompressedPublicKey<F>
-where
-	F: PrimeField64 + Extendable<5> + Legendre,
-{
-	CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK))
-}
-
 impl SchnorrTargets {
 	pub(crate) fn set(
 		&self,

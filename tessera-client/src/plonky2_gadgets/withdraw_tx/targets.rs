@@ -21,15 +21,18 @@ use crate::{
 	AssetId, NOTE_BATCH, STATE_TREE_DEPTH, StandardAccount, SubpoolId, derive_withdraw_tx_hash,
 	plonky2_gadgets::{
 		merkle::MerkleRootTarget,
-		priv_tx::targets::{
-			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
-			MainPoolConfigRootTarget, StateRootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
+		priv_tx::{
+			targets::{
+				AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
+				MainPoolConfigRootTarget, StateRootTarget, SubpoolFullProofTargets,
+				SubpoolIdTarget,
+			},
+			utils::fake_approval_key,
 		},
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
-		witness::fake_authority_key,
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
+	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig, SubpoolFullProof},
 	schnorr::Signature,
 	utils::map_h160_to_f,
 };
@@ -313,8 +316,8 @@ impl WithdrawTxPrivateTargets {
 		let accin = StandardAccount::fake();
 		let accout = accin.clone_with_incremented_nonce();
 
-		let key = fake_authority_key();
-		let (_, subpool_proof) = SubpoolConfig::fake_instance();
+		let approval_key = fake_approval_key();
+		let subpool_proof = SubpoolFullProof::<HashOutput>::default();
 
 		// ── Accounts ──────────────────────────────────────────────────────────────
 		self.accin.set_witness(pw, &accin);
@@ -338,12 +341,12 @@ impl WithdrawTxPrivateTargets {
 		self.accin_act_merkle.set_dummy_witness(pw);
 
 		// ── Authority keys and subpool proof ──────────────────────────────────────
-		self.approval_key.set_witness(pw, key);
+		self.approval_key.set_witness(pw, approval_key);
 
 		self.subpool_proof_targets.set_fake(pw);
 
 		// ── Approval signature (fake — not enforced when not_fake_tx = 0) ─────────
-		self.approval_sig.set_dummy(pw, key);
+		self.approval_sig.set_dummy(pw, approval_key);
 	}
 }
 

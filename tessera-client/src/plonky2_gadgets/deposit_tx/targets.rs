@@ -25,14 +25,16 @@ use crate::{
 	note::DepositNote,
 	plonky2_gadgets::{
 		merkle::MerkleRootTarget,
-		priv_tx::targets::{
-			AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
-			MainPoolConfigRootTarget, PublicIdentifierTarget, StateRootTarget,
-			SubpoolFullProofTargets, SubpoolIdTarget,
+		priv_tx::{
+			targets::{
+				AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
+				MainPoolConfigRootTarget, PublicIdentifierTarget, StateRootTarget,
+				SubpoolFullProofTargets, SubpoolIdTarget,
+			},
+			utils::fake_approval_key,
 		},
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
-		witness::fake_authority_key,
 	},
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig, SubpoolFullProof},
 	schnorr::{CompressedPublicKey, Signature},
@@ -443,7 +445,7 @@ impl DepositTxPrivateTargets {
 		let accin = StandardAccount::fake();
 		let accout = accin.clone_with_incremented_nonce();
 
-		let key = fake_authority_key();
+		let key = fake_approval_key();
 
 		// Recipient must match accin's public identifier (circuit enforces this
 		// via connect_array), and asset_exists_in_accout must be false so that

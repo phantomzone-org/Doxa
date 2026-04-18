@@ -5,8 +5,15 @@ use plonky2::{
 	},
 	plonk::{circuit_builder::CircuitBuilder, config::Hasher},
 };
-use plonky2_field::extension::Extendable;
+use plonky2_field::{extension::Extendable, types::PrimeField64};
 use tessera_utils::F;
+
+use crate::{
+	DEFAULT_SPEND_AUTH_PK,
+	ecgfp5::{CompressedPoint, Legendre},
+	pool_config::{CompPubKey, MainPoolConfigTree},
+	schnorr::CompressedPublicKey,
+};
 
 /// Apply Poseidon twice natively: `H(H(input))`.
 ///
@@ -27,4 +34,18 @@ pub(crate) fn double_hash<F: RichField + Extendable<D>, const D: usize>(
 ) -> HashOutTarget {
 	let out0 = builder.hash_n_to_hash_no_pad::<PoseidonHash>(input.elements.to_vec());
 	builder.hash_n_to_hash_no_pad::<PoseidonHash>(out0.elements.to_vec())
+}
+
+pub(crate) fn fake_approval_key() -> CompPubKey {
+	// A random valid point on the curve
+	CompressedPublicKey(
+		[
+			7613690455422068269,
+			12930951591626745075,
+			16103143792840800039,
+			4657200339622395349,
+			3857357297380158342,
+		]
+		.into(),
+	)
 }

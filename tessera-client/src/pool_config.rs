@@ -17,7 +17,7 @@ use tessera_utils::{
 
 use crate::{
 	MAIN_POOL_CONFIG_DEPTH, SUBPOOL_CONFIG_DEPTH, SubpoolId, ecgfp5::CompressedPoint,
-	plonky2_gadgets::witness::fake_authority_key, schnorr::CompressedPublicKey,
+	schnorr::CompressedPublicKey,
 };
 
 // ── CompressedPublicKey ───────────────────────────────────────────────────────
@@ -62,22 +62,6 @@ impl<H: MerkleHash<Digest = HashOutput>> SubpoolConfig<H> {
 
 	pub fn commitment(&self) -> H::Digest {
 		self.approval_key.commit::<H>()
-	}
-}
-
-// TODO: move such methods somehwere inside plonky2_gadgets
-impl SubpoolConfig<HashOutput> {
-	pub fn fake_instance() -> (Self, SubpoolFullProof<HashOutput>) {
-		let key = fake_authority_key();
-		let mut main_pool = MainPoolConfigTree::<HashOutput>::new();
-		let subpool = SubpoolConfig::new(key);
-		main_pool
-			.insert_subpool(SubpoolId::ZERO, subpool.commitment())
-			.unwrap();
-		let subpool_proof = main_pool
-			.full_subpool_proof(&subpool, SubpoolId::ZERO)
-			.unwrap();
-		(subpool, subpool_proof)
 	}
 }
 
@@ -188,6 +172,21 @@ where
 /// together with the subpool's proof inside the MainPoolConfigTree.
 pub struct SubpoolFullProof<H: MerkleHash> {
 	pub main_pool_proof: MerkleProof<H>,
+}
+
+impl<H: MerkleHash> Default for SubpoolFullProof<H> {
+	fn default() -> Self {
+		Self {
+			main_pool_proof: MerkleProof {
+				leaf: H::ZERO,
+				siblings: vec![H::ZERO; MAIN_POOL_CONFIG_DEPTH],
+				path: vec![false; MAIN_POOL_CONFIG_DEPTH],
+				pos: 0,
+				num_leaves: 0,
+				root: H::ZERO,
+			},
+		}
+	}
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

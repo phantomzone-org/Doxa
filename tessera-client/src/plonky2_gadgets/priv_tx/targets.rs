@@ -187,10 +187,7 @@ impl StandardNoteTarget {
 		pw.set_target(self.identifier[0], F::ZERO).unwrap();
 		pw.set_target(self.identifier[1], F::ZERO).unwrap();
 		self.amount.set(pw, U256::zero());
-		pw.set_target(self.sender.subpool_id.0, F::ZERO).unwrap();
-		for e in self.sender.public_identifier.0.elements {
-			pw.set_target(e, F::ZERO).unwrap();
-		}
+		self.sender.set(pw, &Default::default());
 	}
 
 	/// Zero-fill the free targets for an inactive **output** note slot.
@@ -202,14 +199,8 @@ impl StandardNoteTarget {
 		pw.set_target(self.identifier[0], F::ZERO).unwrap();
 		pw.set_target(self.identifier[1], F::ZERO).unwrap();
 		self.amount.set(pw, U256::zero());
-		pw.set_target(self.recipient.subpool_id.0, F::ZERO).unwrap();
-		for e in self.recipient.public_identifier.0.elements {
-			pw.set_target(e, F::ZERO).unwrap();
-		}
-		pw.set_target(self.sender.subpool_id.0, F::ZERO).unwrap();
-		for e in self.sender.public_identifier.0.elements {
-			pw.set_target(e, F::ZERO).unwrap();
-		}
+		self.recipient.set(pw, &Default::default());
+		self.sender.set(pw, &Default::default());
 	}
 }
 
@@ -259,10 +250,6 @@ impl DummyNoteTarget {
 			},
 		)
 		.unwrap();
-	}
-
-	pub(crate) fn set_zero(&self, pw: &mut PartialWitness<F>) {
-		self.set(pw, [F::ZERO; 4]);
 	}
 }
 
@@ -411,20 +398,7 @@ impl TxCircuitTargets {
 		accin: &StandardAccount,
 		accout: &StandardAccount,
 	) {
-		pw.set_hash_target(self.public.state_root.0, state_root.to_hash_out())
-			.unwrap();
-		pw.set_hash_target(
-			self.public.mainpool_config_root.0,
-			mainpool_config_root.to_hash_out(),
-		)
-		.unwrap();
-
-		self.private.approval_key.set_witness(pw, approval_key);
-		self.private
-			.subpool_proof_targets
-			.set_witness(pw, &subpool_proof);
-		self.private.accin.set_witness(pw, accin);
-		self.private.accout.set_witness(pw, accout);
+	
 	}
 }
 
