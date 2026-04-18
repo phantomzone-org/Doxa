@@ -157,9 +157,9 @@ pub(crate) struct StandardNoteTarget {
 	pub(crate) asset_id: AssetIdTarget,
 	// TODO: change the naming to match of StandardNote
 	/// Spend condition: `(subpool_id, public_id)` of the recipient.
-	pub(crate) recipient: ConsumeCondTarget,
+	pub(crate) recipient: AccountAddressTarget,
 	/// Reject condition: `(subpool_id, public_id)` of the sender.
-	pub(crate) sender: RejectCondTarget,
+	pub(crate) sender: AccountAddressTarget,
 }
 
 impl StandardNoteTarget {
@@ -171,18 +171,8 @@ impl StandardNoteTarget {
 			.unwrap();
 		self.amount.set(pw, note.amt);
 		pw.set_target(self.asset_id.0, note.asset_id.0).unwrap();
-		pw.set_target(self.recipient.subpool_id.0, note.recipient.subpool_id.0)
-			.unwrap();
-		for (j, &x) in note.recipient.public_id.0.0.iter().enumerate() {
-			pw.set_target(self.recipient.public_identifier.0.elements[j], x)
-				.unwrap();
-		}
-		pw.set_target(self.sender.subpool_id.0, note.sender.subpool_id.0)
-			.unwrap();
-		for (j, &x) in note.sender.public_id.0.0.iter().enumerate() {
-			pw.set_target(self.sender.public_identifier.0.elements[j], x)
-				.unwrap();
-		}
+		self.recipient.set(pw, &note.recipient);
+		self.sender.set(pw, &note.sender);
 	}
 
 	/// Zero-fill the free targets for an inactive **input** note slot.
@@ -223,23 +213,26 @@ impl StandardNoteTarget {
 	}
 }
 
-/// Note spend condition: `(subpool_id, public_identifier)` of the recipient.
-///
-/// The circuit verifies that the `public_identifier` of the spender (derived
-/// from their `private_identifier`) matches this target.
+/// In-circuit representation of [`AccountAddress`](crate::account::AccountAddress).
 #[derive(Clone, Copy)]
-pub(crate) struct ConsumeCondTarget {
+pub(crate) struct AccountAddressTarget {
 	pub(crate) subpool_id: SubpoolIdTarget,
 	pub(crate) public_identifier: PublicIdentifierTarget,
 }
 
-/// Note reject condition: `(subpool_id, public_identifier)` of the original sender.
-///
-/// The circuit uses this for reject transactions — the sender reclaims the note.
-#[derive(Clone, Copy)]
-pub(crate) struct RejectCondTarget {
-	pub(crate) subpool_id: SubpoolIdTarget,
-	pub(crate) public_identifier: PublicIdentifierTarget,
+impl AccountAddressTarget {
+	pub(crate) fn set(&self, pw: &mut PartialWitness<F>, addr: &crate::account::AccountAddress) {
+		pw.set_target(self.subpool_id.0, addr.subpool_id.0).unwrap();
+		for (t, &v) in self
+			.public_identifier
+			.0
+			.elements
+			.iter()
+			.zip(addr.public_id.0.0.iter())
+		{
+			pw.set_target(*t, v).unwrap();
+		}
+	}
 }
 
 /// In-circuit type for a note commitment (`H(note_fields)`).

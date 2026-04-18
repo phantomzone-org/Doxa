@@ -21,14 +21,13 @@ use crate::{
 		merkle::{MerkleRootTarget, compute_merkle_root_gadget, conditional_merkle_verify_gadget},
 		priv_tx::{
 			targets::{
-				AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
-				ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment,
+				AccountAddressTarget, AccountCommitmentTarget, AccountNullifierTarget,
+				AccountTarget, AssetIdTarget, ConsumeAuthTarget, DummyAccountCommitment,
 				DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
 				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTarget,
-				RejectCondTarget, StandardNoteTarget, StateRootTarget,
-				SubpoolConfigCommitmentTarget, SubpoolFullProofTargets, SubpoolIdTarget,
-				TxHashTarget, TxSignatureTargets,
+				StandardNoteTarget, StateRootTarget,
+				SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
 			},
 			utils::double_hash,
 		},
@@ -57,10 +56,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	/// Allocate all targets for a full account. `subpool_id` is a plain target;
 	/// callers must register it as a public input explicitly via their circuit's PI block.
 	fn add_virtual_account_target(&mut self) -> AccountTarget;
-	/// Allocate a note spend-condition target (recipient address).
-	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget;
-	/// Allocate a note reject-condition target (sender address).
-	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget;
+	/// Allocate an account address target.
+	fn add_virtual_account_address_target(&mut self) -> AccountAddressTarget;
 	/// Allocate all targets for a full note.
 	fn add_virtual_note_target(&mut self) -> StandardNoteTarget;
 	/// Allocate a pubkey target
@@ -311,32 +308,20 @@ where
 		}
 	}
 
-	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget {
-		ConsumeCondTarget {
-			subpool_id: SubpoolIdTarget(self.add_virtual_target()),
-			public_identifier: PublicIdentifierTarget(self.add_virtual_hash()),
-		}
-	}
-
-	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget {
-		RejectCondTarget {
+	fn add_virtual_account_address_target(&mut self) -> AccountAddressTarget {
+		AccountAddressTarget {
 			subpool_id: SubpoolIdTarget(self.add_virtual_target()),
 			public_identifier: PublicIdentifierTarget(self.add_virtual_hash()),
 		}
 	}
 
 	fn add_virtual_note_target(&mut self) -> StandardNoteTarget {
-		let identifier = self.add_virtual_target_arr();
-		let amount = self.add_virtual_u256_target();
-		let asset_id = AssetIdTarget(self.add_virtual_target());
-		let spend_cond = self.add_virtual_consume_cond_target();
-		let reject_cond = self.add_virtual_reject_cond_target();
 		StandardNoteTarget {
-			identifier,
-			amount,
-			asset_id,
-			recipient: spend_cond,
-			sender: reject_cond,
+			identifier: self.add_virtual_target_arr(),
+			amount: self.add_virtual_u256_target(),
+			asset_id: AssetIdTarget(self.add_virtual_target()),
+			recipient: self.add_virtual_account_address_target(),
+			sender: self.add_virtual_account_address_target(),
 		}
 	}
 
