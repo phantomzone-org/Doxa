@@ -230,35 +230,35 @@ pub struct WithdrawTxCircuit {
 	/// Compiled circuit data — exposes `common` and `verifier_only` to external
 	/// callers (e.g. for constructing a `GenericAggregator`).
 	pub circuit_data: tessera_utils::CircuitDataNative,
-	targets: WithdrawTxTargets,
+	pub(crate) targets: WithdrawTxTargets,
 }
 
-impl WithdrawTxCircuit {
-	/// Generate a dummy withdrawal proof (`not_fake_tx=0`) with zero roots.
-	pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
-		let mut pw = PartialWitness::new();
-		self.targets.set_dummy(&mut pw);
-		self.circuit_data
-			.prove(pw)
-			.expect("dummy withdraw_tx proof generation failed")
-	}
+// impl WithdrawTxCircuit {
+// 	/// Generate a dummy withdrawal proof (`not_fake_tx=0`) with zero roots.
+// 	pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
+// 		let mut pw = PartialWitness::new();
+// 		self.targets.set_dummy(&mut pw);
+// 		self.circuit_data
+// 			.prove(pw)
+// 			.expect("dummy withdraw_tx proof generation failed")
+// 	}
 
-	/// Generate a padding withdrawal proof (`not_fake_tx=0`) with the specified
-	/// `act_root` and `mainpool_config_root`, so that padding proofs share the
-	/// same common PIs as the real proofs in their batch.
-	pub fn prove_padding(
-		&self,
-		act_root: HashOutput,
-		mainpool_config_root: HashOutput,
-	) -> tessera_utils::ProofNative {
-		let mut pw = PartialWitness::new();
-		self.targets
-			.set_dummy_with_roots(&mut pw, act_root, mainpool_config_root);
-		self.circuit_data
-			.prove(pw)
-			.expect("padding withdraw_tx proof generation failed")
-	}
-}
+// 	/// Generate a padding withdrawal proof (`not_fake_tx=0`) with the specified
+// 	/// `act_root` and `mainpool_config_root`, so that padding proofs share the
+// 	/// same common PIs as the real proofs in their batch.
+// 	pub fn prove_padding(
+// 		&self,
+// 		act_root: HashOutput,
+// 		mainpool_config_root: HashOutput,
+// 	) -> tessera_utils::ProofNative {
+// 		let mut pw = PartialWitness::new();
+// 		self.targets
+// 			.set_dummy_with_roots(&mut pw, act_root, mainpool_config_root);
+// 		self.circuit_data
+// 			.prove(pw)
+// 			.expect("padding withdraw_tx proof generation failed")
+// 	}
+// }
 
 /// Build the withdraw_tx circuit using `HashOutput` as the Merkle hasher.
 pub fn build_withdraw_tx_circuit() -> WithdrawTxCircuit {

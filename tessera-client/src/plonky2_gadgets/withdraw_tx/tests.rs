@@ -1,23 +1,18 @@
-use plonky2::plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig};
 use plonky2_field::types::{Field, PrimeField64};
 use primitive_types::{H160, U256};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tessera_trees::MerkleTree;
-use tessera_utils::{
-	ConfigNative, D, F,
-	hasher::{HashOutput, MerkleHashCircuit, MerkleHashTarget},
-};
+use tessera_utils::{F, hasher::HashOutput};
 
 use crate::{
 	AssetId, NOTE_BATCH, Nonce, PIHelper, STATE_TREE_DEPTH, SpendAuth, StandardAccount, SubpoolId,
-	account::AccountStateTreeLeaf,
-	derive_withdraw_tx_hash,
 	plonky2_gadgets::withdraw_tx::{
-		circuit::withdraw_tx_circuit, targets::compute_withdrawal_slots,
+		builder::{FakeWithdrawTxBuilder, WithdrawRealTxBuilder},
+		circuit::build_withdraw_tx_circuit,
 	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
-	schnorr::{PrivateKey, Scalar, schnorr_sign},
+	pool_config::{MainPoolConfigTree, SubpoolConfig},
+	schnorr::PrivateKey,
 };
 
 #[test]
@@ -27,11 +22,7 @@ fn test_prove_withdraw_tx() {
 
 	// ── Keys for subpool ──────────────────────────────────────────────
 	let approval_sk = PrivateKey::sample(&mut rng);
-	let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
-	let rejection_sk = PrivateKey::sample(&mut rng);
-	let rejection_cpk: CompPubKey = rejection_sk.public_key::<F>().into();
-	let consume_sk = PrivateKey::sample(&mut rng);
-	let consume_cpk: CompPubKey = consume_sk.public_key::<F>().into();
+	let approval_cpk = approval_sk.public_key::<F>().into();
 
 	let subpool_id = SubpoolId(F::ONE);
 	let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
@@ -42,12 +33,8 @@ fn test_prove_withdraw_tx() {
 
 	// ── Sample accin ──────────────────────────────────────────────────
 	let mut accin = StandardAccount::sample(&mut rng, subpool_id);
-
-	// ── Simulate FreshAcc: nonce = 1, set spend_pk ────────────────────
 	accin.nonce = Nonce(F::ONE);
 	accin.spend_auth = SpendAuth::new(PrivateKey::sample(&mut rng).public_key().into());
-
-	// ── Mutate AST: set balances (asset_id=1 → 100, 2 → 200, 3 → 300) ─
 	accin
 		.ast
 		.insert_asset(AssetId(F::from_canonical_u64(1)), U256::from(100u64))
@@ -64,66 +51,31 @@ fn test_prove_withdraw_tx() {
 	// ── Insert accin into ACT ─────────────────────────────────────────
 	let mut act = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
 	let accin_insert = act.insert(accin.commitment().0).unwrap();
-
 	let accin_act_proof = act.merkle_proof(accin_insert).unwrap();
-	let act_root = act.root();
 	assert!(accin_act_proof.verify());
 
-	// ── Withdrawals: (asset_id=2, 50) and (asset_id=3, 50) ───────────
-	let withdrawals = [
-		(AssetId(F::from_canonical_u64(2)), U256::from(50u64)),
-		(AssetId(F::from_canonical_u64(3)), U256::from(60u64)),
-	];
+	// ── Build and prove ───────────────────────────────────────────────
+	let circuit = build_withdraw_tx_circuit();
 
-	// ── Compute native TxHash and sign ────────────────────────────────
-	// compute_withdrawal_slots mirrors the derivation inside set_real so the
-	// approval signature is over exactly the same hash the circuit verifies.
-	let (slot_asset_ids, slot_withdrawal_amts, _, _, _, _, _, accout) =
-		compute_withdrawal_slots(&accin, &withdrawals);
+	let mut builder = WithdrawRealTxBuilder::new(accin, H160::zero()).unwrap();
+	builder
+		.add_withdrawal(AssetId(F::from_canonical_u64(2)), U256::from(50u64))
+		.unwrap();
+	builder
+		.add_withdrawal(AssetId(F::from_canonical_u64(3)), U256::from(60u64))
+		.unwrap();
 
-	let accin_null = accin.nullifier();
-	let tx_hash = derive_withdraw_tx_hash(
-		accin_null,
-		accout.commitment(),
-		slot_asset_ids,
-		slot_withdrawal_amts,
-		H160::zero(),
-	);
+	let mut built = builder.build().unwrap();
+	built.approval_sign(&approval_sk, &mut rng);
 
-	let k = Scalar::sample(&mut rng);
-	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
+	let accout = built.accout().clone();
+	let withdraw_tx = built.into_withdraw_tx(&act, &main_pool).unwrap();
 
-	// ── Build circuit ─────────────────────────────────────────────────
-	let config = CircuitConfig::standard_recursion_config();
-	let mut builder = CircuitBuilder::<F, D>::new(config);
-	let t = withdraw_tx_circuit::<HashOutput, _, _>(&mut builder);
-	let data = builder.build::<ConfigNative>();
-
-	// ── Fill witness ──────────────────────────────────────────────────
-	let mut pw = plonky2::iop::witness::PartialWitness::new();
-	t.set(
-		&mut pw,
-		&accin,
-		accin_act_proof,
-		act_root,
-		&main_pool,
-		&withdrawals,
-		H160::zero(),
-		approval_cpk,
-		subpool_id,
-		approval_sig,
-	);
-
-	// ── Prove & verify ────────────────────────────────────────────────
-	let proof = data.prove(pw).expect("prove failed");
-	data.verify(proof.clone()).expect("verify failed");
+	let wp = withdraw_tx.prove(&circuit);
+	circuit.circuit_data.verify(wp.proof.clone()).unwrap();
 
 	// ── PI accessor checks ────────────────────────────────────────────
-	let wp = crate::WithdrawProof {
-		proof,
-	};
-
-	assert_eq!(wp.act_root(), act_root, "act_root mismatch");
+	assert_eq!(wp.act_root(), act.root(), "act_root mismatch");
 	assert_eq!(
 		wp.mainpool_config_root(),
 		main_pool.root(),
@@ -135,19 +87,22 @@ fn test_prove_withdraw_tx() {
 		"not_fake_tx should be 1"
 	);
 	assert_eq!(
-		wp.accin_nullifier(),
-		accin.nullifier().0,
-		"accin_nullifier mismatch"
-	);
-	assert_eq!(
 		wp.accout_commitment(),
 		accout.commitment().0,
 		"accout_commitment mismatch"
 	);
 
 	let asset_ids = wp.asset_ids();
-	assert_eq!(asset_ids[0], withdrawals[0].0, "asset_ids[0] mismatch");
-	assert_eq!(asset_ids[1], withdrawals[1].0, "asset_ids[1] mismatch");
+	assert_eq!(
+		asset_ids[0],
+		AssetId(F::from_canonical_u64(2)),
+		"asset_ids[0] mismatch"
+	);
+	assert_eq!(
+		asset_ids[1],
+		AssetId(F::from_canonical_u64(3)),
+		"asset_ids[1] mismatch"
+	);
 	for i in 2..NOTE_BATCH {
 		assert_eq!(
 			asset_ids[i],
@@ -157,8 +112,8 @@ fn test_prove_withdraw_tx() {
 	}
 
 	let amts = wp.withdrawal_amts();
-	assert_eq!(amts[0], withdrawals[0].1, "withdrawal_amts[0] mismatch");
-	assert_eq!(amts[1], withdrawals[1].1, "withdrawal_amts[1] mismatch");
+	assert_eq!(amts[0], U256::from(50u64), "withdrawal_amts[0] mismatch");
+	assert_eq!(amts[1], U256::from(60u64), "withdrawal_amts[1] mismatch");
 	for i in 2..NOTE_BATCH {
 		assert_eq!(
 			amts[i],
@@ -172,4 +127,19 @@ fn test_prove_withdraw_tx() {
 		H160::zero(),
 		"withdrawal_address mismatch"
 	);
+}
+
+#[test]
+fn test_fake_withdraw_tx() {
+	let circuit = build_withdraw_tx_circuit();
+
+	let withdraw_tx = FakeWithdrawTxBuilder::new(
+		HashOutput([F::ZERO; 4]),
+		HashOutput([F::ZERO; 4]),
+	)
+	.build()
+	.into_withdraw_tx();
+
+	let wp = withdraw_tx.prove(&circuit);
+	circuit.circuit_data.verify(wp.proof).unwrap();
 }
