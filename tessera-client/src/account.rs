@@ -391,7 +391,7 @@ impl StandardAccount {
 	// TODO: why is this here?
 	pub fn fake() -> Self {
 		Self::new_with(
-			crate::PrivateIdentifier([F::from_canonical_u64(1), F::from_noncanonical_u64(2)]),
+			crate::PrivateIdentifier([F::from_canonical_u64(2), F::from_noncanonical_u64(2)]),
 			SubpoolId(F::ZERO),
 		)
 	}

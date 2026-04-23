@@ -45,6 +45,12 @@ impl Default for DepositNote {
 }
 
 impl DepositNote {
+	pub fn default_for_recipient(recipient: AccountAddress) -> Self {
+		Self {
+			recipient,
+			..Default::default()
+		}
+	}
 
 	/// Compute the Poseidon commitment to this deposit note.
 	///

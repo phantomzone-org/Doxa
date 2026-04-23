@@ -1,31 +1,18 @@
-use plonky2::{
-	iop::witness::PartialWitness,
-	plonk::{
-		circuit_builder::CircuitBuilder,
-		circuit_data::CircuitConfig,
-		config::{GenericConfig, Hasher, PoseidonGoldilocksConfig},
-	},
-};
-use plonky2_field::types::{Field, PrimeField64};
+use plonky2_field::types::Field;
 use primitive_types::{H160, U256};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tessera_trees::MerkleTree;
-use tessera_utils::hasher::HashOutput;
+use tessera_utils::{F, hasher::HashOutput};
 
-use super::*;
+use super::{*, builder::{DepositTxBuilder, FakeDepositTxBuilder}};
 use crate::{
-	AccountAddress, AssetId, Nonce, PIHelper, STATE_TREE_DEPTH, StandardAccount, SubpoolId,
-	account::AccountStateTreeLeaf,
-	derive_deposit_tx_hash,
+	AccountAddress, AssetId, NoteIdentifier, Nonce, PIHelper, SpendAuth, STATE_TREE_DEPTH,
+	StandardAccount, SubpoolId,
 	note::DepositNote,
 	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
-	schnorr::{PrivateKey, Scalar, schnorr_sign},
+	schnorr::PrivateKey,
 };
-
-const D: usize = 2;
-type C = PoseidonGoldilocksConfig;
-type F = <C as GenericConfig<D>>::F;
 
 #[test]
 fn test_prove_deposit_tx() {
@@ -44,81 +31,56 @@ fn test_prove_deposit_tx() {
 
 	// ── Sample accin ──────────────────────────────────────────────────────
 	let mut accin = StandardAccount::sample(&mut rng, subpool_id);
-
-	// --- Simulate FreshAcc ------------------------------------------------
 	accin.nonce = Nonce(F::ONE);
-	accin.spend_auth = crate::SpendAuth::new(PrivateKey::sample(&mut rng).public_key().into());
+	accin.spend_auth = SpendAuth::new(PrivateKey::sample(&mut rng).public_key().into());
 
 	// ── Insert accin into ACT ─────────────────────────────────────────────
 	let mut act = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
-	let accin_pos = act.insert(accin.commitment().0).unwrap();
-	let accin_act_merkle_proof = act.merkle_proof(accin_pos).unwrap();
+	act.insert(accin.commitment().0).unwrap();
 
-	// ── DepositNote for accin ──────────────────────────────────────-------
+	// ── DepositNote for accin ─────────────────────────────────────────────
 	let asset_id = AssetId(F::from_canonical_u64(7));
+	let deposit_amount = U256::from(1000u64);
 	let deposit_note = DepositNote {
-		identifier: crate::NoteIdentifier([F::from_canonical_u64(11), F::from_canonical_u64(22)]),
+		identifier: NoteIdentifier([
+			F::from_canonical_u64(11),
+			F::from_canonical_u64(22),
+		]),
 		recipient: AccountAddress::from_acc(&accin),
-		amount: U256::from(1000u64),
+		amount: deposit_amount,
 		asset_id,
 	};
 	let eth_address = H160::random();
 
-	// ── Compute native TxHash ─────────────────────────────────────────────
-	let mut accout = accin.clone_with_incremented_nonce();
-	accout
-		.ast
-		.insert_or_update_asset(asset_id, deposit_note.amount);
-
+	// ── Pre-compute values for assertions ─────────────────────────────────
 	let accin_null = accin.nullifier();
 	let deposit_note_comm = deposit_note.commitment();
-	let tx_hash = derive_deposit_tx_hash(
-		accin_null,
-		accout.commitment(),
-		deposit_note_comm,
-		eth_address,
-	);
+	let mut accout_check = accin.clone_with_incremented_nonce();
+	accout_check.ast.insert_or_update_asset(asset_id, deposit_amount);
+	let accout_comm = accout_check.commitment();
 
-	// ── Sign ──────────────────────────────────────────────────────────────
-	let k = Scalar::sample(&mut rng);
-	let approval_sig = schnorr_sign(&approval_sk, &tx_hash.0, k);
+	// ── Build subpool proof ───────────────────────────────────────────────
+	let subpool_proof = main_pool.full_subpool_proof(&subpool, subpool_id).unwrap();
 
 	// ── Build circuit ─────────────────────────────────────────────────────
-	let config = CircuitConfig::standard_recursion_config();
-	let mut builder = CircuitBuilder::<F, D>::new(config);
-	let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder);
-	let data = builder.build::<C>();
+	let circuit = build_deposit_tx_circuit();
 
-	// ── Fill witness ──────────────────────────────────────────────────────
-	let act_root = act.root();
-	let main_pool_root = main_pool.root();
-	let deposit_amount = deposit_note.amount;
+	// ── Use builder pattern ───────────────────────────────────────────────
+	let mut built = DepositTxBuilder::new(accin, deposit_note, eth_address)
+		.expect("builder construction failed")
+		.build();
+	built.approval_sign(&approval_sk, &mut rng);
+	let provable = built
+		.into_deposit_tx(&act, subpool_proof)
+		.expect("into_deposit_tx failed");
+	let dp = provable.prove(&circuit);
 
-	let mut pw = PartialWitness::new();
-
-	t.set(
-		&mut pw,
-		act_root,
-		&main_pool,
-		&accin,
-		&accout,
-		accin_act_merkle_proof,
-		deposit_note,
-		eth_address,
-		approval_key,
-		subpool_id,
-		None,
-		approval_sig,
-	);
-
-	// ── Prove & verify ────────────────────────────────────────────────────
-	let proof = data.prove(pw).expect("prove failed");
-	data.verify(proof.clone()).expect("verify failed");
+	// ── Verify ────────────────────────────────────────────────────────────
+	circuit.circuit_data.verify(dp.proof.clone()).expect("verify failed");
 
 	// ── PI accessor checks ────────────────────────────────────────────────
-	let dp = crate::DepositProof {
-		proof,
-	};
+	let act_root = act.root();
+	let main_pool_root = main_pool.root();
 
 	assert_eq!(dp.act_root(), act_root, "act_root mismatch");
 	assert_eq!(
@@ -134,7 +96,7 @@ fn test_prove_deposit_tx() {
 	);
 	assert_eq!(
 		dp.accout_commitment(),
-		accout.commitment().0,
+		accout_comm.0,
 		"accout_commitment mismatch"
 	);
 	assert_eq!(
@@ -149,16 +111,15 @@ fn test_prove_deposit_tx() {
 
 #[test]
 fn test_fake_tx() {
-	// ── Build circuit ──────────────────────────────────────────────────────
-	let config = CircuitConfig::standard_recursion_config();
-	let mut builder = CircuitBuilder::<F, D>::new(config);
-	let t = deposit_tx_circuit::<HashOutput, _, _>(&mut builder);
-	let data = builder.build::<C>();
-	let mut pw = PartialWitness::new();
+	let circuit = build_deposit_tx_circuit();
 
-	t.set_dummy(&mut pw);
+	let deposit_tx = FakeDepositTxBuilder::new(
+		HashOutput([F::ZERO; 4]),
+		HashOutput([F::ZERO; 4]),
+	)
+	.build()
+	.into_deposit_tx();
 
-	// ── Prove & verify ─────────────────────────────────────────────────────
-	let proof = data.prove(pw).expect("prove failed");
-	data.verify(proof).expect("verify failed");
+	let dp = deposit_tx.prove(&circuit);
+	circuit.circuit_data.verify(dp.proof).expect("verify failed");
 }

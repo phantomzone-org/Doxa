@@ -11,8 +11,9 @@ use tessera_utils::{F, hasher::HashOutput};
 
 use super::{DepositProof, circuit::DepositTxCircuit};
 use crate::{
-	AccountAddress, StandardAccount, derive_deposit_tx_hash,
+	AccountAddress, STATE_TREE_DEPTH, StandardAccount, derive_deposit_tx_hash,
 	note::DepositNote,
+	plonky2_gadgets::priv_tx::utils::fake_approval_key,
 	pool_config::{CompPubKey, SubpoolFullProof},
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_sign},
 };
@@ -25,6 +26,7 @@ pub enum DepositTxBuilderError {
 	RecipientMismatch,
 	AccinNotInStateTree,
 	ApprovalSignRequired,
+	ConsumeSignRequired,
 	TreeError(anyhow::Error),
 }
 
@@ -42,7 +44,13 @@ impl fmt::Display for DepositTxBuilderError {
 				write!(f, "Account commitment not found in state tree")
 			},
 			Self::ApprovalSignRequired => {
-				write!(f, "Must call approval_sign() before into_provable()")
+				write!(f, "Must call approval_sign() before into_deposit_tx()")
+			},
+			Self::ConsumeSignRequired => {
+				write!(
+					f,
+					"Must call consume_sign() before into_deposit_tx() when consume_auth.config is set"
+				)
 			},
 			Self::TreeError(e) => write!(f, "Tree error: {e}"),
 		}
@@ -90,9 +98,9 @@ impl fmt::Display for DepositTxSignError {
 
 impl std::error::Error for DepositTxSignError {}
 
-// ── Builder ───────────────────────────────────────────────────────────────────
+// ── DepositTxBuilder ──────────────────────────────────────────────────────────
 
-/// Builder for constructing deposit transactions with validation.
+/// Builder for constructing real deposit transactions with validation.
 pub struct DepositTxBuilder {
 	accin: StandardAccount,
 	deposit_note: DepositNote,
@@ -123,7 +131,7 @@ impl DepositTxBuilder {
 		})
 	}
 
-	/// Compute derived values and produce a [`BuiltDepositTx`].
+	/// Compute derived values and produce a [`BuiltRealDepositTx`].
 	pub fn build(self) -> BuiltRealDepositTx {
 		let asset_id = self.deposit_note.asset_id;
 		let deposit_amt = self.deposit_note.amount;
@@ -161,12 +169,12 @@ impl DepositTxBuilder {
 	}
 }
 
-// ── BuiltDepositTx ────────────────────────────────────────────────────────────
+// ── BuiltRealDepositTx ────────────────────────────────────────────────────────
 
-/// Validated, ready-to-sign deposit transaction.
+/// Validated, ready-to-sign real deposit transaction.
 ///
 /// Call [`consume_sign`](Self::consume_sign) and [`approval_sign`](Self::approval_sign)
-/// to attach signatures, then [`into_provable`](Self::into_provable) to attach
+/// to attach signatures, then [`into_deposit_tx`](Self::into_deposit_tx) to attach
 /// state-tree and subpool proofs.
 pub struct BuiltRealDepositTx {
 	accin: StandardAccount,
@@ -225,7 +233,7 @@ impl BuiltRealDepositTx {
 	/// Generate and store an approval signature from the subpool authority key.
 	///
 	/// Also records the approval public key for later witness-setting.
-	/// Must be called before [`into_provable`](Self::into_provable).
+	/// Must be called before [`into_deposit_tx`](Self::into_deposit_tx).
 	pub fn approval_sign<R: CryptoRng + rand::Rng>(
 		&mut self,
 		approval_sk: &PrivateKey,
@@ -238,16 +246,18 @@ impl BuiltRealDepositTx {
 		self.approval_sig = Some(sig);
 	}
 
-	/// Attach state-tree and subpool proofs to produce a [`ProvableDepositTx`].
+	/// Attach state-tree and subpool proofs to produce a [`BuiltDepositTx`].
 	///
 	/// Looks up `accin` in `state_tree` by its commitment.
 	/// The main-pool root is read from `subpool_proof.main_pool_proof.root`.
 	///
 	/// # Errors
 	/// - `ApprovalSignRequired`: [`approval_sign`](Self::approval_sign) was not called
+	/// - `ConsumeSignRequired`: `consume_auth.config == true` but
+	///   [`consume_sign`](Self::consume_sign) was not called
 	/// - `AccinNotInStateTree`: commitment not present in `state_tree`
 	/// - `TreeError`: Merkle proof generation failed
-	pub fn into_provable(
+	pub fn into_deposit_tx(
 		self,
 		state_tree: &MerkleTree<HashOutput>,
 		subpool_proof: SubpoolFullProof<HashOutput>,
@@ -258,6 +268,10 @@ impl BuiltRealDepositTx {
 		let approval_sig = self
 			.approval_sig
 			.ok_or(DepositTxBuilderError::ApprovalSignRequired)?;
+
+		if self.accin.consume_auth.config && self.consume_sig.is_none() {
+			return Err(DepositTxBuilderError::ConsumeSignRequired);
+		}
 
 		let accin_comm = self.accin.commitment().0;
 		let pos = state_tree
@@ -274,6 +288,7 @@ impl BuiltRealDepositTx {
 		let main_pool_root = subpool_proof.main_pool_proof.root;
 
 		Ok(BuiltDepositTx {
+			not_fake_tx: true,
 			accin: self.accin,
 			accout: self.accout,
 			deposit_note: self.deposit_note,
@@ -285,15 +300,93 @@ impl BuiltRealDepositTx {
 			accin_act_merkle_proof,
 			subpool_proof,
 			consume_sig: self.consume_sig,
-			approval_sig,
+			approval_sig: Some(approval_sig),
 		})
 	}
 }
 
-// ── ProvableDepositTx ─────────────────────────────────────────────────────────
+// ── FakeDepositTxBuilder ──────────────────────────────────────────────────────
+
+/// Builder for constructing fake (dummy) deposit transactions.
+///
+/// Fake transactions have `not_fake_tx = false` and are used to pad empty
+/// aggregation slots. No circuit constraints are enforced beyond the boolean
+/// shape of `not_fake_tx`.
+pub struct FakeDepositTxBuilder {
+	state_root: HashOutput,
+	mainpool_config_root: HashOutput,
+}
+
+/// Validated fake deposit transaction, ready to be converted to [`BuiltDepositTx`].
+pub struct BuiltFakeDepositTx {
+	state_root: HashOutput,
+	mainpool_config_root: HashOutput,
+}
+
+impl FakeDepositTxBuilder {
+	/// Create a new fake deposit transaction builder.
+	pub fn new(state_root: HashOutput, mainpool_config_root: HashOutput) -> Self {
+		Self {
+			state_root,
+			mainpool_config_root,
+		}
+	}
+
+	/// Build the fake transaction (infallible — no validation needed).
+	pub fn build(self) -> BuiltFakeDepositTx {
+		BuiltFakeDepositTx {
+			state_root: self.state_root,
+			mainpool_config_root: self.mainpool_config_root,
+		}
+	}
+}
+
+impl BuiltFakeDepositTx {
+	/// Convert this fake transaction into a unified [`BuiltDepositTx`].
+	///
+	/// All fields are populated with dummy/zero values. Since `not_fake_tx = false`,
+	/// the circuit does not enforce any of these values.
+	pub fn into_deposit_tx(self) -> BuiltDepositTx {
+		let accin = StandardAccount::fake();
+		let accout = accin.clone_with_incremented_nonce();
+		let approval_key = fake_approval_key();
+		let deposit_note = DepositNote::default_for_recipient(accin.address());
+
+		let dummy_merkle_proof = tessera_trees::MerkleProof {
+			leaf: HashOutput([F::ZERO; 4]),
+			siblings: vec![HashOutput([F::ZERO; 4]); STATE_TREE_DEPTH],
+			path: vec![false; STATE_TREE_DEPTH],
+			pos: 0,
+			num_leaves: 0,
+			root: HashOutput([F::ZERO; 4]),
+		};
+
+		BuiltDepositTx {
+			not_fake_tx: false,
+			accin,
+			accout,
+			deposit_note,
+			eth_address: H160::zero(),
+			tx_hash: HashOutput([F::ZERO; 4]),
+			approval_key,
+			state_root: self.state_root,
+			main_pool_root: self.mainpool_config_root,
+			accin_act_merkle_proof: dummy_merkle_proof,
+			subpool_proof: SubpoolFullProof::default(),
+			consume_sig: None,
+			approval_sig: None,
+		}
+	}
+}
+
+// ── BuiltDepositTx ────────────────────────────────────────────────────────────
 
 /// Fully-specified deposit transaction ready for proving.
+///
+/// Produced by [`BuiltRealDepositTx::into_deposit_tx`] (real) or
+/// [`BuiltFakeDepositTx::into_deposit_tx`] (fake/padding).
 pub struct BuiltDepositTx {
+	not_fake_tx: bool,
 	accin: StandardAccount,
 	accout: StandardAccount,
 	deposit_note: DepositNote,
@@ -305,7 +398,8 @@ pub struct BuiltDepositTx {
 	accin_act_merkle_proof: tessera_trees::MerkleProof<HashOutput>,
 	subpool_proof: SubpoolFullProof<HashOutput>,
 	consume_sig: Option<Signature>,
-	approval_sig: Signature,
+	/// `Some` for real transactions, `None` for fake (not enforced by circuit).
+	approval_sig: Option<Signature>,
 }
 
 impl BuiltDepositTx {
@@ -317,7 +411,7 @@ impl BuiltDepositTx {
 		// ── Public inputs ─────────────────────────────────────────────────────
 		t.public_targets.set(
 			&mut pw,
-			true,
+			self.not_fake_tx,
 			self.main_pool_root,
 			self.state_root,
 			self.accin.nullifier(),
@@ -336,6 +430,7 @@ impl BuiltDepositTx {
 			.map(|(i, b)| (i, b, true))
 			.unwrap_or_else(|| (self.accin.ast.next_index(), U256::zero(), false));
 		let accout_amt = accin_amt + self.deposit_note.amount;
+		let asset_exists_in_accout = self.accout.ast.amount_for(asset_id).is_some();
 
 		let priv_t = &t.private_targets;
 
@@ -345,7 +440,7 @@ impl BuiltDepositTx {
 		priv_t.accout_amt.set(&mut pw, accout_amt);
 		pw.set_bool_target(priv_t.asset_exists_in_accin, asset_exists_in_accin)
 			.unwrap();
-		pw.set_bool_target(priv_t.asset_exists_in_accout, true)
+		pw.set_bool_target(priv_t.asset_exists_in_accout, asset_exists_in_accout)
 			.unwrap();
 		priv_t
 			.accin_act_merkle
@@ -369,12 +464,18 @@ impl BuiltDepositTx {
 				.set(&mut pw, consume_pk, self.tx_hash, sig),
 			None => priv_t.sig_targets.consume.set_dummy(&mut pw, consume_pk),
 		}
-		priv_t.sig_targets.approval.set(
-			&mut pw,
-			self.approval_key,
-			self.tx_hash,
-			&self.approval_sig,
-		);
+		match &self.approval_sig {
+			Some(sig) => {
+				priv_t
+					.sig_targets
+					.approval
+					.set(&mut pw, self.approval_key, self.tx_hash, sig)
+			},
+			None => priv_t
+				.sig_targets
+				.approval
+				.set_dummy(&mut pw, self.approval_key),
+		}
 
 		let proof = circuit
 			.circuit_data

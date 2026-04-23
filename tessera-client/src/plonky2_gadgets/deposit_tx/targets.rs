@@ -274,35 +274,6 @@ impl DepositTxPublicTargets {
 		self.amount.set(pw, amount);
 		pw.set_target(self.asset_id.0, asset_id.0).unwrap();
 	}
-
-	// pub fn set_dummy(&self, pw: &mut PartialWitness<F>) {
-	// 	self.set_dummy_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
-	// }
-
-	// /// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
-	// /// `mainpool_config_root`, so that padding proofs share the same common PIs
-	// /// as the real proofs in their batch.
-	// pub fn set_dummy_with_roots(
-	// 	&self,
-	// 	pw: &mut PartialWitness<F>,
-	// 	act_root: HashOutput,
-	// 	mainpool_config_root: HashOutput,
-	// ) {
-	// 	// Only set truly free variables. Derived targets (accin_null, accout_comm,
-	// 	// deposit_note_comm) are computed automatically by circuit generators from
-	// 	// the private witness set in DepositTxPrivateTargets::set_fake, so they
-	// 	// must NOT be set here to avoid "wire set twice" conflicts.
-	// 	pw.set_bool_target(self.not_fake_tx, false).unwrap();
-	// 	pw.set_hash_target(
-	// 		self.mainpool_config_root.0,
-	// 		mainpool_config_root.to_hash_out(),
-	// 	)
-	// 	.unwrap();
-	// 	pw.set_hash_target(self.state_root.0, act_root.to_hash_out())
-	// 		.unwrap();
-	// 	pw.set_target_arr(&self.eth_address, &map_h160_to_f(H160::zero()))
-	// 		.unwrap();
-	// }
 }
 
 pub struct DepositTxPrivateTargets {
@@ -419,61 +390,5 @@ impl DepositTxPrivateTargets {
 		self.sig_targets
 			.approval
 			.set(pw, approval_key, tx_hash, &approval_sig);
-	}
-
-	fn set_dummy(&self, pw: &mut PartialWitness<F>) {
-		use tessera_trees::MerkleTree;
-
-		// Use non-zero private identifier so the derived public_identifier is
-		// consistent with the deposit note recipient (circuit hard-connects them).
-		let accin = StandardAccount::fake();
-		let accout = accin.clone_with_incremented_nonce();
-
-		let key = fake_approval_key();
-
-		// Recipient must match accin's public identifier (circuit enforces this
-		// via connect_array), and asset_exists_in_accout must be false so that
-		// the accout AST leaf uses AST_DEFAULT_LEAF (consistent with empty AST root).
-		let deposit_note = DepositNote {
-			identifier: crate::NoteIdentifier::ZERO,
-			recipient: crate::AccountAddress::from_acc(&accin),
-			amount: U256::zero(),
-			asset_id: AssetId::ZERO,
-		};
-
-		// ── Deposit note ──────────────────────────────────────────────────────────
-		self.deposit_note.set(pw, deposit_note);
-
-		// ── Amounts and exists flags ───────────────────────────────────────────────
-		self.accin_amt.set(pw, U256::zero());
-		self.accout_amt.set(pw, U256::zero());
-		pw.set_bool_target(self.asset_exists_in_accin, false)
-			.unwrap();
-		pw.set_bool_target(self.asset_exists_in_accout, false)
-			.unwrap();
-
-		// ── ACT Merkle proof (dummy) ────────────────
-		self.accin_act_merkle.set_dummy_witness(pw);
-
-		// ── AccIn AST Merkle proof ────────────────────────────────────────────────
-		self.accin_ast_merkle
-			.set_witness(pw, &accin.ast.merkle_proof_at(0));
-
-		// ── Subpool full proof ────────────────────────────────────────────────────
-		self.subpool_proof_targets.set_fake(pw);
-
-		// ── Authority keys ────────────────────────────────────────────────────────
-		self.approval_key.set_witness(pw, key);
-
-		// ── Accounts ─────────────────────────────────────────────────────────────
-		self.accin.set_witness(pw, &accin);
-		self.accout.set_witness(pw, &accout);
-
-		// ── Signatures (fake — not enforced when not_fake_tx = false) ─────────────
-		// Q must match the key used at the time of verification.
-		self.sig_targets
-			.consume
-			.set_dummy(pw, accin.consume_pk_or_default());
-		self.sig_targets.approval.set_dummy(pw, key);
 	}
 }
