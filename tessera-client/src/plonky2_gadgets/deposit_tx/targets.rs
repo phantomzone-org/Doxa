@@ -154,22 +154,6 @@ impl DepositTxTargets {
 			approval_sig,
 		);
 	}
-
-	pub(crate) fn set_dummy(&self, pw: &mut PartialWitness<F>) {
-		self.public_targets.set_dummy(pw);
-		self.private_targets.set_dummy(pw);
-	}
-
-	pub(crate) fn set_dummy_with_roots(
-		&self,
-		pw: &mut PartialWitness<F>,
-		act_root: HashOutput,
-		mainpool_config_root: HashOutput,
-	) {
-		self.public_targets
-			.set_dummy_with_roots(pw, act_root, mainpool_config_root);
-		self.private_targets.set_dummy(pw);
-	}
 }
 
 pub struct DepositTxPublicTargets {
@@ -291,34 +275,34 @@ impl DepositTxPublicTargets {
 		pw.set_target(self.asset_id.0, asset_id.0).unwrap();
 	}
 
-	pub fn set_dummy(&self, pw: &mut PartialWitness<F>) {
-		self.set_dummy_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
-	}
+	// pub fn set_dummy(&self, pw: &mut PartialWitness<F>) {
+	// 	self.set_dummy_with_roots(pw, HashOutput::ZERO, HashOutput::ZERO);
+	// }
 
-	/// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
-	/// `mainpool_config_root`, so that padding proofs share the same common PIs
-	/// as the real proofs in their batch.
-	pub fn set_dummy_with_roots(
-		&self,
-		pw: &mut PartialWitness<F>,
-		act_root: HashOutput,
-		mainpool_config_root: HashOutput,
-	) {
-		// Only set truly free variables. Derived targets (accin_null, accout_comm,
-		// deposit_note_comm) are computed automatically by circuit generators from
-		// the private witness set in DepositTxPrivateTargets::set_fake, so they
-		// must NOT be set here to avoid "wire set twice" conflicts.
-		pw.set_bool_target(self.not_fake_tx, false).unwrap();
-		pw.set_hash_target(
-			self.mainpool_config_root.0,
-			mainpool_config_root.to_hash_out(),
-		)
-		.unwrap();
-		pw.set_hash_target(self.state_root.0, act_root.to_hash_out())
-			.unwrap();
-		pw.set_target_arr(&self.eth_address, &map_h160_to_f(H160::zero()))
-			.unwrap();
-	}
+	// /// Like [`set_fake`](Self::set_fake) but with explicit `act_root` and
+	// /// `mainpool_config_root`, so that padding proofs share the same common PIs
+	// /// as the real proofs in their batch.
+	// pub fn set_dummy_with_roots(
+	// 	&self,
+	// 	pw: &mut PartialWitness<F>,
+	// 	act_root: HashOutput,
+	// 	mainpool_config_root: HashOutput,
+	// ) {
+	// 	// Only set truly free variables. Derived targets (accin_null, accout_comm,
+	// 	// deposit_note_comm) are computed automatically by circuit generators from
+	// 	// the private witness set in DepositTxPrivateTargets::set_fake, so they
+	// 	// must NOT be set here to avoid "wire set twice" conflicts.
+	// 	pw.set_bool_target(self.not_fake_tx, false).unwrap();
+	// 	pw.set_hash_target(
+	// 		self.mainpool_config_root.0,
+	// 		mainpool_config_root.to_hash_out(),
+	// 	)
+	// 	.unwrap();
+	// 	pw.set_hash_target(self.state_root.0, act_root.to_hash_out())
+	// 		.unwrap();
+	// 	pw.set_target_arr(&self.eth_address, &map_h160_to_f(H160::zero()))
+	// 		.unwrap();
+	// }
 }
 
 pub struct DepositTxPrivateTargets {

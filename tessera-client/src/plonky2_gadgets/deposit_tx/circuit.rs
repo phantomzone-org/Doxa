@@ -61,81 +61,81 @@ pub struct DepositTxCircuit {
 	/// Compiled circuit data — exposes `common` and `verifier_only` to
 	/// external callers (e.g. for constructing a `GenericAggregator`).
 	pub circuit_data: tessera_utils::CircuitDataNative,
-	targets: DepositTxTargets,
+	pub(crate) targets: DepositTxTargets,
 }
 
 impl DepositTxCircuit {
-	/// Generate a dummy deposit_tx proof (`not_fake_tx=0`) with zero roots.
-	///
-	/// Used to seed the `GenericAggregator` for artifact generation
-	/// (O(log N) doubling) and as the padding proof at runtime.
-	pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
-		use plonky2::iop::witness::PartialWitness;
-		use tessera_utils::hasher::HashOutput;
+	// /// Generate a dummy deposit_tx proof (`not_fake_tx=0`) with zero roots.
+	// ///
+	// /// Used to seed the `GenericAggregator` for artifact generation
+	// /// (O(log N) doubling) and as the padding proof at runtime.
+	// pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
+	// 	use plonky2::iop::witness::PartialWitness;
+	// 	use tessera_utils::hasher::HashOutput;
 
-		let mut pw = PartialWitness::new();
-		self.targets.set_dummy(&mut pw);
-		self.circuit_data
-			.prove(pw)
-			.expect("dummy deposit_tx proof generation failed")
-	}
+	// 	let mut pw = PartialWitness::new();
+	// 	self.targets.set_dummy(&mut pw);
+	// 	self.circuit_data
+	// 		.prove(pw)
+	// 		.expect("dummy deposit_tx proof generation failed")
+	// }
 
-	/// Generate a padding deposit_tx proof (`not_fake_tx=0`) with the specified
-	/// `act_root` and `mainpool_config_root`, so that padding proofs share the
-	/// same common PIs as the real proofs in their batch.
-	pub fn prove_padding(
-		&self,
-		act_root: HashOutput,
-		mainpool_config_root: HashOutput,
-	) -> tessera_utils::ProofNative {
-		use plonky2::iop::witness::PartialWitness;
+	// /// Generate a padding deposit_tx proof (`not_fake_tx=0`) with the specified
+	// /// `act_root` and `mainpool_config_root`, so that padding proofs share the
+	// /// same common PIs as the real proofs in their batch.
+	// pub fn prove_padding(
+	// 	&self,
+	// 	act_root: HashOutput,
+	// 	mainpool_config_root: HashOutput,
+	// ) -> tessera_utils::ProofNative {
+	// 	use plonky2::iop::witness::PartialWitness;
 
-		let mut pw = PartialWitness::new();
-		self.targets
-			.set_dummy_with_roots(&mut pw, act_root, mainpool_config_root);
-		self.circuit_data
-			.prove(pw)
-			.expect("padding deposit_tx proof generation failed")
-	}
+	// 	let mut pw = PartialWitness::new();
+	// 	self.targets
+	// 		.set_dummy_with_roots(&mut pw, act_root, mainpool_config_root);
+	// 	self.circuit_data
+	// 		.prove(pw)
+	// 		.expect("padding deposit_tx proof generation failed")
+	// }
 
-	/// Generate a real deposit_tx proof (`not_fake_tx=1`).
-	///
-	/// Wraps [`set_deposit_tx_witness`] so that external callers do not need
-	/// access to the private `DepositTxTargets`.
-	#[allow(clippy::too_many_arguments)]
-	pub fn prove_real(
-		&self,
-		act_root: HashOutput,
-		main_pool: MainPoolConfigTree<HashOutput>,
-		accin: &StandardAccount,
-		accout: &StandardAccount,
-		accin_act_merkle_proof: MerkleProof<HashOutput>,
-		deposit_note: DepositNote,
-		eth_address: H160,
-		approval_key: CompPubKey,
-		subpool_id: SubpoolId,
-		consume_sig: Option<Signature>,
-		approval_sig: Signature,
-	) -> tessera_utils::ProofNative {
-		let mut pw = PartialWitness::new();
-		self.targets.set(
-			&mut pw,
-			act_root,
-			&main_pool,
-			accin,
-			accout,
-			accin_act_merkle_proof,
-			deposit_note,
-			eth_address,
-			approval_key,
-			subpool_id,
-			consume_sig,
-			approval_sig,
-		);
-		self.circuit_data
-			.prove(pw)
-			.expect("real deposit_tx proof generation failed")
-	}
+	// /// Generate a real deposit_tx proof (`not_fake_tx=1`).
+	// ///
+	// /// Wraps [`set_deposit_tx_witness`] so that external callers do not need
+	// /// access to the private `DepositTxTargets`.
+	// #[allow(clippy::too_many_arguments)]
+	// pub fn prove_real(
+	// 	&self,
+	// 	act_root: HashOutput,
+	// 	main_pool: MainPoolConfigTree<HashOutput>,
+	// 	accin: &StandardAccount,
+	// 	accout: &StandardAccount,
+	// 	accin_act_merkle_proof: MerkleProof<HashOutput>,
+	// 	deposit_note: DepositNote,
+	// 	eth_address: H160,
+	// 	approval_key: CompPubKey,
+	// 	subpool_id: SubpoolId,
+	// 	consume_sig: Option<Signature>,
+	// 	approval_sig: Signature,
+	// ) -> tessera_utils::ProofNative {
+	// 	let mut pw = PartialWitness::new();
+	// 	self.targets.set(
+	// 		&mut pw,
+	// 		act_root,
+	// 		&main_pool,
+	// 		accin,
+	// 		accout,
+	// 		accin_act_merkle_proof,
+	// 		deposit_note,
+	// 		eth_address,
+	// 		approval_key,
+	// 		subpool_id,
+	// 		consume_sig,
+	// 		approval_sig,
+	// 	);
+	// 	self.circuit_data
+	// 		.prove(pw)
+	// 		.expect("real deposit_tx proof generation failed")
+	// }
 }
 
 /// Build the deposit_tx circuit using `HashOutput` as the Merkle hasher.

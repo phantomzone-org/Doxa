@@ -158,7 +158,8 @@ impl WithdrawTxPublicTargets {
 		pw.set_bool_target(self.not_fake_tx, true).unwrap();
 		pw.set_hash_target(self.root.0, act_root.to_hash_out())
 			.unwrap();
-		pw.set_hash_target(self.mainpool_config_root.0, main_pool_root.to_hash_out());
+		pw.set_hash_target(self.mainpool_config_root.0, main_pool_root.to_hash_out())
+			.unwrap();
 		for (i, id) in slot_asset_ids.iter().enumerate() {
 			pw.set_target(self.asset_ids[i].0, id.0).unwrap();
 		}
