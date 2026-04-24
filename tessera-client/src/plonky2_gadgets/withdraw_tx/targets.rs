@@ -168,6 +168,8 @@ pub(crate) struct WithdrawTxPrivateTargets {
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	/// Approval Schnorr signature over the withdrawal tx hash.
 	pub(crate) approval_sig: SchnorrTargets,
+	/// Spend Schnorr signature over the withdrawal tx hash (from accin.spend_auth key).
+	pub(crate) spend_sig: SchnorrTargets,
 }
 
 impl WithdrawTxPrivateTargets {
@@ -194,6 +196,7 @@ impl WithdrawTxPrivateTargets {
 		subpool_id: SubpoolId,
 		main_pool: &MainPoolConfigTree<HashOutput>,
 		approval_sig: Signature,
+		spend_sig: Signature,
 	) {
 		// ── Native tx hash ────────────────────────────────────────────────────────
 		let accin_null = accin.nullifier();
@@ -237,6 +240,10 @@ impl WithdrawTxPrivateTargets {
 		// ── Approval signature ────────────────────────────────────────────────────
 		self.approval_sig
 			.set(pw, approval_key, tx_hash, &approval_sig);
+
+		// ── Spend signature ───────────────────────────────────────────────────────
+		self.spend_sig
+			.set(pw, accin.spend_pk_or_default(), tx_hash, &spend_sig);
 	}
 
 	/// Fill all private targets for a fake (dummy) withdrawal (`not_fake_tx = 0`).
@@ -281,6 +288,9 @@ impl WithdrawTxPrivateTargets {
 
 		// ── Approval signature (fake — not enforced when not_fake_tx = 0) ─────────
 		self.approval_sig.set_dummy(pw, approval_key);
+
+		// ── Spend signature (fake — not enforced when not_fake_tx = 0) ───────────
+		self.spend_sig.set_dummy(pw, accin.spend_pk_or_default());
 	}
 }
 

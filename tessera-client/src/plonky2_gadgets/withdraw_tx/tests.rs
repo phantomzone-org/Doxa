@@ -34,7 +34,8 @@ fn test_prove_withdraw_tx() {
 	// ── Sample accin ──────────────────────────────────────────────────
 	let mut accin = StandardAccount::sample(&mut rng, subpool_id);
 	accin.nonce = Nonce(F::ONE);
-	accin.spend_auth = SpendAuth::new(PrivateKey::sample(&mut rng).public_key().into());
+	let spend_sk = PrivateKey::sample(&mut rng);
+	accin.spend_auth = SpendAuth::new(spend_sk.public_key().into());
 	accin
 		.ast
 		.insert_asset(AssetId(F::from_canonical_u64(1)), U256::from(100u64))
@@ -67,6 +68,7 @@ fn test_prove_withdraw_tx() {
 
 	let mut built = builder.build().unwrap();
 	built.approval_sign(&approval_sk, &mut rng);
+	built.spend_sign(&spend_sk, &mut rng);
 
 	let accout = built.accout().clone();
 	let withdraw_tx = built.into_withdraw_tx(&act, &main_pool).unwrap();

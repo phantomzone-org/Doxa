@@ -188,6 +188,10 @@ where
 	let approval_sig =
 		conditional_schnorr_verify_gadget(builder, tx_hash.0, approval_key, not_fake_tx);
 
+	// ── Spend signature ───────────────────────────────────────────────────────
+	let spend_sig =
+		conditional_schnorr_verify_gadget(builder, tx_hash.0, accin.spend_auth, not_fake_tx);
+
 	// ── Public inputs ─────────────────────────────────────────────────────────
 	let public = WithdrawTxPublicTargets {
 		not_fake_tx,
@@ -215,6 +219,7 @@ where
 			ast_merkles,
 			subpool_proof_targets,
 			approval_sig,
+			spend_sig,
 			acc_in_subpool_id: accin.subpool_id,
 			acc_out_subpool_id: accout.subpool_id,
 		},

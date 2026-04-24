@@ -39,6 +39,7 @@ pub enum WithdrawTxBuilderError {
 	},
 	AccinNotInStateTree,
 	ApprovalSignRequired,
+	SpendSignRequired,
 	SubpoolNotFound,
 	TreeError(anyhow::Error),
 }
@@ -67,6 +68,9 @@ impl fmt::Display for WithdrawTxBuilderError {
 			},
 			Self::ApprovalSignRequired => {
 				write!(f, "Must call approval_sign() before into_withdraw_tx()")
+			},
+			Self::SpendSignRequired => {
+				write!(f, "Must call spend_sign() before into_withdraw_tx()")
 			},
 			Self::SubpoolNotFound => write!(f, "Subpool not found in main pool config"),
 			Self::TreeError(e) => write!(f, "Tree error: {e}"),
@@ -168,6 +172,7 @@ impl WithdrawRealTxBuilder {
 			tx_hash,
 			approval_key: None,
 			approval_sig: None,
+			spend_sig: None,
 		})
 	}
 }
@@ -188,6 +193,8 @@ pub struct BuiltWithdrawRealTx {
 	approval_key: Option<CompPubKey>,
 	/// Set when `approval_sign` is called.
 	approval_sig: Option<Signature>,
+	/// Set when `spend_sign` is called.
+	spend_sig: Option<Signature>,
 }
 
 impl BuiltWithdrawRealTx {
@@ -216,6 +223,15 @@ impl BuiltWithdrawRealTx {
 		self.approval_sig = Some(sig);
 	}
 
+	/// Generate and store a spend signature from the account's spend key.
+	///
+	/// Must be called before [`into_withdraw_tx`](Self::into_withdraw_tx).
+	pub fn spend_sign<R: CryptoRng + rand::Rng>(&mut self, spend_sk: &PrivateKey, rng: &mut R) {
+		let k = Scalar::sample(rng);
+		let sig = schnorr_sign(spend_sk, &self.tx_hash.0, k);
+		self.spend_sig = Some(sig);
+	}
+
 	/// Attach state-tree and main-pool proofs to produce a [`BuiltWithdrawTx`].
 	///
 	/// # Errors
@@ -234,6 +250,9 @@ impl BuiltWithdrawRealTx {
 		let approval_sig = self
 			.approval_sig
 			.ok_or(WithdrawTxBuilderError::ApprovalSignRequired)?;
+		let spend_sig = self
+			.spend_sig
+			.ok_or(WithdrawTxBuilderError::SpendSignRequired)?;
 
 		let accin_comm = self.accin.commitment().0;
 		let pos = state_tree
@@ -265,6 +284,7 @@ impl BuiltWithdrawRealTx {
 			accin_act_merkle_proof,
 			subpool_proof,
 			approval_sig: Some(approval_sig),
+			spend_sig: Some(spend_sig),
 		})
 	}
 }
@@ -334,6 +354,7 @@ impl BuiltFakeWithdrawTx {
 			accin_act_merkle_proof: dummy_merkle_proof,
 			subpool_proof: SubpoolFullProof::default(),
 			approval_sig: None,
+			spend_sig: None,
 		}
 	}
 }
@@ -356,6 +377,8 @@ pub struct BuiltWithdrawTx {
 	subpool_proof: SubpoolFullProof<HashOutput>,
 	/// `Some` for real transactions, `None` for fake (not enforced by circuit).
 	approval_sig: Option<Signature>,
+	/// `Some` for real transactions, `None` for fake (not enforced by circuit).
+	spend_sig: Option<Signature>,
 }
 
 impl BuiltWithdrawTx {
@@ -433,6 +456,12 @@ impl BuiltWithdrawTx {
 				.approval_sig
 				.set(&mut pw, self.approval_key, tx_hash, sig),
 			None => priv_t.approval_sig.set_dummy(&mut pw, self.approval_key),
+		}
+
+		let spend_pk = self.accin.spend_pk_or_default();
+		match &self.spend_sig {
+			Some(sig) => priv_t.spend_sig.set(&mut pw, spend_pk, tx_hash, sig),
+			None => priv_t.spend_sig.set_dummy(&mut pw, spend_pk),
 		}
 
 		let proof = circuit
