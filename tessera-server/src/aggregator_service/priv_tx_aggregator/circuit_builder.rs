@@ -59,8 +59,8 @@ pub(super) fn setup_super_builder(
 		.collect();
 
 	// 5. Cross-check: SR leaves == TX output_commitments (unconditional — SR is built from ALL
-	//    proofs, including padding). SR leaf order per slot: [AC, NC0..NC6] (8 leaves, 1 +
-	//    NOTE_BATCH).
+	//    proofs, including padding). SR leaf order per slot: [AC, NC0..NC6] (1 + NOTE_BATCH
+	//    leaves).
 	let leaves_per_slot = 1 + NOTE_BATCH;
 	for (s, slot) in slots.iter().enumerate() {
 		for (j, tx_comm) in slot.output_commitments().iter().enumerate() {

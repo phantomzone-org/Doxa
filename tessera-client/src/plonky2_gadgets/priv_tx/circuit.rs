@@ -311,3 +311,25 @@ where
 		},
 	}
 }
+
+/// Pre-built private transaction circuit.
+pub struct PrivTxCircuit {
+	pub circuit_data: tessera_utils::CircuitDataNative,
+	pub(crate) targets: TxCircuitTargets,
+}
+
+/// Build the priv_tx circuit using `HashOutput` as the Merkle hasher.
+pub fn build_priv_tx_circuit() -> PrivTxCircuit {
+	use plonky2::plonk::circuit_data::CircuitConfig;
+
+	let config = CircuitConfig::standard_recursion_config();
+	let mut builder =
+		CircuitBuilder::<tessera_utils::F, { tessera_utils::D }>::new(config);
+	let targets =
+		priv_tx_circuit::<HashOutput, tessera_utils::F, { tessera_utils::D }>(&mut builder);
+	let circuit_data = builder.build::<tessera_utils::ConfigNative>();
+	PrivTxCircuit {
+		circuit_data,
+		targets,
+	}
+}
