@@ -34,9 +34,15 @@ mod tests;
 /// [45..73] onote commitments (7×4)
 /// ```
 #[derive(Clone)]
-pub struct PrivateTransactionProof(pub ProofWithPublicInputs<F, ConfigNative, D>);
+pub struct PrivTxProof(pub ProofWithPublicInputs<F, ConfigNative, D>);
 
-impl PIHelper for PrivateTransactionProof {
+impl PrivTxProof {
+	pub fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
+		&self.0
+	}
+}
+
+impl PIHelper for PrivTxProof {
 	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
 		&self.0
 	}
@@ -48,7 +54,7 @@ impl PIHelper for PrivateTransactionProof {
 	}
 }
 
-impl PrivateTransactionProof {
+impl PrivTxProof {
 	/// PI[17..45]: Input note nullifiers (one per NOTE_BATCH slot).
 	pub fn input_note_nullifiers(&self) -> [HashOutput; NOTE_BATCH] {
 		core::array::from_fn(|i| {

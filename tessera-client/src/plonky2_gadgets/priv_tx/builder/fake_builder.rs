@@ -15,7 +15,7 @@ use crate::{
 /// Fake transactions have `not_fake_tx = false` and are used to pad empty
 /// aggregation slots. No circuit constraints are enforced beyond the boolean
 /// shape of `not_fake_tx`.
-pub struct FakeTxBuilder {
+pub struct FakeSpendTxBuilder {
 	/// State tree root (passed through to public inputs, not enforced)
 	state_root: HashOutput,
 
@@ -32,7 +32,7 @@ pub struct BuiltFakeTx {
 	mainpool_config_root: HashOutput,
 }
 
-impl FakeTxBuilder {
+impl FakeSpendTxBuilder {
 	/// Create a new fake transaction builder.
 	pub fn new(state_root: HashOutput, mainpool_config_root: HashOutput) -> Self {
 		Self {

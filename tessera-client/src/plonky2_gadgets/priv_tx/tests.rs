@@ -25,7 +25,7 @@ use crate::{
 	StandardAccount, StandardNote, SubpoolId, derive_priv_tx_hash,
 	plonky2_gadgets::{
 		priv_tx::{
-			builder::{FakeTxBuilder, FreshAccTxBuilder, SpendTxBuilder, SpendTxSignatures},
+			builder::{FakeSpendTxBuilder, FreshAccTxBuilder, SpendTxBuilder, SpendTxSignatures},
 			targets::TxKindFlags,
 		},
 		tests::print_common_data,
@@ -123,11 +123,14 @@ fn test_spend_tx_consume_delegated() {
 
 	// Basic PI assertions
 	// TODO: improve PI assertions
-	let tp = crate::PrivateTransactionProof(proven.proof.clone());
+	let tp = crate::PrivTxProof(proven.proof().clone());
 	assert_eq!(tp.not_fake_tx().to_canonical_u64(), 1);
 	assert_eq!(tp.act_root(), state_tree.root());
 
-	circuit.circuit_data.verify(proven.proof).expect("verify failed");
+	circuit
+		.circuit_data
+		.verify(proven.0)
+		.expect("verify failed");
 }
 
 /// Reject an input note sent from acc1 to acc0 (returns it to sender).
@@ -178,11 +181,14 @@ fn test_spend_tx_reject_input_note() {
 		.prove(&circuit.circuit_data, &circuit.targets)
 		.expect("prove failed");
 
-	let tp = crate::PrivateTransactionProof(proven.proof.clone());
+	let tp = crate::PrivTxProof(proven.proof().clone());
 	assert_eq!(tp.not_fake_tx().to_canonical_u64(), 1);
 	assert_eq!(tp.act_root(), state_tree.root());
 
-	circuit.circuit_data.verify(proven.proof).expect("verify failed");
+	circuit
+		.circuit_data
+		.verify(proven.0)
+		.expect("verify failed");
 }
 
 /// Spend from acc0's existing balance, creating an output note to acc1.
@@ -233,11 +239,14 @@ fn test_spend_tx_spend_from_balance() {
 		.prove(&circuit.circuit_data, &circuit.targets)
 		.expect("prove failed");
 
-	let tp = crate::PrivateTransactionProof(proven.proof.clone());
+	let tp = crate::PrivTxProof(proven.proof().clone());
 	assert_eq!(tp.not_fake_tx().to_canonical_u64(), 1);
 	assert_eq!(tp.act_root(), state_tree.root());
 
-	circuit.circuit_data.verify(proven.proof).expect("verify failed");
+	circuit
+		.circuit_data
+		.verify(proven.0)
+		.expect("verify failed");
 }
 
 /// Consume an input note with non-delegated consume auth (own consume key).
@@ -298,24 +307,30 @@ fn test_spend_tx_consume_non_delegated() {
 		.prove(&circuit.circuit_data, &circuit.targets)
 		.expect("prove failed");
 
-	let tp = crate::PrivateTransactionProof(proven.proof.clone());
+	let tp = crate::PrivTxProof(proven.proof().clone());
 	assert_eq!(tp.not_fake_tx().to_canonical_u64(), 1);
 	assert_eq!(tp.act_root(), state_tree.root());
 
-	circuit.circuit_data.verify(proven.proof).expect("verify failed");
+	circuit
+		.circuit_data
+		.verify(proven.0)
+		.expect("verify failed");
 }
 
 #[test]
 fn test_fake_spend_tx() {
 	let zerohash = HashOutput([F::ZERO; 4]);
 	let circuit = build_priv_tx_circuit();
-	let priv_tx = FakeTxBuilder::new(zerohash, zerohash)
+	let priv_tx = FakeSpendTxBuilder::new(zerohash, zerohash)
 		.build()
 		.into_priv_tx();
 	let proven = priv_tx
 		.prove(&circuit.circuit_data, &circuit.targets)
 		.expect("prove failed");
-	circuit.circuit_data.verify(proven.proof).expect("verify failed");
+	circuit
+		.circuit_data
+		.verify(proven.0)
+		.expect("verify failed");
 }
 
 #[test]
@@ -362,8 +377,10 @@ fn test_prove_fresh_acc_tx() {
 		.prove(&circuit.circuit_data, &circuit.targets)
 		.expect("prove failed");
 
-	let tp = crate::PrivateTransactionProof(proven.proof.clone());
-	assert_eq!(tp.not_fake_tx().to_canonical_u64(), 1);
+	assert_eq!(proven.not_fake_tx().to_canonical_u64(), 1);
 
-	circuit.circuit_data.verify(proven.proof).expect("verify failed");
+	circuit
+		.circuit_data
+		.verify(proven.0)
+		.expect("verify failed");
 }

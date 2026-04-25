@@ -1,4 +1,4 @@
-use tessera_client::{NOTE_BATCH, PRIV_TX_BATCH_SIZE, SUBTREE_BATCHSIZE};
+use tessera_client::{FakeSpendTxBuilder, NOTE_BATCH, PRIV_TX_BATCH_SIZE, SUBTREE_BATCHSIZE};
 
 // ── E2E test ─────────────────────────────────────────────────────────────────
 //
@@ -12,15 +12,11 @@ use tessera_client::{NOTE_BATCH, PRIV_TX_BATCH_SIZE, SUBTREE_BATCHSIZE};
 fn priv_tx_batch_to_groth16_e2e() {
 	use std::path::Path;
 
-	use plonky2::field::types::{Field, PrimeField64};
-	use tessera_client::{
-		build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PrivTxInputs, PrivateTransactionProof,
-		TesseraGateSerializer,
-	};
+	use plonky2::field::types::PrimeField64;
+	use tessera_client::{build_priv_tx_circuit, TesseraGateSerializer};
 	use tessera_utils::{
 		groth::{BN128Wrapper, Groth16Wrapper},
 		hasher::HashOutput,
-		F,
 	};
 
 	use super::PrivTxAggregator;
@@ -65,25 +61,19 @@ fn priv_tx_batch_to_groth16_e2e() {
 
 	// ── 2. Populate and finalize a PrivateTxBatch ────────────────────────────
 	// Add 1 dummy proof; finalize() pads the remaining 63 slots automatically.
-	let zero = HashOutput([F::ZERO; 4]);
-	let zero4 = [F::ZERO; 4];
-	let (circuit, targets) = build_priv_tx_circuit();
-	let leaf_proof = prove_priv_tx(
-		&circuit,
-		&targets,
-		PrivTxInputs::Fake(FakeTxInputs {
-			state_root: zero,
-			mainpool_config_root: zero,
-			override_an: zero4,
-			override_ac: zero4,
-			override_nn: [zero4; NOTE_BATCH],
-			override_nc: [zero4; NOTE_BATCH],
-		}),
-	);
+	let privtx_circ = build_priv_tx_circuit();
+	let fake_privtx_proof = FakeSpendTxBuilder::new(
+		HashOutput(Default::default()),
+		HashOutput(Default::default()),
+	)
+	.build()
+	.into_priv_tx()
+	.prove(&privtx_circ.circuit_data, &privtx_circ.targets)
+	.expect("FakeSpendTxBuilder prove failed");
 
 	let mut batch = PrivateTxBatch::new();
 	batch
-		.add_proof(TxProof::Private(PrivateTransactionProof(leaf_proof)))
+		.add_proof(TxProof::Private(fake_privtx_proof))
 		.expect("add_proof");
 	batch.finalize().expect("finalize");
 

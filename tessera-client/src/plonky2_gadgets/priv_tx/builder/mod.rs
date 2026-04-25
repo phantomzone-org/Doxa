@@ -108,10 +108,10 @@ mod fake_builder;
 mod freshacc_builder;
 mod spend_builder;
 
-pub use built_priv_tx::{BuiltPrivTx, PrivTxPublicInputs, ProvenPrivTx};
+pub use built_priv_tx::{BuiltPrivTx, PrivTxPublicInputs};
 pub use errors::{
 	FakeTxBuilderError, FreshAccTxBuilderError, PrivTxProveError, SpendTxBuilderError, TxSignError,
 };
-pub use fake_builder::{BuiltFakeTx, FakeTxBuilder};
+pub use fake_builder::{BuiltFakeTx, FakeSpendTxBuilder};
 pub use freshacc_builder::{BuiltFreshAccTx, FreshAccTxBuilder};
 pub use spend_builder::{BuiltSpendTx, RequiredSignatures, SpendTxBuilder, SpendTxSignatures};

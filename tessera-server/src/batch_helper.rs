@@ -1,11 +1,11 @@
 use anyhow::Result;
 use plonky2::{field::types::PrimeField64, plonk::proof::ProofWithPublicInputs};
 use tessera_client::{
-	DepositProof, HashOutput, PIHelper, PrivateTransactionProof, WithdrawProof, SUBTREE_BATCHSIZE,
+	DepositProof, HashOutput, PIHelper, PrivTxProof, WithdrawProof, SUBTREE_BATCHSIZE,
 };
 use tessera_utils::{ConfigNative, D, F};
 
-use crate::prover_service::SubtreeRootCircuit;
+use crate::{contract::ITesseraRollupV2::Proof, prover_service::SubtreeRootCircuit};
 
 /// [`PiCommitHash`] that matches Solidity's `keccak256(abi.encodePacked(...))`.
 pub struct SolidityKeccak256;
@@ -53,9 +53,10 @@ pub trait PiCommitHash {
 /// 3. [`pi_commitment`](Self::pi_commitment) — produce the keccak commitment submitted on-chain.
 pub trait BatchHelper {
 	const PROOF_BATCH_SIZE: usize;
+	type Proof: PIHelper;
 
 	/// Returns all proofs currently stored in the batch.
-	fn proofs(&self) -> &[TxProof];
+	fn proofs(&self) -> &[Self::Proof];
 
 	fn common_act_root(&self) -> Result<HashOutput>;
 
@@ -152,7 +153,7 @@ fn push_fields(words: &mut Vec<u32>, fields: &[F]) {
 pub enum TxProof {
 	Deposit(DepositProof),
 	Withdraw(WithdrawProof),
-	Private(PrivateTransactionProof),
+	Private(PrivTxProof),
 	None(),
 }
 
@@ -247,8 +248,8 @@ mod tests {
 	fn pi_commitment_output_is_32_bytes() {
 		use plonky2::field::types::Field;
 		use tessera_client::{
-			build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PrivTxInputs,
-			PrivateTransactionProof, NOTE_BATCH,
+			build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PrivTxInputs, PrivTxProof,
+			NOTE_BATCH,
 		};
 
 		use crate::prover_service::priv_tx::batch_helper::PrivateTxBatch;
@@ -270,7 +271,7 @@ mod tests {
 
 		let mut batch = PrivateTxBatch::new();
 		batch
-			.add_proof(TxProof::Private(PrivateTransactionProof(proof)))
+			.add_proof(TxProof::Private(PrivTxProof(proof)))
 			.unwrap();
 		batch.finalize().unwrap();
 

@@ -1,27 +1,26 @@
 use plonky2::{field::types::Field, plonk::circuit_data::CircuitData};
 use tessera_client::{
-	build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PIHelper, PrivTxInputs, PrivTxTargets,
-	PrivateTransactionProof, NOTE_BATCH, PRIV_TX_BATCH_SIZE,
+	build_priv_tx_circuit,
+	plonky2_gadgets::priv_tx::{targets::TxCircuitTargets, PrivTxCircuit},
+	FakeSpendTxBuilder, PIHelper, PrivTxProof, NOTE_BATCH, PRIV_TX_BATCH_SIZE,
 };
-use tessera_utils::{hasher::HashOutput, ConfigNative, D, F};
+use tessera_utils::{hasher::HashOutput, D, F};
 
 use crate::batch_helper::{BatchHelper, TxProof};
 
 pub struct PrivateTxBatch {
 	proofs: Vec<TxProof>,
 	batch_poseidon_root: Option<HashOutput>,
-	circuit: CircuitData<F, ConfigNative, D>,
-	targets: PrivTxTargets<D>,
+	circuit: PrivTxCircuit,
 }
 
 impl PrivateTxBatch {
 	pub fn new() -> Self {
-		let (circuit, targets) = build_priv_tx_circuit();
+		let circuit = build_priv_tx_circuit();
 		Self {
 			proofs: Vec::new(),
 			batch_poseidon_root: None,
 			circuit,
-			targets,
 		}
 	}
 
@@ -101,25 +100,12 @@ impl BatchHelper for PrivateTxBatch {
 		if n_padding > 0 {
 			let act_root = self.proofs[0].act_root();
 			let mainpool_config_root = self.proofs[0].mainpool_config_root();
-			let zero4 = [F::ZERO; 4];
-
-			let padding_proof = prove_priv_tx(
-				&self.circuit,
-				&self.targets,
-				PrivTxInputs::Fake(FakeTxInputs {
-					state_root: act_root,
-					mainpool_config_root,
-					override_an: zero4,
-					override_ac: zero4,
-					override_nn: [zero4; NOTE_BATCH],
-					override_nc: [zero4; NOTE_BATCH],
-				}),
-			);
-
+			let padding_proof = FakeSpendTxBuilder::new(act_root, mainpool_config_root)
+				.build()
+				.into_priv_tx()
+				.prove(&self.circuit.circuit_data, &self.circuit.targets)?;
 			for _ in 0..n_padding {
-				self.proofs.push(TxProof::Private(PrivateTransactionProof(
-					padding_proof.clone(),
-				)));
+				self.proofs.push(TxProof::Private(padding_proof.clone()));
 			}
 		}
 
@@ -139,44 +125,11 @@ impl BatchHelper for PrivateTxBatch {
 #[cfg(test)]
 mod tests {
 	use plonky2::field::types::Field;
-	use tessera_client::{
-		build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PrivTxInputs, PrivateTransactionProof,
-		NOTE_BATCH, PRIV_TX_BATCH_SIZE,
-	};
+	use tessera_client::{build_priv_tx_circuit, PrivTxProof, NOTE_BATCH, PRIV_TX_BATCH_SIZE};
 	use tessera_utils::{hasher::HashOutput, F};
 
 	use super::*;
 	use crate::batch_helper::{BatchHelper, SolidityKeccak256, TxProof};
-
-	// ── Helpers ──────────────────────────────────────────────────────────────
-
-	fn zero_hash() -> HashOutput {
-		HashOutput([F::ZERO; 4])
-	}
-
-	fn alt_hash() -> HashOutput {
-		HashOutput([F::ONE, F::ZERO, F::ZERO, F::ZERO])
-	}
-
-	/// Generate a fake private-tx proof carrying the given common roots.
-	/// Mirrors exactly what `PrivateTxBatch::finalize` does for padding proofs.
-	fn make_priv_proof(act_root: HashOutput, config_root: HashOutput) -> TxProof {
-		let (circuit, targets) = build_priv_tx_circuit();
-		let zero4 = [F::ZERO; 4];
-		let proof = prove_priv_tx(
-			&circuit,
-			&targets,
-			PrivTxInputs::Fake(FakeTxInputs {
-				state_root: act_root,
-				mainpool_config_root: config_root,
-				override_an: zero4,
-				override_ac: zero4,
-				override_nn: [zero4; NOTE_BATCH],
-				override_nc: [zero4; NOTE_BATCH],
-			}),
-		);
-		TxProof::Private(PrivateTransactionProof(proof))
-	}
 
 	// ── Cheap tests (no ZK proving) ──────────────────────────────────────────
 

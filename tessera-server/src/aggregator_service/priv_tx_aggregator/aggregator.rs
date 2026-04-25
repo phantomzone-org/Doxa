@@ -5,7 +5,7 @@ use plonky2::{
 	plonk::circuit_data::{CommonCircuitData, VerifierOnlyCircuitData},
 	util::serialization::GateSerializer,
 };
-use tessera_client::{PIHelper, SUBTREE_BATCHSIZE};
+use tessera_client::{FakeSpendTxBuilder, PIHelper, SUBTREE_BATCHSIZE};
 use tessera_utils::{hasher::HashOutput, CircuitDataNative, ConfigNative, ProofNative, D, F};
 
 use super::{circuit::PrivTxSuperCircuit, targets::PrivTxSuperCircuitData};
@@ -159,31 +159,20 @@ impl PrivTxAggregator {
 	/// super-circuit with SR leaves derived from that single leaf's
 	/// `output_commitments` repeated across all slots.
 	pub fn prove_dummy(&self) -> Result<ProofNative> {
-		use plonky2::field::types::Field;
-		use tessera_client::{
-			build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PIHelper, PrivTxInputs,
-			PrivateTransactionProof, NOTE_BATCH,
-		};
+		use tessera_client::{build_priv_tx_circuit, PIHelper};
 		use tessera_utils::hasher::HashOutput;
 
-		let zero = HashOutput([F::ZERO; 4]);
-		let zero4 = [F::ZERO; 4];
-		let (cd, tgts) = build_priv_tx_circuit();
-		let leaf = prove_priv_tx(
-			&cd,
-			&tgts,
-			PrivTxInputs::Fake(FakeTxInputs {
-				state_root: zero,
-				mainpool_config_root: zero,
-				override_an: zero4,
-				override_ac: zero4,
-				override_nn: [zero4; NOTE_BATCH],
-				override_nc: [zero4; NOTE_BATCH],
-			}),
-		);
+		let privtx_circuit = build_priv_tx_circuit();
+		let fake_tx_proof = FakeSpendTxBuilder::new(
+			HashOutput(Default::default()),
+			HashOutput(Default::default()),
+		)
+		.build()
+		.into_priv_tx()
+		.prove(&privtx_circuit.circuit_data, &privtx_circuit.targets)?;
 
 		// Derive SR leaves from the single leaf before moving it.
-		let single_leaves = PrivateTransactionProof(leaf.clone()).output_commitments();
+		let single_leaves = fake_tx_proof.output_commitments();
 		let sr_leaves: Vec<HashOutput> = single_leaves
 			.iter()
 			.cloned()
@@ -191,7 +180,7 @@ impl PrivTxAggregator {
 			.take(SUBTREE_BATCHSIZE)
 			.collect();
 
-		let tx_agg = self.tx_aggregator.aggregate_dummy(leaf)?;
+		let tx_agg = self.tx_aggregator.aggregate_dummy(fake_tx_proof.0)?;
 		let sr_proof = self.subtree_root.prove(&sr_leaves)?;
 		self.super_circuit.prove(tx_agg.proof, sr_proof)
 	}

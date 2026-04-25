@@ -43,7 +43,8 @@ use tessera_utils::{
 
 use super::errors::PrivTxProveError;
 use crate::{
-	NOTE_BATCH, NoteCommitment, NoteNullifier, StandardAccount, StandardNote, SubpoolId,
+	NOTE_BATCH, NoteCommitment, NoteNullifier, PrivTxProof, StandardAccount, StandardNote,
+	SubpoolId,
 	plonky2_gadgets::priv_tx::{
 		targets::{TxCircuitTargets, TxKindFlags},
 		utils::double_hash_native,
@@ -153,12 +154,6 @@ pub struct BuiltPrivTx {
 	pub approval_sig: Option<Signature>,
 }
 
-/// Final proven transaction ready for submission.
-pub struct ProvenPrivTx {
-	pub proof: ProofNative,
-	pub public_inputs: PrivTxPublicInputs,
-}
-
 /// Public inputs extracted from a proven transaction.
 #[derive(Debug, Clone)]
 pub struct PrivTxPublicInputs {
@@ -186,7 +181,7 @@ impl BuiltPrivTx {
 		&self,
 		circuit_data: &CircuitDataNative,
 		targets: &TxCircuitTargets,
-	) -> Result<ProvenPrivTx, PrivTxProveError> {
+	) -> Result<PrivTxProof, PrivTxProveError> {
 		// Build partial witness
 		let mut pw = PartialWitness::new();
 
@@ -199,10 +194,7 @@ impl BuiltPrivTx {
 		// Generate proof
 		let proof = circuit_data.prove(pw)?;
 
-		Ok(ProvenPrivTx {
-			proof,
-			public_inputs: self.extract_public_inputs(),
-		})
+		Ok(PrivTxProof(proof))
 	}
 
 	/// Set witness values for TxCircuitTargets.
@@ -505,72 +497,5 @@ impl BuiltPrivTx {
 		}
 
 		Ok(())
-	}
-
-	/// Extract public inputs from this built transaction.
-	// TODO: why is this method required?
-	fn extract_public_inputs(&self) -> PrivTxPublicInputs {
-		PrivTxPublicInputs {
-			state_root: self.state_root,
-			mainpool_config_root: self.mainpool_config_root,
-			accin_nullifier: self.accin.nullifier().0,
-			accout_commitment: self.accout.commitment().0,
-			input_note_nullifiers: self.compute_input_nullifiers(),
-			output_note_commitments: self.compute_output_commitments(),
-			not_fake_tx: self.tx_kind_flags != TxKindFlags::FAKE,
-		}
-	}
-
-	/// Compute input note nullifiers for all NOTE_BATCH slots.
-	///
-	/// Mirrors the slot layout in `set_notes_witness`:
-	///   slots 0..n_rjct              → rejected input note nullifiers
-	///   slots n_rjct..n_rjct+n_in   → regular input note nullifiers
-	///   remaining                    → dummy nullifiers
-	fn compute_input_nullifiers(&self) -> [NoteNullifier; NOTE_BATCH] {
-		let nk = self.accin.nk();
-		let n_rjct = self.rejected_inotes.len();
-		array::from_fn(|i| {
-			if i < n_rjct {
-				let pos = self.rejected_inotes_nct_proofs[i].pos;
-				self.rejected_inotes[i].nullifier(pos, &nk).unwrap()
-			} else {
-				let j = i - n_rjct;
-				if j < self.inotes.len() {
-					let pos = self.inotes_nct_proofs[j].pos;
-					self.inotes[j].nullifier(pos, &nk).unwrap()
-				} else {
-					NoteNullifier(HashOutput(double_hash_native(
-						self.dinotes[j - self.inotes.len()],
-					)))
-				}
-			}
-		})
-	}
-
-	/// Compute output note commitments for all NOTE_BATCH slots.
-	///
-	/// Mirrors the slot layout in `set_notes_witness`:
-	///   slots 0..n_rjct              → rejected onote commitments (derived from rejected_inotes)
-	///   slots n_rjct..n_rjct+n_out  → regular output note commitments
-	///   remaining                    → dummy commitments
-	fn compute_output_commitments(&self) -> [NoteCommitment; NOTE_BATCH] {
-		let n_rjct = self.rejected_inotes.len();
-		array::from_fn(|i| {
-			if i < n_rjct {
-				let mut onote = self.rejected_inotes[i].clone();
-				onote.recipient = self.rejected_inotes[i].sender;
-				onote.commitment()
-			} else {
-				let j = i - n_rjct;
-				if j < self.onotes.len() {
-					self.onotes[j].commitment()
-				} else {
-					NoteCommitment(HashOutput(double_hash_native(
-						self.donotes[j - self.onotes.len()],
-					)))
-				}
-			}
-		})
 	}
 }

@@ -28,7 +28,10 @@ pub use account::*;
 pub use note::*;
 pub use plonky2_gadgets::{
 	deposit_tx::{DepositProof, DepositTxCircuit, build_deposit_tx_circuit},
-	priv_tx::PrivateTransactionProof,
+	priv_tx::{
+		PrivTxProof, build_priv_tx_circuit,
+		builder::{FakeSpendTxBuilder, SpendTxBuilder},
+	},
 	withdraw_tx::{WithdrawProof, WithdrawTxCircuit, build_withdraw_tx_circuit},
 };
 pub use tessera_utils::hasher::HashOutput;
