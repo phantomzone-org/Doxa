@@ -1,4 +1,7 @@
-use tessera_client::{BRIDGE_TX_BATCH_SIZE, NOTE_BATCH, SUBTREE_BATCHSIZE};
+use tessera_client::{
+	FakeDepositTxBuilder, FakeWithdrawTxBuilder, BRIDGE_TX_BATCH_SIZE, NOTE_BATCH,
+	SUBTREE_BATCHSIZE,
+};
 
 // ── E2E test ─────────────────────────────────────────────────────────────────
 //
@@ -12,15 +15,13 @@ use tessera_client::{BRIDGE_TX_BATCH_SIZE, NOTE_BATCH, SUBTREE_BATCHSIZE};
 fn bridge_tx_batch_to_groth16_e2e() {
 	use std::path::Path;
 
-	use plonky2::field::types::{Field, PrimeField64};
+	use plonky2::field::types::PrimeField64;
 	use tessera_client::{
-		build_deposit_tx_circuit, build_withdraw_tx_circuit, DepositProof, TesseraGateSerializer,
-		WithdrawProof,
+		build_deposit_tx_circuit, build_withdraw_tx_circuit, TesseraGateSerializer,
 	};
 	use tessera_utils::{
 		groth::{BN128Wrapper, Groth16Wrapper},
 		hasher::HashOutput,
-		F,
 	};
 
 	use super::BridgeTxAggregator;
@@ -69,23 +70,24 @@ fn bridge_tx_batch_to_groth16_e2e() {
 
 	// ── 2. Populate and finalize a BridgeTxBatch ─────────────────────────────
 	// Add 1 withdraw + 1 deposit proof; finalize() pads the remaining slots.
-	let zero = HashOutput([F::ZERO; 4]);
 	let w_circuit = build_withdraw_tx_circuit();
 	let d_circuit = build_deposit_tx_circuit();
-	let w_proof = w_circuit.prove_padding(zero, zero);
-	let d_proof = d_circuit.prove_padding(zero, zero);
+	let sr = HashOutput(Default::default());
+	let mr = HashOutput(Default::default());
+	let w_proof = FakeWithdrawTxBuilder::new(sr, mr)
+		.build()
+		.into_withdraw_tx()
+		.prove(&w_circuit)
+		.expect("FakeWithdrawTxBuilder build failed");
+	let d_proof = FakeDepositTxBuilder::new(sr, mr)
+		.build()
+		.into_deposit_tx()
+		.prove(&d_circuit)
+		.expect("FakeDepositTxBuilder build failed");
 
 	let mut batch = BridgeTxBatch::new();
-	batch
-		.add_proof(TxProof::Withdraw(WithdrawProof {
-			proof: w_proof,
-		}))
-		.expect("add withdraw proof");
-	batch
-		.add_proof(TxProof::Deposit(DepositProof {
-			proof: d_proof,
-		}))
-		.expect("add deposit proof");
+	batch.add_proof(w_proof.into()).expect("add withdraw proof");
+	batch.add_proof(d_proof.into()).expect("add deposit proof");
 	batch.finalize().expect("finalize");
 
 	assert_eq!(batch.proofs().len(), BRIDGE_TX_BATCH_SIZE);
@@ -98,6 +100,7 @@ fn bridge_tx_batch_to_groth16_e2e() {
 	let super_proof = agg.prove(&batch).expect("BridgeTxAggregator::prove");
 	assert_eq!(super_proof.public_inputs.len(), 8);
 
+	// TODO: come up with better method to translate PI to Vec<u8>
 	let pi_from_proof: [u8; 32] = {
 		let mut out = [0u8; 32];
 		for (i, f) in super_proof.public_inputs.iter().enumerate() {

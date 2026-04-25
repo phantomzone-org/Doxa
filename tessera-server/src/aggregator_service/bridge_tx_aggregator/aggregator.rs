@@ -47,7 +47,7 @@ const PAIR_LEAF_D_VERIFIER_PATH: &str = "d_verifier.bin";
 
 /// The pair leaf circuit: verifies one (Withdraw, Deposit) proof pair and emits
 /// combined public inputs `[act_root(4) | mainpool(4) | w_unique | d_unique]`.
-struct PairLeaf {
+struct PairLeafCircuit {
 	circuit_data: CircuitDataNative,
 	w_proof: ProofWithPublicInputsTarget<D>,
 	d_proof: ProofWithPublicInputsTarget<D>,
@@ -55,7 +55,7 @@ struct PairLeaf {
 	inner: BridgeTxPairLeafData, // TODO: why isn't this Arced?
 }
 
-impl PairLeaf {
+impl PairLeafCircuit {
 	/// Build the pair leaf circuit from the two inner leaf circuit descriptors.
 	fn build(inner: BridgeTxPairLeafData) -> Result<Self> {
 		let (builder, w_proof, d_proof) = build_pair_leaf(&inner);
@@ -228,7 +228,7 @@ impl PairLeaf {
 /// └── super-circuit/          ← BridgeTxSuperCircuit
 /// ```
 pub struct BridgeTxAggregator {
-	pair_leaf: PairLeaf,
+	pair_leaf: PairLeafCircuit,
 	pair_aggregator: GenericAggregator<F, ConfigNative, D>,
 	subtree_root: SubtreeRootCircuit,
 	super_circuit: BridgeTxSuperCircuit,
@@ -245,7 +245,7 @@ impl BridgeTxAggregator {
 		deposit_leaf_common: CommonCircuitData<F, D>,
 		deposit_leaf_verifier: VerifierOnlyCircuitData<ConfigNative, D>,
 	) -> Result<Self> {
-		let pair_leaf = PairLeaf::build(BridgeTxPairLeafData {
+		let pair_leaf = PairLeafCircuit::build(BridgeTxPairLeafData {
 			withdraw_common: withdraw_leaf_common,
 			withdraw_verifier: withdraw_leaf_verifier,
 			deposit_common: deposit_leaf_common,
@@ -350,7 +350,7 @@ impl BridgeTxAggregator {
 		let pair_aggregator =
 			GenericAggregator::from_artifacts(&path.join(PAIR_AGG_DIR), &DefaultGateSerializer)?;
 		let pair_leaf =
-			PairLeaf::from_artifacts(&path.join(PAIR_LEAF_DIR), w_gate_ser, d_gate_ser)?;
+			PairLeafCircuit::from_artifacts(&path.join(PAIR_LEAF_DIR), w_gate_ser, d_gate_ser)?;
 		let subtree_root =
 			SubtreeRootCircuit::from_artifacts(&path.join(SUBTREE_ROOT_DIR), SUBTREE_BATCHSIZE)?;
 		let super_circuit = BridgeTxSuperCircuit::from_artifacts(
@@ -392,11 +392,11 @@ impl BridgeTxAggregator {
 		let w_proof = FakeWithdrawTxBuilder::new(zero, zero)
 			.build()
 			.into_withdraw_tx()
-			.prove(&w_circuit);
+			.prove(&w_circuit)?;
 		let d_proof = FakeDepositTxBuilder::new(zero, zero)
 			.build()
 			.into_deposit_tx()
-			.prove(&d_circuit);
+			.prove(&d_circuit)?;
 
 		// Derive SR leaves from a single pair before consuming the proofs.
 		let w_single = w_proof.output_commitments();
@@ -421,7 +421,7 @@ impl BridgeTxAggregator {
 		if !GenericAggregator::<F, ConfigNative, D>::has_full_artifacts(&path.join(PAIR_AGG_DIR))? {
 			return Ok(false);
 		}
-		if !PairLeaf::has_artifacts(&path.join(PAIR_LEAF_DIR)) {
+		if !PairLeafCircuit::has_artifacts(&path.join(PAIR_LEAF_DIR)) {
 			return Ok(false);
 		}
 		if !SubtreeRootCircuit::has_artifacts(&path.join(SUBTREE_ROOT_DIR)) {

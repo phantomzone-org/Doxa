@@ -73,7 +73,7 @@ fn test_prove_withdraw_tx() {
 	let accout = built.accout().clone();
 	let withdraw_tx = built.into_withdraw_tx(&act, &main_pool).unwrap();
 
-	let wp = withdraw_tx.prove(&circuit);
+	let wp = withdraw_tx.prove(&circuit).expect("prove failed");
 	circuit.circuit_data.verify(wp.proof.clone()).unwrap();
 
 	// ── PI accessor checks ────────────────────────────────────────────
@@ -142,6 +142,6 @@ fn test_fake_withdraw_tx() {
 	.build()
 	.into_withdraw_tx();
 
-	let wp = withdraw_tx.prove(&circuit);
+	let wp = withdraw_tx.prove(&circuit).expect("prove failed");
 	circuit.circuit_data.verify(wp.proof).unwrap();
 }

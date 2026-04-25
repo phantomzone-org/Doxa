@@ -73,7 +73,7 @@ fn test_prove_deposit_tx() {
 	let provable = built
 		.into_deposit_tx(&act, subpool_proof)
 		.expect("into_deposit_tx failed");
-	let dp = provable.prove(&circuit);
+	let dp = provable.prove(&circuit).expect("prove failed");
 
 	// ── Verify ────────────────────────────────────────────────────────────
 	circuit.circuit_data.verify(dp.proof.clone()).expect("verify failed");
@@ -120,6 +120,6 @@ fn test_fake_tx() {
 	.build()
 	.into_deposit_tx();
 
-	let dp = deposit_tx.prove(&circuit);
+	let dp = deposit_tx.prove(&circuit).expect("prove failed");
 	circuit.circuit_data.verify(dp.proof).expect("verify failed");
 }

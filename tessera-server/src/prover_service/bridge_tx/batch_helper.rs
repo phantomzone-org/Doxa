@@ -177,7 +177,7 @@ impl BatchHelper for BridgeTxBatch {
 			let padding = FakeWithdrawTxBuilder::new(act_root, mainpool_config_root)
 				.build()
 				.into_withdraw_tx()
-				.prove(&self.withdraw_circuit);
+				.prove(&self.withdraw_circuit)?;
 			for _ in 0..n_withdraw_padding {
 				self.withdraw_half
 					.push(BridgeTxProof::from(padding.clone()));
@@ -190,7 +190,7 @@ impl BatchHelper for BridgeTxBatch {
 			let padding = FakeDepositTxBuilder::new(act_root, mainpool_config_root)
 				.build()
 				.into_deposit_tx()
-				.prove(&self.deposit_circuit);
+				.prove(&self.deposit_circuit)?;
 			for _ in 0..n_deposit_padding {
 				self.deposit_half.push(BridgeTxProof::from(padding.clone()));
 			}
@@ -243,7 +243,8 @@ mod tests {
 			FakeWithdrawTxBuilder::new(act_root, config_root)
 				.build()
 				.into_withdraw_tx()
-				.prove(&circuit),
+				.prove(&circuit)
+				.expect("withdraw prove failed"),
 		)
 	}
 
@@ -253,7 +254,8 @@ mod tests {
 			FakeDepositTxBuilder::new(st_root, config_root)
 				.build()
 				.into_deposit_tx()
-				.prove(&circuit),
+				.prove(&circuit)
+				.expect("deposit prove failed"),
 		)
 	}
 

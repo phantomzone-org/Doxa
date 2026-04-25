@@ -383,7 +383,7 @@ pub struct BuiltWithdrawTx {
 
 impl BuiltWithdrawTx {
 	/// Generate a zero-knowledge proof for this withdrawal transaction.
-	pub fn prove(self, circuit: &WithdrawTxCircuit) -> WithdrawProof {
+	pub fn prove(self, circuit: &WithdrawTxCircuit) -> anyhow::Result<WithdrawProof> {
 		let mut pw = PartialWitness::new();
 		let t = &circuit.targets;
 
@@ -399,23 +399,19 @@ impl BuiltWithdrawTx {
 		) = compute_withdrawal_slots(&self.accin, &self.withdrawals);
 
 		// ── Public inputs ─────────────────────────────────────────────────────
-		pw.set_bool_target(t.public.not_fake_tx, self.not_fake_tx)
-			.unwrap();
-		pw.set_hash_target(t.public.root.0, self.state_root.to_hash_out())
-			.unwrap();
+		pw.set_bool_target(t.public.not_fake_tx, self.not_fake_tx)?;
+		pw.set_hash_target(t.public.root.0, self.state_root.to_hash_out())?;
 		pw.set_hash_target(
 			t.public.mainpool_config_root.0,
 			self.main_pool_root.to_hash_out(),
-		)
-		.unwrap();
+		)?;
 		for (i, id) in slot_asset_ids.iter().enumerate() {
-			pw.set_target(t.public.asset_ids[i].0, id.0).unwrap();
+			pw.set_target(t.public.asset_ids[i].0, id.0)?;
 		}
 		for (i, amt) in slot_withdrawal_amts.iter().enumerate() {
 			t.public.withdrawal_amts[i].set(&mut pw, *amt);
 		}
-		pw.set_target_arr(&t.public.w_acc_addr, &map_h160_to_f(self.w_acc_addr))
-			.unwrap();
+		pw.set_target_arr(&t.public.w_acc_addr, &map_h160_to_f(self.w_acc_addr))?;
 
 		// ── Private witness ───────────────────────────────────────────────────
 		let priv_t = &t.private;
@@ -426,10 +422,8 @@ impl BuiltWithdrawTx {
 		for i in 0..NOTE_BATCH {
 			priv_t.accin_amts[i].set(&mut pw, slot_accin_amts[i]);
 			priv_t.accout_amts[i].set(&mut pw, slot_accout_amts[i]);
-			pw.set_bool_target(priv_t.asset_exists_in_accin[i], slot_exists_in[i])
-				.unwrap();
-			pw.set_bool_target(priv_t.asset_exists_in_accout[i], slot_exists_out[i])
-				.unwrap();
+			pw.set_bool_target(priv_t.asset_exists_in_accin[i], slot_exists_in[i])?;
+			pw.set_bool_target(priv_t.asset_exists_in_accout[i], slot_exists_out[i])?;
 			priv_t.ast_merkles[i].set_witness(&mut pw, &slot_proofs[i]);
 		}
 
@@ -464,10 +458,7 @@ impl BuiltWithdrawTx {
 			None => priv_t.spend_sig.set_dummy(&mut pw, spend_pk),
 		}
 
-		let proof = circuit
-			.circuit_data
-			.prove(pw)
-			.expect("withdraw proof generation failed");
-		WithdrawProof { proof }
+		let proof = circuit.circuit_data.prove(pw)?;
+		Ok(WithdrawProof { proof })
 	}
 }

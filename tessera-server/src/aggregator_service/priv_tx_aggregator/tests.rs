@@ -21,7 +21,7 @@ fn priv_tx_batch_to_groth16_e2e() {
 
 	use super::PrivTxAggregator;
 	use crate::{
-		batch_helper::{BatchHelper, SolidityKeccak256, TxProof},
+		batch_helper::{BatchHelper, SolidityKeccak256},
 		prover_service::priv_tx::PrivateTxBatch,
 	};
 
@@ -72,9 +72,7 @@ fn priv_tx_batch_to_groth16_e2e() {
 	.expect("FakeSpendTxBuilder prove failed");
 
 	let mut batch = PrivateTxBatch::new();
-	batch
-		.add_proof(TxProof::Private(fake_privtx_proof))
-		.expect("add_proof");
+	batch.add_proof(fake_privtx_proof).expect("add_proof");
 	batch.finalize().expect("finalize");
 
 	assert_eq!(batch.proofs().len(), PRIV_TX_BATCH_SIZE);
@@ -87,6 +85,7 @@ fn priv_tx_batch_to_groth16_e2e() {
 	let super_proof = agg.prove(&batch).expect("PrivTxAggregator::prove");
 	assert_eq!(super_proof.public_inputs.len(), 8);
 
+	// TODO: better way to map PI to Vec<u8>
 	let pi_from_proof: [u8; 32] = {
 		let mut out = [0u8; 32];
 		for (i, f) in super_proof.public_inputs.iter().enumerate() {

@@ -404,7 +404,7 @@ pub struct BuiltDepositTx {
 
 impl BuiltDepositTx {
 	/// Generate a zero-knowledge proof for this deposit transaction.
-	pub fn prove(self, circuit: &DepositTxCircuit) -> DepositProof {
+	pub fn prove(self, circuit: &DepositTxCircuit) -> anyhow::Result<DepositProof> {
 		let mut pw = PartialWitness::new();
 		let t = &circuit.targets;
 
@@ -438,10 +438,8 @@ impl BuiltDepositTx {
 		priv_t.deposit_note.set(&mut pw, self.deposit_note);
 		priv_t.accin_amt.set(&mut pw, accin_amt);
 		priv_t.accout_amt.set(&mut pw, accout_amt);
-		pw.set_bool_target(priv_t.asset_exists_in_accin, asset_exists_in_accin)
-			.unwrap();
-		pw.set_bool_target(priv_t.asset_exists_in_accout, asset_exists_in_accout)
-			.unwrap();
+		pw.set_bool_target(priv_t.asset_exists_in_accin, asset_exists_in_accin)?;
+		pw.set_bool_target(priv_t.asset_exists_in_accout, asset_exists_in_accout)?;
 		priv_t
 			.accin_act_merkle
 			.set_witness(&mut pw, &self.accin_act_merkle_proof);
@@ -477,12 +475,7 @@ impl BuiltDepositTx {
 				.set_dummy(&mut pw, self.approval_key),
 		}
 
-		let proof = circuit
-			.circuit_data
-			.prove(pw)
-			.expect("deposit proof generation failed");
-		DepositProof {
-			proof,
-		}
+		let proof = circuit.circuit_data.prove(pw)?;
+		Ok(DepositProof { proof })
 	}
 }
