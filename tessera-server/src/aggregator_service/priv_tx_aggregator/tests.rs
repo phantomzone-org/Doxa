@@ -26,7 +26,7 @@ fn priv_tx_batch_to_groth16_e2e() {
 	};
 
 	// ── Artifact paths ───────────────────────────────────────────────────────
-	let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+	let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
 	let agg_path = workspace.join("artifacts/priv-tx");
 	let plonky2_path = agg_path.join("plonky2-proof");
 	let groth_path = agg_path.join("groth-artifacts");
