@@ -1,11 +1,9 @@
 use anyhow::Result;
-use plonky2::{field::types::PrimeField64, plonk::proof::ProofWithPublicInputs};
-use tessera_client::{
-	DepositProof, HashOutput, PIHelper, PrivTxProof, WithdrawProof, SUBTREE_BATCHSIZE,
-};
-use tessera_utils::{ConfigNative, D, F};
+use plonky2::field::types::PrimeField64;
+use tessera_client::{HashOutput, PIHelper, SUBTREE_BATCHSIZE};
+use tessera_utils::{D, F};
 
-use crate::{contract::ITesseraRollupV2::Proof, prover_service::SubtreeRootCircuit};
+use crate::prover_service::SubtreeRootCircuit;
 
 /// [`PiCommitHash`] that matches Solidity's `keccak256(abi.encodePacked(...))`.
 pub struct SolidityKeccak256;
@@ -69,7 +67,7 @@ pub trait BatchHelper {
 	/// Add a proof to the next available slot.
 	///
 	/// Returns `Ok(true)` when the batch is now full (caller should flush).
-	fn add_proof(&mut self, proof: TxProof) -> Result<bool>;
+	fn add_proof(&mut self, proof: Self::Proof) -> Result<bool>;
 
 	/// Whether the batch is at capacity (no more slots available).
 	fn is_full(&self) -> bool {
@@ -144,56 +142,13 @@ fn push_fields(words: &mut Vec<u32>, fields: &[F]) {
 // TxProof — unified proof type covering all three transaction kinds
 // ---------------------------------------------------------------------------
 
-/// A single transaction proof, covering all three kinds supported by Tessera.
-///
-/// All variants share the uniform [`PIHelper`] prefix
-/// (`act_root | mainpool_config_root | not_fake_tx | accin_null | accout_comm`),
-/// so batches can iterate over slots uniformly via [`PIHelper::pis`].
-#[derive(Clone)]
-pub enum TxProof {
-	Deposit(DepositProof),
-	Withdraw(WithdrawProof),
-	Private(PrivTxProof),
-	None(),
-}
-
-impl PIHelper for TxProof {
-	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
-		match self {
-			Self::Deposit(p) => p.proof(),
-			Self::Withdraw(p) => p.proof(),
-			Self::Private(p) => p.proof(),
-			Self::None() => panic!("None Proof"),
-		}
-	}
-
-	fn output_commitments(&self) -> Vec<HashOutput> {
-		match self {
-			Self::Deposit(p) => p.output_commitments(),
-			Self::Withdraw(p) => p.output_commitments(),
-			Self::Private(p) => p.output_commitments(),
-			Self::None() => panic!("None Proof"),
-		}
-	}
-}
-
-impl TxProof {
-	pub fn kind(&self) -> &'static str {
-		match self {
-			TxProof::Private(_) => "Private",
-			TxProof::Deposit(_) => "Deposit",
-			TxProof::Withdraw(_) => "Withdraw",
-			TxProof::None() => "None",
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
+	use tessera_client::FakeSpendTxBuilder;
 	use tessera_utils::{hasher::HashOutput, F};
 
 	use super::*;
@@ -225,13 +180,6 @@ mod tests {
 		assert_eq!(h.len(), 32, "keccak256 output must be 32 bytes");
 	}
 
-	// ── TxProof::kind ─────────────────────────────────────────────────────────
-
-	#[test]
-	fn tx_proof_kind_none() {
-		assert_eq!(TxProof::None().kind(), "None");
-	}
-
 	// ── pi_commitment word layout ─────────────────────────────────────────────
 
 	/// The `pi_commitment` preimage contains exactly
@@ -246,33 +194,21 @@ mod tests {
 	#[test]
 	#[ignore]
 	fn pi_commitment_output_is_32_bytes() {
-		use plonky2::field::types::Field;
-		use tessera_client::{
-			build_priv_tx_circuit, prove_priv_tx, FakeTxInputs, PrivTxInputs, PrivTxProof,
-			NOTE_BATCH,
-		};
+		use tessera_client::build_priv_tx_circuit;
 
 		use crate::prover_service::priv_tx::batch_helper::PrivateTxBatch;
 
-		let (circuit, targets) = build_priv_tx_circuit();
-		let zero4 = [F::ZERO; 4];
-		let proof = prove_priv_tx(
-			&circuit,
-			&targets,
-			PrivTxInputs::Fake(FakeTxInputs {
-				state_root: HashOutput([F::ZERO; 4]),
-				mainpool_config_root: HashOutput([F::ZERO; 4]),
-				override_an: zero4,
-				override_ac: zero4,
-				override_nn: [zero4; NOTE_BATCH],
-				override_nc: [zero4; NOTE_BATCH],
-			}),
-		);
-
+		let circ = build_priv_tx_circuit();
+		let proof = FakeSpendTxBuilder::new(
+			HashOutput(Default::default()),
+			HashOutput(Default::default()),
+		)
+		.build()
+		.into_priv_tx()
+		.prove(&circ.circuit_data, &circ.targets)
+		.expect("FakeSpendTxBuilder proof failed");
 		let mut batch = PrivateTxBatch::new();
-		batch
-			.add_proof(TxProof::Private(PrivTxProof(proof)))
-			.unwrap();
+		batch.add_proof(proof).unwrap();
 		batch.finalize().unwrap();
 
 		let commitment = batch.pi_commitment::<SolidityKeccak256>().unwrap();

@@ -4,7 +4,7 @@ use tessera_client::{
 };
 use tessera_utils::hasher::HashOutput;
 
-use crate::batch_helper::{BatchHelper, TxProof};
+use crate::batch_helper::BatchHelper;
 
 pub struct BridgeTxBatch {
 	proofs: Vec<TxProof>,

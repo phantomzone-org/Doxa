@@ -1,15 +1,13 @@
-use plonky2::{field::types::Field, plonk::circuit_data::CircuitData};
 use tessera_client::{
-	build_priv_tx_circuit,
-	plonky2_gadgets::priv_tx::{targets::TxCircuitTargets, PrivTxCircuit},
-	FakeSpendTxBuilder, PIHelper, PrivTxProof, NOTE_BATCH, PRIV_TX_BATCH_SIZE,
+	build_priv_tx_circuit, plonky2_gadgets::priv_tx::PrivTxCircuit, FakeSpendTxBuilder, PIHelper,
+	PrivTxProof, PRIV_TX_BATCH_SIZE,
 };
-use tessera_utils::{hasher::HashOutput, D, F};
+use tessera_utils::hasher::HashOutput;
 
-use crate::batch_helper::{BatchHelper, TxProof};
+use crate::batch_helper::BatchHelper;
 
 pub struct PrivateTxBatch {
-	proofs: Vec<TxProof>,
+	proofs: Vec<PrivTxProof>,
 	batch_poseidon_root: Option<HashOutput>,
 	circuit: PrivTxCircuit,
 }
@@ -40,28 +38,24 @@ impl Default for PrivateTxBatch {
 }
 
 impl BatchHelper for PrivateTxBatch {
+	type Proof = PrivTxProof;
+
 	const PROOF_BATCH_SIZE: usize = PRIV_TX_BATCH_SIZE;
 
-	fn add_proof(&mut self, proof: TxProof) -> anyhow::Result<bool> {
+	fn add_proof(&mut self, proof: PrivTxProof) -> anyhow::Result<bool> {
 		anyhow::ensure!(!self.is_full(), "batch is full");
 		anyhow::ensure!(!self.is_finalized(), "batch is already finalized");
-
-		match proof {
-			TxProof::Private(_) => {
-				if !self.proofs.is_empty() {
-					anyhow::ensure!(
-						proof.act_root() == self.proofs[0].act_root(),
-						"act_root mismatch"
-					);
-					anyhow::ensure!(
-						proof.mainpool_config_root() == self.proofs[0].mainpool_config_root(),
-						"mainpool_config_root mismatch"
-					);
-				}
-				self.proofs.push(proof);
-			},
-			other => anyhow::bail!("expected TxProof::Private, got {}", other.kind()),
-		};
+		if !self.proofs.is_empty() {
+			anyhow::ensure!(
+				proof.act_root() == self.proofs[0].act_root(),
+				"act_root mismatch"
+			);
+			anyhow::ensure!(
+				proof.mainpool_config_root() == self.proofs[0].mainpool_config_root(),
+				"mainpool_config_root mismatch"
+			);
+		}
+		self.proofs.push(proof);
 
 		Ok(self.is_full())
 	}
@@ -85,7 +79,7 @@ impl BatchHelper for PrivateTxBatch {
 			.ok_or_else(|| anyhow::anyhow!("batch is not finalized"))
 	}
 
-	fn proofs(&self) -> &[TxProof] {
+	fn proofs(&self) -> &[PrivTxProof] {
 		&self.proofs
 	}
 
@@ -105,7 +99,7 @@ impl BatchHelper for PrivateTxBatch {
 				.into_priv_tx()
 				.prove(&self.circuit.circuit_data, &self.circuit.targets)?;
 			for _ in 0..n_padding {
-				self.proofs.push(TxProof::Private(padding_proof.clone()));
+				self.proofs.push(padding_proof.clone());
 			}
 		}
 
@@ -125,11 +119,34 @@ impl BatchHelper for PrivateTxBatch {
 #[cfg(test)]
 mod tests {
 	use plonky2::field::types::Field;
-	use tessera_client::{build_priv_tx_circuit, PrivTxProof, NOTE_BATCH, PRIV_TX_BATCH_SIZE};
+	use rand::Rng;
+	use tessera_client::{
+		build_priv_tx_circuit, FakeSpendTxBuilder, PIHelper, PrivTxProof, PRIV_TX_BATCH_SIZE,
+	};
 	use tessera_utils::{hasher::HashOutput, F};
 
 	use super::*;
-	use crate::batch_helper::{BatchHelper, SolidityKeccak256, TxProof};
+	use crate::batch_helper::{BatchHelper, SolidityKeccak256};
+
+	fn zero_hash() -> HashOutput {
+		HashOutput([F::ZERO; 4])
+	}
+
+	fn rand_hash() -> HashOutput {
+		let mut rng = rand::rng();
+		HashOutput(core::array::from_fn(|_| {
+			F::from_noncanonical_u64(rng.next_u64())
+		}))
+	}
+
+	fn make_priv_proof(act_root: HashOutput, mainpool_config_root: HashOutput) -> PrivTxProof {
+		let circuit = build_priv_tx_circuit();
+		FakeSpendTxBuilder::new(act_root, mainpool_config_root)
+			.build()
+			.into_priv_tx()
+			.prove(&circuit.circuit_data, &circuit.targets)
+			.unwrap()
+	}
 
 	// ── Cheap tests (no ZK proving) ──────────────────────────────────────────
 
@@ -140,16 +157,6 @@ mod tests {
 		assert!(
 			batch.finalize().is_err(),
 			"finalize on empty batch must fail"
-		);
-	}
-
-	/// Adding a `TxProof::None` (wrong type) must return an error immediately.
-	#[test]
-	fn add_wrong_type_fails() {
-		let mut batch = PrivateTxBatch::new();
-		assert!(
-			batch.add_proof(TxProof::None()).is_err(),
-			"TxProof::None must be rejected by PrivateTxBatch"
 		);
 	}
 
@@ -180,7 +187,7 @@ mod tests {
 			.unwrap();
 		assert!(
 			batch
-				.add_proof(make_priv_proof(alt_hash(), zero_hash()))
+				.add_proof(make_priv_proof(rand_hash(), zero_hash()))
 				.is_err(),
 			"mismatched act_root must be rejected"
 		);
@@ -196,7 +203,7 @@ mod tests {
 			.unwrap();
 		assert!(
 			batch
-				.add_proof(make_priv_proof(zero_hash(), alt_hash()))
+				.add_proof(make_priv_proof(zero_hash(), rand_hash()))
 				.is_err(),
 			"mismatched mainpool_config_root must be rejected"
 		);
@@ -223,10 +230,8 @@ mod tests {
 	#[test]
 	#[ignore]
 	fn finalize_padding_shares_common_roots() {
-		use tessera_client::PIHelper as _;
-
-		let act_root = alt_hash();
-		let config_root = HashOutput([F::from_canonical_u64(99), F::ZERO, F::ZERO, F::ZERO]);
+		let act_root = rand_hash();
+		let config_root = rand_hash();
 
 		let mut batch = PrivateTxBatch::new();
 		batch
