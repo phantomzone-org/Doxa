@@ -56,10 +56,10 @@ fn main() -> Result<()> {
 	} else {
 		info!("[1] Building PrivTxAggregator (arity=8, depth=2, 64 slots) …");
 		let now = Instant::now();
-		let (leaf_cd, _) = build_priv_tx_circuit();
+		let leaf = build_priv_tx_circuit();
 		let agg = PrivTxAggregator::build(
-			leaf_cd.common.clone(),
-			leaf_cd.verifier_only.clone(),
+			leaf.circuit_data.common.clone(),
+			leaf.circuit_data.verifier_only.clone(),
 		)?;
 		info!("    built in {:.1?}", now.elapsed());
 

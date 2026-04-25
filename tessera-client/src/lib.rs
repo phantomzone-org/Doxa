@@ -27,12 +27,18 @@ pub(crate) mod utils;
 pub use account::*;
 pub use note::*;
 pub use plonky2_gadgets::{
-	deposit_tx::{DepositProof, DepositTxCircuit, build_deposit_tx_circuit},
+	deposit_tx::{
+		DepositProof, DepositTxCircuit, build_deposit_tx_circuit,
+		builder::FakeDepositTxBuilder,
+	},
 	priv_tx::{
 		PrivTxProof, build_priv_tx_circuit,
 		builder::{FakeSpendTxBuilder, SpendTxBuilder},
 	},
-	withdraw_tx::{WithdrawProof, WithdrawTxCircuit, build_withdraw_tx_circuit},
+	withdraw_tx::{
+		WithdrawProof, WithdrawTxCircuit, build_withdraw_tx_circuit,
+		builder::FakeWithdrawTxBuilder,
+	},
 };
 pub use tessera_utils::hasher::HashOutput;
 use tessera_utils::{ConfigNative, D, F, HASH_SIZE};

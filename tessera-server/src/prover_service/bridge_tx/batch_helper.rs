@@ -1,18 +1,62 @@
+use plonky2::plonk::proof::ProofWithPublicInputs;
 use tessera_client::{
-	build_deposit_tx_circuit, build_withdraw_tx_circuit, DepositProof, DepositTxCircuit, PIHelper,
-	WithdrawProof, WithdrawTxCircuit, BRIDGE_TX_BATCH_SIZE,
+	build_deposit_tx_circuit, build_withdraw_tx_circuit, DepositProof, DepositTxCircuit,
+	FakeDepositTxBuilder, FakeWithdrawTxBuilder, PIHelper, WithdrawProof, WithdrawTxCircuit,
+	BRIDGE_TX_BATCH_SIZE,
 };
-use tessera_utils::hasher::HashOutput;
+use tessera_utils::{hasher::HashOutput, ConfigNative, D, F};
 
 use crate::batch_helper::BatchHelper;
 
+// ---------------------------------------------------------------------------
+// BridgeTxProof — unified proof type for bridge transactions
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub enum BridgeTxProof {
+	WithdrawTxProof(WithdrawProof),
+	DepositTxProof(DepositProof),
+}
+
+impl PIHelper for BridgeTxProof {
+	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
+		match self {
+			Self::WithdrawTxProof(p) => p.proof(),
+			Self::DepositTxProof(p) => p.proof(),
+		}
+	}
+
+	fn output_commitments(&self) -> Vec<HashOutput> {
+		match self {
+			Self::WithdrawTxProof(p) => p.output_commitments(),
+			Self::DepositTxProof(p) => p.output_commitments(),
+		}
+	}
+}
+
+impl From<WithdrawProof> for BridgeTxProof {
+	fn from(p: WithdrawProof) -> Self {
+		Self::WithdrawTxProof(p)
+	}
+}
+
+impl From<DepositProof> for BridgeTxProof {
+	fn from(p: DepositProof) -> Self {
+		Self::DepositTxProof(p)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BridgeTxBatch
+// ---------------------------------------------------------------------------
+
 pub struct BridgeTxBatch {
-	proofs: Vec<TxProof>,
-	withdraw_proofs: usize,
-	deposit_proofs: usize,
+	withdraw_half: Vec<BridgeTxProof>,
+	deposit_half: Vec<BridgeTxProof>,
 	common_act_root: Option<HashOutput>,
 	common_main_config_root: Option<HashOutput>,
 	batch_poseidon_root: Option<HashOutput>,
+	finalized_proofs: Vec<BridgeTxProof>,
 	withdraw_circuit: WithdrawTxCircuit,
 	deposit_circuit: DepositTxCircuit,
 }
@@ -20,15 +64,23 @@ pub struct BridgeTxBatch {
 impl BridgeTxBatch {
 	pub fn new() -> Self {
 		Self {
-			proofs: vec![TxProof::None(); BRIDGE_TX_BATCH_SIZE],
-			withdraw_proofs: 0,
-			deposit_proofs: 0,
+			withdraw_half: Vec::new(),
+			deposit_half: Vec::new(),
 			common_act_root: None,
 			common_main_config_root: None,
 			batch_poseidon_root: None,
+			finalized_proofs: Vec::new(),
 			withdraw_circuit: build_withdraw_tx_circuit(),
 			deposit_circuit: build_deposit_tx_circuit(),
 		}
+	}
+
+	pub fn is_withdraw_full(&self) -> bool {
+		self.withdraw_half.len() == Self::PROOF_BATCH_SIZE >> 1
+	}
+
+	pub fn is_deposit_full(&self) -> bool {
+		self.deposit_half.len() == Self::PROOF_BATCH_SIZE >> 1
 	}
 }
 
@@ -39,75 +91,58 @@ impl Default for BridgeTxBatch {
 }
 
 impl BatchHelper for BridgeTxBatch {
+	type Proof = BridgeTxProof;
+
 	const PROOF_BATCH_SIZE: usize = BRIDGE_TX_BATCH_SIZE;
 
-	fn add_proof(&mut self, proof: TxProof) -> anyhow::Result<bool> {
+	fn add_proof(&mut self, proof: BridgeTxProof) -> anyhow::Result<bool> {
 		anyhow::ensure!(!self.is_full(), "batch is full");
 		anyhow::ensure!(!self.is_finalized(), "batch is already finalized");
-		match proof {
-			TxProof::Withdraw(_) => {
-				if self.common_act_root.is_some() {
-					anyhow::ensure!(
-						proof.act_root() == self.common_act_root()?,
-						"act_root mismatch"
-					);
-					anyhow::ensure!(
-						proof.mainpool_config_root() == self.common_main_config_root()?,
-						"mainpool_config_root mismatch"
-					);
-				} else {
-					self.common_act_root = Some(proof.act_root());
-					self.common_main_config_root = Some(proof.mainpool_config_root());
-				}
-				self.proofs[self.withdraw_proofs] = proof;
-				self.withdraw_proofs += 1;
-			},
 
-			TxProof::Deposit(_) => {
-				if self.common_act_root.is_some() {
-					anyhow::ensure!(
-						proof.act_root() == self.common_act_root()?,
-						"act_root mismatch"
-					);
-					anyhow::ensure!(
-						proof.mainpool_config_root() == self.common_main_config_root()?,
-						"mainpool_config_root mismatch"
-					);
-				} else {
-					self.common_act_root = Some(proof.act_root());
-					self.common_main_config_root = Some(proof.mainpool_config_root());
-				}
-				self.proofs[(Self::PROOF_BATCH_SIZE >> 1) + self.deposit_proofs] = proof;
-				self.deposit_proofs += 1;
+		if self.common_act_root.is_some() {
+			anyhow::ensure!(
+				proof.act_root() == self.common_act_root()?,
+				"act_root mismatch"
+			);
+			anyhow::ensure!(
+				proof.mainpool_config_root() == self.common_main_config_root()?,
+				"mainpool_config_root mismatch"
+			);
+		} else {
+			self.common_act_root = Some(proof.act_root());
+			self.common_main_config_root = Some(proof.mainpool_config_root());
+		}
+
+		match proof {
+			BridgeTxProof::WithdrawTxProof(_) => {
+				anyhow::ensure!(!self.is_withdraw_full(), "withdraw half is full");
+				self.withdraw_half.push(proof);
 			},
-			other => anyhow::bail!(
-				"expected TxProof::Withdraw or TxProof::Deposit, got {}",
-				other.kind()
-			),
-		};
+			BridgeTxProof::DepositTxProof(_) => {
+				anyhow::ensure!(!self.is_deposit_full(), "deposit half is full");
+				self.deposit_half.push(proof);
+			},
+		}
 
 		Ok(self.is_full())
 	}
 
 	fn is_full(&self) -> bool {
-		// Intentional: the batch is considered full once either half is full.
-		// This allows flushing when withdrawals or deposits alone reach capacity.
-		(self.withdraw_proofs == Self::PROOF_BATCH_SIZE >> 1)
-			| (self.deposit_proofs == Self::PROOF_BATCH_SIZE >> 1)
+		self.is_withdraw_full() && self.is_deposit_full()
 	}
 
 	fn is_empty(&self) -> bool {
-		self.withdraw_proofs == 0 && self.deposit_proofs == 0
+		self.withdraw_half.is_empty() && self.deposit_half.is_empty()
 	}
 
 	fn common_act_root(&self) -> anyhow::Result<HashOutput> {
 		self.common_act_root
-			.ok_or_else(|| anyhow::anyhow!("batch is not finalized"))
+			.ok_or_else(|| anyhow::anyhow!("no proofs added yet"))
 	}
 
 	fn common_main_config_root(&self) -> anyhow::Result<HashOutput> {
 		self.common_main_config_root
-			.ok_or_else(|| anyhow::anyhow!("batch is not finalized"))
+			.ok_or_else(|| anyhow::anyhow!("no proofs added yet"))
 	}
 
 	fn is_finalized(&self) -> bool {
@@ -119,15 +154,15 @@ impl BatchHelper for BridgeTxBatch {
 			.ok_or_else(|| anyhow::anyhow!("batch is not finalized"))
 	}
 
-	fn proofs(&self) -> &[TxProof] {
-		&self.proofs
+	fn proofs(&self) -> &[BridgeTxProof] {
+		&self.finalized_proofs
 	}
 
-	/// Pad each half with dummy proofs sharing the same common PIs, then
-	/// compute the Poseidon subtree root over all `output_commitments()` in slot order.
+	/// Pad each half with fake proofs sharing the same common PIs, merge halves,
+	/// then compute the Poseidon subtree root over all `output_commitments()`.
 	///
-	/// Withdrawal half `[0..HALF)` is padded with dummy withdraw proofs;
-	/// deposit half `[HALF..BATCH_SIZE)` is padded with dummy deposit proofs.
+	/// Withdrawal half `[0..HALF)` is padded with fake withdraw proofs;
+	/// deposit half `[HALF..BATCH_SIZE)` is padded with fake deposit proofs.
 	fn finalize(&mut self) -> anyhow::Result<()> {
 		anyhow::ensure!(!self.is_empty(), "batch is empty");
 		anyhow::ensure!(!self.is_finalized(), "batch is already finalized");
@@ -136,44 +171,43 @@ impl BatchHelper for BridgeTxBatch {
 		let mainpool_config_root = self.common_main_config_root()?;
 		let half = Self::PROOF_BATCH_SIZE >> 1;
 
-		// Pad the withdrawal half [0..HALF).
-		let n_withdraw_padding = half - self.withdraw_proofs;
+		// Pad the withdrawal half.
+		let n_withdraw_padding = half - self.withdraw_half.len();
 		if n_withdraw_padding > 0 {
-			let padding = self
-				.withdraw_circuit
-				.prove_padding(act_root, mainpool_config_root);
-			for i in self.withdraw_proofs..half {
-				self.proofs[i] = TxProof::Withdraw(WithdrawProof {
-					proof: padding.clone(),
-				});
+			let padding = FakeWithdrawTxBuilder::new(act_root, mainpool_config_root)
+				.build()
+				.into_withdraw_tx()
+				.prove(&self.withdraw_circuit);
+			for _ in 0..n_withdraw_padding {
+				self.withdraw_half
+					.push(BridgeTxProof::from(padding.clone()));
 			}
 		}
 
-		// Pad the deposit half [HALF..BATCH_SIZE).
-		let n_deposit_padding = half - self.deposit_proofs;
+		// Pad the deposit half.
+		let n_deposit_padding = half - self.deposit_half.len();
 		if n_deposit_padding > 0 {
-			let padding = self
-				.deposit_circuit
-				.prove_padding(act_root, mainpool_config_root);
-			for i in self.deposit_proofs..half {
-				self.proofs[half + i] = TxProof::Deposit(DepositProof {
-					proof: padding.clone(),
-				});
+			let padding = FakeDepositTxBuilder::new(act_root, mainpool_config_root)
+				.build()
+				.into_deposit_tx()
+				.prove(&self.deposit_circuit);
+			for _ in 0..n_deposit_padding {
+				self.deposit_half.push(BridgeTxProof::from(padding.clone()));
 			}
 		}
 
-		// Update counters so that is_full() returns true and batch_poseidon_root() can run.
-		self.withdraw_proofs = half;
-		self.deposit_proofs = half;
+		// Merge halves in slot order: withdrawals first, deposits second.
+		self.finalized_proofs = self
+			.withdraw_half
+			.iter()
+			.cloned()
+			.chain(self.deposit_half.iter().cloned())
+			.collect();
 
 		self.batch_poseidon_root = Some(self.batch_poseidon_root()?);
 		Ok(())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Encoding helper
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -183,13 +217,13 @@ impl BatchHelper for BridgeTxBatch {
 mod tests {
 	use plonky2::field::types::Field;
 	use tessera_client::{
-		build_deposit_tx_circuit, build_withdraw_tx_circuit, DepositProof, PIHelper as _,
-		WithdrawProof, BRIDGE_TX_BATCH_SIZE,
+		build_deposit_tx_circuit, build_withdraw_tx_circuit, FakeDepositTxBuilder,
+		FakeWithdrawTxBuilder, BRIDGE_TX_BATCH_SIZE,
 	};
 	use tessera_utils::{hasher::HashOutput, F};
 
 	use super::*;
-	use crate::batch_helper::{BatchHelper, SolidityKeccak256, TxProof};
+	use crate::batch_helper::{BatchHelper, SolidityKeccak256};
 
 	const HALF: usize = BRIDGE_TX_BATCH_SIZE >> 1;
 
@@ -203,18 +237,24 @@ mod tests {
 		HashOutput([F::ONE, F::ZERO, F::ZERO, F::ZERO])
 	}
 
-	fn make_withdraw_proof(act_root: HashOutput, config_root: HashOutput) -> TxProof {
+	fn make_withdraw_proof(act_root: HashOutput, config_root: HashOutput) -> BridgeTxProof {
 		let circuit = build_withdraw_tx_circuit();
-		TxProof::Withdraw(WithdrawProof {
-			proof: circuit.prove_padding(act_root, config_root),
-		})
+		BridgeTxProof::from(
+			FakeWithdrawTxBuilder::new(act_root, config_root)
+				.build()
+				.into_withdraw_tx()
+				.prove(&circuit),
+		)
 	}
 
-	fn make_deposit_proof(act_root: HashOutput, config_root: HashOutput) -> TxProof {
+	fn make_deposit_proof(st_root: HashOutput, config_root: HashOutput) -> BridgeTxProof {
 		let circuit = build_deposit_tx_circuit();
-		TxProof::Deposit(DepositProof {
-			proof: circuit.prove_padding(act_root, config_root),
-		})
+		BridgeTxProof::from(
+			FakeDepositTxBuilder::new(st_root, config_root)
+				.build()
+				.into_deposit_tx()
+				.prove(&circuit),
+		)
 	}
 
 	// ── Cheap tests (no ZK proving) ──────────────────────────────────────────
@@ -226,16 +266,6 @@ mod tests {
 		assert!(
 			batch.finalize().is_err(),
 			"finalize on empty batch must fail"
-		);
-	}
-
-	/// Adding a `TxProof::None` (wrong type) must return an error immediately.
-	#[test]
-	fn add_wrong_type_fails() {
-		let mut batch = BridgeTxBatch::new();
-		assert!(
-			batch.add_proof(TxProof::None()).is_err(),
-			"TxProof::None must be rejected by BridgeTxBatch"
 		);
 	}
 
@@ -259,7 +289,7 @@ mod tests {
 	/// A deposit after a withdraw with a different `act_root` must be rejected.
 	#[test]
 	#[ignore]
-	fn add_mismatched_act_root_fails() {
+	fn add_mismatched_st_root_fails() {
 		let mut batch = BridgeTxBatch::new();
 		batch
 			.add_proof(make_withdraw_proof(zero_hash(), zero_hash()))
@@ -288,73 +318,60 @@ mod tests {
 		);
 	}
 
-	/// Withdraw proofs land in slots `[0..HALF)`, not in the deposit half.
+	/// Filling the withdraw half alone triggers `is_withdraw_full()` but not `is_full()`.
 	#[test]
 	#[ignore]
-	fn withdraw_proof_lands_in_lower_half() {
+	fn withdraw_half_full_triggers_is_withdraw_full() {
 		let mut batch = BridgeTxBatch::new();
-		batch
-			.add_proof(make_withdraw_proof(zero_hash(), zero_hash()))
-			.unwrap();
-		assert!(
-			matches!(batch.proofs()[0], TxProof::Withdraw(_)),
-			"slot 0 must be Withdraw"
-		);
-		assert!(
-			matches!(batch.proofs()[HALF], TxProof::None()),
-			"first deposit slot must still be None"
-		);
-	}
-
-	/// Deposit proofs land in slots `[HALF..BATCH_SIZE)`, not in the withdraw half.
-	#[test]
-	#[ignore]
-	fn deposit_proof_lands_in_upper_half() {
-		let mut batch = BridgeTxBatch::new();
-		batch
-			.add_proof(make_deposit_proof(zero_hash(), zero_hash()))
-			.unwrap();
-		assert!(
-			matches!(batch.proofs()[HALF], TxProof::Deposit(_)),
-			"slot HALF must be Deposit"
-		);
-		assert!(
-			matches!(batch.proofs()[0], TxProof::None()),
-			"first withdraw slot must still be None"
-		);
-	}
-
-	/// Filling the withdraw half alone is enough to trigger `is_full()`.
-	#[test]
-	#[ignore]
-	fn withdraw_half_full_triggers_is_full() {
-		let mut batch = BridgeTxBatch::new();
+		let proof = make_withdraw_proof(zero_hash(), zero_hash());
 		for _ in 0..HALF {
-			let p = make_withdraw_proof(zero_hash(), zero_hash());
-			if batch.add_proof(p).unwrap() {
-				break;
-			}
+			batch.add_proof(proof.clone()).unwrap();
+		}
+		assert!(
+			batch.is_withdraw_full(),
+			"batch must be withdraw-full after HALF withdraw proofs"
+		);
+		assert!(
+			!batch.is_full(),
+			"is_full must be false when only withdraw half is full"
+		);
+	}
+
+	/// Filling the deposit half alone triggers `is_deposit_full()` but not `is_full()`.
+	#[test]
+	#[ignore]
+	fn deposit_half_full_triggers_is_deposit_full() {
+		let mut batch = BridgeTxBatch::new();
+		let proof = make_deposit_proof(zero_hash(), zero_hash());
+		for _ in 0..HALF {
+			batch.add_proof(proof.clone()).unwrap();
+		}
+		assert!(
+			batch.is_deposit_full(),
+			"batch must be deposit-full after HALF deposit proofs"
+		);
+		assert!(
+			!batch.is_full(),
+			"is_full must be false when only deposit half is full"
+		);
+	}
+
+	/// Filling both halves triggers `is_full()`.
+	#[test]
+	#[ignore]
+	fn both_halves_full_triggers_is_full() {
+		let mut batch = BridgeTxBatch::new();
+		let proof = make_withdraw_proof(zero_hash(), zero_hash());
+		for _ in 0..HALF {
+			batch.add_proof(proof.clone()).unwrap();
+		}
+		let proof = make_deposit_proof(zero_hash(), zero_hash());
+		for _ in 0..HALF {
+			batch.add_proof(proof.clone()).unwrap();
 		}
 		assert!(
 			batch.is_full(),
-			"batch must be full after HALF withdraw proofs"
-		);
-	}
-
-	/// Filling the deposit half alone is enough to trigger `is_full()`.
-	#[test]
-	#[ignore]
-	fn deposit_half_full_triggers_is_full() {
-		let mut batch = BridgeTxBatch::new();
-		for _ in 0..HALF {
-			let p = make_deposit_proof(zero_hash(), zero_hash());
-			if batch.add_proof(p).unwrap() {
-				break;
-			}
-		}
-		assert!(
-			batch.is_full(),
-			"batch must be full after HALF deposit proofs"
+			"batch must be full when both halves are full"
 		);
 	}
 
@@ -374,14 +391,14 @@ mod tests {
 
 		for i in 0..HALF {
 			assert!(
-				matches!(batch.proofs()[i], TxProof::Withdraw(_)),
-				"slot {i} in lower half must be Withdraw after finalize"
+				matches!(batch.proofs()[i], BridgeTxProof::WithdrawTxProof(_)),
+				"slot {i} in lower half must be WithdrawTxProof after finalize"
 			);
 		}
 		for i in HALF..BRIDGE_TX_BATCH_SIZE {
 			assert!(
-				matches!(batch.proofs()[i], TxProof::Deposit(_)),
-				"slot {i} in upper half must be Deposit after finalize"
+				matches!(batch.proofs()[i], BridgeTxProof::DepositTxProof(_)),
+				"slot {i} in upper half must be DepositTxProof after finalize"
 			);
 		}
 	}
@@ -435,7 +452,7 @@ mod tests {
 		assert_eq!(c1, c2, "pi_commitment must be deterministic");
 	}
 
-	/// `MockDepositAggregator::prove` returns `ProveOutcome::Success` with the
+	/// `MockBridgeTxAggregator::prove` returns `ProveOutcome::Success` with the
 	/// correct Poseidon root.
 	#[test]
 	#[ignore]

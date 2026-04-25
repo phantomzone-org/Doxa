@@ -11,20 +11,21 @@ use tessera_client::{BRIDGE_TX_BATCH_SIZE, NOTE_BATCH, SUBTREE_BATCHSIZE};
 #[ignore]
 fn bridge_tx_batch_to_groth16_e2e() {
 	use std::path::Path;
+
 	use plonky2::field::types::{Field, PrimeField64};
 	use tessera_client::{
-		DepositProof, TesseraGateSerializer, WithdrawProof, build_deposit_tx_circuit,
-		build_withdraw_tx_circuit,
+		build_deposit_tx_circuit, build_withdraw_tx_circuit, DepositProof, TesseraGateSerializer,
+		WithdrawProof,
 	};
 	use tessera_utils::{
-		F,
 		groth::{BN128Wrapper, Groth16Wrapper},
 		hasher::HashOutput,
+		F,
 	};
 
 	use super::BridgeTxAggregator;
 	use crate::{
-		batch_helper::{BatchHelper, SolidityKeccak256, TxProof},
+		batch_helper::{BatchHelper, SolidityKeccak256},
 		prover_service::bridge_tx::BridgeTxBatch,
 	};
 
@@ -34,8 +35,7 @@ fn bridge_tx_batch_to_groth16_e2e() {
 	let plonky2_path = agg_path.join("plonky2-proof");
 	let groth_path = agg_path.join("groth-artifacts");
 
-	const GEN_CMD: &str =
-		"  cargo run -p tessera-e2e --bin bridge_tx_artifacts --release";
+	const GEN_CMD: &str = "  cargo run -p tessera-e2e --bin bridge_tx_artifacts --release";
 
 	if !BridgeTxAggregator::has_full_artifacts(&agg_path).unwrap_or(false) {
 		panic!(
@@ -77,10 +77,14 @@ fn bridge_tx_batch_to_groth16_e2e() {
 
 	let mut batch = BridgeTxBatch::new();
 	batch
-		.add_proof(TxProof::Withdraw(WithdrawProof { proof: w_proof }))
+		.add_proof(TxProof::Withdraw(WithdrawProof {
+			proof: w_proof,
+		}))
 		.expect("add withdraw proof");
 	batch
-		.add_proof(TxProof::Deposit(DepositProof { proof: d_proof }))
+		.add_proof(TxProof::Deposit(DepositProof {
+			proof: d_proof,
+		}))
 		.expect("add deposit proof");
 	batch.finalize().expect("finalize");
 
@@ -116,7 +120,9 @@ fn bridge_tx_batch_to_groth16_e2e() {
 	Groth16Wrapper::init_with_label(label, &plonky2_path, &groth_path)
 		.expect("Groth16Wrapper::init_with_label");
 
-	let bn128_proof = bn128.wrap_proof_to_bn128(super_proof).expect("wrap_proof_to_bn128");
+	let bn128_proof = bn128
+		.wrap_proof_to_bn128(super_proof)
+		.expect("wrap_proof_to_bn128");
 	let (g16_proof, g16_pub_inp) =
 		Groth16Wrapper::prove_with_label(label, bn128_proof).expect("Groth16 prove");
 	Groth16Wrapper::verify_with_label(label, g16_proof, g16_pub_inp).expect("Groth16 verify");
@@ -131,22 +137,37 @@ const HALF: usize = BRIDGE_TX_BATCH_SIZE / 2;
 /// The pair aggregator config: arity=4, depth=4 → 4^4 = 256 pair slots.
 #[test]
 fn bridge_tx_pair_agg_config_is_valid() {
-	let cfg = GenericAggregatorConfig { arity: 4, depth: 4 };
+	let cfg = GenericAggregatorConfig {
+		arity: 4,
+		depth: 4,
+	};
 	assert!(cfg.validate().is_ok(), "pair agg config must be valid");
-	assert_eq!(cfg.arity.pow(cfg.depth as u32), HALF, "4^4 must equal HALF (256)");
+	assert_eq!(
+		cfg.arity.pow(cfg.depth as u32),
+		HALF,
+		"4^4 must equal HALF (256)"
+	);
 }
 
 /// `HALF == 4^4 == 256` — the pair aggregator handles one pair per slot.
 #[test]
 fn bridge_tx_half_is_arity_power() {
 	assert_eq!(HALF, 4_usize.pow(4), "HALF must equal 4^4");
-	assert_eq!(HALF * 2, BRIDGE_TX_BATCH_SIZE, "2*HALF must equal BRIDGE_TX_BATCH_SIZE");
+	assert_eq!(
+		HALF * 2,
+		BRIDGE_TX_BATCH_SIZE,
+		"2*HALF must equal BRIDGE_TX_BATCH_SIZE"
+	);
 }
 
 /// SR leaf count: withdraw(256) + deposit(256) = 512 == SUBTREE_BATCHSIZE.
 #[test]
 fn bridge_tx_sr_leaf_count_matches() {
-	assert_eq!(HALF + HALF, SUBTREE_BATCHSIZE, "2*HALF must equal SUBTREE_BATCHSIZE");
+	assert_eq!(
+		HALF + HALF,
+		SUBTREE_BATCHSIZE,
+		"2*HALF must equal SUBTREE_BATCHSIZE"
+	);
 }
 
 /// Verify the expected pair PI count and Keccak preimage word count.
@@ -177,6 +198,13 @@ fn bridge_tx_pair_pi_and_preimage_word_count() {
 	assert_eq!(d_unique, 27, "d_unique mismatch");
 	assert_eq!(pair_pi_size, 112, "pair_pi_size mismatch");
 	assert_eq!(pair_agg_root_pis, 28672, "pair_agg root PI count mismatch");
-	assert_eq!(total_preimage_fields, 26636, "total preimage fields unchanged");
-	assert_eq!(total_preimage_fields * 2, 53272, "total preimage u32 words unchanged");
+	assert_eq!(
+		total_preimage_fields, 26636,
+		"total preimage fields unchanged"
+	);
+	assert_eq!(
+		total_preimage_fields * 2,
+		53272,
+		"total preimage u32 words unchanged"
+	);
 }
