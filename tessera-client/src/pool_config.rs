@@ -124,16 +124,21 @@ where
 		self.inner.root()
 	}
 
-	/// Insert the entry for `subpool_id` at position `subpool_id` in the tree.
+	/// Insert a subpool at the leaf position `subpool_id` in the config tree,
+	/// matching the on-chain convention used by `updateSubpoolRoot`.
 	///
-	/// The leaf is placed at index `subpool_id.0` (matching the on-chain convention
-	/// where `updateSubpoolRoot` navigates the binary tree using the bits of
-	/// `subpoolId`).  Zero leaves are pre-filled at positions `0..subpool_id` so
-	/// that the underlying append-only [`MerkleTree`] can update the target slot.
+	/// Subpools must be inserted **sequentially**: 1, 2, 3, … with no gaps.
+	///
+	/// * `subpool_id = 1` — always allowed.  Position 0 is permanently reserved
+	///   (zero leaf); it is seeded automatically on the first call.
+	/// * `subpool_id = N > 1` — only allowed if `subpool_id = N − 1` has already
+	///   been inserted (i.e. the tree has exactly `N` leaves at the time of the
+	///   call, meaning positions 0 … N−1 are all occupied).
 	///
 	/// # Errors
-	/// Returns an error if `subpool_id == 0` (reserved) or if the underlying tree
-	/// operation fails.
+	/// * `subpool_id == 0` — reserved, always rejected.
+	/// * `subpool_id > 1` and the previous subpool has not been inserted yet.
+	/// * Any underlying [`MerkleTree`] error.
 	pub fn insert_subpool_at_position(
 		&mut self,
 		subpool_id: SubpoolId,
@@ -142,14 +147,27 @@ where
 		let id = subpool_id.0.to_canonical_u64() as usize;
 		anyhow::ensure!(id > 0, "subpool_id 0 is reserved and cannot be used");
 
+		if id == 1 {
+			// Seed the permanently-reserved position 0 on first use.
+			if self.inner.num_leaves() == 0 {
+				self.inner.insert(H::ZERO)?; // position 0: reserved zero
+			}
+			// After seeding, inner.num_leaves() == 1; next insert → position 1.
+		} else {
+			// Enforce sequential insertion: position id−1 must already exist.
+			anyhow::ensure!(
+				self.inner.num_leaves() == id,
+				"cannot insert subpool_id={id}: subpool_id={} must be inserted first \
+				 (tree has {} leaves, expected {id})",
+				id - 1,
+				self.inner.num_leaves(),
+			);
+		}
+
 		let leaf = MainPoolConfigLeaf::<H>::new(subpool_root, subpool_id);
 		let digest = leaf.commit();
-
-		// Pre-fill with zero leaves so the target index is within bounds for update_leaf.
-		while self.inner.num_leaves() <= id {
-			self.inner.insert(H::ZERO)?;
-		}
-		self.inner.update_leaf(id, digest)?;
+		let inserted_at = self.inner.insert(digest)?;
+		debug_assert_eq!(inserted_at, id, "inserted at wrong position");
 		self.leaf_index_map.insert(digest, id);
 		Ok(())
 	}

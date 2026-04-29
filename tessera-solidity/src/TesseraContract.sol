@@ -133,8 +133,8 @@ contract TesseraContract {
     bool    public paused;
 
     // --- verifiers ---
-    IGroth16Verifier public immutable txVerifier;
-    IGroth16Verifier public immutable bridgeTxVerifier;
+    IGroth16Verifier public txVerifier;
+    IGroth16Verifier public bridgeTxVerifier;
 
     // --- token ---
     address public immutable monitoredToken;
@@ -184,6 +184,8 @@ contract TesseraContract {
     event DepositAvailable(bytes32 indexed noteCommitment, uint256 value, address recipient);
     event DepositWithdrawn(bytes32 indexed noteCommitment, uint256 value, address recipient);
     event DepositValidated(bytes32 indexed noteCommitment);
+    event TxVerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
+    event BridgeTxVerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
     event OperatorChanged(address indexed oldOp, address indexed newOp);
     event PausedChanged(bool isPaused);
     event WithdrawalDelayUpdated(uint256 oldDelay, uint256 newDelay);
@@ -296,6 +298,20 @@ contract TesseraContract {
     // -------------------------------------------------------------------------
     // Access control & configuration
     // -------------------------------------------------------------------------
+
+    /// @notice Replaces the Groth16 verifier for private-transaction batches.
+    function setTxVerifier(address newVerifier) external onlyOperator {
+        if (newVerifier == address(0)) revert ZeroAddress();
+        emit TxVerifierUpdated(address(txVerifier), newVerifier);
+        txVerifier = IGroth16Verifier(newVerifier);
+    }
+
+    /// @notice Replaces the Groth16 verifier for bridge-transaction batches.
+    function setBridgeTxVerifier(address newVerifier) external onlyOperator {
+        if (newVerifier == address(0)) revert ZeroAddress();
+        emit BridgeTxVerifierUpdated(address(bridgeTxVerifier), newVerifier);
+        bridgeTxVerifier = IGroth16Verifier(newVerifier);
+    }
 
     /// @notice Transfers the operator role to `newOperator`.
     function setOperator(address newOperator) external onlyOperator {

@@ -88,9 +88,49 @@ pub trait BatchHelper {
 
 	/// Compute the PI commitment for the finalized batch using hash function `H`.
 	///
+	/// Equivalent to `H::hash(&self.pi_preimage_words()?)`.
+	///
 	/// # Errors
 	/// Returns `Err` if the batch has not been finalized or is empty.
 	fn pi_commitment<H: PiCommitHash>(&self) -> Result<[u8; 32]> {
+		Ok(H::hash(&self.pi_preimage_words()?))
+	}
+
+	/// Return the raw Keccak-256 preimage bytes for this finalized batch.
+	///
+	/// This is the exact `batchPreimage` bytes argument passed to
+	/// `submitTransactionBatch` / `proveTransactionBatch` on-chain.
+	///
+	/// The relationship with [`pi_commitment`] is:
+	/// ```text
+	/// keccak256(pi_preimage_bytes()) == pi_commitment::<SolidityKeccak256>()
+	/// ```
+	///
+	/// Each Goldilocks field element is GL-preimage encoded as
+	/// `[lo_u32_BE(4B), hi_u32_BE(4B)]`, matching the Solidity contract's
+	/// `_glHashToU256` / GL-preimage convention.
+	///
+	/// # Errors
+	/// Returns `Err` if the batch has not been finalized or is empty.
+	fn pi_preimage_bytes(&self) -> Result<Vec<u8>> {
+		Ok(self
+			.pi_preimage_words()?
+			.iter()
+			.flat_map(|w| w.to_be_bytes())
+			.collect())
+	}
+
+	/// Build the ordered `u32` word vector that is the pre-image of the
+	/// PI commitment hash.  Shared by [`pi_commitment`] and [`pi_preimage_bytes`].
+	///
+	/// Layout:
+	/// 1. `batchPoseidonRoot` (4 GL elements → 8 u32 words)
+	/// 2. Common PIs once: `act_root ‖ mainpool_config_root` (8 u32 words)
+	/// 3. Per-slot unique PIs for every slot in the batch
+	///
+	/// Each GL field element `f` contributes two u32 words: `[lo, hi]`
+	/// where `lo = f & 0xFFFF_FFFF` and `hi = f >> 32`.
+	fn pi_preimage_words(&self) -> Result<Vec<u32>> {
 		let batch_poseidon_root = self.commitments_subtree_root()?;
 
 		let mut words: Vec<u32> = Vec::new();
@@ -106,7 +146,7 @@ pub trait BatchHelper {
 			push_fields(&mut words, &proof.batch_unique_pis());
 		}
 
-		Ok(H::hash(&words))
+		Ok(words)
 	}
 
 	fn batch_poseidon_root(&self) -> Result<HashOutput> {

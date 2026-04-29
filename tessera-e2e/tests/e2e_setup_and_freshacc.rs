@@ -6,16 +6,11 @@
 //!
 //! Before running this test you must:
 //!
-//! 1. **Build the Solidity contracts** (produces verifier + rollup bytecode):
-//!    ```text
-//!    cd tessera-solidity && forge build
-//!    ```
+//! 1. **Build the Solidity contracts** (produces verifier + rollup bytecode): ```text cd
+//!    tessera-solidity && forge build ```
 //!
-//! 2. **Generate PrivTxAggregator artifacts**:
-//!    ```text
-//!    cargo run -p tessera-e2e --bin priv_tx_artifacts --release
-//!    ```
-//!    Artifacts are written to `tessera-server/artifacts/priv-tx/`.
+//! 2. **Generate PrivTxAggregator artifacts**: ```text cargo run -p tessera-e2e --bin
+//!    priv_tx_artifacts --release ``` Artifacts are written to `tessera-server/artifacts/priv-tx/`.
 //!
 //! # Running
 //!
@@ -44,8 +39,8 @@ use tessera_client::{
 	plonky2_gadgets::priv_tx::builder::FreshAccTxBuilder,
 	pool_config::{CompPubKey, MainPoolConfigLeaf, MainPoolConfigTree, SubpoolConfig},
 	schnorr::PrivateKey,
-	HashOutput, PrivTxProof, StandardAccount, SubpoolId, MAIN_POOL_CONFIG_DEPTH,
-	PIHelper, PRIV_TX_BATCH_SIZE, STATE_TREE_DEPTH, TesseraGateSerializer,
+	HashOutput, PIHelper, PrivTxProof, StandardAccount, SubpoolId, TesseraGateSerializer,
+	MAIN_POOL_CONFIG_DEPTH, PRIV_TX_BATCH_SIZE, STATE_TREE_DEPTH,
 };
 use tessera_server::{
 	aggregator_service::PrivTxAggregator,
@@ -89,7 +84,7 @@ sol! {
 		// Views
 		function imtCurrentRoot() external view returns (uint256);
 		function mainPoolConfigRoot() external view returns (uint256);
-		function confirmedRoots(uint256 root) external view returns (bool);
+		function isConfirmedRoot(uint256 root) external view returns (bool);
 
 		event TransactionBatchProven(
 			bytes32 indexed piCommitment,
@@ -125,8 +120,7 @@ fn load_foundry_bytecode(sol_file: &str, contract: &str) -> String {
 		 Run:  cd tessera-solidity && forge build",
 	);
 
-	let content = std::fs::read_to_string(&path)
-		.unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+	let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
 	let json: serde_json::Value =
 		serde_json::from_str(&content).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
 	let hex = json["bytecode"]["object"]
@@ -168,9 +162,7 @@ async fn deploy_with_args<P: Provider + Clone>(
 	let mut code = hex::decode(bytecode_hex).expect("hex decode");
 	code.extend_from_slice(&constructor_args);
 	provider
-		.send_transaction(
-			TransactionRequest::default().with_deploy_code(Bytes::from(code)),
-		)
+		.send_transaction(TransactionRequest::default().with_deploy_code(Bytes::from(code)))
 		.await
 		.expect("deploy_with_args send")
 		.get_receipt()
@@ -190,9 +182,7 @@ fn hash_to_u256_le(h: &HashOutput) -> U256 {
 }
 
 /// Parse a Groth16 solidity JSON string into `(proof[8], commitments[2], pok[2])`.
-fn parse_groth16_solidity_json(
-	json: &str,
-) -> ([U256; 8], [U256; 2], [U256; 2]) {
+fn parse_groth16_solidity_json(json: &str) -> ([U256; 8], [U256; 2], [U256; 2]) {
 	let v: serde_json::Value = serde_json::from_str(json).expect("parse groth16 json");
 	let parse_u256_vec = |key: &str, len: usize| -> Vec<U256> {
 		v[key]
@@ -223,7 +213,6 @@ fn parse_groth16_solidity_json(
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
 async fn test_e2e_setup_operators_and_freshacc_batch() {
 	let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
@@ -231,12 +220,9 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 	//
 	// All panics include actionable instructions for the developer.
 
-	let rollup_bytecode =
-		load_foundry_bytecode("TesseraContract.sol", "TesseraContract");
-	let poseidon_bytecode =
-		load_foundry_bytecode("PoseidonGoldilocks.sol", "PoseidonGoldilocks");
-	let token_bytecode =
-		load_foundry_bytecode("ToyUSDTWOperator.sol", "ToyUSDT");
+	let rollup_bytecode = load_foundry_bytecode("TesseraContract.sol", "TesseraContract");
+	let poseidon_bytecode = load_foundry_bytecode("PoseidonGoldilocks.sol", "PoseidonGoldilocks");
+	let token_bytecode = load_foundry_bytecode("ToyUSDTWOperator.sol", "ToyUSDT");
 	let verifier_bytecode = load_foundry_bytecode(
 		"TesseraBatchTransactionVerifier.sol",
 		"TesseraBatchTransactionVerifier",
@@ -247,8 +233,7 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 	let plonky2_path = agg_path.join("plonky2-proof");
 	let groth_path = agg_path.join("groth-artifacts");
 
-	const GEN_CMD: &str =
-		"  cargo run -p tessera-e2e --bin priv_tx_artifacts --release";
+	const GEN_CMD: &str = "  cargo run -p tessera-server --bin priv_tx_artifacts --release";
 
 	if !PrivTxAggregator::has_full_artifacts(&agg_path).unwrap_or(false) {
 		panic!(
@@ -287,7 +272,8 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 
 	let verifier_addr = deploy_no_args(&op_provider, &verifier_bytecode).await;
 	let poseidon_addr = deploy_no_args(&op_provider, &poseidon_bytecode).await;
-	let token_addr    = deploy_no_args(&op_provider, &token_bytecode).await;
+	let token_addr =
+		deploy_with_args(&op_provider, &token_bytecode, operator_addr.abi_encode()).await;
 
 	// TesseraContract(txVerifier, bridgeTxVerifier, poseidon, operator, token,
 	//                 treeDepth=32, configTreeDepth=20, withdrawalDelay=0)
@@ -310,8 +296,7 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 	)
 		.abi_encode();
 
-	let rollup_addr =
-		deploy_with_args(&op_provider, &rollup_bytecode, constructor_args).await;
+	let rollup_addr = deploy_with_args(&op_provider, &rollup_bytecode, constructor_args).await;
 	let rollup = ITessera::ITesseraInstance::new(rollup_addr, &op_provider);
 
 	// ── Phase 2: Define 3 subpool owners ─────────────────────────────────────
@@ -324,10 +309,10 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 	let mut rng = ChaCha8Rng::seed_from_u64(42);
 
 	struct SubpoolOwner {
-		subpool_id:   SubpoolId,
-		addr:         alloy::primitives::Address,
-		signer:       PrivateKeySigner,
-		approval_sk:  PrivateKey,
+		subpool_id: SubpoolId,
+		addr: alloy::primitives::Address,
+		signer: PrivateKeySigner,
+		approval_sk: PrivateKey,
 		approval_cpk: CompPubKey,
 		subpool_root: HashOutput,
 	}
@@ -336,13 +321,13 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 		.zip(1usize..=3)
 		.map(|(id, key_idx)| {
 			let signer: PrivateKeySigner = anvil.keys()[key_idx].clone().into();
-			let addr         = signer.address();
-			let approval_sk  = PrivateKey::sample(&mut rng);
+			let addr = signer.address();
+			let approval_sk = PrivateKey::sample(&mut rng);
 			let approval_cpk: CompPubKey = approval_sk.public_key::<F>().into();
-			let subpool      = SubpoolConfig::<HashOutput>::new(approval_cpk);
+			let subpool = SubpoolConfig::<HashOutput>::new(approval_cpk);
 			let subpool_root = subpool.commitment();
 			SubpoolOwner {
-				subpool_id:   SubpoolId(F::from_canonical_u64(id)),
+				subpool_id: SubpoolId(F::from_canonical_u64(id)),
 				addr,
 				signer,
 				approval_sk,
@@ -366,41 +351,40 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 
 	// ── Phase 3: Each subpool owner calls updateSubpoolRoot ───────────────────
 	//
-	// We maintain a local MerkleTree<HashOutput> of depth MAIN_POOL_CONFIG_DEPTH
-	// mirroring the on-chain config tree, so we can extract correct sibling
-	// paths before each update.
+	// We use a single MainPoolConfigTree to track state locally and to supply
+	// Merkle siblings for the on-chain call.
 	//
-	// On-chain leaf at index `subpool_id` =
-	//   poseidon.compress(uint256(subpoolId), subpoolRoot)
+	// Key insight: Merkle siblings at position P are determined by the *adjacent
+	// subtrees*, not by the leaf at P itself.  Therefore the siblings computed
+	// **after** insert_subpool_at_position are identical to the siblings the
+	// contract needs to verify the old (zero) leaf at that position.  So we can
+	// safely insert locally first, read siblings, then call on-chain.
 	//
-	// Rust leaf (MainPoolConfigLeaf::commit) =
-	//   poseidon_two_to_one([subpool_id, 0, 0, 0], subpool_root_hash)
-	//
-	// Both use the same Goldilocks Poseidon ⟹ leaves and roots agree ✓
+	// On-chain leaf  = poseidon.compress(uint256(subpoolId), subpoolRoot)
+	// Rust leaf      = MainPoolConfigLeaf::commit()
+	//                = poseidon_two_to_one([subpool_id,0,0,0], subpool_root_hash)
+	// Both use the same Goldilocks Poseidon → leaves and roots agree ✓
 
-	let mut raw_cfg_tree: MerkleTree<HashOutput> =
-		MerkleTree::new(MAIN_POOL_CONFIG_DEPTH);
+	let mut config_tree = MainPoolConfigTree::<HashOutput>::new();
 
 	for o in &owners {
-		let id_usize = o.subpool_id.0.to_canonical_u64() as usize;
+		// 1. Insert locally first so subpool_proof can return the sibling path.
+		config_tree
+			.insert_subpool_at_position(o.subpool_id, o.subpool_root)
+			.expect("insert_subpool_at_position");
 
-		// Pre-fill zero leaves so merkle_proof(id_usize) is valid.
-		while raw_cfg_tree.num_leaves() <= id_usize {
-			raw_cfg_tree
-				.insert(HashOutput([F::ZERO; 4]))
-				.expect("pre-fill");
-		}
-
-		// Siblings for the current (not-yet-updated) tree state.
-		let siblings_u256: Vec<U256> = raw_cfg_tree
-			.merkle_proof(id_usize)
-			.expect("merkle_proof")
+		// 2. Read siblings from the local tree.  Because siblings are determined by nodes *other*
+		//    than position subpool_id, they are the same whether the leaf at that position is zero
+		//    (old on-chain state) or the new digest (post-local-insert state).
+		let siblings_u256: Vec<U256> = config_tree
+			.subpool_proof(o.subpool_id, o.subpool_root)
+			.expect("subpool_proof for siblings")
 			.siblings
 			.iter()
 			.map(hash_to_u256_le)
 			.collect();
 
-		// Subpool owner calls updateSubpoolRoot.
+		// 3. Subpool owner submits the update on-chain.
 		let spowner_provider = ProviderBuilder::new()
 			.wallet(EthereumWallet::from(o.signer.clone()))
 			.connect_http(anvil.endpoint_url());
@@ -416,24 +400,6 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 			.get_receipt()
 			.await
 			.expect("updateSubpoolRoot receipt");
-
-		// Mirror the on-chain state change locally.
-		let leaf_digest =
-			MainPoolConfigLeaf::<HashOutput>::new(o.subpool_root, o.subpool_id)
-				.commit();
-		raw_cfg_tree
-			.update_leaf(id_usize, leaf_digest)
-			.expect("local update_leaf");
-	}
-
-	// Build MainPoolConfigTree used as circuit input.
-	// insert_subpool_at_position places each leaf at index = subpool_id,
-	// exactly mirroring the on-chain layout.
-	let mut config_tree = MainPoolConfigTree::<HashOutput>::new();
-	for o in &owners {
-		config_tree
-			.insert_subpool_at_position(o.subpool_id, o.subpool_root)
-			.expect("insert_subpool_at_position");
 	}
 
 	// Sanity-check: Rust root must match on-chain mainPoolConfigRoot.
@@ -460,7 +426,7 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 	// Verify genesis ACT root is in on-chain confirmedRoots.
 	assert!(
 		rollup
-			.confirmedRoots(genesis_act_root_u256)
+			.isConfirmedRoot(genesis_act_root_u256)
 			.call()
 			.await
 			.expect("confirmedRoots"),
@@ -473,7 +439,7 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 
 	for o in &owners {
 		let accin = StandardAccount::sample(&mut rng, o.subpool_id);
-		let spend_sk  = PrivateKey::sample(&mut rng);
+		let spend_sk = PrivateKey::sample(&mut rng);
 		let spend_cpk: CompPubKey = spend_sk.public_key::<F>().into();
 
 		let built = FreshAccTxBuilder::new(accin)
@@ -530,16 +496,30 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 	assert_eq!(super_proof.public_inputs.len(), 8);
 
 	// Verify super-proof PIs match the batch pi_commitment.
-	let pi_commitment = batch.pi_commitment::<SolidityKeccak256>().expect("pi_commitment");
+	let pi_commitment = batch
+		.pi_commitment::<SolidityKeccak256>()
+		.expect("pi_commitment");
+	// The 8 super-proof PIs each encode one u32 word of the keccak256 output.
+	// keccak256 words are < 2^32, so the high 32 bits of each GL field element
+	// must be zero.  We assert this explicitly rather than silently truncating.
 	let pi_from_proof: [u8; 32] = {
 		let mut out = [0u8; 32];
 		for (i, f) in super_proof.public_inputs.iter().enumerate() {
-			let w = f.to_canonical_u64() as u32;
-			out[i * 4..(i + 1) * 4].copy_from_slice(&w.to_be_bytes());
+			let val = f.to_canonical_u64();
+			assert_eq!(
+				val >> 32,
+				0,
+				"super proof PI[{i}] = {val:#x} has non-zero high bits; \
+				 keccak256 output words must fit in u32"
+			);
+			out[i * 4..(i + 1) * 4].copy_from_slice(&(val as u32).to_be_bytes());
 		}
 		out
 	};
-	assert_eq!(pi_from_proof, pi_commitment, "super proof PIs must match pi_commitment");
+	assert_eq!(
+		pi_from_proof, pi_commitment,
+		"super proof PIs must match pi_commitment"
+	);
 
 	// BN128 wrap.
 	let bn128 = BN128Wrapper::new(agg.super_circuit_data().clone(), super_proof.clone())
@@ -550,7 +530,9 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 	Groth16Wrapper::init_with_label(label, &plonky2_path, &groth_path)
 		.expect("Groth16Wrapper::init_with_label");
 
-	let bn128_proof = bn128.wrap_proof_to_bn128(super_proof).expect("wrap_proof_to_bn128");
+	let bn128_proof = bn128
+		.wrap_proof_to_bn128(super_proof)
+		.expect("wrap_proof_to_bn128");
 	let (g16_proof_bytes, g16_pub_inp_bytes) =
 		Groth16Wrapper::prove_with_label(label, bn128_proof).expect("Groth16 prove");
 
@@ -582,8 +564,8 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 		.proveTransactionBatch(
 			Bytes::from(preimage),
 			ITessera::Proof {
-				proof:         g16_proof,
-				commitments:   g16_commitments,
+				proof: g16_proof,
+				commitments: g16_commitments,
 				commitmentPok: g16_pok,
 			},
 		)
@@ -596,15 +578,22 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 
 	// ── Phase 8: Assert ───────────────────────────────────────────────────────
 
-	let new_root = rollup.imtCurrentRoot().call().await.expect("imtCurrentRoot");
+	let new_root = rollup
+		.imtCurrentRoot()
+		.call()
+		.await
+		.expect("imtCurrentRoot");
 
 	assert_ne!(
-		new_root,
-		genesis_act_root_u256,
+		new_root, genesis_act_root_u256,
 		"IMT must have advanced beyond the genesis root after the batch proof"
 	);
 	assert!(
-		rollup.confirmedRoots(new_root).call().await.expect("confirmedRoots"),
+		rollup
+			.isConfirmedRoot(new_root)
+			.call()
+			.await
+			.expect("confirmedRoots"),
 		"new IMT root must be in confirmedRoots after proveTransactionBatch"
 	);
 

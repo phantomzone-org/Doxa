@@ -106,6 +106,37 @@ fn main() -> Result<()> {
 	info!("Groth16 init: {result}");
 	Groth16Wrapper::check_init();
 
+	// =========================================================================
+	// 4. Copy Verifier.sol → tessera-solidity/src/TesseraBatchTransactionVerifier.sol
+	//    and run forge build so the deployed verifier matches the proving key.
+	// =========================================================================
+	{
+		let verifier_src = fs::read_to_string(groth_path.join("Verifier.sol"))
+			.map_err(|e| anyhow::anyhow!("read Verifier.sol: {e}"))?;
+		let renamed = verifier_src.replace(
+			"contract Verifier {",
+			"contract TesseraBatchTransactionVerifier {",
+		);
+		let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+			.parent()
+			.expect("tessera-server has a parent workspace");
+		let dest = workspace.join("tessera-solidity/src/TesseraBatchTransactionVerifier.sol");
+		fs::write(&dest, renamed)
+			.map_err(|e| anyhow::anyhow!("write TesseraBatchTransactionVerifier.sol: {e}"))?;
+		info!("[4] Wrote TesseraBatchTransactionVerifier.sol → {dest:?}");
+
+		let solidity_dir = workspace.join("tessera-solidity");
+		let status = std::process::Command::new("forge")
+			.args(["build"])
+			.current_dir(&solidity_dir)
+			.status()
+			.map_err(|e| anyhow::anyhow!("forge build: {e}"))?;
+		if !status.success() {
+			return Err(anyhow::anyhow!("forge build failed in {solidity_dir:?}"));
+		}
+		info!("[4] forge build complete");
+	}
+
 	info!("All PrivTx batch artifacts ready → {}", root.display());
 	Ok(())
 }
