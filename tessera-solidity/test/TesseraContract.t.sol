@@ -76,7 +76,8 @@ contract TesseraRollupV2Test is Test {
             OP,
             address(token),
             PCR,
-            depth
+            depth,
+            20
         );
     }
 
@@ -88,7 +89,8 @@ contract TesseraRollupV2Test is Test {
             OP,
             address(token),
             PCR,
-            depth
+            depth,
+            20
         );
     }
 
@@ -916,14 +918,14 @@ contract TesseraRollupV2Test is Test {
         assertNotEq(keccak256(p1), keccak256(p2), "distinct roots must yield distinct commitments");
     }
 
-    /// Operator can update poolConfigRoot; old value rejected by new batches.
+    /// Operator can update mainPoolConfigRoot; old value rejected by new batches.
     function test_setPoolConfigRoot() public {
         uint256 newPCR = 0xABCDEF;
         vm.prank(OP);
         vm.expectEmit(true, true, false, false, address(rollup));
-        emit TesseraContract.PoolConfigRootUpdated(PCR, newPCR);
-        rollup.setPoolConfigRoot(newPCR);
-        assertEq(rollup.poolConfigRoot(), newPCR);
+        emit TesseraContract.MainPoolConfigRootUpdated(PCR, newPCR);
+        rollup.setMainPoolConfigRoot(newPCR);
+        assertEq(rollup.mainPoolConfigRoot(), newPCR);
 
         // Old PCR is rejected — preimage still encodes PCR at mainPoolConfigRoot.
         bytes memory b = _minBatch(1);

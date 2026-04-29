@@ -80,7 +80,8 @@ contract DeployScript is Script {
             operator,
             monitoredToken,
             poolConfigRoot,
-            treeDepth
+            treeDepth,
+            20 // configTreeDepth: supports up to 2^20 subpools
         );
         console.log("TesseraContract:     ", address(rollup));
 

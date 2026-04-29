@@ -41,7 +41,8 @@ contract TesseraRollupV2IntegrationTest is Test {
             OP,
             address(token),
             PCR,
-            32
+            32,
+            20
         );
     }
 
@@ -259,7 +260,8 @@ contract TesseraDepositIntegrationTest is Test {
             OP,
             address(token),
             PCR,
-            32
+            32,
+            20
         );
     }
 
