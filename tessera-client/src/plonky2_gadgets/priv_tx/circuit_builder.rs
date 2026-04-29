@@ -1,6 +1,6 @@
 use plonky2::{
 	hash::{
-		hash_types::{HashOut, HashOutTarget, RichField},
+		hash_types::{HashOut, HashOutTarget, NUM_HASH_OUT_ELTS, RichField},
 		poseidon::PoseidonHash,
 	},
 	iop::target::{BoolTarget, Target},
@@ -26,8 +26,8 @@ use crate::{
 				DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
 				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
 				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTarget,
-				StandardNoteTarget, StateRootTarget,
-				SubpoolFullProofTargets, SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
+				StandardNoteTarget, StateRootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
+				TxHashTarget, TxSignatureTargets,
 			},
 			utils::double_hash,
 		},
@@ -517,12 +517,14 @@ where
 			self.hash_n_to_hash_no_pad::<PoseidonHash>(approval_key.0.0.to_vec());
 
 		// Step B: Verify the subpool config commitment is a leaf in the depth-20 main pool tree.
-		// Main pool leaf = H(subpool_config_comm[4] || subpool_id[1]).
+		// Main pool leaf = H([subpool_id, 0, 0, 0] || subpool_config_comm).
 		// TODO: add a DS in the derivation of the leaf?
+		let zero = self.zero();
 		let main_pool_leaf_hash = {
-			let mut inputs = subpool_config_comm.elements.to_vec();
-			inputs.push(subpool_id.0);
-			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs)
+			let mut inputs: [Target; NUM_HASH_OUT_ELTS * 2] = core::array::from_fn(|_| zero);
+			inputs[0] = subpool_id.0;
+			inputs[4..].copy_from_slice(subpool_config_comm.elements.as_slice());
+			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs.to_vec())
 		};
 		let main_pool_proof = conditional_merkle_verify_gadget::<F, D>(
 			self,

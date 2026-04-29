@@ -40,8 +40,6 @@ contract TesseraRollupV2Test is Test {
     address constant OP    = address(0x0001);
     address constant ALICE = address(0xA11CE);
 
-    /// @dev poolConfigRoot is now a LE-packed Goldilocks uint256, not bytes32.
-    uint256 constant PCR   = 0xC0FFEE;
     uint256 constant DEPTH = 4; // 16 leaf slots
 
     // Unique-nullifier counter; reset per test by Forge's EVM isolation.
@@ -75,9 +73,9 @@ contract TesseraRollupV2Test is Test {
             address(poseidon),
             OP,
             address(token),
-            PCR,
             depth,
-            20
+            20,
+            0
         );
     }
 
@@ -88,9 +86,9 @@ contract TesseraRollupV2Test is Test {
             address(poseidon),
             OP,
             address(token),
-            PCR,
             depth,
-            20
+            20,
+            0
         );
     }
 
@@ -155,9 +153,9 @@ contract TesseraRollupV2Test is Test {
         uint256 N  = r.PRIV_TX_BATCH_SIZE();
         uint256 NB = r.NOTE_BATCH();
         p = new bytes(96 + N * (8 + 32 + 32 + NB * 64));
-        _wb32(p,  0, _glH(bpr));                    // batchPoseidonRoot
-        _wb32(p, 32, _glH(r.zeros(r.treeDepth()))); // root (confirmed)
-        _wb32(p, 64, _glH(PCR));                    // mainPoolConfigRoot
+        _wb32(p,  0, _glH(bpr));                         // batchPoseidonRoot
+        _wb32(p, 32, _glH(r.imtCurrentRoot()));         // root (confirmed)
+        _wb32(p, 64, _glH(r.mainPoolConfigRoot()));      // mainPoolConfigRoot
         // Remaining bytes stay zero (all notFakeTx = 0).
     }
 
@@ -193,9 +191,9 @@ contract TesseraRollupV2Test is Test {
     {
         uint256 H = r.BRIDGE_TX_HALF_SIZE();
         p = new bytes(96 + H * (W_SLOT_SIZE + D_SLOT_SIZE));
-        _wb32(p,  0, _glH(bpr));                    // batchPoseidonRoot
-        _wb32(p, 32, _glH(r.zeros(r.treeDepth()))); // root
-        _wb32(p, 64, _glH(PCR));                    // mainPoolConfigRoot
+        _wb32(p,  0, _glH(bpr));                         // batchPoseidonRoot
+        _wb32(p, 32, _glH(r.imtCurrentRoot()));         // root
+        _wb32(p, 64, _glH(r.mainPoolConfigRoot()));      // mainPoolConfigRoot
     }
 
     /// @dev Like _minBridgeBatch but marks deposit slot 0 as real.
@@ -274,14 +272,26 @@ contract TesseraRollupV2Test is Test {
     // Reference IMT simulation
     // -----------------------------------------------------------------------
 
+    /// @dev Compute the zero hash at `level` using the same Poseidon as the contract.
+    ///      zeros[0] = 0, zeros[i] = compress(zeros[i-1], zeros[i-1]).
+    function _zeroHash(uint256 level) internal returns (uint256 z) {
+        z = 0;
+        for (uint256 i = 0; i < level; i++) z = poseidon.compress(z, z);
+    }
+
     /// @dev Simulates one _appendLeaf using the same PoseidonGoldilocks as the contract.
     function _simAppend(uint256 leaf) internal returns (uint256 root) {
         uint256 depth = rollup.treeDepth();
-        uint256 node  = leaf;
+        // Build zero chain locally (no passthrough needed).
+        uint256[] memory zeros = new uint256[](depth);
+        zeros[0] = 0;
+        for (uint256 i = 1; i < depth; i++) zeros[i] = poseidon.compress(zeros[i - 1], zeros[i - 1]);
+
+        uint256 node = leaf;
         for (uint256 i = 0; i < depth; i++) {
             if ((_simLC >> i) & 1 == 0) {
                 _simFS[i] = node;
-                node = poseidon.compress(node, rollup.zeros(i));
+                node = poseidon.compress(node, zeros[i]);
             } else {
                 node = poseidon.compress(_simFS[i], node);
             }
@@ -315,9 +325,9 @@ contract TesseraRollupV2Test is Test {
 
         _append(leaf);
 
-        assertEq(rollup.leafCount(), 1, "leafCount");
-        assertEq(rollup.currentRoot(), expected, "root matches reference");
-        assertTrue(rollup.confirmedRoots(expected), "new root in confirmedRoots");
+        assertEq(rollup.imtLeafCount(), 1, "leafCount");
+        assertEq(rollup.imtCurrentRoot(), expected, "root matches reference");
+        assertTrue(rollup.isConfirmedRoot(expected), "new root in confirmedRoots");
     }
 
     /// After 2, 4, 8 appends, root matches reference at each milestone.
@@ -335,11 +345,11 @@ contract TesseraRollupV2Test is Test {
 
         for (uint256 i = 0; i < 8; i++) _append(leaves[i]);
 
-        assertEq(rollup.leafCount(), 8);
-        assertEq(rollup.currentRoot(), ref8, "root after 8");
-        assertTrue(rollup.confirmedRoots(ref2), "root@2 in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(ref4), "root@4 in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(ref8), "root@8 in confirmedRoots");
+        assertEq(rollup.imtLeafCount(), 8);
+        assertEq(rollup.imtCurrentRoot(), ref8, "root after 8");
+        assertTrue(rollup.isConfirmedRoot(ref2), "root@2 in confirmedRoots");
+        assertTrue(rollup.isConfirmedRoot(ref4), "root@4 in confirmedRoots");
+        assertTrue(rollup.isConfirmedRoot(ref8), "root@8 in confirmedRoots");
     }
 
     /// After 3, 5, 7 appends, root matches reference at each count.
@@ -354,22 +364,24 @@ contract TesseraRollupV2Test is Test {
 
         for (uint256 i = 0; i < 7; i++) _append(0x2000 + i);
 
-        assertEq(rollup.leafCount(), 7);
-        assertEq(rollup.currentRoot(), ref7, "root after 7");
-        assertTrue(rollup.confirmedRoots(ref3), "root@3 in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(ref5), "root@5 in confirmedRoots");
+        assertEq(rollup.imtLeafCount(), 7);
+        assertEq(rollup.imtCurrentRoot(), ref7, "root after 7");
+        assertTrue(rollup.isConfirmedRoot(ref3), "root@3 in confirmedRoots");
+        assertTrue(rollup.isConfirmedRoot(ref5), "root@5 in confirmedRoots");
     }
 
     /// Each append records the new root; genesis root stays confirmed forever.
     function test_appendLeaf_adds_to_confirmedRoots() public {
-        assertTrue(rollup.confirmedRoots(rollup.zeros(rollup.treeDepth())), "genesis confirmed at deploy");
+        // Genesis root = zeros[treeDepth]; computed locally as the initial imt.currentRoot.
+        uint256 genesisRoot = rollup.imtCurrentRoot();
+        assertTrue(rollup.isConfirmedRoot(genesisRoot), "genesis confirmed at deploy");
 
-        uint256 prevRoot = rollup.currentRoot();
+        uint256 prevRoot = genesisRoot;
         for (uint256 i = 1; i <= 4; i++) {
             _append(0x3000 + i);
-            uint256 newRoot = rollup.currentRoot();
-            assertTrue(rollup.confirmedRoots(newRoot),  "new root confirmed");
-            assertTrue(rollup.confirmedRoots(prevRoot), "old root still confirmed");
+            uint256 newRoot = rollup.imtCurrentRoot();
+            assertTrue(rollup.isConfirmedRoot(newRoot),  "new root confirmed");
+            assertTrue(rollup.isConfirmedRoot(prevRoot), "old root still confirmed");
             prevRoot = newRoot;
         }
     }
@@ -407,7 +419,7 @@ contract TesseraRollupV2Test is Test {
         rollup.submitTransactionBatch(preimage);
 
         rollup.proveTransactionBatch(preimage, _dummyProof());
-        assertEq(rollup.leafCount(), 1);
+        assertEq(rollup.imtLeafCount(), 1);
     }
 
     /// Unknown root reverts RootNotConfirmed.
@@ -497,19 +509,19 @@ contract TesseraRollupV2Test is Test {
     /// Happy path: proof accepted, leaf appended, event emitted.
     function test_prove_happy() public {
         uint256 bpr        = 0xABCD;
-        uint256 lcBefore   = rollup.leafCount();
-        uint256 rootBefore = rollup.currentRoot();
+        uint256 lcBefore   = rollup.imtLeafCount();
+        uint256 rootBefore = rollup.imtCurrentRoot();
 
         bytes memory preimage = _minBatch(bpr);
         vm.prank(OP);
         rollup.submitTransactionBatch(preimage);
         rollup.proveTransactionBatch(preimage, _dummyProof());
 
-        uint256 newRoot = rollup.currentRoot();
-        assertEq(rollup.leafCount(), lcBefore + 1,    "leafCount incremented");
-        assertTrue(newRoot != rootBefore,             "root changed");
-        assertTrue(rollup.confirmedRoots(newRoot),    "new root in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(rootBefore), "old root still confirmed");
+        uint256 newRoot = rollup.imtCurrentRoot();
+        assertEq(rollup.imtLeafCount(), lcBefore + 1,   "leafCount incremented");
+        assertTrue(newRoot != rootBefore,                "root changed");
+        assertTrue(rollup.isConfirmedRoot(newRoot),      "new root in confirmedRoots");
+        assertTrue(rollup.isConfirmedRoot(rootBefore),   "old root still confirmed");
     }
 
     /// Unknown piCommitment reverts BatchNotFound.
@@ -585,15 +597,15 @@ contract TesseraRollupV2Test is Test {
 
     /// Previous currentRoot stays in confirmedRoots after a new leaf is appended.
     function test_prove_rootHistoryPreserved() public {
-        uint256 r0 = rollup.currentRoot();
+        uint256 r0 = rollup.imtCurrentRoot();
         _append(0x1111);
-        uint256 r1 = rollup.currentRoot();
+        uint256 r1 = rollup.imtCurrentRoot();
         _append(0x2222);
-        uint256 r2 = rollup.currentRoot();
+        uint256 r2 = rollup.imtCurrentRoot();
 
-        assertTrue(rollup.confirmedRoots(r0), "genesis root preserved");
-        assertTrue(rollup.confirmedRoots(r1), "root@1 preserved");
-        assertTrue(rollup.confirmedRoots(r2), "root@2 present");
+        assertTrue(rollup.isConfirmedRoot(r0), "genesis root preserved");
+        assertTrue(rollup.isConfirmedRoot(r1), "root@1 preserved");
+        assertTrue(rollup.isConfirmedRoot(r2), "root@2 present");
     }
 
     // -----------------------------------------------------------------------
@@ -695,7 +707,7 @@ contract TesseraRollupV2Test is Test {
 
         assertEq(uint8(rollup.getDeposit(nc).status),
             uint8(TesseraContract.DepositStatus.Validated), "deposit not validated");
-        assertEq(rollup.leafCount(), 1, "leaf not appended");
+        assertEq(rollup.imtLeafCount(), 1, "leaf not appended");
     }
 
     /// All-padding batch appends a leaf after prove.
@@ -703,9 +715,9 @@ contract TesseraRollupV2Test is Test {
         bytes memory preimage = _minBridgeBatch(rollup, 0xABCD);
         vm.prank(OP);
         rollup.submitBridgeTxBatch(preimage);
-        assertEq(rollup.leafCount(), 0, "no leaf yet before prove");
+        assertEq(rollup.imtLeafCount(), 0, "no leaf yet before prove");
         rollup.proveBridgeTxBatch(preimage, _dummyProof());
-        assertEq(rollup.leafCount(), 1, "leaf appended after prove");
+        assertEq(rollup.imtLeafCount(), 1, "leaf appended after prove");
     }
 
     /// Cannot withdraw a deposit after it has been Validated.
@@ -918,20 +930,61 @@ contract TesseraRollupV2Test is Test {
         assertNotEq(keccak256(p1), keccak256(p2), "distinct roots must yield distinct commitments");
     }
 
-    /// Operator can update mainPoolConfigRoot; old value rejected by new batches.
-    function test_setPoolConfigRoot() public {
-        uint256 newPCR = 0xABCDEF;
-        vm.prank(OP);
-        vm.expectEmit(true, true, false, false, address(rollup));
-        emit TesseraContract.MainPoolConfigRootUpdated(PCR, newPCR);
-        rollup.setMainPoolConfigRoot(newPCR);
-        assertEq(rollup.mainPoolConfigRoot(), newPCR);
+    /// Genesis mainPoolConfigRoot matches zeros[configTreeDepth] computed locally.
+    function test_genesisConfigRoot() public {
+        uint256 expected = _zeroHash(rollup.configTreeDepth());
+        assertEq(rollup.mainPoolConfigRoot(), expected, "genesis config root mismatch");
+    }
 
-        // Old PCR is rejected — preimage still encodes PCR at mainPoolConfigRoot.
-        bytes memory b = _minBatch(1);
+    /// withdrawalDelay blocks early withdrawal; passes after delay elapses.
+    function test_withdrawalDelay() public {
+        // Deploy a rollup with a 10-block delay.
+        TesseraContract delayed = new TesseraContract(
+            address(acceptVerifier),
+            address(acceptVerifier),
+            address(poseidon),
+            OP,
+            address(token),
+            DEPTH,
+            20,
+            10
+        );
+        bytes32 nc = bytes32(uint256(55));
+        uint256 amount = 1e6;
+        token.mint(ALICE, amount);
+        vm.prank(ALICE);
+        token.approve(address(delayed), amount);
+        vm.prank(ALICE);
+        delayed.depositAndRegister(nc, amount);
+
+        // Attempt withdrawal immediately — should revert.
+        vm.prank(ALICE);
+        vm.expectRevert(abi.encodeWithSelector(
+            TesseraContract.WithdrawalTooEarly.selector,
+            nc,
+            block.number + 10
+        ));
+        delayed.withdrawPendingDeposit(nc);
+
+        // Roll forward 10 blocks — withdrawal should succeed.
+        vm.roll(block.number + 10);
+        vm.prank(ALICE);
+        delayed.withdrawPendingDeposit(nc);
+        assertEq(token.balanceOf(ALICE), amount);
+    }
+
+    /// assignSubpoolOwner rejects subpoolId 0.
+    function test_assignSubpoolOwner_rejectsZero() public {
         vm.prank(OP);
-        vm.expectRevert(TesseraContract.PoolConfigMismatch.selector);
-        rollup.submitTransactionBatch(b);
+        vm.expectRevert(TesseraContract.SubpoolIdZero.selector);
+        rollup.assignSubpoolOwner(0, ALICE);
+    }
+
+    /// assignSubpoolOwner only callable by operator.
+    function test_assignSubpoolOwner_onlyOperator() public {
+        vm.prank(ALICE);
+        vm.expectRevert(TesseraContract.NotOperator.selector);
+        rollup.assignSubpoolOwner(1, ALICE);
     }
 }
 

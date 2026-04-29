@@ -17,21 +17,23 @@ import {ToyUser} from "../src/ToyUser.sol";
 ///           cargo run --bin super_aggregator_v2_artifacts --release
 ///
 /// Required environment variables:
-///   TESSERA_POOL_CONFIG_ROOT -- bytes32 initial pool configuration root
-///   TESSERA_TREE_DEPTH       -- depth of the on-chain Poseidon Merkle tree (e.g. 20)
+///   TESSERA_TREE_DEPTH         -- depth of the on-chain Poseidon Merkle tree (e.g. 20)
+///   TESSERA_CONFIG_TREE_DEPTH  -- depth of the subpool config Merkle tree (e.g. 20)
 ///
 /// Optional:
-///   TESSERA_TX_VERIFIER      -- pre-deployed Groth16 tx-batch verifier address
-///                               (deploys a fresh TesseraBatchTransactionVerifier if unset)
-///   TESSERA_DEPOSIT_VERIFIER -- pre-deployed Groth16 deposit-batch verifier address
-///                               (reuses txVerifier address if unset — same circuit)
-///   TESSERA_MONITORED_TOKEN  -- ERC20 address escrowed by the bridge
-///                               (deploys a fresh ToyUSDT if unset)
-///   TESSERA_OPERATOR         -- operator address (defaults to msg.sender)
+///   TESSERA_TX_VERIFIER        -- pre-deployed Groth16 tx-batch verifier address
+///                                 (deploys a fresh TesseraBatchTransactionVerifier if unset)
+///   TESSERA_DEPOSIT_VERIFIER   -- pre-deployed Groth16 deposit-batch verifier address
+///                                 (reuses txVerifier address if unset — same circuit)
+///   TESSERA_MONITORED_TOKEN    -- ERC20 address escrowed by the bridge
+///                                 (deploys a fresh ToyUSDT if unset)
+///   TESSERA_OPERATOR           -- operator address (defaults to msg.sender)
+///   TESSERA_WITHDRAWAL_DELAY   -- minimum blocks between deposit and withdrawal (default: 0)
 contract DeployScript is Script {
     function run() external {
-        uint256 poolConfigRoot = vm.envUint("TESSERA_POOL_CONFIG_ROOT");
-        uint256 treeDepth      = vm.envUint("TESSERA_TREE_DEPTH");
+        uint256 treeDepth        = vm.envUint("TESSERA_TREE_DEPTH");
+        uint256 configTreeDepth  = vm.envUint("TESSERA_CONFIG_TREE_DEPTH");
+        uint256 withdrawalDelay  = vm.envOr("TESSERA_WITHDRAWAL_DELAY", uint256(0));
 
         address txVerifier      = vm.envOr("TESSERA_TX_VERIFIER",      address(0));
         address depositVerifier = vm.envOr("TESSERA_DEPOSIT_VERIFIER", address(0));
@@ -73,15 +75,17 @@ contract DeployScript is Script {
         }
 
         // 5. Main rollup contract.
+        //    mainPoolConfigRoot is computed at construction as the genesis root of an
+        //    all-zero configTreeDepth-deep Poseidon binary Merkle tree.
         TesseraContract rollup = new TesseraContract(
             txVerifier,
             depositVerifier,
             address(poseidon),
             operator,
             monitoredToken,
-            poolConfigRoot,
             treeDepth,
-            20 // configTreeDepth: supports up to 2^20 subpools
+            configTreeDepth,
+            withdrawalDelay
         );
         console.log("TesseraContract:     ", address(rollup));
 
@@ -94,7 +98,9 @@ contract DeployScript is Script {
         console.log("\n--- Deployment summary ---");
         console.log("Operator:            ", operator);
         console.log("Tree depth:          ", treeDepth);
-        console.log("Pool config root:    ", uint256(poolConfigRoot));
-        console.log("Genesis tree root:   ", rollup.currentRoot());
+        console.log("Config tree depth:   ", configTreeDepth);
+        console.log("Withdrawal delay:    ", withdrawalDelay);
+        console.log("Genesis tree root:   ", rollup.imtCurrentRoot());
+        console.log("Genesis config root: ", rollup.mainPoolConfigRoot());
     }
 }

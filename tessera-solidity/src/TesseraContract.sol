@@ -61,10 +61,10 @@ contract TesseraContract {
 
     /// @notice Canonical deposit metadata stored by note commitment.
     struct Deposit {
-        uint256      value;
-        address      recipient;
+        uint256       value;
+        address       recipient;
         DepositStatus status;
-        uint256      depositBlock;  // block.number at deposit time
+        uint256       depositBlock; // block.number at deposit time
     }
 
     /// @notice Groth16 proof container passed to both verifier calls.
@@ -73,7 +73,6 @@ contract TesseraContract {
         uint256[2] commitments;
         uint256[2] commitmentPok;
     }
-
 
     // -------------------------------------------------------------------------
     // Constants
@@ -118,9 +117,9 @@ contract TesseraContract {
     // Deposit section (BRIDGE_TX_HALF_SIZE × 216 B):
     //   Per d-slot (216 B): notFakeTx[8] | dAccinNull[32] | dAccoutComm[32] | dNoteComm[32]
     //                        | dEthAddress[5×8=40] | dAmount[8×8=64] | dAssetId[8]
-    uint256 private constant W_SLOT_SIZE    = 8 + 32 + 32 + NOTE_BATCH * 8 + NOTE_BATCH * 64 + 40; // 616
-    uint256 private constant D_SLOT_SIZE    = 8 + 32 + 32 + 32 + 40 + 64 + 8;                      // 216
-    uint256 private constant D_SECTION_OFF  = 96 + BRIDGE_TX_HALF_SIZE * W_SLOT_SIZE;              // 157792
+    uint256 private constant W_SLOT_SIZE      = 8 + 32 + 32 + NOTE_BATCH * 8 + NOTE_BATCH * 64 + 40; // 616
+    uint256 private constant D_SLOT_SIZE      = 8 + 32 + 32 + 32 + 40 + 64 + 8;                      // 216
+    uint256 private constant D_SECTION_OFF    = 96 + BRIDGE_TX_HALF_SIZE * W_SLOT_SIZE;              // 157792
     uint256 private constant W_ACCIN_NULL_OFF = 8;
     uint256 private constant D_ACCIN_NULL_OFF = 8;
     uint256 private constant D_NOTE_COMM_OFF  = 72;
@@ -140,14 +139,15 @@ contract TesseraContract {
     // --- token ---
     address public immutable monitoredToken;
 
-    // --- main pool config (binary Merkle tree root) ---
+    // --- main pool config (root of a binary Poseidon Merkle tree of subpool roots) ---
     uint256 public mainPoolConfigRoot;
     uint256 public immutable configTreeDepth;
 
     // --- subpool registry ---
-    /// subpool_id => owner address (only operator can assign)
+    /// subpool_id => owner address (only operator can assign; subpool_id 0 is reserved/invalid)
     mapping(uint64 => address) public subpoolOwners;
-    /// subpool_id => current subpool_root value used for leaf computation
+    /// subpool_id => current subpool_root value used for leaf computation.
+    ///   0 means the leaf has never been updated (treated as zero leaf in Merkle proofs).
     mapping(uint64 => uint256) public subpoolRoots;
 
     // --- on-chain Poseidon incremental Merkle tree ---
@@ -162,7 +162,10 @@ contract TesseraContract {
     mapping(bytes32 => Deposit) public deposits;
 
     // --- deposit withdrawal time buffer ---
-    uint256 public withdrawalDelay; // minimum blocks between deposit and withdrawal
+    /// @notice Minimum number of blocks that must pass between a deposit and its withdrawal.
+    ///         Prevents a user from front-running the batch proof by inserting a withdrawal
+    ///         transaction immediately after the aggregation server includes their deposit.
+    uint256 public withdrawalDelay;
 
     // --- pending / confirmed batches (keyed by piCommitment = keccak256(batchPreimage)) ---
     mapping(bytes32 => bool) public pendingTxBatches;
@@ -182,7 +185,6 @@ contract TesseraContract {
     event DepositWithdrawn(bytes32 indexed noteCommitment, uint256 value, address recipient);
     event DepositValidated(bytes32 indexed noteCommitment);
     event OperatorChanged(address indexed oldOp, address indexed newOp);
-    event MainPoolConfigRootUpdated(uint256 indexed oldRoot, uint256 indexed newRoot);
     event PausedChanged(bool isPaused);
     event WithdrawalDelayUpdated(uint256 oldDelay, uint256 newDelay);
     event SubpoolOwnerAssigned(uint64 indexed subpoolId, address indexed owner);
@@ -214,6 +216,7 @@ contract TesseraContract {
     error WithdrawalTooEarly(bytes32 noteCommitment, uint256 availableAtBlock);
     error NotSubpoolOwner(uint64 subpoolId);
     error SubpoolNotAssigned(uint64 subpoolId);
+    error SubpoolIdZero();
     error InvalidSiblingPathLength(uint256 provided, uint256 expected);
     error InvalidMerkleProof(uint64 subpoolId);
 
@@ -226,25 +229,25 @@ contract TesseraContract {
     /// @param _poseidon          Deployed PoseidonGoldilocks contract address.
     /// @param _operator          Initial operator address.
     /// @param _monitoredToken    ERC20 token escrowed by this bridge.
-    /// @param _mainPoolConfigRoot Initial main pool configuration root (LE-packed GL HashOut).
     /// @param _treeDepth         Depth of the on-chain Poseidon Merkle tree (e.g. 20).
     /// @param _configTreeDepth   Depth of the binary config Merkle tree for subpool roots.
+    /// @param _withdrawalDelay   Minimum blocks between deposit and withdrawal (operator-updatable).
     constructor(
         address _txVerifier,
         address _bridgeTxVerifier,
         address _poseidon,
         address _operator,
         address _monitoredToken,
-        uint256 _mainPoolConfigRoot,
         uint256 _treeDepth,
-        uint256 _configTreeDepth
+        uint256 _configTreeDepth,
+        uint256 _withdrawalDelay
     ) {
         if (_txVerifier == address(0))       revert ZeroAddress();
         if (_bridgeTxVerifier == address(0)) revert ZeroAddress();
         if (_poseidon == address(0))         revert ZeroAddress();
         if (_operator == address(0))         revert ZeroAddress();
         if (_monitoredToken == address(0))   revert ZeroAddress();
-        if (_treeDepth == 0 || _treeDepth > MAX_TREE_DEPTH) revert InvalidTreeDepth();
+        if (_treeDepth == 0 || _treeDepth > MAX_TREE_DEPTH)             revert InvalidTreeDepth();
         if (_configTreeDepth == 0 || _configTreeDepth > MAX_TREE_DEPTH) revert InvalidTreeDepth();
 
         txVerifier       = IGroth16Verifier(_txVerifier);
@@ -252,12 +255,20 @@ contract TesseraContract {
         poseidon         = IPoseidonGoldilocks(_poseidon);
         operator         = _operator;
         monitoredToken   = _monitoredToken;
-        mainPoolConfigRoot = _mainPoolConfigRoot;
         treeDepth        = _treeDepth;
         configTreeDepth  = _configTreeDepth;
+        withdrawalDelay  = _withdrawalDelay;
 
         // Initialise IMT (builds zeros chain, seeds filledSubtrees, sets genesis root).
         imt.init(_poseidon, _treeDepth);
+
+        // Compute genesis mainPoolConfigRoot: root of a configTreeDepth-deep all-zero
+        // Poseidon binary Merkle tree. Config tree zeros are NOT stored; computed transiently.
+        uint256 z = 0;
+        for (uint256 i = 0; i < _configTreeDepth; i++) {
+            z = IPoseidonGoldilocks(_poseidon).compress(z, z);
+        }
+        mainPoolConfigRoot = z;
     }
 
     // -------------------------------------------------------------------------
@@ -299,13 +310,6 @@ contract TesseraContract {
         emit PausedChanged(_paused);
     }
 
-    /// @notice Updates the accepted main pool configuration root directly.
-    ///         Use `updateSubpoolRoot` for tree-based updates.
-    function setMainPoolConfigRoot(uint256 newRoot) external onlyOperator {
-        emit MainPoolConfigRootUpdated(mainPoolConfigRoot, newRoot);
-        mainPoolConfigRoot = newRoot;
-    }
-
     /// @notice Sets the minimum number of blocks that must pass between a deposit
     ///         and its withdrawal. Prevents front-running of batch proof transactions.
     function setWithdrawalDelay(uint256 newDelay) external onlyOperator {
@@ -319,24 +323,28 @@ contract TesseraContract {
 
     /// @notice Assigns `owner` as the owner of subpool `subpoolId`.
     ///         Only the operator can call this.
-    /// @param subpoolId  Position of the leaf in the config Merkle tree (uint64).
+    ///         subpoolId 0 is reserved and cannot be assigned.
+    /// @param subpoolId  Position of the leaf in the config Merkle tree (uint64, must be > 0).
     /// @param owner      Address that will be allowed to call `updateSubpoolRoot`.
     function assignSubpoolOwner(uint64 subpoolId, address owner) external onlyOperator {
-        if (owner == address(0)) revert ZeroAddress();
+        if (subpoolId == 0)          revert SubpoolIdZero();
+        if (owner == address(0))     revert ZeroAddress();
         subpoolOwners[subpoolId] = owner;
         emit SubpoolOwnerAssigned(subpoolId, owner);
     }
 
     /// @notice Updates the subpool root for `subpoolId`, recomputing `mainPoolConfigRoot`.
     ///
-    /// @param subpoolId       Leaf position in the config Merkle tree.
+    /// @param subpoolId       Leaf position in the config Merkle tree (must be > 0).
     /// @param newSubpoolRoot  New subpool root value chosen by the subpool owner.
     /// @param siblings        Merkle siblings from leaf to root (`configTreeDepth` elements).
-    ///                        siblings[0] is paired with the leaf; siblings[depth-1] with the root.
+    ///                        siblings[0] is paired with the leaf; siblings[depth-1] is paired
+    ///                        just below the root.
     ///
-    /// @dev The caller must supply the sibling path for the current state of the tree.
-    ///      The contract verifies the old leaf, then computes the new root with the new leaf.
-    ///      Leaf value = poseidon.compress(subpoolId, subpoolRoot).
+    /// @dev Leaf value = poseidon.compress(subpoolId, subpoolRoot).
+    ///      If `subpoolRoots[subpoolId]` is zero the leaf has never been updated and the
+    ///      old leaf value used for proof verification is 0 (zero leaf), not
+    ///      poseidon.compress(subpoolId, 0).
     function updateSubpoolRoot(
         uint64 subpoolId,
         uint256 newSubpoolRoot,
@@ -345,10 +353,15 @@ contract TesseraContract {
         address owner = subpoolOwners[subpoolId];
         if (owner == address(0)) revert SubpoolNotAssigned(subpoolId);
         if (msg.sender != owner) revert NotSubpoolOwner(subpoolId);
-        if (siblings.length != configTreeDepth) revert InvalidSiblingPathLength(siblings.length, configTreeDepth);
+        if (siblings.length != configTreeDepth)
+            revert InvalidSiblingPathLength(siblings.length, configTreeDepth);
 
-        // Compute old leaf value and verify it exists in the current config tree.
-        uint256 oldLeaf = poseidon.compress(uint256(subpoolId), subpoolRoots[subpoolId]);
+        // Old leaf: zero if never updated, otherwise poseidon(subpoolId, subpoolRoot).
+        uint256 oldLeaf = (subpoolRoots[subpoolId] == 0)
+            ? 0
+            : poseidon.compress(uint256(subpoolId), subpoolRoots[subpoolId]);
+
+        // Verify old leaf exists in the current config tree.
         uint256 verifyNode = oldLeaf;
         for (uint256 i = 0; i < configTreeDepth; i++) {
             if ((uint256(subpoolId) >> i) & 1 == 0) {
@@ -359,7 +372,7 @@ contract TesseraContract {
         }
         if (verifyNode != mainPoolConfigRoot) revert InvalidMerkleProof(subpoolId);
 
-        // Compute new leaf and walk siblings to get new root.
+        // Compute new leaf and walk siblings to derive the new root.
         uint256 newLeaf = poseidon.compress(uint256(subpoolId), newSubpoolRoot);
         uint256 newNode = newLeaf;
         for (uint256 i = 0; i < configTreeDepth; i++) {
@@ -370,8 +383,8 @@ contract TesseraContract {
             }
         }
 
-        subpoolRoots[subpoolId] = newSubpoolRoot;
-        mainPoolConfigRoot = newNode;
+        subpoolRoots[subpoolId]  = newSubpoolRoot;
+        mainPoolConfigRoot       = newNode;
 
         emit SubpoolRootUpdated(subpoolId, newSubpoolRoot, newNode);
     }
@@ -429,9 +442,9 @@ contract TesseraContract {
 
         uint256 value = after_ - before;
         deposits[noteCommitment] = Deposit({
-            value: value,
-            recipient: recipient,
-            status: DepositStatus.Pending,
+            value:        value,
+            recipient:    recipient,
+            status:       DepositStatus.Pending,
             depositBlock: block.number
         });
 
@@ -440,7 +453,7 @@ contract TesseraContract {
     }
 
     /// @notice Withdraws a `Pending` deposit back to its recipient.
-    ///         Caller must wait at least `withdrawalDelay` blocks after the deposit.
+    ///         The caller must wait at least `withdrawalDelay` blocks after the deposit.
     function withdrawPendingDeposit(bytes32 noteCommitment) external whenNotPaused {
         Deposit storage dep = deposits[noteCommitment];
         if (dep.status == DepositStatus.None)    revert NoteNotFound(noteCommitment);
@@ -483,15 +496,15 @@ contract TesseraContract {
         onlyOperator
         whenNotPaused
     {
-        bytes32 root              = _cdB32(batchPreimage, 32);
-        bytes32 mainPoolCfgRoot   = _cdB32(batchPreimage, 64);
+        bytes32 root            = _cdB32(batchPreimage, 32);
+        bytes32 mainPoolCfgRoot = _cdB32(batchPreimage, 64);
 
         if (!imt.confirmedRoots[_glHashToU256(root)]) revert RootNotConfirmed(root);
         if (_glHashToU256(mainPoolCfgRoot) != mainPoolConfigRoot) revert PoolConfigMismatch();
 
         bytes32 piCommitment = keccak256(batchPreimage);
-        if (confirmedTxBatches[piCommitment])  revert BatchAlreadyConfirmed(piCommitment);
-        if (pendingTxBatches[piCommitment])    revert BatchAlreadySubmitted(piCommitment);
+        if (confirmedTxBatches[piCommitment]) revert BatchAlreadyConfirmed(piCommitment);
+        if (pendingTxBatches[piCommitment])   revert BatchAlreadySubmitted(piCommitment);
 
         pendingTxBatches[piCommitment] = true;
 
@@ -578,8 +591,8 @@ contract TesseraContract {
         onlyOperator
         whenNotPaused
     {
-        bytes32 root               = _cdB32(batchPreimage, 32);
-        bytes32 mainPoolCfgRoot    = _cdB32(batchPreimage, 64);
+        bytes32 root            = _cdB32(batchPreimage, 32);
+        bytes32 mainPoolCfgRoot = _cdB32(batchPreimage, 64);
 
         if (!imt.confirmedRoots[_glHashToU256(root)]) revert RootNotConfirmed(root);
         if (_glHashToU256(mainPoolCfgRoot) != mainPoolConfigRoot) revert PoolConfigMismatch();
@@ -697,7 +710,6 @@ contract TesseraContract {
     /// @dev Convert a GL-preimage-encoded bytes32 back to a LE-packed uint256.
     ///      Preimage layout: [lo0_BE4][hi0_BE4][lo1_BE4][hi1_BE4]...
     ///      LE-packed layout: e0|(e1<<64)|(e2<<128)|(e3<<192)
-    ///      Used for confirmedRoots/nullifiers lookups and appendLeaf calls.
     function _glHashToU256(bytes32 b) private pure returns (uint256) {
         uint256 w = uint256(b);
         return  (w >> 224) |
@@ -713,6 +725,12 @@ contract TesseraContract {
     // -------------------------------------------------------------------------
     // View helpers
     // -------------------------------------------------------------------------
+
+    /// @notice Current leaf count in the on-chain Merkle tree.
+    function imtLeafCount() external view returns (uint256) { return imt.leafCount; }
+
+    /// @notice Current root of the on-chain Merkle tree.
+    function imtCurrentRoot() external view returns (uint256) { return imt.currentRoot; }
 
     /// @notice Returns the deposit record for `noteCommitment`; reverts if absent.
     function getDeposit(bytes32 noteCommitment) external view returns (Deposit memory) {
@@ -742,9 +760,6 @@ contract TesseraContract {
     ///                   siblings[0] is paired with the leaf; siblings[8] is paired just below
     ///                   the root.
     /// @return           True iff (1) batchRoot is validated and (2) the path hashes to batchRoot.
-    ///
-    /// @dev The per-level zero hashes for the 512-leaf subtree are identical to `zeros[0..8]`
-    ///      already stored in the contract (same Poseidon hasher, same starting zero).
     function verifyBatchLeaf(
         uint256 batchRoot,
         uint256 leaf,
@@ -777,29 +792,4 @@ contract TesseraContract {
         inputs[6] = (h >> 32)  & 0xFFFFFFFF;
         inputs[7] =  h         & 0xFFFFFFFF;
     }
-
-    // -------------------------------------------------------------------------
-    // IMT passthrough views (backwards compatibility)
-    // -------------------------------------------------------------------------
-
-    /// @notice Current leaf count in the on-chain Merkle tree.
-    function leafCount() external view returns (uint256) { return imt.leafCount; }
-
-    /// @notice Current root of the on-chain Merkle tree.
-    function currentRoot() external view returns (uint256) { return imt.currentRoot; }
-
-    /// @notice Leaf value at `index`.
-    function leaves(uint256 index) external view returns (uint256) { return imt.leaves[index]; }
-
-    /// @notice Zero-hash at `level`.
-    function zeros(uint256 level) external view returns (uint256) { return imt.zeros[level]; }
-
-    /// @notice Filled subtree hash at `level`.
-    function filledSubtrees(uint256 level) external view returns (uint256) { return imt.filledSubtrees[level]; }
-
-    /// @notice Whether `root` is a confirmed tree root.
-    function confirmedRoots(uint256 root) external view returns (bool) { return imt.confirmedRoots[root]; }
-
-    /// @notice Whether `batchRoot` is a validated batch root.
-    function validatedBatchRoots(uint256 batchRoot) external view returns (bool) { return imt.validatedBatchRoots[batchRoot]; }
 }

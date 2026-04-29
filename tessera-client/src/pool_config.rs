@@ -92,11 +92,11 @@ where
 	H: MerkleHash<Digest = HashOutput>,
 {
 	pub fn commit(&self) -> H::Digest {
-		let mut input = [F::ZERO; HASH_SIZE + 1];
-		input[..HASH_SIZE].copy_from_slice(&self.subpool_config_comm.0);
-		input[HASH_SIZE] = self.subpool_id.0;
-		let hash = <PoseidonHash as Hasher<F>>::hash_no_pad(&input).elements;
-		HashOutput(hash)
+		let mut left = HashOut::default();
+		left.elements[0] = self.subpool_id.0;
+		let right = self.subpool_config_comm.as_hash_out();
+		let hash = <PoseidonHash as Hasher<F>>::two_to_one(left, right);
+		HashOutput(hash.elements)
 	}
 }
 

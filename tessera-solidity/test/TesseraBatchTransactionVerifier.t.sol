@@ -27,7 +27,6 @@ contract TesseraRollupV2IntegrationTest is Test {
     TesseraContract            public tessera_contract;
 
     address constant OP  = address(0x0001);
-    uint256 constant PCR = 0;
 
     function setUp() public {
         batch_tx_verifier = new TesseraBatchTransactionVerifier();
@@ -40,9 +39,9 @@ contract TesseraRollupV2IntegrationTest is Test {
             address(poseidon),
             OP,
             address(token),
-            PCR,
             32,
-            20
+            20,
+            0
         );
     }
 
@@ -110,7 +109,7 @@ contract TesseraRollupV2IntegrationTest is Test {
         preimage = abi.encodePacked(
             _glH(vm.parseJsonUint(json, ".batchPoseidonRoot")),
             _glH(vm.parseJsonUint(json, ".root")),
-            _glH(PCR)
+            _glH(tessera_contract.mainPoolConfigRoot())
         );
 
         bool[] memory notFakeTx;
@@ -223,7 +222,7 @@ contract TesseraRollupV2IntegrationTest is Test {
         });
         tessera_contract.proveTransactionBatch(preimage, p);
 
-        assertEq(tessera_contract.leafCount(), 1, "leaf appended");
+        assertEq(tessera_contract.imtLeafCount(), 1, "leaf appended");
     }
 }
 
@@ -246,7 +245,6 @@ contract TesseraDepositIntegrationTest is Test {
     TesseraContract                  public rollup;
 
     address constant OP  = address(0x0001);
-    uint256 constant PCR = 0;
 
     function setUp() public {
         batch_tx_verifier      = new TesseraBatchTransactionVerifier();
@@ -259,9 +257,9 @@ contract TesseraDepositIntegrationTest is Test {
             address(poseidon),
             OP,
             address(token),
-            PCR,
             32,
-            20
+            20,
+            0
         );
     }
 
