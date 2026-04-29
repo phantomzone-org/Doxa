@@ -52,7 +52,7 @@ fn spend_test_subpool<R: rand::Rng + CryptoRng>(
 	let subpool_id = SubpoolId(F::ONE);
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.commitment())
+		.insert_subpool_at_position(subpool_id, subpool.commitment())
 		.unwrap();
 	(approval_sk, approval_cpk, subpool_id, Arc::new(main_pool))
 }
@@ -344,7 +344,7 @@ fn test_prove_fresh_acc_tx() {
 	let subpool_id = SubpoolId(F::ONE);
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.commitment())
+		.insert_subpool_at_position(subpool_id, subpool.commitment())
 		.unwrap();
 	let main_pool = Arc::new(main_pool);
 

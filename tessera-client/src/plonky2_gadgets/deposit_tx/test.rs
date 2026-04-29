@@ -26,7 +26,7 @@ fn test_prove_deposit_tx() {
 	let subpool = SubpoolConfig::<HashOutput>::new(approval_key);
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.commitment())
+		.insert_subpool_at_position(subpool_id, subpool.commitment())
 		.unwrap();
 
 	// ── Sample accin ──────────────────────────────────────────────────────

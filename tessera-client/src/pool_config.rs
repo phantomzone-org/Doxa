@@ -124,16 +124,33 @@ where
 		self.inner.root()
 	}
 
-	/// Insert or update the entry for `subpool_id` at the given `index` in the tree.
-	pub fn insert_subpool(
+	/// Insert the entry for `subpool_id` at position `subpool_id` in the tree.
+	///
+	/// The leaf is placed at index `subpool_id.0` (matching the on-chain convention
+	/// where `updateSubpoolRoot` navigates the binary tree using the bits of
+	/// `subpoolId`).  Zero leaves are pre-filled at positions `0..subpool_id` so
+	/// that the underlying append-only [`MerkleTree`] can update the target slot.
+	///
+	/// # Errors
+	/// Returns an error if `subpool_id == 0` (reserved) or if the underlying tree
+	/// operation fails.
+	pub fn insert_subpool_at_position(
 		&mut self,
 		subpool_id: SubpoolId,
 		subpool_root: HashOutput,
 	) -> MerkleTreeResult<()> {
+		let id = subpool_id.0.to_canonical_u64() as usize;
+		anyhow::ensure!(id > 0, "subpool_id 0 is reserved and cannot be used");
+
 		let leaf = MainPoolConfigLeaf::<H>::new(subpool_root, subpool_id);
 		let digest = leaf.commit();
-		let index = self.inner.insert(digest)?;
-		self.leaf_index_map.insert(digest, index);
+
+		// Pre-fill with zero leaves so the target index is within bounds for update_leaf.
+		while self.inner.num_leaves() <= id {
+			self.inner.insert(H::ZERO)?;
+		}
+		self.inner.update_leaf(id, digest)?;
+		self.leaf_index_map.insert(digest, id);
 		Ok(())
 	}
 
@@ -209,7 +226,7 @@ mod tests {
 		let mut main_tree = MainPoolConfigTree::new();
 		let subpool_id = SubpoolId(F::from_canonical_u64(5));
 		main_tree
-			.insert_subpool(subpool_id, subpool.commitment())
+			.insert_subpool_at_position(subpool_id, subpool.commitment())
 			.unwrap();
 
 		let proof = main_tree

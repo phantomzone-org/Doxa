@@ -135,7 +135,7 @@ fn prove_priv_tx_inner(
 	let subpool_id = SubpoolId(F::ONE);
 	let mut main_pool = MainPoolConfigTree::new();
 	main_pool
-		.insert_subpool(subpool_id, subpool.commitment())
+		.insert_subpool_at_position(subpool_id, subpool.commitment())
 		.unwrap();
 
 	let accin = StandardAccount::sample(&mut rng, subpool_id);
