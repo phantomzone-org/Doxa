@@ -9,8 +9,8 @@
 //! 1. **Build the Solidity contracts** (produces verifier + rollup bytecode): ```text cd
 //!    tessera-solidity && forge build ```
 //!
-//! 2. **Generate PrivTxAggregator artifacts**: ```text cargo run -p tessera-e2e --bin
-//!    priv_tx_artifacts --release ``` Artifacts are written to `tessera-server/artifacts/priv-tx/`.
+//! 2. **Generate PrivTxAggregator artifacts**: ```text cargo run -p tessera-server --bin
+//!    priv_tx_setup --release ``` Artifacts are written to `tessera-server/artifacts/priv-tx/`.
 //!
 //! # Running
 //!
