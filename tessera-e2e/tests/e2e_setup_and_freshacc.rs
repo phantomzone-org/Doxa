@@ -222,7 +222,6 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 
 	let rollup_bytecode = load_foundry_bytecode("TesseraContract.sol", "TesseraContract");
 	let poseidon_bytecode = load_foundry_bytecode("PoseidonGoldilocks.sol", "PoseidonGoldilocks");
-	let token_bytecode = load_foundry_bytecode("ToyUSDTWOperator.sol", "ToyUSDT");
 	let verifier_bytecode = load_foundry_bytecode(
 		"TesseraBatchTransactionVerifier.sol",
 		"TesseraBatchTransactionVerifier",
@@ -272,11 +271,12 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 
 	let verifier_addr = deploy_no_args(&op_provider, &verifier_bytecode).await;
 	let poseidon_addr = deploy_no_args(&op_provider, &poseidon_bytecode).await;
-	let token_addr =
-		deploy_with_args(&op_provider, &token_bytecode, operator_addr.abi_encode()).await;
 
-	// TesseraContract(txVerifier, bridgeTxVerifier, poseidon, operator, token,
+	// TesseraContract(txVerifier, bridgeTxVerifier, poseidon, operator,
 	//                 treeDepth=32, configTreeDepth=20, withdrawalDelay=0)
+	//
+	// Assets are registered post-deployment via registerAsset(); this test
+	// exercises private-TX batches only (no deposits), so none are needed.
 	//
 	// treeDepth = STATE_TREE_DEPTH = 32 → genesis IMT root = zeros[32]
 	//                                      = genesis ACT root used in FreshAcc proofs
@@ -289,7 +289,6 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 		verifier_addr,
 		poseidon_addr,
 		operator_addr,
-		token_addr,
 		U256::from(STATE_TREE_DEPTH as u64),
 		U256::from(MAIN_POOL_CONFIG_DEPTH as u64),
 		U256::from(0u64), // withdrawalDelay

@@ -38,7 +38,6 @@ contract TesseraRollupV2IntegrationTest is Test {
             address(accept_all_verifier),
             address(poseidon),
             OP,
-            address(token),
             32,
             20,
             0
@@ -256,7 +255,6 @@ contract TesseraDepositIntegrationTest is Test {
             address(accept_all_verifier),
             address(poseidon),
             OP,
-            address(token),
             32,
             20,
             0

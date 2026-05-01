@@ -40,7 +40,8 @@ contract TesseraRollupV2Test is Test {
     address constant OP    = address(0x0001);
     address constant ALICE = address(0xA11CE);
 
-    uint256 constant DEPTH = 4; // 16 leaf slots
+    uint256 constant DEPTH    = 4; // 16 leaf slots
+    uint256 constant ASSET_ID = 1; // registered asset ID for `token` in tests
 
     // Unique-nullifier counter; reset per test by Forge's EVM isolation.
     uint256 private _nc;
@@ -60,6 +61,9 @@ contract TesseraRollupV2Test is Test {
         rejectVerifier = new RejectAllVerifier();
         rollup = _deploy(DEPTH);
         _nc    = 0xDEAD_0001;
+        // Register the test token so deposit functions work.
+        vm.prank(OP);
+        rollup.registerAsset(ASSET_ID, address(token));
     }
 
     // -----------------------------------------------------------------------
@@ -72,7 +76,6 @@ contract TesseraRollupV2Test is Test {
             address(acceptVerifier),
             address(poseidon),
             OP,
-            address(token),
             depth,
             20,
             0
@@ -85,7 +88,6 @@ contract TesseraRollupV2Test is Test {
             address(acceptVerifier),
             address(poseidon),
             OP,
-            address(token),
             depth,
             20,
             0
@@ -309,7 +311,7 @@ contract TesseraRollupV2Test is Test {
         vm.prank(user);
         token.approve(address(rollup), amount);
         vm.prank(user);
-        rollup.depositAndRegister(nc, amount);
+        rollup.depositAndRegister(nc, ASSET_ID, amount);
     }
 
     // -----------------------------------------------------------------------
@@ -626,7 +628,7 @@ contract TesseraRollupV2Test is Test {
         vm.expectEmit(true, false, false, true, address(rollup));
         emit TesseraContract.DepositAvailable(nc, amount, ALICE);
         vm.prank(ALICE);
-        rollup.depositAndRegister(nc, amount);
+        rollup.depositAndRegister(nc, ASSET_ID, amount);
 
         TesseraContract.Deposit memory d = rollup.getDeposit(nc);
         assertEq(d.value, amount);
@@ -777,7 +779,7 @@ contract TesseraRollupV2Test is Test {
 
         vm.prank(ALICE);
         vm.expectRevert(TesseraContract.PausedErr.selector);
-        rollup.depositAndRegister(bytes32(uint256(1)), 100);
+        rollup.depositAndRegister(bytes32(uint256(1)), ASSET_ID, 100);
 
         vm.prank(ALICE);
         vm.expectRevert(TesseraContract.PausedErr.selector);
@@ -944,18 +946,21 @@ contract TesseraRollupV2Test is Test {
             address(acceptVerifier),
             address(poseidon),
             OP,
-            address(token),
             DEPTH,
             20,
             10
         );
+        // Register the test token on the delayed contract.
+        vm.prank(OP);
+        delayed.registerAsset(ASSET_ID, address(token));
+
         bytes32 nc = bytes32(uint256(55));
         uint256 amount = 1e6;
         token.mint(ALICE, amount);
         vm.prank(ALICE);
         token.approve(address(delayed), amount);
         vm.prank(ALICE);
-        delayed.depositAndRegister(nc, amount);
+        delayed.depositAndRegister(nc, ASSET_ID, amount);
 
         // Attempt withdrawal immediately — should revert.
         vm.prank(ALICE);

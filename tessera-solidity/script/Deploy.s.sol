@@ -82,7 +82,6 @@ contract DeployScript is Script {
             depositVerifier,
             address(poseidon),
             operator,
-            monitoredToken,
             treeDepth,
             configTreeDepth,
             withdrawalDelay

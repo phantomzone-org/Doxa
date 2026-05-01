@@ -119,17 +119,95 @@ Access from outside `TesseraContract`:
   - Contract verifies the old leaf against `mainPoolConfigRoot`, then derives the new root.
   - The operator **cannot** directly set `mainPoolConfigRoot`.
 
+### Multi-Asset Support
+
+`TesseraContract` supports multiple ERC20 assets via an `assetMap`:
+
+```solidity
+mapping(uint256 => address) public assetMap;         // assetId → token address
+mapping(address => uint256) private _tokenToAssetId; // reverse lookup (no duplicates)
+```
+
+**Rules:**
+- Asset IDs are assigned by the operator via `registerAsset(uint256 assetId, address token)`.
+- `assetId = 0` is reserved and may not be used.
+- A token address may not be mapped to two different IDs.
+- Assets cannot be deleted once registered.
+- All deposit and withdrawal calls take an `assetId` parameter. The contract resolves the token address from `assetMap[assetId]`.
+
+---
+
 ### Deposit Lifecycle
 
 ```
-None → Pending (depositAndRegister)
+None → Pending  (depositAndRegister / depositAndRegisterFor / transferDepositAndRegister)
              ↓
-       Validated (proveBridgeTxBatch)
+       Validated (proveBridgeTxBatch — deposit validity check moved here from submit phase)
              or
        Withdrawn (withdrawPendingDeposit, after withdrawalDelay blocks)
 ```
 
+Each `Deposit` record now includes an `assetId` field. `withdrawPendingDeposit` uses `assetMap[dep.assetId]` to return the correct token.
+
 `withdrawalDelay` (operator-configurable, set at construction) imposes a minimum block delay between deposit and withdrawal, preventing a user from front-running the aggregation server's batch proof transaction.
+
+---
+
+### Withdrawal Entry Flow
+
+During `proveBridgeTxBatch`, for each W-slot in the batch preimage the contract reads from the public input:
+
+| Field | Offset in W-slot |
+|---|---|
+| `ethAddress` (recipient) | `wOff + W_ETH_ADDR_OFF` (5 GL elements → 40 bytes) |
+| `assetId[i]` | `wOff + W_ASSET_ID_OFF + i * 8` (1 GL element) |
+| `amount[i]` | `wOff + W_AMT_OFF + i * 8` (8 GL elements → 64 bytes) |
+
+Where:
+- `W_ASSET_ID_OFF = W_ACCIN_NULL_OFF + 32 + 32 = 72`
+- `W_AMT_OFF = W_ASSET_ID_OFF + NOTE_BATCH * 8 = 128`
+- `W_ETH_ADDR_OFF = W_AMT_OFF + NOTE_BATCH * 64 = 576`
+
+Pairs with `assetId = 0` and `amount = 0` are skipped.
+
+Non-empty pairs are accumulated into a `PendingWithdrawal` entry stored in `_pendingWithdrawals`:
+
+```solidity
+struct PendingWithdrawal {
+    address recipient;
+    uint256[NOTE_BATCH] assetIds;
+    uint256[NOTE_BATCH] amounts;
+}
+```
+
+`flushPendingWithdrawals()` (permissionless) iterates `_pendingWithdrawals`, calls `IERC20.transfer` for each non-zero pair, and clears the array.
+
+---
+
+### Deposit Validation (moved to prove phase)
+
+`submitBridgeTxBatch` no longer validates deposit public inputs. The check now happens in `proveBridgeTxBatch` during the D-slot loop. For each non-zero D-slot the contract:
+
+1. Reads `noteKey` from `batchPreImage` at `slotOff + D_NOTE_COMM_OFF`.
+2. Reads `ethAddress`, `amount`, `assetId` from the same slot using offsets:
+   - `D_ETH_ADDR_OFF = D_NOTE_COMM_OFF + 32`
+   - `D_AMT_OFF = D_ETH_ADDR_OFF + 40`
+   - `D_ASSET_ID_OFF = D_AMT_OFF + 64`
+3. Looks up the deposit via `noteKey` and asserts it is in `PENDING` state.
+4. Asserts `deposit.recipient == ethAddress`, `deposit.value == amount`, `deposit.assetId == assetId`.
+5. On success, sets deposit status to `VALIDATED`.
+
+---
+
+### Calldata GL Decoding Helpers
+
+Three private helpers decode Goldilocks-encoded values from `bytes calldata`:
+
+| Helper | Return type | Encoding |
+|---|---|---|
+| `_cdGLU64(data, off)` | `uint256` | 1 GL element (8 bytes: lo_u32_BE ++ hi_u32_BE) |
+| `_cdGLU256(data, off)` | `uint256` | 8 GL elements LE (256 bits in 32-bit limbs, LE limb order) |
+| `_cdGLAddress(data, off)` | `address` | 5 GL elements LE (160 bits in 32-bit limbs, LE limb order) |
 
 ---
 
@@ -141,12 +219,13 @@ constructor(
     address _bridgeTxVerifier,  // Groth16 verifier for bridge-TX batches
     address _poseidon,          // PoseidonGoldilocks contract
     address _operator,          // Initial operator
-    address _monitoredToken,    // ERC20 token escrowed by bridge
     uint256 _treeDepth,         // IMT depth (e.g. 20); max 32
     uint256 _configTreeDepth,   // Config tree depth (e.g. 20); max 32
     uint256 _withdrawalDelay    // Min blocks between deposit and withdrawal
 )
 ```
+
+Note: `monitoredToken` was removed. Assets are registered post-deployment via `registerAsset`.
 
 ---
 
@@ -159,6 +238,10 @@ constructor(
 5. `subpoolId = 0` cannot be assigned an owner.
 6. The effective old leaf for an uninitialized subpool (subpoolRoots == 0) is `0`, not `poseidon(id, 0)`.
 7. `mainPoolConfigRoot` can only change through `updateSubpoolRoot` (by subpool owners). The operator has no direct setter.
+8. `assetId = 0` is reserved; `registerAsset` reverts with `AssetIdZero` if used.
+9. A token address cannot be assigned to two different asset IDs (`TokenAlreadyRegistered`).
+10. Assets cannot be deleted once registered.
+11. Deposit validity (recipient, amount, assetId) is checked in `proveBridgeTxBatch`, not `submitBridgeTxBatch`.
 
 ---
 
@@ -170,13 +253,19 @@ constructor(
 | `submitBridgeTxBatch` | Operator only |
 | `proveTransactionBatch` | Permissionless |
 | `proveBridgeTxBatch` | Permissionless |
+| `flushPendingWithdrawals` | Permissionless |
 | `depositAndRegister` | Anyone (whenNotPaused) |
+| `depositAndRegisterFor` | Anyone (whenNotPaused) |
+| `transferDepositAndRegister` | Anyone (whenNotPaused) |
 | `withdrawPendingDeposit` | Deposit recipient (after delay) |
+| `registerAsset` | Operator only |
 | `assignSubpoolOwner` | Operator only |
 | `updateSubpoolRoot` | Assigned subpool owner |
 | `setOperator` | Operator only |
 | `setPaused` | Operator only |
 | `setWithdrawalDelay` | Operator only |
+| `setTxVerifier` | Operator only (no pause check) |
+| `setBridgeTxVerifier` | Operator only (no pause check) |
 
 ---
 
@@ -202,10 +291,11 @@ Optional:
 ```
 TESSERA_TX_VERIFIER        # pre-deployed verifier address
 TESSERA_DEPOSIT_VERIFIER   # pre-deployed verifier address
-TESSERA_MONITORED_TOKEN    # ERC20 address
 TESSERA_OPERATOR           # defaults to msg.sender
 TESSERA_WITHDRAWAL_DELAY   # defaults to 0
 ```
+
+Assets are registered after deployment with `registerAsset(assetId, tokenAddress)` — there is no deploy-time asset parameter.
 
 ```bash
 forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
@@ -230,3 +320,7 @@ Tests are skipped automatically if the fixture file `test/fixtures/groth16_proof
 - **IMT as a library** — `IMTLib` operates on a `storage` pointer (`IMTState`) to allow embedding in any contract without proxy patterns.
 - **Config tree zeros not stored** — the zero chain for the config tree is computed transiently at construction. Callers computing sibling paths for `updateSubpoolRoot` must compute config tree zeros locally using the same `poseidon.compress` zero-chain formula.
 - **Deposit withdrawal delay** — set at deploy time and operator-adjustable, defaulting to 0. A non-zero value should be set in production to prevent gaming the aggregation server.
+- **Deposit validation deferred to prove phase** — `submitBridgeTxBatch` no longer validates individual deposits; this check runs in `proveBridgeTxBatch` where the batch preimage is available alongside the on-chain deposit records.
+- **`assetId = 0` reserved** — zero is the sentinel for "empty" pairs in the W-slot output list; using it as a real asset ID would make those pairs indistinguishable from padding.
+- **`flushPendingWithdrawals` is permissionless** — withdrawal entries are accumulated during `proveBridgeTxBatch` and can be flushed by anyone. This decouples the expensive token-transfer loop from the proof-verification transaction.
+- **Verifier setters bypass pause** — `setTxVerifier` and `setBridgeTxVerifier` can be called even when the contract is paused so the operator can deploy a new verifying key in response to an emergency without first unpausing.
