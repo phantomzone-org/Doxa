@@ -164,11 +164,17 @@ where
 			);
 		}
 
-		let leaf = MainPoolConfigLeaf::<H>::new(subpool_root, subpool_id);
-		let digest = leaf.commit();
+		let digest = if subpool_root == H::ZERO {
+			H::ZERO // uninitialized subpool: spec says leaf = H::ZERO, not Poseidon(id, 0)
+		} else {
+			MainPoolConfigLeaf::<H>::new(subpool_root, subpool_id).commit()
+		};
 		let inserted_at = self.inner.insert(digest)?;
 		debug_assert_eq!(inserted_at, id, "inserted at wrong position");
-		self.leaf_index_map.insert(digest, id);
+		// Only add to leaf_index_map when digest is non-zero (zero is the default/sentinel value)
+		if digest != H::ZERO {
+			self.leaf_index_map.insert(digest, id);
+		}
 		Ok(())
 	}
 
@@ -178,6 +184,11 @@ where
 		subpool_id: SubpoolId,
 		subpool_config_comm: H::Digest,
 	) -> MerkleTreeResult<MerkleProof<H>> {
+		if subpool_config_comm == H::ZERO {
+			// Zero-root subpool: leaf = H::ZERO stored at position subpool_id
+			let id = subpool_id.0.to_canonical_u64() as usize;
+			return self.inner.merkle_proof(id);
+		}
 		let leaf = MainPoolConfigLeaf::<H>::new(subpool_config_comm, subpool_id);
 		let digest = leaf.commit();
 		let index = *self
@@ -242,6 +253,12 @@ mod tests {
 		let subpool = SubpoolConfig::<HashOutput>::new(approval);
 
 		let mut main_tree = MainPoolConfigTree::new();
+		// Insert subpools 1-4 as sequential prerequisites (zero roots = uninitialized)
+		for i in 1u64..5 {
+			main_tree
+				.insert_subpool_at_position(SubpoolId(F::from_canonical_u64(i)), HashOutput::ZERO)
+				.unwrap();
+		}
 		let subpool_id = SubpoolId(F::from_canonical_u64(5));
 		main_tree
 			.insert_subpool_at_position(subpool_id, subpool.commitment())
@@ -252,5 +269,36 @@ mod tests {
 			.expect("proof must be Some");
 
 		assert!(proof.main_pool_proof.verify(), "main pool proof invalid");
+	}
+
+	#[test]
+	fn test_zero_root_subpool_proof() {
+		let mut main_tree = MainPoolConfigTree::<HashOutput>::new();
+
+		// Insert subpool 1 with a non-zero root
+		let non_zero_root = HashOutput([
+			F::from_canonical_u64(42),
+			F::ZERO,
+			F::ZERO,
+			F::ZERO,
+		]);
+		let subpool_id_1 = SubpoolId(F::from_canonical_u64(1));
+		main_tree
+			.insert_subpool_at_position(subpool_id_1, non_zero_root)
+			.unwrap();
+
+		// Insert subpool 2 with a zero root (uninitialized)
+		let subpool_id_2 = SubpoolId(F::from_canonical_u64(2));
+		main_tree
+			.insert_subpool_at_position(subpool_id_2, HashOutput::ZERO)
+			.unwrap();
+
+		// Requesting proof for the zero-root subpool should succeed
+		let proof = main_tree
+			.subpool_proof(subpool_id_2, HashOutput::ZERO)
+			.expect("proof must be Ok for zero-root subpool");
+
+		assert_eq!(proof.leaf, HashOutput::ZERO, "leaf should be H::ZERO for zero-root subpool");
+		assert!(proof.verify(), "Merkle proof for zero-root subpool should be valid");
 	}
 }

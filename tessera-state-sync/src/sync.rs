@@ -40,6 +40,12 @@ impl StateSyncService {
         let tree_depth = fetch_tree_depth(&provider, address).await?;
         let config_tree_depth = fetch_config_tree_depth(&provider, address).await?;
         info!("Tree depths: state={}, config={}", tree_depth, config_tree_depth);
+        anyhow::ensure!(
+            config_tree_depth == tessera_client::MAIN_POOL_CONFIG_DEPTH,
+            "on-chain configTreeDepth={} != MAIN_POOL_CONFIG_DEPTH={}",
+            config_tree_depth,
+            tessera_client::MAIN_POOL_CONFIG_DEPTH
+        );
 
         let service = Self::new(tree_depth);
 
@@ -120,6 +126,10 @@ impl StateSyncService {
         address: Address,
         chunk_blocks: u64,
     ) -> anyhow::Result<()> {
+        let genesis_block: u64 = std::env::var("TESSERA_GENESIS_BLOCK")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let from_block = self.with_state(|state| state.last_synced_block);
         let to_block = provider.get_block_number().await
             .context("failed to get latest block number")?;
@@ -152,7 +162,7 @@ impl StateSyncService {
                         BatchKind::Transaction => ITesseraRollupV2::TransactionBatchSubmitted::SIGNATURE_HASH,
                         BatchKind::BridgeTx => ITesseraRollupV2::BridgeTxBatchSubmitted::SIGNATURE_HASH,
                     },
-                    entry.pi_commitment, 0, to_block, chunk_blocks,
+                    entry.pi_commitment, genesis_block, from_block, chunk_blocks,
                     match entry.kind { BatchKind::Transaction => "TransactionBatchSubmitted", BatchKind::BridgeTx => "BridgeTxBatchSubmitted" },
                 ).await?;
                 let input = fetch_transaction_input(&provider, tx_hash).await?;
@@ -192,12 +202,6 @@ impl StateSyncService {
 }
 
 // ── Internal types ────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BatchKind {
-    Transaction,
-    BridgeTx,
-}
 
 pub struct ProvenBatchEntry {
     pub pi_commitment: B256,
@@ -486,7 +490,7 @@ fn apply_tx_preimage(
         // Extract and add commitments with correct subtree indices
         for s in 0..PRIV_TX_BATCH_SIZE {
             let slot_off = TX_HEADER_SIZE + s * TX_SLOT_SIZE;
-            if !read_gl_bool(preimage, slot_off) { continue; }
+            // no read_gl_bool check here — all slots contribute to the subtree
 
             // leaf s*8+0 = accOutComm
             let acc_comm = read_gl_b32(preimage, slot_off + TX_ACCOUT_COMM_OFF);
@@ -506,12 +510,12 @@ fn apply_tx_preimage(
 
             // Account input nullifier
             let acc_null = read_gl_b32(preimage, slot_off + TX_ACCIN_NULL_OFF);
-            state.add_pending_nullifier(acc_null, pi_commitment);
+            state.add_pending_nullifier(bytes_to_hash(&acc_null), pi_commitment);
 
             // Note input nullifiers
             for j in 0..NOTE_BATCH {
                 let note_null = read_gl_b32(preimage, slot_off + TX_NOTE_IN_OFF + j * 32);
-                state.add_pending_nullifier(note_null, pi_commitment);
+                state.add_pending_nullifier(bytes_to_hash(&note_null), pi_commitment);
             }
         }
 
@@ -533,25 +537,27 @@ fn apply_bridge_preimage(
         // Withdraw: slot s → leaf s
         for s in 0..BRIDGE_TX_HALF_SIZE {
             let w_off = TX_HEADER_SIZE + s * W_SLOT_SIZE;
-            if !read_gl_bool(preimage, w_off) { continue; }
+            // no read_gl_bool check here — all slots contribute to the subtree
             let acc_comm = read_gl_b32(preimage, w_off + W_ACCOUT_COMM_OFF);
             state.add_pending_commitment(bytes_to_hash(&acc_comm), pi_commitment, s);
 
             // Withdraw nullifiers
+            if !read_gl_bool(preimage, w_off) { continue; }
             let acc_null = read_gl_b32(preimage, w_off + W_ACCIN_NULL_OFF);
-            state.add_pending_nullifier(acc_null, pi_commitment);
+            state.add_pending_nullifier(bytes_to_hash(&acc_null), pi_commitment);
         }
 
         // Deposit: slot s → leaf 256+s
         for s in 0..BRIDGE_TX_HALF_SIZE {
             let d_off = D_SECTION_OFF + s * D_SLOT_SIZE;
-            if !read_gl_bool(preimage, d_off) { continue; }
+            // no read_gl_bool check here — all slots contribute to the subtree
             let acc_comm = read_gl_b32(preimage, d_off + D_ACCOUT_COMM_OFF);
             state.add_pending_commitment(bytes_to_hash(&acc_comm), pi_commitment, 256 + s);
 
             // Deposit nullifiers
+            if !read_gl_bool(preimage, d_off) { continue; }
             let acc_null = read_gl_b32(preimage, d_off + D_ACCIN_NULL_OFF);
-            state.add_pending_nullifier(acc_null, pi_commitment);
+            state.add_pending_nullifier(bytes_to_hash(&acc_null), pi_commitment);
         }
 
         // Store pending batch
@@ -628,13 +634,13 @@ fn decode_bridge_batch_calldata(input: &alloy::primitives::Bytes) -> anyhow::Res
     Ok(call.batchPreimage)
 }
 
-fn extract_batch_root_from_preimage(preimage: &[u8], _kind: BatchKind) -> anyhow::Result<[u8; 32]> {
+fn extract_batch_root_from_preimage(preimage: &[u8], _kind: BatchKind) -> anyhow::Result<HashOutput> {
     // Batch root is the first 32 bytes (batchPoseidonRoot)
     if preimage.len() < 32 {
         anyhow::bail!("preimage too short for batch root");
     }
-    let batch_root = read_gl_b32(preimage, 0);
-    Ok(batch_root)
+    let batch_root_bytes = read_gl_b32(preimage, 0);
+    Ok(bytes_to_hash(&batch_root_bytes))
 }
 
 // ── Preimage parsing helpers ────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+use alloy::primitives::B256;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -7,7 +8,7 @@ use plonky2_field::types::Field;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::state::{BatchStatus, CommitmentStatus, DepositStatus, NullifierStatus, StateSyncService};
+use crate::state::{BatchKind, BatchStatus, CommitmentStatus, DepositStatus, NullifierStatus, StateSyncService};
 
 #[derive(Deserialize)]
 pub struct CommitmentQuery {
@@ -73,10 +74,13 @@ pub async fn get_commitment_merkle_path(
     Query(params): Query<CommitmentQuery>,
     State(service): State<StateSyncService>,
 ) -> Result<Json<Value>, StatusCode> {
-    let commitment = hex_string_to_bytes32(&params.commitment)
+    let commitment_bytes = hex_string_to_bytes32(&params.commitment)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let commitment_hash = crate::contract::bytes32_to_hash(
+        &B256::from(commitment_bytes)
+    ).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let status = service.with_state(|state| state.get_commitment_status(&commitment));
+    let status = service.with_state(|state| state.get_commitment_status(&commitment_hash));
 
     match status {
         CommitmentStatus::Confirmed { batch_subtree_path, state_tree_path } => {
@@ -116,10 +120,13 @@ pub async fn get_nullifier_status(
     Query(params): Query<NullifierQuery>,
     State(service): State<StateSyncService>,
 ) -> Result<Json<Value>, StatusCode> {
-    let nullifier = hex_string_to_bytes32(&params.nullifier)
+    let nullifier_bytes = hex_string_to_bytes32(&params.nullifier)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let nullifier_hash = crate::contract::bytes32_to_hash(
+        &B256::from(nullifier_bytes)
+    ).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let status = service.with_state(|state| state.get_nullifier_status(&nullifier));
+    let status = service.with_state(|state| state.get_nullifier_status(&nullifier_hash));
 
     match status {
         NullifierStatus::Confirmed => {
@@ -151,10 +158,15 @@ pub async fn get_subpool_full_proof(
             use tessera_client::pool_config::MainPoolConfigLeaf;
             use tessera_client::SubpoolId;
             use tessera_utils::F;
+            use tessera_utils::hasher::MerkleHash;
 
             let subpool_id_field = SubpoolId(F::from_canonical_u64(params.subpool_id));
-            let leaf = MainPoolConfigLeaf::<tessera_utils::hasher::HashOutput>::new(subpool_root, subpool_id_field);
-            let leaf_value = leaf.commit();
+            let leaf_value = if subpool_root == tessera_utils::hasher::HashOutput::ZERO {
+                tessera_utils::hasher::HashOutput::ZERO
+            } else {
+                let leaf = MainPoolConfigLeaf::<tessera_utils::hasher::HashOutput>::new(subpool_root, subpool_id_field);
+                leaf.commit()
+            };
 
             // Get proof from config tree
             if let Ok(proof) = state.config_tree.subpool_proof(subpool_id_field, subpool_root) {
@@ -189,11 +201,13 @@ pub async fn get_batch_status(
     let pi_commitment = hex_string_to_bytes32(&params.pi_commitment)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    if params.kind != "tx" && params.kind != "bridge" {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+    let kind = match params.kind.as_str() {
+        "tx" => BatchKind::Transaction,
+        "bridge" => BatchKind::BridgeTx,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
 
-    let status = service.with_state(|state| state.get_batch_status(&pi_commitment));
+    let status = service.with_state(|state| state.get_batch_status(&pi_commitment, kind));
 
     match status {
         BatchStatus::Confirmed => {
