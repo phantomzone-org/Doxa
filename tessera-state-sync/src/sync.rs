@@ -8,7 +8,7 @@ use alloy::{
 };
 use anyhow::Context;
 use plonky2_field::types::Field;
-use tessera_utils::hasher::HashOutput;
+use tessera_utils::hasher::{HashOutput, MerkleHash};
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -327,11 +327,11 @@ async fn sync_config_tree<P: Provider + Clone>(
             };
 
             service.with_state_mut(|state| {
-                // Buffer out-of-order events
                 if event.subpool_id == state.next_expected_subpool_id {
+                    state.subpool_roots.entry(event.subpool_id).or_insert(HashOutput::ZERO);
                     state.next_expected_subpool_id += 1;
-                    // Process any buffered events that can now be processed
-                    while let Some(_buffered_event) = state.pending_subpool_assignments.remove(&state.next_expected_subpool_id) {
+                    while let Some(buffered_event) = state.pending_subpool_assignments.remove(&state.next_expected_subpool_id) {
+                        state.subpool_roots.entry(buffered_event.subpool_id).or_insert(HashOutput::ZERO);
                         state.next_expected_subpool_id += 1;
                     }
                 } else if event.subpool_id > state.next_expected_subpool_id {
@@ -352,6 +352,20 @@ async fn sync_config_tree<P: Provider + Clone>(
             service.with_state_mut(|s| s.subpool_roots.insert(subpool_id, root));
         }
         // Rebuild config tree from fetched roots
+        service.with_state_mut(|s| {
+            s.config_tree = tessera_client::pool_config::MainPoolConfigTree::new();
+            let mut sorted: Vec<_> = s.subpool_roots.iter().map(|(&id, &r)| (id, r)).collect();
+            sorted.sort_by_key(|(id, _)| *id);
+            for (subpool_id, subpool_root) in sorted {
+                use tessera_client::SubpoolId;
+                use tessera_utils::F;
+                let sid = SubpoolId(F::from_canonical_u64(subpool_id));
+                s.config_tree.insert_subpool_at_position(sid, subpool_root)
+                    .expect("config tree rebuild should not fail");
+            }
+        });
+    } else {
+        // Poll-sync: rebuild config tree to incorporate any newly assigned zero-root subpools.
         service.with_state_mut(|s| {
             s.config_tree = tessera_client::pool_config::MainPoolConfigTree::new();
             let mut sorted: Vec<_> = s.subpool_roots.iter().map(|(&id, &r)| (id, r)).collect();
