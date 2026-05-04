@@ -161,6 +161,8 @@ sol! {
             uint256 value;
             address recipient;
             DepositStatus status;
+            uint256 depositBlock;
+            uint256 assetId;
         }
 
         struct Proof {
@@ -173,18 +175,18 @@ sol! {
         function proveTransactionBatch(bytes calldata batchPreimage, Proof calldata proof) external;
         function submitBridgeTxBatch(bytes calldata batchPreimage) external;
         function proveBridgeTxBatch(bytes calldata batchPreimage, Proof calldata proof) external;
-        function depositAndRegister(bytes32 noteCommitment, uint256 maxAmount) external;
+        function depositAndRegister(bytes32 noteCommitment, uint256 assetId, uint256 maxAmount) external;
         function withdrawPendingDeposit(bytes32 noteCommitment) external;
-        function currentRoot() external view returns (uint256);
-        function confirmedRoots(uint256 root) external view returns (bool);
+        function imtCurrentRoot() external view returns (uint256);
+        function imtLeafCount() external view returns (uint256);
         function mainPoolConfigRoot() external view returns (uint256);
         function updateSubpoolRoot(uint64 subpoolId, uint256 newSubpoolRoot, uint256[] calldata siblings) external;
         function nullifiers(uint256 nullifier) external view returns (bool);
-        function leaves(uint256 index) external view returns (uint256);
-        function validatedBatchRoots(uint256 batchRoot) external view returns (bool);
-        function leafCount() external view returns (uint256);
-        function zeros(uint256 level) external view returns (uint256);
         function treeDepth() external view returns (uint256);
+        function assignSubpoolOwner(uint64 subpoolId, address owner) external;
+        function registerAsset(uint256 assetId, address token) external;
+        function isConfirmedRoot(uint256 root) external view returns (bool);
+        function isNullifierUsed(uint256 nullifier) external view returns (bool);
         function configTreeDepth() external view returns (uint256);
         function subpoolOwners(uint64 subpoolId) external view returns (address);
         function subpoolRoots(uint64 subpoolId) external view returns (uint256);

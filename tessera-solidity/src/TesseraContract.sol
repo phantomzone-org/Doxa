@@ -237,13 +237,10 @@ contract TesseraContract {
     event DepositAvailable(
         bytes32 indexed noteCommitment,
         uint256 value,
-        address recipient
+        address recipient,
+        uint256 assetId
     );
-    event DepositWithdrawn(
-        bytes32 indexed noteCommitment,
-        uint256 value,
-        address recipient
-    );
+    event DepositWithdrawn(bytes32 indexed noteCommitment);
     event DepositValidated(bytes32 indexed noteCommitment);
     event AssetRegistered(uint256 indexed assetId, address indexed token);
     event PendingWithdrawalsFlushed(uint256 count);
@@ -573,7 +570,7 @@ contract TesseraContract {
             assetId: assetId
         });
 
-        emit DepositAvailable(noteCommitment, value, recipient);
+        emit DepositAvailable(noteCommitment, value, recipient, assetId);
         return noteCommitment;
     }
 
@@ -600,7 +597,7 @@ contract TesseraContract {
         bool ok = IERC20MonitoredToken(token).transfer(dep.recipient, value);
         if (!ok) revert TokenTransferFailed();
 
-        emit DepositWithdrawn(noteCommitment, value, dep.recipient);
+        emit DepositWithdrawn(noteCommitment);
     }
 
     // -------------------------------------------------------------------------
