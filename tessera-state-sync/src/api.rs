@@ -12,28 +12,28 @@ use crate::state::{BatchKind, BatchStatus, CommitmentStatus, DepositStatus, Null
 
 #[derive(Deserialize)]
 pub struct CommitmentQuery {
-    commitment: String,
+    pub commitment: String,
 }
 
 #[derive(Deserialize)]
 pub struct NullifierQuery {
-    nullifier: String,
+    pub nullifier: String,
 }
 
 #[derive(Deserialize)]
 pub struct SubpoolQuery {
-    subpool_id: u64,
+    pub subpool_id: u64,
 }
 
 #[derive(Deserialize)]
 pub struct BatchQuery {
-    pi_commitment: String,
-    kind: String, // "tx" or "bridge"
+    pub pi_commitment: String,
+    pub kind: String, // "tx" or "bridge"
 }
 
 #[derive(Deserialize)]
 pub struct DepositsQuery {
-    from_block: Option<u64>,
+    pub from_block: Option<u64>,
 }
 
 #[derive(Serialize)]

@@ -205,7 +205,7 @@ sol! {
         event DepositAvailable(bytes32 indexed noteCommitment, uint256 value, address recipient, uint256 assetId);
         event DepositValidated(bytes32 indexed noteCommitment);
         event DepositWithdrawn(bytes32 indexed noteCommitment);
-        event SubpoolOwnerAssigned(uint64 indexed subpoolId, address owner);
+        event SubpoolOwnerAssigned(uint64 indexed subpoolId, address indexed owner);
         event SubpoolRootUpdated(uint64 indexed subpoolId, uint256 newSubpoolRoot, uint256 newConfigRoot);
     }
 }
