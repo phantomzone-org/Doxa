@@ -397,7 +397,12 @@ async fn test_deposit_validated_via_bridge_batch() {
     )
     .await;
 
-    let note_comm_raw = [2u8; 32];
+    let note_comm_raw: [u8; 32] = [
+        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x02,
+        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x02,
+        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x02,
+        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x02,
+    ];
     let note_commitment = B256::from(note_comm_raw);
     ITesseraRollupV2::new(env.rollup, &dep_provider)
         .depositAndRegister(note_commitment, U256::from(1u64), U256::from(1000u64))
@@ -456,7 +461,12 @@ async fn test_deposit_withdrawn_sync() {
     )
     .await;
 
-    let note_comm_raw = [3u8; 32];
+    let note_comm_raw: [u8; 32] = [
+        0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x04,
+        0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x04,
+        0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x04,
+        0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x04,
+    ];
     let note_commitment = B256::from(note_comm_raw);
     ITesseraRollupV2::new(env.rollup, &dep_provider)
         .depositAndRegister(note_commitment, U256::from(1u64), U256::from(1000u64))
@@ -833,7 +843,13 @@ async fn test_api_deposits_with_data() {
     )
     .await;
 
-    let note_commitment = B256::from([4u8; 32]);
+    let note_comm_raw: [u8; 32] = [
+        0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x06,
+        0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x06,
+        0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x06,
+        0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x06,
+    ];
+    let note_commitment = B256::from(note_comm_raw);
     ITesseraRollupV2::new(env.rollup, &dep_provider)
         .depositAndRegister(note_commitment, U256::from(1u64), U256::from(1000u64))
         .send()
@@ -857,4 +873,107 @@ async fn test_api_deposits_with_data() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["status"], "Pending");
     assert_eq!(arr[0]["asset_id"], "1");
+}
+
+// ---------------------------------------------------------------------------
+// Test 27: API bridge batch status (pending → confirmed)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_api_bridge_batch_status() {
+    let (env, provider) = setup_env().await;
+    submit_bridge_batch(&provider, env.rollup, bridge_preimage()).await;
+
+    let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
+        .await
+        .unwrap();
+
+    let pi_hex = format!("0x{}", hex::encode(alloy::primitives::keccak256(bridge_preimage())));
+
+    // Should be pending before prove
+    let resp = get_batch_status(
+        Query(BatchQuery { pi_commitment: pi_hex.clone(), kind: "bridge".to_string() }),
+        State(service.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.0["status"], "pending");
+
+    // Prove the batch
+    prove_bridge_batch(&provider, env.rollup, bridge_preimage()).await;
+    service.poll_sync(&provider, env.rollup, 1000).await.unwrap();
+
+    // Should now be confirmed
+    let resp = get_batch_status(
+        Query(BatchQuery { pi_commitment: pi_hex, kind: "bridge".to_string() }),
+        State(service),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.0["status"], "confirmed");
+}
+
+// ---------------------------------------------------------------------------
+// Test 28: API get_deposits with from_block filter
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_api_get_deposits_from_block() {
+    let (env, provider) = setup_env().await;
+
+    // Register asset 1 → token
+    ITesseraRollupV2::new(env.rollup, &provider)
+        .registerAsset(U256::from(1u64), env.token)
+        .send().await.unwrap().get_receipt().await.unwrap();
+
+    let (depositor_addr, dep_provider) = depositor_provider(&env);
+    mint_and_approve(env.token, env.rollup, depositor_addr, U256::from(1000u64), &provider, &dep_provider).await;
+
+    // Two asymmetric note commitments (valid Goldilocks, lo != hi in each limb)
+    let nc1: [u8; 32] = [
+        0x00,0x00,0x00,0x07,0x00,0x00,0x00,0x08,
+        0x00,0x00,0x00,0x07,0x00,0x00,0x00,0x08,
+        0x00,0x00,0x00,0x07,0x00,0x00,0x00,0x08,
+        0x00,0x00,0x00,0x07,0x00,0x00,0x00,0x08,
+    ];
+    let nc2: [u8; 32] = [
+        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x0a,
+        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x0a,
+        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x0a,
+        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x0a,
+    ];
+
+    // First deposit — capture block from receipt
+    let receipt1 = ITesseraRollupV2::new(env.rollup, &dep_provider)
+        .depositAndRegister(B256::from(nc1), U256::from(1u64), U256::from(500u64))
+        .send().await.unwrap().get_receipt().await.unwrap();
+    let first_deposit_block = receipt1.block_number.unwrap();
+
+    // Second deposit — Anvil mines one block per tx, so this will be in a later block
+    ITesseraRollupV2::new(env.rollup, &dep_provider)
+        .depositAndRegister(B256::from(nc2), U256::from(1u64), U256::from(500u64))
+        .send().await.unwrap().get_receipt().await.unwrap();
+
+    let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
+        .await
+        .unwrap();
+
+    // from_block = first_deposit_block + 1 should return only nc2
+    let resp = get_deposits(
+        Query(DepositsQuery { from_block: Some(first_deposit_block + 1) }),
+        State(service.clone()),
+    )
+    .await
+    .unwrap();
+    let arr = resp.0.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+
+    // from_block = 0 should return both deposits
+    let resp_all = get_deposits(
+        Query(DepositsQuery { from_block: Some(0) }),
+        State(service),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp_all.0.as_array().unwrap().len(), 2);
 }

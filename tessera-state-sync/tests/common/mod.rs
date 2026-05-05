@@ -1,38 +1,39 @@
 use std::sync::OnceLock;
 
 use alloy::{
-    network::{EthereumWallet, TransactionBuilder},
-    node_bindings::{Anvil, AnvilInstance},
-    primitives::{Address, Bytes, U256},
-    providers::{Provider, ProviderBuilder},
-    rpc::types::TransactionRequest,
-    signers::local::PrivateKeySigner,
-    sol_types::SolValue,
+	network::{EthereumWallet, TransactionBuilder},
+	node_bindings::{Anvil, AnvilInstance},
+	primitives::{Address, Bytes, U256},
+	providers::{Provider, ProviderBuilder},
+	rpc::types::TransactionRequest,
+	signers::local::PrivateKeySigner,
+	sol_types::SolValue,
 };
-use plonky2_field::types::Field;
 use tessera_client::{
-    build_deposit_tx_circuit, build_priv_tx_circuit, build_withdraw_tx_circuit,
-    FakeDepositTxBuilder, FakeSpendTxBuilder, FakeWithdrawTxBuilder,
+	build_deposit_tx_circuit, build_priv_tx_circuit, build_withdraw_tx_circuit,
+	FakeDepositTxBuilder, FakeSpendTxBuilder, FakeWithdrawTxBuilder,
 };
 use tessera_e2e::contract_bytecodes::{ACCEPT_ALL_BYTECODE, POSEIDON_BYTECODE, TOKEN_BYTECODE};
 use tessera_server::{
-    batch_helper::BatchHelper,
-    prover_service::bridge_tx::{BridgeTxBatch, BridgeTxProof},
-    prover_service::priv_tx::PrivateTxBatch,
+	batch_helper::BatchHelper,
+	prover_service::{
+		bridge_tx::{BridgeTxBatch, BridgeTxProof},
+		priv_tx::PrivateTxBatch,
+	},
 };
-use tessera_state_sync::contract::ITesseraRollupV2::Proof;
-use tessera_utils::{hasher::HashOutput, F};
+use tessera_state_sync::contract::{ITesseraRollupV2, ITesseraRollupV2::Proof};
+use tessera_utils::hasher::HashOutput;
 
 // ---------------------------------------------------------------------------
 // Dummy proof (AcceptAllVerifier accepts any zero-filled proof)
 // ---------------------------------------------------------------------------
 
 pub fn dummy_proof() -> Proof {
-    Proof {
-        proof: [U256::ZERO; 8],
-        commitments: [U256::ZERO; 2],
-        commitmentPok: [U256::ZERO; 2],
-    }
+	Proof {
+		proof: [U256::ZERO; 8],
+		commitments: [U256::ZERO; 2],
+		commitmentPok: [U256::ZERO; 2],
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -42,18 +43,18 @@ pub fn dummy_proof() -> Proof {
 /// Load V2 TesseraContract deployment bytecode from the Foundry artifact.
 /// Path: <manifest_dir>/../tessera-solidity/out/TesseraContract.sol/TesseraContract.json
 pub fn v2_contract_bytecode() -> String {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path = format!(
-        "{}/../tessera-solidity/out/TesseraContract.sol/TesseraContract.json",
-        manifest_dir
-    );
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Cannot read {}: {}", path, e));
-    let json: serde_json::Value = serde_json::from_str(&text).expect("invalid JSON");
-    let obj = json["bytecode"]["object"]
-        .as_str()
-        .expect("bytecode.object missing");
-    obj.strip_prefix("0x").unwrap_or(obj).to_string()
+	let manifest_dir = env!("CARGO_MANIFEST_DIR");
+	let path = format!(
+		"{}/../tessera-solidity/out/TesseraContract.sol/TesseraContract.json",
+		manifest_dir
+	);
+	let text =
+		std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("Cannot read {}: {}", path, e));
+	let json: serde_json::Value = serde_json::from_str(&text).expect("invalid JSON");
+	let obj = json["bytecode"]["object"]
+		.as_str()
+		.expect("bytecode.object missing");
+	obj.strip_prefix("0x").unwrap_or(obj).to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -61,78 +62,86 @@ pub fn v2_contract_bytecode() -> String {
 // ---------------------------------------------------------------------------
 
 pub struct TestEnv {
-    pub rollup: Address,
-    pub token: Address,
-    pub operator: Address,
-    pub anvil: AnvilInstance,
+	pub rollup: Address,
+	pub token: Address,
+	pub operator: Address,
+	pub anvil: AnvilInstance,
 }
 
 pub async fn deploy_bytecode<P: Provider>(provider: &P, hex: &str) -> Address {
-    let code = Bytes::from(hex::decode(hex).unwrap());
-    let tx = TransactionRequest::default().with_deploy_code(code);
-    let receipt = provider
-        .send_transaction(tx)
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    receipt.contract_address.expect("no contract address in receipt")
+	let code = Bytes::from(hex::decode(hex).unwrap());
+	let tx = TransactionRequest::default().with_deploy_code(code);
+	let receipt = provider
+		.send_transaction(tx)
+		.await
+		.unwrap()
+		.get_receipt()
+		.await
+		.unwrap();
+	receipt
+		.contract_address
+		.expect("no contract address in receipt")
 }
 
 /// Deploy AcceptAllVerifier (×2), Poseidon, V2 TesseraContract, ToyUSDT.
-/// Constructor: (txVerifier, bridgeTxVerifier, poseidon, operator, treeDepth=23, configTreeDepth=20, withdrawalDelay=0)
-/// configTreeDepth MUST equal tessera_client::MAIN_POOL_CONFIG_DEPTH = 20.
+/// Constructor: (txVerifier, bridgeTxVerifier, poseidon, operator, treeDepth=23,
+/// configTreeDepth=20, withdrawalDelay=0) configTreeDepth MUST equal
+/// tessera_client::MAIN_POOL_CONFIG_DEPTH = 20.
 pub async fn setup_env() -> (TestEnv, impl Provider + Clone) {
-    let anvil = Anvil::new().spawn();
-    let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-    let operator = signer.address();
-    let wallet = EthereumWallet::from(signer);
-    let provider = ProviderBuilder::new()
-        .wallet(wallet)
-        .connect_http(anvil.endpoint_url());
+	let anvil = Anvil::new().spawn();
+	let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
+	let operator = signer.address();
+	let wallet = EthereumWallet::from(signer);
+	let provider = ProviderBuilder::new()
+		.wallet(wallet)
+		.connect_http(anvil.endpoint_url());
 
-    let accept_all = deploy_bytecode(&provider, ACCEPT_ALL_BYTECODE).await;
-    let poseidon = deploy_bytecode(&provider, POSEIDON_BYTECODE).await;
-    let token = deploy_bytecode(&provider, TOKEN_BYTECODE).await;
+	let accept_all = deploy_bytecode(&provider, ACCEPT_ALL_BYTECODE).await;
+	let poseidon = deploy_bytecode(&provider, POSEIDON_BYTECODE).await;
+	let token = deploy_bytecode(&provider, TOKEN_BYTECODE).await;
 
-    // V2 TesseraContract — constructor args ABI-encoded and appended to bytecode
-    let bytecode_hex = v2_contract_bytecode();
-    let mut bytecode = hex::decode(&bytecode_hex).unwrap();
-    let args = (
-        accept_all,         // _txVerifier
-        accept_all,         // _bridgeTxVerifier
-        poseidon,           // _poseidon
-        operator,           // _operator
-        U256::from(23u64),  // _treeDepth
-        U256::from(20u64),  // _configTreeDepth ← must equal MAIN_POOL_CONFIG_DEPTH = 20
-        U256::ZERO,         // _withdrawalDelay
-    );
-    bytecode.extend_from_slice(&args.abi_encode());
-    let code = Bytes::from(bytecode);
-    let tx = TransactionRequest::default().with_deploy_code(code);
-    let receipt = provider
-        .send_transaction(tx)
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    let rollup = receipt.contract_address.expect("rollup deploy failed");
+	// V2 TesseraContract — constructor args ABI-encoded and appended to bytecode
+	let bytecode_hex = v2_contract_bytecode();
+	let mut bytecode = hex::decode(&bytecode_hex).unwrap();
+	let args = (
+		accept_all,        // _txVerifier
+		accept_all,        // _bridgeTxVerifier
+		poseidon,          // _poseidon
+		operator,          // _operator
+		U256::from(23u64), // _treeDepth
+		U256::from(20u64), // _configTreeDepth ← must equal MAIN_POOL_CONFIG_DEPTH = 20
+		U256::ZERO,        // _withdrawalDelay
+	);
+	bytecode.extend_from_slice(&args.abi_encode());
+	let code = Bytes::from(bytecode);
+	let tx = TransactionRequest::default().with_deploy_code(code);
+	let receipt = provider
+		.send_transaction(tx)
+		.await
+		.unwrap()
+		.get_receipt()
+		.await
+		.unwrap();
+	let rollup = receipt.contract_address.expect("rollup deploy failed");
 
-    let env = TestEnv { rollup, token, operator, anvil };
-    (env, provider)
+	let env = TestEnv {
+		rollup,
+		token,
+		operator,
+		anvil,
+	};
+	(env, provider)
 }
 
 /// Build a provider for anvil key[1] (the "depositor" account).
 pub fn depositor_provider(env: &TestEnv) -> (Address, impl Provider + Clone) {
-    let signer: PrivateKeySigner = env.anvil.keys()[1].clone().into();
-    let addr = signer.address();
-    let wallet = EthereumWallet::from(signer);
-    let provider = ProviderBuilder::new()
-        .wallet(wallet)
-        .connect_http(env.anvil.endpoint_url());
-    (addr, provider)
+	let signer: PrivateKeySigner = env.anvil.keys()[1].clone().into();
+	let addr = signer.address();
+	let wallet = EthereumWallet::from(signer);
+	let provider = ProviderBuilder::new()
+		.wallet(wallet)
+		.connect_http(env.anvil.endpoint_url());
+	(addr, provider)
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +155,7 @@ pub fn depositor_provider(env: &TestEnv) -> (Address, impl Provider + Clone) {
 /// root at deploy time; `submitTransactionBatch` rejects any batch whose
 /// act_root is not confirmed.
 pub fn genesis_act_root() -> HashOutput {
-    tessera_trees::MerkleTree::<HashOutput>::new(23).root()
+	tessera_trees::MerkleTree::<HashOutput>::new(23).root()
 }
 
 /// Compute the genesis mainpool_config_root for configTreeDepth=20.
@@ -154,7 +163,7 @@ pub fn genesis_act_root() -> HashOutput {
 /// Equals the root of an empty MainPoolConfigTree (depth 20), matching
 /// the `mainPoolConfigRoot` stored on-chain immediately after construction.
 pub fn genesis_config_root() -> HashOutput {
-    tessera_client::pool_config::MainPoolConfigTree::<HashOutput>::new().root()
+	tessera_client::pool_config::MainPoolConfigTree::<HashOutput>::new().root()
 }
 
 // ---------------------------------------------------------------------------
@@ -171,47 +180,47 @@ static BRIDGE_PREIMAGE: OnceLock<Vec<u8>> = OnceLock::new();
 /// values so that `submitTransactionBatch` on a freshly-deployed contract will
 /// pass the `isConfirmedRoot` and `PoolConfigMismatch` checks.
 pub fn tx_preimage() -> &'static Vec<u8> {
-    TX_PREIMAGE.get_or_init(|| {
-        let act_root = genesis_act_root();
-        let config_root = genesis_config_root();
-        let circuit = build_priv_tx_circuit();
-        let proof = FakeSpendTxBuilder::new(act_root, config_root)
-            .build()
-            .into_priv_tx()
-            .prove(&circuit.circuit_data, &circuit.targets)
-            .expect("fake priv_tx prove");
-        let mut batch = PrivateTxBatch::new(); // builds circuit again internally
-        batch.add_proof(proof).unwrap();
-        batch.finalize().expect("finalize TX batch");
-        batch.pi_preimage_bytes().expect("TX preimage bytes")
-    })
+	TX_PREIMAGE.get_or_init(|| {
+		let act_root = genesis_act_root();
+		let config_root = genesis_config_root();
+		let circuit = build_priv_tx_circuit();
+		let proof = FakeSpendTxBuilder::new(act_root, config_root)
+			.build()
+			.into_priv_tx()
+			.prove(&circuit.circuit_data, &circuit.targets)
+			.expect("fake priv_tx prove");
+		let mut batch = PrivateTxBatch::new(); // builds circuit again internally
+		batch.add_proof(proof).unwrap();
+		batch.finalize().expect("finalize TX batch");
+		batch.pi_preimage_bytes().expect("TX preimage bytes")
+	})
 }
 
 /// Finalized fake bridge batch preimage.
 ///
 /// Same genesis-root requirement as `tx_preimage()`.
 pub fn bridge_preimage() -> &'static Vec<u8> {
-    BRIDGE_PREIMAGE.get_or_init(|| {
-        let act_root = genesis_act_root();
-        let config_root = genesis_config_root();
-        let wc = build_withdraw_tx_circuit();
-        let dc = build_deposit_tx_circuit();
-        let w = FakeWithdrawTxBuilder::new(act_root, config_root)
-            .build()
-            .into_withdraw_tx()
-            .prove(&wc)
-            .expect("fake withdraw prove");
-        let d = FakeDepositTxBuilder::new(act_root, config_root)
-            .build()
-            .into_deposit_tx()
-            .prove(&dc)
-            .expect("fake deposit prove");
-        let mut batch = BridgeTxBatch::new(); // builds circuits again internally
-        batch.add_proof(BridgeTxProof::WithdrawTxProof(w)).unwrap();
-        batch.add_proof(BridgeTxProof::DepositTxProof(d)).unwrap();
-        batch.finalize().expect("finalize bridge batch");
-        batch.pi_preimage_bytes().expect("bridge preimage bytes")
-    })
+	BRIDGE_PREIMAGE.get_or_init(|| {
+		let act_root = genesis_act_root();
+		let config_root = genesis_config_root();
+		let wc = build_withdraw_tx_circuit();
+		let dc = build_deposit_tx_circuit();
+		let w = FakeWithdrawTxBuilder::new(act_root, config_root)
+			.build()
+			.into_withdraw_tx()
+			.prove(&wc)
+			.expect("fake withdraw prove");
+		let d = FakeDepositTxBuilder::new(act_root, config_root)
+			.build()
+			.into_deposit_tx()
+			.prove(&dc)
+			.expect("fake deposit prove");
+		let mut batch = BridgeTxBatch::new(); // builds circuits again internally
+		batch.add_proof(BridgeTxProof::WithdrawTxProof(w)).unwrap();
+		batch.add_proof(BridgeTxProof::DepositTxProof(d)).unwrap();
+		batch.finalize().expect("finalize bridge batch");
+		batch.pi_preimage_bytes().expect("bridge preimage bytes")
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -219,47 +228,47 @@ pub fn bridge_preimage() -> &'static Vec<u8> {
 // ---------------------------------------------------------------------------
 
 pub async fn submit_tx_batch<P: Provider>(provider: &P, rollup: Address, preimage: &[u8]) {
-    ITesseraRollupV2::new(rollup, provider)
-        .submitTransactionBatch(Bytes::from(preimage.to_vec()))
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+	ITesseraRollupV2::new(rollup, provider)
+		.submitTransactionBatch(Bytes::from(preimage.to_vec()))
+		.send()
+		.await
+		.unwrap()
+		.get_receipt()
+		.await
+		.unwrap();
 }
 
 pub async fn prove_tx_batch<P: Provider>(provider: &P, rollup: Address, preimage: &[u8]) {
-    ITesseraRollupV2::new(rollup, provider)
-        .proveTransactionBatch(Bytes::from(preimage.to_vec()), dummy_proof())
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+	ITesseraRollupV2::new(rollup, provider)
+		.proveTransactionBatch(Bytes::from(preimage.to_vec()), dummy_proof())
+		.send()
+		.await
+		.unwrap()
+		.get_receipt()
+		.await
+		.unwrap();
 }
 
 pub async fn submit_bridge_batch<P: Provider>(provider: &P, rollup: Address, preimage: &[u8]) {
-    ITesseraRollupV2::new(rollup, provider)
-        .submitBridgeTxBatch(Bytes::from(preimage.to_vec()))
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+	ITesseraRollupV2::new(rollup, provider)
+		.submitBridgeTxBatch(Bytes::from(preimage.to_vec()))
+		.send()
+		.await
+		.unwrap()
+		.get_receipt()
+		.await
+		.unwrap();
 }
 
 pub async fn prove_bridge_batch<P: Provider>(provider: &P, rollup: Address, preimage: &[u8]) {
-    ITesseraRollupV2::new(rollup, provider)
-        .proveBridgeTxBatch(Bytes::from(preimage.to_vec()), dummy_proof())
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+	ITesseraRollupV2::new(rollup, provider)
+		.proveBridgeTxBatch(Bytes::from(preimage.to_vec()), dummy_proof())
+		.send()
+		.await
+		.unwrap()
+		.get_receipt()
+		.await
+		.unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -268,21 +277,21 @@ pub async fn prove_bridge_batch<P: Provider>(provider: &P, rollup: Address, prei
 
 /// Encode bool as GL field element (8 bytes): lo_u32 = 1 if true, else 0; hi = 0.
 pub fn gl_encode_bool(v: bool) -> [u8; 8] {
-    let mut out = [0u8; 8];
-    if v {
-        out[0..4].copy_from_slice(&1u32.to_be_bytes());
-    }
-    out
+	let mut out = [0u8; 8];
+	if v {
+		out[0..4].copy_from_slice(&1u32.to_be_bytes());
+	}
+	out
 }
 
 /// Encode u64 as GL field element (8 bytes): [lo_u32_BE4][hi_u32_BE4].
 pub fn gl_encode_u64(v: u64) -> [u8; 8] {
-    let lo = (v & 0xFFFF_FFFF) as u32;
-    let hi = (v >> 32) as u32;
-    let mut out = [0u8; 8];
-    out[0..4].copy_from_slice(&lo.to_be_bytes());
-    out[4..8].copy_from_slice(&hi.to_be_bytes());
-    out
+	let lo = (v & 0xFFFF_FFFF) as u32;
+	let hi = (v >> 32) as u32;
+	let mut out = [0u8; 8];
+	out[0..4].copy_from_slice(&lo.to_be_bytes());
+	out[4..8].copy_from_slice(&hi.to_be_bytes());
+	out
 }
 
 /// Encode Ethereum address as 5 × GL elements (40 bytes).
@@ -291,28 +300,29 @@ pub fn gl_encode_u64(v: u64) -> [u8; 8] {
 /// big-endian u32: `result |= uint160(lo[i]) << (32 * i)`.
 /// Limb 0 = LS 32 bits = bytes[16..20], limb 4 = MS 32 bits = bytes[0..4].
 pub fn gl_encode_address(addr: &alloy::primitives::Address) -> [u8; 40] {
-    let bytes = addr.as_slice(); // 20 bytes, big-endian
-    let mut out = [0u8; 40];
-    for i in 0..5 {
-        // limb i occupies bits [i*32 .. (i+1)*32) of uint160
-        // in big-endian 20-byte repr, that chunk starts at bytes[16 - 4*i]
-        let chunk_start = 16 - 4 * i;
-        out[i * 8..i * 8 + 4].copy_from_slice(&bytes[chunk_start..chunk_start + 4]);
-        // hi_u32 = 0 (already zero-initialized)
-    }
-    out
+	let bytes = addr.as_slice(); // 20 bytes, big-endian
+	let mut out = [0u8; 40];
+	for i in 0..5 {
+		// limb i occupies bits [i*32 .. (i+1)*32) of uint160
+		// in big-endian 20-byte repr, that chunk starts at bytes[16 - 4*i]
+		let chunk_start = 16 - 4 * i;
+		out[i * 8..i * 8 + 4].copy_from_slice(&bytes[chunk_start..chunk_start + 4]);
+		// hi_u32 = 0 (already zero-initialized)
+	}
+	out
 }
 
 /// Encode U256 as 8 × GL elements (64 bytes).
 /// Each of the 8 limbs is the (i*32)-bit slice of the value, encoded as [lo_BE4][0000_4B].
 pub fn gl_encode_u256(v: alloy::primitives::U256) -> [u8; 64] {
-    let mut out = [0u8; 64];
-    for i in 0..8 {
-        let limb = ((v >> (i * 32usize)) & alloy::primitives::U256::from(0xFFFF_FFFFu64)).to::<u32>();
-        out[i * 8..i * 8 + 4].copy_from_slice(&limb.to_be_bytes());
-        // hi = 0
-    }
-    out
+	let mut out = [0u8; 64];
+	for i in 0..8 {
+		let limb =
+			((v >> (i * 32usize)) & alloy::primitives::U256::from(0xFFFF_FFFFu64)).to::<u32>();
+		out[i * 8..i * 8 + 4].copy_from_slice(&limb.to_be_bytes());
+		// hi = 0
+	}
+	out
 }
 
 /// Patch a bridge preimage: set deposit slot `slot_idx` (0-based in deposit half) to is_real=true
@@ -325,43 +335,43 @@ pub fn gl_encode_u256(v: alloy::primitives::U256) -> [u8; 64] {
 /// 144: amount (64 bytes = 8 GL elements)
 /// 208: asset_id (8 bytes GL u64)
 pub fn patch_bridge_deposit_slot(
-    preimage: &[u8],
-    slot_idx: usize,
-    note_commitment: [u8; 32],
-    recipient: alloy::primitives::Address,
-    value: alloy::primitives::U256,
-    asset_id: u64,
+	preimage: &[u8],
+	slot_idx: usize,
+	note_commitment: [u8; 32],
+	recipient: alloy::primitives::Address,
+	value: alloy::primitives::U256,
+	asset_id: u64,
 ) -> Vec<u8> {
-    use tessera_state_sync::constants::{D_NOTE_COMM_OFF, D_SECTION_OFF, D_SLOT_SIZE};
-    use tessera_state_sync::contract::raw_to_preimage_bytes32;
+	use tessera_state_sync::constants::{D_NOTE_COMM_OFF, D_SECTION_OFF, D_SLOT_SIZE};
 
-    // These offsets match TesseraContract.sol internal constants (not re-exported from constants.rs)
-    const D_ETH_ADDR_OFF: usize = 104; // D_NOTE_COMM_OFF + 32
-    const D_AMT_OFF: usize = 144; // D_ETH_ADDR_OFF + 40
-    const D_ASSET_ID_OFF: usize = 208; // D_AMT_OFF + 64
+	// These offsets match TesseraContract.sol internal constants (not re-exported from
+	// constants.rs)
+	const D_ETH_ADDR_OFF: usize = 104; // D_NOTE_COMM_OFF + 32
+	const D_AMT_OFF: usize = 144; // D_ETH_ADDR_OFF + 40
+	const D_ASSET_ID_OFF: usize = 208; // D_AMT_OFF + 64
 
-    let mut out = preimage.to_vec();
-    let base = D_SECTION_OFF + slot_idx * D_SLOT_SIZE;
+	let mut out = preimage.to_vec();
+	let base = D_SECTION_OFF + slot_idx * D_SLOT_SIZE;
 
-    // is_real = true at slot offset 0
-    out[base..base + 8].copy_from_slice(&gl_encode_bool(true));
+	// is_real = true at slot offset 0
+	out[base..base + 8].copy_from_slice(&gl_encode_bool(true));
 
-    // note_commitment as GL-preimage bytes32 at D_NOTE_COMM_OFF
-    let comm_gl = raw_to_preimage_bytes32(&note_commitment);
-    out[base + D_NOTE_COMM_OFF..base + D_NOTE_COMM_OFF + 32].copy_from_slice(comm_gl.as_slice());
+	// note_commitment as raw bytes32 at D_NOTE_COMM_OFF
+	// The contract reads this via _cdB32 (plain 32-byte read) as the deposit lookup key,
+	// so it must be the same bytes that were passed to depositAndRegister.
+	out[base + D_NOTE_COMM_OFF..base + D_NOTE_COMM_OFF + 32].copy_from_slice(&note_commitment);
 
-    // recipient as 5 × GL elements at D_ETH_ADDR_OFF
-    out[base + D_ETH_ADDR_OFF..base + D_ETH_ADDR_OFF + 40]
-        .copy_from_slice(&gl_encode_address(&recipient));
+	// recipient as 5 × GL elements at D_ETH_ADDR_OFF
+	out[base + D_ETH_ADDR_OFF..base + D_ETH_ADDR_OFF + 40]
+		.copy_from_slice(&gl_encode_address(&recipient));
 
-    // value as 8 × GL elements at D_AMT_OFF
-    out[base + D_AMT_OFF..base + D_AMT_OFF + 64].copy_from_slice(&gl_encode_u256(value));
+	// value as 8 × GL elements at D_AMT_OFF
+	out[base + D_AMT_OFF..base + D_AMT_OFF + 64].copy_from_slice(&gl_encode_u256(value));
 
-    // asset_id as GL u64 at D_ASSET_ID_OFF
-    out[base + D_ASSET_ID_OFF..base + D_ASSET_ID_OFF + 8]
-        .copy_from_slice(&gl_encode_u64(asset_id));
+	// asset_id as GL u64 at D_ASSET_ID_OFF
+	out[base + D_ASSET_ID_OFF..base + D_ASSET_ID_OFF + 8].copy_from_slice(&gl_encode_u64(asset_id));
 
-    out
+	out
 }
 
 /// Patch a TX preimage: set slot `slot_idx` (0-based) to is_real=true and assign
@@ -377,31 +387,29 @@ pub fn patch_bridge_deposit_slot(
 ///
 /// All values are well within the Goldilocks prime (< 2^64 - 2^32 + 1).
 pub fn patch_tx_slot_is_real(preimage: &[u8], slot_idx: usize) -> Vec<u8> {
-    use tessera_state_sync::constants::{
-        NOTE_BATCH, TX_ACCIN_NULL_OFF, TX_HEADER_SIZE, TX_NOTE_IN_OFF, TX_SLOT_SIZE,
-    };
-    let mut out = preimage.to_vec();
-    let base = TX_HEADER_SIZE + slot_idx * TX_SLOT_SIZE;
+	use tessera_state_sync::constants::{
+		NOTE_BATCH, TX_ACCIN_NULL_OFF, TX_HEADER_SIZE, TX_NOTE_IN_OFF, TX_SLOT_SIZE,
+	};
+	let mut out = preimage.to_vec();
+	let base = TX_HEADER_SIZE + slot_idx * TX_SLOT_SIZE;
 
-    // Mark slot as real (notFakeTx = true).
-    out[base..base + 8].copy_from_slice(&gl_encode_bool(true));
+	// Mark slot as real (notFakeTx = true).
+	out[base..base + 8].copy_from_slice(&gl_encode_bool(true));
 
-    // Patch accin nullifier to a unique GL value: first element = slot_idx*100 + 1.
-    // Layout: 4 GL elements × 8 bytes each = 32 bytes.
-    let null_base = base + TX_ACCIN_NULL_OFF;
-    out[null_base..null_base + 8]
-        .copy_from_slice(&gl_encode_u64((slot_idx * 100 + 1) as u64));
-    out[null_base + 8..null_base + 32].fill(0); // elements 1-3 = 0
+	// Patch accin nullifier to a unique GL value: first element = slot_idx*100 + 1.
+	// Layout: 4 GL elements × 8 bytes each = 32 bytes.
+	let null_base = base + TX_ACCIN_NULL_OFF;
+	out[null_base..null_base + 8].copy_from_slice(&gl_encode_u64((slot_idx * 100 + 1) as u64));
+	out[null_base + 8..null_base + 32].fill(0); // elements 1-3 = 0
 
-    // Patch 7 input-note nullifiers to unique GL values.
-    for j in 0..NOTE_BATCH {
-        let nn_base = base + TX_NOTE_IN_OFF + j * 32;
-        out[nn_base..nn_base + 8]
-            .copy_from_slice(&gl_encode_u64((slot_idx * 100 + 10 + j) as u64));
-        out[nn_base + 8..nn_base + 32].fill(0);
-    }
+	// Patch 7 input-note nullifiers to unique GL values.
+	for j in 0..NOTE_BATCH {
+		let nn_base = base + TX_NOTE_IN_OFF + j * 32;
+		out[nn_base..nn_base + 8].copy_from_slice(&gl_encode_u64((slot_idx * 100 + 10 + j) as u64));
+		out[nn_base + 8..nn_base + 32].fill(0);
+	}
 
-    out
+	out
 }
 
 // ---------------------------------------------------------------------------
@@ -411,38 +419,36 @@ pub fn patch_tx_slot_is_real(preimage: &[u8], slot_idx: usize) -> Vec<u8> {
 use alloy::sol;
 
 sol! {
-    #[sol(rpc)]
-    interface IToyUSDT {
-        function mint(address to, uint256 amount) external;
-        function approve(address spender, uint256 amount) external returns (bool);
-    }
+	#[sol(rpc)]
+	interface IToyUSDT {
+		function mint(address to, uint256 amount) external;
+		function approve(address spender, uint256 amount) external returns (bool);
+	}
 }
 
 /// Mint `amount` tokens to `to` and approve `spender` to spend them.
 pub async fn mint_and_approve<P: Provider>(
-    token_addr: Address,
-    spender: Address,
-    to: Address,
-    amount: U256,
-    operator_provider: &impl Provider,
-    to_provider: &P,
+	token_addr: Address,
+	spender: Address,
+	to: Address,
+	amount: U256,
+	operator_provider: &impl Provider,
+	to_provider: &P,
 ) {
-    IToyUSDT::new(token_addr, operator_provider)
-        .mint(to, amount)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    IToyUSDT::new(token_addr, to_provider)
-        .approve(spender, amount)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+	IToyUSDT::new(token_addr, operator_provider)
+		.mint(to, amount)
+		.send()
+		.await
+		.unwrap()
+		.get_receipt()
+		.await
+		.unwrap();
+	IToyUSDT::new(token_addr, to_provider)
+		.approve(spender, amount)
+		.send()
+		.await
+		.unwrap()
+		.get_receipt()
+		.await
+		.unwrap();
 }
-
-use tessera_state_sync::contract::ITesseraRollupV2;
