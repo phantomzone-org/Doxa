@@ -23,7 +23,16 @@ use tessera_server::{
         priv_tx::PrivateTxBatch,
     },
 };
-use tessera_state_sync::contract::{ITesseraRollupV2, ITesseraRollupV2::Proof};
+use tessera_state_sync::{
+    constants::{
+        BATCH_SUBTREE_DEPTH, NOTE_BATCH, PRIV_TX_BATCH_SIZE, TX_ACCOUT_COMM_OFF, TX_HEADER_SIZE,
+        TX_NOTE_OUT_OFF, TX_SLOT_SIZE,
+    },
+    contract::{
+        ITesseraRollupV2, ITesseraRollupV2::Proof, bytes32_to_hash, preimage_bytes32_to_raw,
+    },
+};
+use tessera_trees::MerkleTree;
 use tessera_utils::hasher::HashOutput;
 
 // ---------------------------------------------------------------------------
@@ -150,21 +159,6 @@ pub async fn deploy_bytes<P: Provider>(provider: &P, bytecode: &[u8]) -> Address
         .expect("no contract address in receipt")
 }
 
-/// Deploy a contract from a hex-encoded bytecode string. Returns the deployed contract address.
-pub async fn deploy_bytecode<P: Provider>(provider: &P, hex: &str) -> Address {
-    let code = Bytes::from(hex::decode(hex).unwrap());
-    let tx = TransactionRequest::default().with_deploy_code(code);
-    let receipt = provider
-        .send_transaction(tx)
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
-    receipt
-        .contract_address
-        .expect("no contract address in receipt")
-}
 
 async fn deploy_tessera_contract<P: Provider>(
     provider: &P,
@@ -474,14 +468,14 @@ pub fn patch_bridge_deposit_slot(
 /// Patch bridge preimage: set withdrawal slot `slot_idx` to is_real=true with a unique
 /// account-input nullifier derived from `slot_idx`.
 pub fn patch_bridge_withdraw_slot(preimage: &[u8], slot_idx: usize) -> Vec<u8> {
-    use tessera_state_sync::constants::{TX_HEADER_SIZE, W_ACCIN_NULL_OFF, W_SLOT_SIZE};
+    use tessera_state_sync::constants::{W_ACCIN_NULL_OFF, W_SLOT_SIZE};
     let mut out = preimage.to_vec();
     let base = TX_HEADER_SIZE + slot_idx * W_SLOT_SIZE;
     // is_real = true
     out[base..base + 8].copy_from_slice(&gl_encode_bool(true));
-    // unique accinNull: first GL element = slot_idx*200 + 1 (separate namespace from TX slots)
+    // unique accinNull: first GL element = slot_idx*500 + 100_000 (separate namespace from TX slots)
     let null_base = base + W_ACCIN_NULL_OFF;
-    out[null_base..null_base + 8].copy_from_slice(&gl_encode_u64((slot_idx * 200 + 1) as u64));
+    out[null_base..null_base + 8].copy_from_slice(&gl_encode_u64((slot_idx * 500 + 100_000) as u64));
     out[null_base + 8..null_base + 32].fill(0);
     out
 }
@@ -497,11 +491,13 @@ pub fn patch_bridge_withdraw_slot(preimage: &[u8], slot_idx: usize) -> Vec<u8> {
 ///   accinNull    = HashOutput([slot_idx*100 + 1, 0, 0, 0])
 ///   noteInNull j = HashOutput([slot_idx*100 + 10 + j, 0, 0, 0])   (j = 0..NOTE_BATCH-1)
 ///
+/// Output commitment assignment:
+///   accOutComm      = GL-preimage([slot_idx*1000 + 1, 0, 0, 0])
+///   noteOutComm[j]  = GL-preimage([slot_idx*1000 + 200 + j, 0, 0, 0])  (j = 0..NOTE_BATCH-1)
+///
 /// All values are well within the Goldilocks prime (< 2^64 - 2^32 + 1).
 pub fn patch_tx_slot_is_real(preimage: &[u8], slot_idx: usize) -> Vec<u8> {
-    use tessera_state_sync::constants::{
-        NOTE_BATCH, TX_ACCIN_NULL_OFF, TX_HEADER_SIZE, TX_NOTE_IN_OFF, TX_SLOT_SIZE,
-    };
+    use tessera_state_sync::constants::{TX_ACCIN_NULL_OFF, TX_NOTE_IN_OFF};
     let mut out = preimage.to_vec();
     let base = TX_HEADER_SIZE + slot_idx * TX_SLOT_SIZE;
 
@@ -521,7 +517,57 @@ pub fn patch_tx_slot_is_real(preimage: &[u8], slot_idx: usize) -> Vec<u8> {
         out[nn_base + 8..nn_base + 32].fill(0);
     }
 
+    // Patch accout commitment: element-0 = slot_idx*1000 + 1, elements 1-3 = 0.
+    let acc_out_base = base + TX_ACCOUT_COMM_OFF;
+    out[acc_out_base..acc_out_base + 8]
+        .copy_from_slice(&gl_encode_u64((slot_idx * 1000 + 1) as u64));
+    out[acc_out_base + 8..acc_out_base + 32].fill(0);
+
+    // Patch 7 output-note commitments: element-0 = slot_idx*1000 + 200 + j, elements 1-3 = 0.
+    for j in 0..NOTE_BATCH {
+        let note_out_base = base + TX_NOTE_OUT_OFF + j * 32;
+        out[note_out_base..note_out_base + 8]
+            .copy_from_slice(&gl_encode_u64((slot_idx * 1000 + 200 + j) as u64));
+        out[note_out_base + 8..note_out_base + 32].fill(0);
+    }
+
     out
+}
+
+/// Set bytes [0..8] of the preimage to `gl_encode_u64(value)` and bytes [8..32] to zero,
+/// giving two preimages derived from the same base different `batchPoseidonRoot` values.
+pub fn patch_batch_root_gl(preimage: &[u8], value: u64) -> Vec<u8> {
+    let mut out = preimage.to_vec();
+    out[0..8].copy_from_slice(&gl_encode_u64(value));
+    out[8..32].fill(0);
+    out
+}
+
+/// Compute the batch subtree root that `apply_tx_preimage` would produce for a given
+/// TX preimage. Inserts all output commitments (acc + note) for every slot in the
+/// same slot×8+j order used by the sync service.
+pub fn batch_subtree_root_from_tx_preimage(preimage: &[u8]) -> HashOutput {
+    let mut tree = MerkleTree::<HashOutput>::new(BATCH_SUBTREE_DEPTH);
+    for s in 0..PRIV_TX_BATCH_SIZE {
+        let slot_off = TX_HEADER_SIZE + s * TX_SLOT_SIZE;
+        // leaf s*8+0 = accOutComm
+        let acc_comm = read_preimage_hash(preimage, slot_off + TX_ACCOUT_COMM_OFF);
+        tree.insert(acc_comm).expect("insert acc_comm");
+        // leaves s*8+1 .. s*8+7 = noteOutComm[0..6]
+        for j in 0..NOTE_BATCH {
+            let note_comm = read_preimage_hash(preimage, slot_off + TX_NOTE_OUT_OFF + j * 32);
+            tree.insert(note_comm).expect("insert note_comm");
+        }
+    }
+    tree.root()
+}
+
+fn read_preimage_hash(preimage: &[u8], off: usize) -> HashOutput {
+    let b: alloy::primitives::B256 = preimage[off..off + 32]
+        .try_into()
+        .expect("slice is always 32 bytes");
+    let raw = preimage_bytes32_to_raw(&b);
+    bytes32_to_hash(&alloy::primitives::B256::from(raw)).unwrap()
 }
 
 // ---------------------------------------------------------------------------
