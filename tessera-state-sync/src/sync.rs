@@ -492,46 +492,33 @@ async fn sync_config_tree<P: Provider + Clone>(
 			let root = contract::u256_le_to_hash(root_u256)?;
 			service.with_state_mut(|s| s.subpool_roots.insert(subpool_id, root));
 		}
-		// Rebuild config tree from fetched roots
-		service.with_state_mut(|s| {
-			s.config_tree = tessera_client::pool_config::MainPoolConfigTree::new();
-			let mut sorted: Vec<_> = s.subpool_roots.iter().map(|(&id, &r)| (id, r)).collect();
-			sorted.sort_by_key(|(id, _)| *id);
-			for (subpool_id, subpool_root) in sorted {
-				use tessera_client::SubpoolId;
-				use tessera_utils::F;
-				let sid = SubpoolId(F::from_canonical_u64(subpool_id));
-				s.config_tree
-					.insert_subpool_at_position(sid, subpool_root)
-					.expect("config tree rebuild should not fail");
-			}
-		});
 	} else {
-		// Poll-sync: rebuild config tree to incorporate any newly assigned zero-root subpools.
-		service.with_state_mut(|s| {
-			s.config_tree = tessera_client::pool_config::MainPoolConfigTree::new();
-			let mut sorted: Vec<_> = s.subpool_roots.iter().map(|(&id, &r)| (id, r)).collect();
-			sorted.sort_by_key(|(id, _)| *id);
-			for (subpool_id, subpool_root) in sorted {
-				use tessera_client::SubpoolId;
-				use tessera_utils::F;
-				let sid = SubpoolId(F::from_canonical_u64(subpool_id));
-				s.config_tree
-					.insert_subpool_at_position(sid, subpool_root)
-					.expect("config tree rebuild should not fail");
+		// Poll-sync: process SubpoolRootUpdated events and insert into subpool_roots hashmap.
+		for log in &updated_logs {
+			if let Ok(decoded) = log.log_decode::<ITesseraRollupV2::SubpoolRootUpdated>() {
+				let subpool_id = decoded.inner.subpoolId;
+				let new_root = contract::u256_le_to_hash(decoded.inner.newSubpoolRoot)?;
+				service.with_state_mut(|s| s.subpool_roots.insert(subpool_id, new_root));
 			}
-		});
-	}
-
-	// Process root updates
-	for log in &updated_logs {
-		if let Ok(decoded) = log.log_decode::<ITesseraRollupV2::SubpoolRootUpdated>() {
-			let subpool_id = decoded.inner.subpoolId;
-			let new_root = contract::u256_le_to_hash(decoded.inner.newSubpoolRoot)?;
-
-			service.with_state_mut(|state| state.update_subpool_root(subpool_id, new_root))?;
 		}
 	}
+
+	// Rebuild config tree once from the now-final subpool_roots.
+	service.with_state_mut(|s| {
+		s.config_tree = tessera_client::pool_config::MainPoolConfigTree::new();
+		let mut sorted: Vec<_> = s.subpool_roots.iter().map(|(&id, &r)| (id, r)).collect();
+		sorted.sort_by_key(|(id, _)| *id);
+		for (subpool_id, subpool_root) in sorted {
+			use tessera_client::SubpoolId;
+			use tessera_utils::F;
+			s.config_tree
+				.insert_subpool_at_position(
+					SubpoolId(F::from_canonical_u64(subpool_id)),
+					subpool_root,
+				)
+				.expect("config tree rebuild");
+		}
+	});
 
 	// Add warning when buffered subpool events remain after processing
 	service.with_state(|s| {

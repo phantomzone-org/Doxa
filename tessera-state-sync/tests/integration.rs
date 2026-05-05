@@ -9,7 +9,7 @@ use tessera_state_sync::{
         get_nullifier_status, get_subpool_full_proof,
         BatchQuery, CommitmentQuery, DepositsQuery, NullifierQuery, SubpoolQuery,
     },
-    constants::{TX_HEADER_SIZE, TX_ACCIN_NULL_OFF, TX_ACCOUT_COMM_OFF},
+    constants::{TX_HEADER_SIZE, TX_ACCIN_NULL_OFF, TX_ACCOUT_COMM_OFF, W_ACCIN_NULL_OFF},
     contract::{
         bytes32_to_hash, hash_to_bytes32, hash_to_u256_le, preimage_bytes32_to_raw,
         ITesseraRollupV2,
@@ -19,6 +19,91 @@ use tessera_state_sync::{
 use tessera_utils::{hasher::HashOutput, F};
 use axum::extract::{Query, State};
 use tessera_utils::hasher::MerkleHash;
+
+// ---------------------------------------------------------------------------
+// Named constants for GL byte widths
+// ---------------------------------------------------------------------------
+
+/// Bytes for a single GL-preimage encoded bytes32 (4 GL field elements × 8 bytes each).
+const GL_B32_BYTES: usize = 32;
+/// Bytes for a single GL field element (lo_u32_BE4 ++ hi_u32_BE4).
+const GL_FIELD_BYTES: usize = 8;
+
+// ---------------------------------------------------------------------------
+// StateMirrorExpectation builder
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct StateMirrorExpectation {
+    pending_tx_pis:       Vec<[u8; 32]>,
+    confirmed_tx_pis:     Vec<[u8; 32]>,
+    pending_bridge_pis:   Vec<[u8; 32]>,
+    confirmed_bridge_pis: Vec<[u8; 32]>,
+    state_tree_leaves:    Option<usize>,
+    pending_nullifiers:   Vec<HashOutput>,
+    confirmed_nullifiers: Vec<HashOutput>,
+    /// (note_commitment_bytes, expected_status)
+    deposits:             Vec<([u8; 32], DepositStatus)>,
+    /// (subpool_id, expected_root)
+    subpool_roots:        Vec<(u64, HashOutput)>,
+}
+
+impl StateMirrorExpectation {
+    fn new() -> Self { Self::default() }
+    fn pending_tx_pis(mut self, v: Vec<[u8;32]>) -> Self { self.pending_tx_pis = v; self }
+    fn confirmed_tx_pis(mut self, v: Vec<[u8;32]>) -> Self { self.confirmed_tx_pis = v; self }
+    fn pending_bridge_pis(mut self, v: Vec<[u8;32]>) -> Self { self.pending_bridge_pis = v; self }
+    fn confirmed_bridge_pis(mut self, v: Vec<[u8;32]>) -> Self { self.confirmed_bridge_pis = v; self }
+    fn state_tree_leaves(mut self, n: usize) -> Self { self.state_tree_leaves = Some(n); self }
+    fn pending_nullifiers(mut self, v: Vec<HashOutput>) -> Self { self.pending_nullifiers = v; self }
+    fn confirmed_nullifiers(mut self, v: Vec<HashOutput>) -> Self { self.confirmed_nullifiers = v; self }
+    fn deposits(mut self, v: Vec<([u8;32], DepositStatus)>) -> Self { self.deposits = v; self }
+    fn subpool_roots(mut self, v: Vec<(u64, HashOutput)>) -> Self { self.subpool_roots = v; self }
+
+    fn assert(&self, service: &tessera_state_sync::StateSyncService) {
+        service.with_state(|s| {
+            for pi in &self.pending_tx_pis {
+                assert!(s.pending_tx_batches.contains_key(pi),
+                    "expected pending tx pi {:?} not found", pi);
+            }
+            for pi in &self.confirmed_tx_pis {
+                assert!(s.confirmed_tx_batches.contains(pi),
+                    "expected confirmed tx pi {:?} not found", pi);
+            }
+            for pi in &self.pending_bridge_pis {
+                assert!(s.pending_bridge_tx_batches.contains_key(pi),
+                    "expected pending bridge pi {:?} not found", pi);
+            }
+            for pi in &self.confirmed_bridge_pis {
+                assert!(s.confirmed_bridge_tx_batches.contains(pi),
+                    "expected confirmed bridge pi {:?} not found", pi);
+            }
+            if let Some(n) = self.state_tree_leaves {
+                assert_eq!(s.state_tree.num_leaves(), n, "state_tree leaf count mismatch");
+            }
+            for null in &self.pending_nullifiers {
+                assert!(s.pending_nullifiers.contains_key(null),
+                    "expected pending nullifier {:?} not found", null);
+            }
+            for null in &self.confirmed_nullifiers {
+                assert!(s.confirmed_nullifiers.contains(null),
+                    "expected confirmed nullifier {:?} not found", null);
+            }
+            for (nc, expected_status) in &self.deposits {
+                let rec = s.deposits.get(nc)
+                    .unwrap_or_else(|| panic!("deposit not found: {:?}", nc));
+                assert_eq!(&rec.status, expected_status,
+                    "deposit status mismatch for {:?}", nc);
+            }
+            for (id, expected_root) in &self.subpool_roots {
+                let actual = s.subpool_roots.get(id).copied()
+                    .unwrap_or_else(|| panic!("subpool {} not found in subpool_roots", id));
+                assert_eq!(actual, *expected_root,
+                    "subpool_root mismatch for id={}", id);
+            }
+        });
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Test 1: Empty chain sync
@@ -31,7 +116,9 @@ async fn test_empty_chain_sync() {
         .await
         .unwrap();
 
-    assert_eq!(service.with_state(|s| s.state_tree.num_leaves()), 0);
+    StateMirrorExpectation::new()
+        .state_tree_leaves(0)
+        .assert(&service);
     assert!(service.with_state(|s| s.confirmed_tx_batches.is_empty()));
     assert!(service.with_state(|s| s.confirmed_bridge_tx_batches.is_empty()));
     assert!(service.with_state(|s| s.deposits.is_empty()));
@@ -51,8 +138,21 @@ async fn test_tx_batch_submitted_pending() {
         .unwrap();
 
     let pi: [u8; 32] = *alloy::primitives::keccak256(tx_preimage());
-    assert!(service.with_state(|s| s.pending_tx_batches.contains_key(&pi)));
+
+    StateMirrorExpectation::new()
+        .pending_tx_pis(vec![pi])
+        .assert(&service);
     assert!(service.with_state(|s| s.confirmed_tx_batches.is_empty()));
+
+    // Verify API also reports pending
+    let pi_hex = format!("0x{}", hex::encode(pi));
+    let resp = get_batch_status(
+        Query(BatchQuery { pi_commitment: pi_hex, kind: "tx".to_string() }),
+        State(service),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.0["status"], "pending");
 }
 
 // ---------------------------------------------------------------------------
@@ -70,13 +170,16 @@ async fn test_tx_batch_proven_confirmed() {
         .unwrap();
 
     let pi: [u8; 32] = *alloy::primitives::keccak256(tx_preimage());
-    assert!(service.with_state(|s| s.confirmed_tx_batches.contains(&pi)));
-    assert_eq!(service.with_state(|s| s.state_tree.num_leaves()), 1);
+
+    StateMirrorExpectation::new()
+        .confirmed_tx_pis(vec![pi])
+        .state_tree_leaves(1)
+        .assert(&service);
     assert!(!service.with_state(|s| s.pending_tx_batches.contains_key(&pi)));
 
     // batch_root key derivation: the first 32 bytes of the preimage are batchPoseidonRoot
     // in GL-preimage encoding; preimage_bytes32_to_raw converts to raw bytes32.
-    let gl_bytes: [u8; 32] = tx_preimage()[0..32].try_into().unwrap();
+    let gl_bytes: [u8; GL_B32_BYTES] = tx_preimage()[0..GL_B32_BYTES].try_into().unwrap();
     let batch_root_raw = preimage_bytes32_to_raw(&B256::from(gl_bytes));
     assert_eq!(
         service.with_state(|s| s.batch_root_to_leaf_index.get(&batch_root_raw).copied()),
@@ -99,8 +202,11 @@ async fn test_bridge_batch_proven_confirmed() {
         .unwrap();
 
     let pi: [u8; 32] = *alloy::primitives::keccak256(bridge_preimage());
-    assert!(service.with_state(|s| s.confirmed_bridge_tx_batches.contains(&pi)));
-    assert_eq!(service.with_state(|s| s.state_tree.num_leaves()), 1);
+
+    StateMirrorExpectation::new()
+        .confirmed_bridge_pis(vec![pi])
+        .state_tree_leaves(1)
+        .assert(&service);
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +232,9 @@ async fn test_multiple_tx_batches_sequential() {
         .await
         .unwrap();
 
-    assert_eq!(service.with_state(|s| s.state_tree.num_leaves()), 2);
+    StateMirrorExpectation::new()
+        .state_tree_leaves(2)
+        .assert(&service);
 }
 
 // ---------------------------------------------------------------------------
@@ -145,13 +253,19 @@ async fn test_poll_sync_incremental() {
     let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
         .await
         .unwrap();
-    assert_eq!(service.with_state(|s| s.state_tree.num_leaves()), 1);
+
+    StateMirrorExpectation::new()
+        .state_tree_leaves(1)
+        .assert(&service);
 
     submit_tx_batch(&provider, env.rollup, &preimage_b).await;
     prove_tx_batch(&provider, env.rollup, &preimage_b).await;
 
     service.poll_sync(&provider, env.rollup, 1000).await.unwrap();
-    assert_eq!(service.with_state(|s| s.state_tree.num_leaves()), 2);
+
+    StateMirrorExpectation::new()
+        .state_tree_leaves(2)
+        .assert(&service);
 }
 
 // ---------------------------------------------------------------------------
@@ -170,14 +284,16 @@ async fn test_nullifier_tracked() {
         .unwrap();
 
     // Read the account-input nullifier from slot 0 in the preimage.
-    let null_gl: [u8; 32] = patched
-        [TX_HEADER_SIZE + TX_ACCIN_NULL_OFF..TX_HEADER_SIZE + TX_ACCIN_NULL_OFF + 32]
+    let null_gl: [u8; GL_B32_BYTES] = patched
+        [TX_HEADER_SIZE + TX_ACCIN_NULL_OFF..TX_HEADER_SIZE + TX_ACCIN_NULL_OFF + GL_B32_BYTES]
         .try_into()
         .unwrap();
     let null_raw = preimage_bytes32_to_raw(&B256::from(null_gl));
     let expected_null = bytes32_to_hash(&B256::from(null_raw)).unwrap();
 
-    assert!(service.with_state(|s| s.confirmed_nullifiers.contains(&expected_null)));
+    StateMirrorExpectation::new()
+        .confirmed_nullifiers(vec![expected_null])
+        .assert(&service);
 }
 
 // ---------------------------------------------------------------------------
@@ -201,11 +317,9 @@ async fn test_subpool_owner_assigned_sync() {
         .await
         .unwrap();
 
-    assert!(service.with_state(|s| s.subpool_roots.contains_key(&1u64)));
-    assert_eq!(
-        service.with_state(|s| s.subpool_roots.get(&1u64).copied()),
-        Some(HashOutput::ZERO)
-    );
+    StateMirrorExpectation::new()
+        .subpool_roots(vec![(1u64, HashOutput::ZERO)])
+        .assert(&service);
     assert_eq!(service.with_state(|s| s.next_expected_subpool_id), 2);
     assert!(service.with_state(|s| s.pending_subpool_assignments.is_empty()));
 }
@@ -254,11 +368,9 @@ async fn test_subpool_root_updated_sync() {
 
     service.poll_sync(&provider, env.rollup, 1000).await.unwrap();
 
-    // Check local state
-    assert_eq!(
-        service.with_state(|s| s.subpool_roots.get(&1u64).copied()),
-        Some(new_root)
-    );
+    StateMirrorExpectation::new()
+        .subpool_roots(vec![(1u64, new_root)])
+        .assert(&service);
 
     // Check that local config_tree root matches on-chain mainPoolConfigRoot
     let onchain_root = ITesseraRollupV2::new(env.rollup, &provider)
@@ -271,48 +383,40 @@ async fn test_subpool_root_updated_sync() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 10: Out-of-order subpool assignment
+// Test 10: Sequential subpool assignment (replaces out-of-order test)
 // ---------------------------------------------------------------------------
 
+/// Assigns subpools 1, 2, 3 sequentially and verifies sync tracks all of them.
+/// The buffering code in sync_config_tree stays as defense-in-depth but is only
+/// reachable via synthetic events, not from this contract.
 #[tokio::test]
-async fn test_out_of_order_subpool_assignment() {
+async fn test_subpool_owner_assigned_sequential() {
     let (env, provider) = setup_env().await;
 
-    // Assign subpool 2 BEFORE subpool 1
-    ITesseraRollupV2::new(env.rollup, &provider)
-        .assignSubpoolOwner(2u64, env.operator)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+    for id in 1u64..=3 {
+        ITesseraRollupV2::new(env.rollup, &provider)
+            .assignSubpoolOwner(id, env.operator)
+            .send().await.unwrap().get_receipt().await.unwrap();
+    }
 
     let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
-        .await
-        .unwrap();
+        .await.unwrap();
 
-    // Subpool 2 should be buffered as pending
-    assert!(service.with_state(|s| s.pending_subpool_assignments.contains_key(&2u64)));
-    assert!(!service.with_state(|s| s.subpool_roots.contains_key(&2u64)));
-    assert_eq!(service.with_state(|s| s.next_expected_subpool_id), 1u64);
+    StateMirrorExpectation::new()
+        .subpool_roots(vec![
+            (1, HashOutput::ZERO),
+            (2, HashOutput::ZERO),
+            (3, HashOutput::ZERO),
+        ])
+        .assert(&service);
 
-    // Now assign subpool 1
-    ITesseraRollupV2::new(env.rollup, &provider)
-        .assignSubpoolOwner(1u64, env.operator)
-        .send()
-        .await
-        .unwrap()
-        .get_receipt()
-        .await
-        .unwrap();
+    assert_eq!(service.with_state(|s| s.next_expected_subpool_id), 4);
 
-    service.poll_sync(&provider, env.rollup, 1000).await.unwrap();
-
-    assert!(service.with_state(|s| s.subpool_roots.contains_key(&1u64)));
-    assert!(service.with_state(|s| s.subpool_roots.contains_key(&2u64)));
-    assert!(service.with_state(|s| s.pending_subpool_assignments.is_empty()));
-    assert_eq!(service.with_state(|s| s.next_expected_subpool_id), 3u64);
+    // Confirm config_tree root matches on-chain mainPoolConfigRoot
+    let onchain_root = ITesseraRollupV2::new(env.rollup, &provider)
+        .mainPoolConfigRoot().call().await.unwrap();
+    let local_root = service.with_state(|s| hash_to_u256_le(&s.config_tree.root()));
+    assert_eq!(onchain_root, local_root);
 }
 
 // ---------------------------------------------------------------------------
@@ -397,12 +501,7 @@ async fn test_deposit_validated_via_bridge_batch() {
     )
     .await;
 
-    let note_comm_raw: [u8; 32] = [
-        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x02,
-        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x02,
-        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x02,
-        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x02,
-    ];
+    let note_comm_raw = random_gl_b32();
     let note_commitment = B256::from(note_comm_raw);
     ITesseraRollupV2::new(env.rollup, &dep_provider)
         .depositAndRegister(note_commitment, U256::from(1u64), U256::from(1000u64))
@@ -428,8 +527,10 @@ async fn test_deposit_validated_via_bridge_batch() {
     let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
         .await
         .unwrap();
-    let rec = service.with_state(|s| s.deposits.get(&note_comm_raw).cloned().unwrap());
-    assert_eq!(rec.status, DepositStatus::Validated);
+
+    StateMirrorExpectation::new()
+        .deposits(vec![(note_comm_raw, DepositStatus::Validated)])
+        .assert(&service);
 }
 
 // ---------------------------------------------------------------------------
@@ -461,12 +562,7 @@ async fn test_deposit_withdrawn_sync() {
     )
     .await;
 
-    let note_comm_raw: [u8; 32] = [
-        0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x04,
-        0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x04,
-        0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x04,
-        0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x04,
-    ];
+    let note_comm_raw = random_gl_b32();
     let note_commitment = B256::from(note_comm_raw);
     ITesseraRollupV2::new(env.rollup, &dep_provider)
         .depositAndRegister(note_commitment, U256::from(1u64), U256::from(1000u64))
@@ -481,8 +577,10 @@ async fn test_deposit_withdrawn_sync() {
     let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
         .await
         .unwrap();
-    let rec = service.with_state(|s| s.deposits.get(&note_comm_raw).cloned().unwrap());
-    assert_eq!(rec.status, DepositStatus::Pending);
+
+    StateMirrorExpectation::new()
+        .deposits(vec![(note_comm_raw, DepositStatus::Pending)])
+        .assert(&service);
 
     // Withdraw the Pending deposit (withdrawalDelay=0, only the depositor can withdraw)
     // Note: withdrawPendingDeposit only works on Pending deposits.
@@ -496,8 +594,10 @@ async fn test_deposit_withdrawn_sync() {
         .unwrap();
 
     service.poll_sync(&provider, env.rollup, 1000).await.unwrap();
-    let rec = service.with_state(|s| s.deposits.get(&note_comm_raw).cloned().unwrap());
-    assert_eq!(rec.status, DepositStatus::Withdrawn);
+
+    StateMirrorExpectation::new()
+        .deposits(vec![(note_comm_raw, DepositStatus::Withdrawn)])
+        .assert(&service);
 }
 
 // ---------------------------------------------------------------------------
@@ -535,8 +635,8 @@ async fn test_api_commitment_pending() {
         .unwrap();
 
     // The account-output commitment for slot 0 is at offset TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF
-    let comm_gl: [u8; 32] = tx_preimage()
-        [TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF..TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF + 32]
+    let comm_gl: [u8; GL_B32_BYTES] = tx_preimage()
+        [TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF..TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF + GL_B32_BYTES]
         .try_into()
         .unwrap();
     let comm_raw = preimage_bytes32_to_raw(&B256::from(comm_gl));
@@ -566,8 +666,8 @@ async fn test_api_commitment_confirmed() {
         .await
         .unwrap();
 
-    let comm_gl: [u8; 32] = tx_preimage()
-        [TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF..TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF + 32]
+    let comm_gl: [u8; GL_B32_BYTES] = tx_preimage()
+        [TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF..TX_HEADER_SIZE + TX_ACCOUT_COMM_OFF + GL_B32_BYTES]
         .try_into()
         .unwrap();
     let comm_raw = preimage_bytes32_to_raw(&B256::from(comm_gl));
@@ -621,13 +721,17 @@ async fn test_api_nullifier_pending() {
         .unwrap();
 
     // Extract nullifier from patched preimage
-    let null_gl: [u8; 32] = patched
-        [TX_HEADER_SIZE + TX_ACCIN_NULL_OFF..TX_HEADER_SIZE + TX_ACCIN_NULL_OFF + 32]
+    let null_gl: [u8; GL_B32_BYTES] = patched
+        [TX_HEADER_SIZE + TX_ACCIN_NULL_OFF..TX_HEADER_SIZE + TX_ACCIN_NULL_OFF + GL_B32_BYTES]
         .try_into()
         .unwrap();
     let null_raw = preimage_bytes32_to_raw(&B256::from(null_gl));
     let null_hash = bytes32_to_hash(&B256::from(null_raw)).unwrap();
     let nullifier_hex = format!("0x{}", hex::encode(hash_to_bytes32(&null_hash)));
+
+    StateMirrorExpectation::new()
+        .pending_nullifiers(vec![null_hash])
+        .assert(&service);
 
     let resp = get_nullifier_status(
         Query(NullifierQuery { nullifier: nullifier_hex }),
@@ -654,13 +758,17 @@ async fn test_api_nullifier_confirmed() {
         .unwrap();
 
     // Extract nullifier from patched preimage
-    let null_gl: [u8; 32] = patched
-        [TX_HEADER_SIZE + TX_ACCIN_NULL_OFF..TX_HEADER_SIZE + TX_ACCIN_NULL_OFF + 32]
+    let null_gl: [u8; GL_B32_BYTES] = patched
+        [TX_HEADER_SIZE + TX_ACCIN_NULL_OFF..TX_HEADER_SIZE + TX_ACCIN_NULL_OFF + GL_B32_BYTES]
         .try_into()
         .unwrap();
     let null_raw = preimage_bytes32_to_raw(&B256::from(null_gl));
     let null_hash = bytes32_to_hash(&B256::from(null_raw)).unwrap();
     let nullifier_hex = format!("0x{}", hex::encode(hash_to_bytes32(&null_hash)));
+
+    StateMirrorExpectation::new()
+        .confirmed_nullifiers(vec![null_hash])
+        .assert(&service);
 
     let resp = get_nullifier_status(
         Query(NullifierQuery { nullifier: nullifier_hex }),
@@ -713,6 +821,10 @@ async fn test_api_subpool_full_proof() {
         .await
         .unwrap();
 
+    StateMirrorExpectation::new()
+        .subpool_roots(vec![(1u64, HashOutput::ZERO)])
+        .assert(&service);
+
     let result = get_subpool_full_proof(
         Query(SubpoolQuery { subpool_id: 1 }),
         State(service),
@@ -760,7 +872,13 @@ async fn test_api_batch_status_pending() {
         .await
         .unwrap();
 
-    let pi_hex = format!("0x{}", hex::encode(alloy::primitives::keccak256(tx_preimage())));
+    let pi: [u8; 32] = *alloy::primitives::keccak256(tx_preimage());
+
+    StateMirrorExpectation::new()
+        .pending_tx_pis(vec![pi])
+        .assert(&service);
+
+    let pi_hex = format!("0x{}", hex::encode(pi));
     let resp = get_batch_status(
         Query(BatchQuery { pi_commitment: pi_hex, kind: "tx".to_string() }),
         State(service),
@@ -784,7 +902,14 @@ async fn test_api_batch_status_confirmed() {
         .await
         .unwrap();
 
-    let pi_hex = format!("0x{}", hex::encode(alloy::primitives::keccak256(tx_preimage())));
+    let pi: [u8; 32] = *alloy::primitives::keccak256(tx_preimage());
+
+    StateMirrorExpectation::new()
+        .confirmed_tx_pis(vec![pi])
+        .state_tree_leaves(1)
+        .assert(&service);
+
+    let pi_hex = format!("0x{}", hex::encode(pi));
     let resp = get_batch_status(
         Query(BatchQuery { pi_commitment: pi_hex, kind: "tx".to_string() }),
         State(service),
@@ -843,12 +968,7 @@ async fn test_api_deposits_with_data() {
     )
     .await;
 
-    let note_comm_raw: [u8; 32] = [
-        0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x06,
-        0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x06,
-        0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x06,
-        0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x06,
-    ];
+    let note_comm_raw = random_gl_b32();
     let note_commitment = B256::from(note_comm_raw);
     ITesseraRollupV2::new(env.rollup, &dep_provider)
         .depositAndRegister(note_commitment, U256::from(1u64), U256::from(1000u64))
@@ -862,6 +982,10 @@ async fn test_api_deposits_with_data() {
     let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
         .await
         .unwrap();
+
+    StateMirrorExpectation::new()
+        .deposits(vec![(note_comm_raw, DepositStatus::Pending)])
+        .assert(&service);
 
     let resp = get_deposits(
         Query(DepositsQuery { from_block: None }),
@@ -888,7 +1012,12 @@ async fn test_api_bridge_batch_status() {
         .await
         .unwrap();
 
-    let pi_hex = format!("0x{}", hex::encode(alloy::primitives::keccak256(bridge_preimage())));
+    let pi: [u8; 32] = *alloy::primitives::keccak256(bridge_preimage());
+    let pi_hex = format!("0x{}", hex::encode(pi));
+
+    StateMirrorExpectation::new()
+        .pending_bridge_pis(vec![pi])
+        .assert(&service);
 
     // Should be pending before prove
     let resp = get_batch_status(
@@ -902,6 +1031,11 @@ async fn test_api_bridge_batch_status() {
     // Prove the batch
     prove_bridge_batch(&provider, env.rollup, bridge_preimage()).await;
     service.poll_sync(&provider, env.rollup, 1000).await.unwrap();
+
+    StateMirrorExpectation::new()
+        .confirmed_bridge_pis(vec![pi])
+        .state_tree_leaves(1)
+        .assert(&service);
 
     // Should now be confirmed
     let resp = get_batch_status(
@@ -929,19 +1063,9 @@ async fn test_api_get_deposits_from_block() {
     let (depositor_addr, dep_provider) = depositor_provider(&env);
     mint_and_approve(env.token, env.rollup, depositor_addr, U256::from(1000u64), &provider, &dep_provider).await;
 
-    // Two asymmetric note commitments (valid Goldilocks, lo != hi in each limb)
-    let nc1: [u8; 32] = [
-        0x00,0x00,0x00,0x07,0x00,0x00,0x00,0x08,
-        0x00,0x00,0x00,0x07,0x00,0x00,0x00,0x08,
-        0x00,0x00,0x00,0x07,0x00,0x00,0x00,0x08,
-        0x00,0x00,0x00,0x07,0x00,0x00,0x00,0x08,
-    ];
-    let nc2: [u8; 32] = [
-        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x0a,
-        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x0a,
-        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x0a,
-        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x0a,
-    ];
+    // Two random GL-encoded note commitments
+    let nc1 = random_gl_b32();
+    let nc2 = random_gl_b32();
 
     // First deposit — capture block from receipt
     let receipt1 = ITesseraRollupV2::new(env.rollup, &dep_provider)
@@ -976,4 +1100,174 @@ async fn test_api_get_deposits_from_block() {
     .await
     .unwrap();
     assert_eq!(resp_all.0.as_array().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Test 29: Bridge batch — real withdrawal, fake deposit
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bridge_batch_real_withdraw_fake_deposit() {
+    let (env, provider) = setup_env().await;
+
+    let patched = patch_bridge_withdraw_slot(bridge_preimage(), 0);
+    submit_bridge_batch(&provider, env.rollup, &patched).await;
+    prove_bridge_batch(&provider, env.rollup, &patched).await;
+
+    let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
+        .await
+        .unwrap();
+
+    let pi: [u8; 32] = *alloy::primitives::keccak256(&patched);
+
+    // Extract the withdrawal nullifier from the patched preimage
+    let null_gl: [u8; GL_B32_BYTES] = patched
+        [TX_HEADER_SIZE + W_ACCIN_NULL_OFF..TX_HEADER_SIZE + W_ACCIN_NULL_OFF + GL_B32_BYTES]
+        .try_into()
+        .unwrap();
+    let null_raw = preimage_bytes32_to_raw(&B256::from(null_gl));
+    let withdraw_nullifier = bytes32_to_hash(&B256::from(null_raw)).unwrap();
+
+    StateMirrorExpectation::new()
+        .state_tree_leaves(1)
+        .confirmed_bridge_pis(vec![pi])
+        .confirmed_nullifiers(vec![withdraw_nullifier])
+        .assert(&service);
+}
+
+// ---------------------------------------------------------------------------
+// Test 30: Bridge batch — fake withdrawal, real deposit
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bridge_batch_fake_withdraw_real_deposit() {
+    let (env, provider) = setup_env().await;
+
+    // Register asset 1 → token
+    ITesseraRollupV2::new(env.rollup, &provider)
+        .registerAsset(U256::from(1u64), env.token)
+        .send()
+        .await
+        .unwrap()
+        .get_receipt()
+        .await
+        .unwrap();
+
+    let (depositor_addr, dep_provider) = depositor_provider(&env);
+    mint_and_approve(
+        env.token,
+        env.rollup,
+        depositor_addr,
+        U256::from(1000u64),
+        &provider,
+        &dep_provider,
+    )
+    .await;
+
+    let note_comm_raw = random_gl_b32();
+    ITesseraRollupV2::new(env.rollup, &dep_provider)
+        .depositAndRegister(B256::from(note_comm_raw), U256::from(1u64), U256::from(500u64))
+        .send()
+        .await
+        .unwrap()
+        .get_receipt()
+        .await
+        .unwrap();
+
+    let patched = patch_bridge_deposit_slot(
+        bridge_preimage(),
+        0,
+        note_comm_raw,
+        depositor_addr,
+        U256::from(500u64),
+        1u64,
+    );
+    submit_bridge_batch(&provider, env.rollup, &patched).await;
+    prove_bridge_batch(&provider, env.rollup, &patched).await;
+
+    let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
+        .await
+        .unwrap();
+
+    let pi: [u8; 32] = *alloy::primitives::keccak256(&patched);
+
+    StateMirrorExpectation::new()
+        .state_tree_leaves(1)
+        .confirmed_bridge_pis(vec![pi])
+        .deposits(vec![(note_comm_raw, DepositStatus::Validated)])
+        .assert(&service);
+}
+
+// ---------------------------------------------------------------------------
+// Test 31: Bridge batch — real withdrawal, real deposit
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bridge_batch_real_withdraw_real_deposit() {
+    let (env, provider) = setup_env().await;
+
+    // Register asset 1 → token
+    ITesseraRollupV2::new(env.rollup, &provider)
+        .registerAsset(U256::from(1u64), env.token)
+        .send()
+        .await
+        .unwrap()
+        .get_receipt()
+        .await
+        .unwrap();
+
+    let (depositor_addr, dep_provider) = depositor_provider(&env);
+    mint_and_approve(
+        env.token,
+        env.rollup,
+        depositor_addr,
+        U256::from(1000u64),
+        &provider,
+        &dep_provider,
+    )
+    .await;
+
+    let note_comm_raw = random_gl_b32();
+    ITesseraRollupV2::new(env.rollup, &dep_provider)
+        .depositAndRegister(B256::from(note_comm_raw), U256::from(1u64), U256::from(1000u64))
+        .send()
+        .await
+        .unwrap()
+        .get_receipt()
+        .await
+        .unwrap();
+
+    // Apply both patches sequentially: first withdrawal (slot 0), then deposit (slot 0)
+    let patched = patch_bridge_withdraw_slot(bridge_preimage(), 0);
+    let patched = patch_bridge_deposit_slot(
+        &patched,
+        0,
+        note_comm_raw,
+        depositor_addr,
+        U256::from(1000u64),
+        1u64,
+    );
+    submit_bridge_batch(&provider, env.rollup, &patched).await;
+    prove_bridge_batch(&provider, env.rollup, &patched).await;
+
+    let service = StateSyncService::sync_from_genesis(&provider, env.rollup, 1000)
+        .await
+        .unwrap();
+
+    let pi: [u8; 32] = *alloy::primitives::keccak256(&patched);
+
+    // Extract the withdrawal nullifier from the patched preimage
+    let null_gl: [u8; GL_B32_BYTES] = patched
+        [TX_HEADER_SIZE + W_ACCIN_NULL_OFF..TX_HEADER_SIZE + W_ACCIN_NULL_OFF + GL_B32_BYTES]
+        .try_into()
+        .unwrap();
+    let null_raw = preimage_bytes32_to_raw(&B256::from(null_gl));
+    let withdraw_nullifier = bytes32_to_hash(&B256::from(null_raw)).unwrap();
+
+    StateMirrorExpectation::new()
+        .state_tree_leaves(1)
+        .confirmed_bridge_pis(vec![pi])
+        .confirmed_nullifiers(vec![withdraw_nullifier])
+        .deposits(vec![(note_comm_raw, DepositStatus::Validated)])
+        .assert(&service);
 }

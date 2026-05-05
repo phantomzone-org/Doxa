@@ -4,10 +4,9 @@ use std::{
 };
 
 use alloy::primitives::{Address, U256};
-use plonky2_field::types::Field;
 use tessera_client::pool_config::MainPoolConfigTree;
 use tessera_trees::{MerkleProof, MerkleTree};
-use tessera_utils::{hasher::HashOutput, F};
+use tessera_utils::hasher::HashOutput;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DepositStatus {
@@ -218,21 +217,6 @@ impl StateSyncState {
 
 	pub fn add_pending_nullifier(&mut self, nullifier: HashOutput, pi_commitment: [u8; 32]) {
 		self.pending_nullifiers.insert(nullifier, pi_commitment);
-	}
-
-	pub fn update_subpool_root(&mut self, subpool_id: u64, new_root: HashOutput) -> anyhow::Result<()> {
-		self.subpool_roots.insert(subpool_id, new_root);
-		self.config_tree = MainPoolConfigTree::new();
-		let mut sorted_subpools: Vec<_> = self.subpool_roots.iter().collect();
-		sorted_subpools.sort_by_key(|(id, _)| *id);
-		for (&subpool_id, &subpool_root) in sorted_subpools {
-			use tessera_client::SubpoolId;
-			let subpool_id_field = SubpoolId(F::from_canonical_u64(subpool_id));
-			self.config_tree
-				.insert_subpool_at_position(subpool_id_field, subpool_root)
-				.map_err(|e| anyhow::anyhow!("failed to insert subpool in config tree: {e}"))?;
-		}
-		Ok(())
 	}
 
 	pub fn get_commitment_status(&self, commitment: &HashOutput) -> CommitmentStatus {

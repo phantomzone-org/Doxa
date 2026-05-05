@@ -289,6 +289,7 @@ contract TesseraContract {
     error NotSubpoolOwner(uint64 subpoolId);
     error SubpoolNotAssigned(uint64 subpoolId);
     error SubpoolIdZero();
+    error SubpoolIdOutOfOrder();
     error InvalidSiblingPathLength(uint256 provided, uint256 expected);
     error InvalidMerkleProof(uint64 subpoolId);
     error AssetIdZero();
@@ -437,6 +438,7 @@ contract TesseraContract {
     ) external onlyOperator {
         if (subpoolId == 0) revert SubpoolIdZero();
         if (owner == address(0)) revert ZeroAddress();
+        if (subpoolId != 1 && subpoolOwners[subpoolId - 1] == address(0)) revert SubpoolIdOutOfOrder();
         subpoolOwners[subpoolId] = owner;
         emit SubpoolOwnerAssigned(subpoolId, owner);
     }
