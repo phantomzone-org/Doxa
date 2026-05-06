@@ -340,7 +340,7 @@ WantedBy=multi-user.target
 
 ## Architecture & State
 
-The service maintains six synchronized indexes:
+The service maintains seven synchronized indexes:
 
 1. **StateTree Mirror**: On-chain IMT (Merkle tree of batch roots)
 2. **Batch Subtrees**: 512-leaf subtree for each batch (account + note commitments)
@@ -358,8 +358,3 @@ All state is held in memory and lost on restart (see Future Work in AGENTS.md fo
 - **CLAUDE.md** (repo root) — Build commands, architecture overview, environment setup
 - **tessera-solidity/contracts/TesseraContract.sol** — Smart contract source (event definitions, state)
 - **tessera-client/src/lib.rs** — Client-side types and circuit definitions
-
-## License
-
-Tessera is proprietary software. See LICENSE file in the repository root.
-

@@ -25,7 +25,7 @@ The `tessera-state-sync` crate is a standalone Rust binary + library that syncs 
 
 ### State Model (`state.rs`)
 
-The `StateSyncState` struct maintains six interconnected indexes:
+The `StateSyncState` struct maintains eight interconnected indexes:
 
 #### 1. StateTree Mirror
 - **`state_tree`**: A `MerkleTree<HashOutput>` that mirrors the on-chain IMT. Each leaf is a `batchPoseidonRoot` (one per proven batch).
@@ -86,17 +86,17 @@ Two main functions:
 Replays all events from block 1 to the current `eth_blockNumber()` in order:
 
 1. **Event types monitored** (in order):
-   - `TransactionBatchSubmitted(piCommitment, batchPreimage, batchPoseidonRoot, newTreeRoot)`
-   - `BridgeTxBatchSubmitted(piCommitment, batchPreimage, batchPoseidonRoot, newTreeRoot)`
-   - `TransactionBatchProven(piCommitment, leafIndex, newTreeRoot)`
-   - `BridgeTxBatchProven(piCommitment, leafIndex, newTreeRoot)`
+   - `TransactionBatchSubmitted(piCommitment, batchPoseidonRoot)` *(preimage fetched from calldata)*
+   - `BridgeTxBatchSubmitted(piCommitment, batchPoseidonRoot)` *(preimage fetched from calldata)*
+   - `TransactionBatchProven(piCommitment, newTreeRoot, leafIndex)`
+   - `BridgeTxBatchProven(piCommitment, newTreeRoot, leafIndex)`
    - `SubpoolOwnerAssigned(subpoolId, owner)`
    - `SubpoolRootUpdated(subpoolId, newSubpoolRoot, newConfigRoot)`
-   - `DepositAvailable(noteCommitment, value, recipient, assetId)` *(need to fetch block number and asset ID from receipt/calldata)*
+   - `DepositAvailable(noteCommitment, value, recipient, assetId)` *(block number and asset ID from event)*
    - `DepositValidated(noteCommitment)`
-   - `DepositWithdrawn(noteCommitment, value, recipient)`
+   - `DepositWithdrawn(noteCommitment)`
 
-2. **Batch submissions**: Decode the `batchPreimage` from the transaction calldata (not the event). Extract all account and note commitments, storing them in `pending_batch_leaves` with `confirmed = false`.
+2. **Batch submissions**: Submission events emit `piCommitment` and `batchPoseidonRoot`, but NOT the `batchPreimage`. The preimage is fetched from the transaction calldata via `eth_getTransactionByHash` and decoded using `decode_tx_batch_calldata()` or `decode_bridge_batch_calldata()`. Extract all account and note commitments, storing them in `pending_batch_leaves` with `confirmed = false`.
 
 3. **Batch proofs**: When a `*BatchProven` event is seen, call `StateSyncState::confirm_batch()` which:
    - Inserts the `batchPoseidonRoot` as a new leaf in `state_tree`
@@ -105,7 +105,7 @@ Replays all events from block 1 to the current `eth_blockNumber()` in order:
    - Moves the batch from pending to confirmed
    - Moves all pending nullifiers for that batch to confirmed
 
-4. **Config tree initialization**: For genesis sync only, after processing all `SubpoolOwnerAssigned` events, fetch the current `subpoolRoots[id]` from the contract for each assigned subpool (via `subpoolRoots(subpool_id)` view call), then rebuild the entire `config_tree` from scratch using all collected roots.
+4. **Config tree initialization**: For genesis sync only, after processing all `SubpoolOwnerAssigned` events, fetch the current `subpoolRoots[id]` from the contract for each assigned subpool (via `subpoolRoots(subpool_id)` view call), then rebuild the entire `config_tree` from scratch using all collected roots. After genesis sync completes, verify that the local leaf count matches the on-chain IMT leaf count via `imtLeafCount()` as a sanity check.
 
 5. **Log fetching**: Uses paginated `eth_getLogs` with a chunk size of 1,000 blocks per request to avoid timeouts.
 
@@ -209,13 +209,24 @@ If `from_block` is omitted, defaults to 0 (all deposits). Status is one of `"Pen
 
 ### Contract Bindings (`contract.rs`)
 
-Contains Alloy `sol!` macro bindings for `TesseraContract` ABI. Two utility functions for Goldilocks field encoding:
+Contains Alloy `sol!` macro bindings for `TesseraContract` ABI. Multiple utility functions for Goldilocks field encoding:
 
-- **`hash_to_bytes32(hash: &HashOutput) -> &[u8; 32]`**: Converts a `HashOutput` to its byte representation, handling the GL-preimage encoding swap (each field element's two halves are byte-swapped).
+**Basic conversions** (8-byte big-endian u64 per element):
+- **`hash_to_bytes32(h: &HashOutput) -> B256`**: Converts a `HashOutput` to its byte representation (each field element as 8-byte big-endian).
+- **`bytes32_to_hash(b: &B256) -> anyhow::Result<HashOutput>`**: Reverse conversion with validation.
+- **`bytes_slice_to_hashes(raw: &[[u8; 32]]) -> anyhow::Result<Vec<HashOutput>>`**: Batch conversion of raw byte arrays to validated `HashOutput` values.
 
-- **`bytes32_to_hash(bytes: &B256) -> anyhow::Result<HashOutput>`**: Reverse conversion with validation.
+**LE-packed uint256 conversions** (used for on-chain contract calls like `subpoolRoots`):
+- **`hash_to_u256_le(h: &HashOutput) -> U256`**: Packs `HashOutput` into a little-endian `uint256` (layout: `e0 | (e1 << 64) | (e2 << 128) | (e3 << 192)`).
+- **`u256_le_to_hash(v: U256) -> anyhow::Result<HashOutput>`**: Inverse conversion with field range validation.
+- **`bytes32_be_to_u256_le(b: &[u8; 32]) -> U256`**: Converts big-endian `[u8; 32]` to LE-packed `uint256`.
 
-These are necessary because ZK circuits operate over the Goldilocks field (p = 2⁶⁴ − 2³² + 1), and `HashOutput` is 4 Goldilocks elements LE-packed into a `uint256` (per CLAUDE.md).
+**GL-preimage format** (byte-swapped 4-byte halves per field element, used in contract batch structs):
+- **`hash_to_preimage_bytes32(h: &HashOutput) -> B256`**: Encodes `HashOutput` in GL-preimage format (`[lo_BE4][hi_BE4]` per element).
+- **`raw_to_preimage_bytes32(raw: &[u8; 32]) -> B256`**: Swaps the two 4-byte halves for each of the 4 field elements.
+- **`preimage_bytes32_to_raw(b: &B256) -> [u8; 32]`**: Inverse of above (used in sync to decode commitments from preimage calldata).
+
+These are necessary because ZK circuits operate over the Goldilocks field (p = 2⁶⁴ − 2³² + 1), and `HashOutput` is 4 Goldilocks elements. Different encoding schemes are used in different contexts (on-chain state, contract calldata, uint256 packing) to match the contract's expectations.
 
 ### Constants (`constants.rs`)
 
@@ -235,31 +246,45 @@ These are hard-coded and must match the contract. They are NOT read from the con
 
 The codebase has been reviewed and approved. The following suggestions (non-blocking) were noted by the reviewer:
 
-1. **Poll-sync rebuild optimization** (`sync.rs:367–381`):
-   - The unconditional `else` block that rebuilds the config tree runs even when no new subpools were assigned in the current poll interval, wasting a full tree rebuild on steady-state ticks.
+1. **Poll-sync rebuild optimization** (`sync_config_tree`):
+   - The config tree rebuild runs unconditionally in poll mode, even when no new subpools were assigned in the current poll interval, wasting a full tree rebuild on steady-state ticks.
    - **Fix**: Add a guard `if !assigned_logs.is_empty()` before the rebuild.
    - **Priority**: Low (tree is small; cost is minimal).
 
-2. **Partial mutation window in confirm_batch** (`state.rs:144–158`):
+2. **Partial mutation window in confirm_batch** (`state.rs`, `confirm_batch` method):
    - If any `subtree.insert()` call fails after `insert_state_tree_leaf()` succeeds, the state tree has a new leaf but the batch metadata (subtree, pi_to_batch_root, commitment confirmations, nullifier moves) is incomplete.
-   - **Mitigation**: In practice this cannot happen (exactly 512 inserts into a depth-9 tree with 512-leaf capacity), but a defensive guard (clone leaves vec and build subtree before calling `remove`) would remove the dependency on that invariant.
+   - **Mitigation**: In practice this cannot happen (exactly 512 inserts into a depth-9 tree with 512-leaf capacity), but a defensive guard (clone leaves vec and build subtree before mutating state) would remove the dependency on that invariant.
    - **Priority**: Low (invariant is rock-solid).
 
-3. **Root divergence visibility** (`state.rs:196`):
+3. **Root divergence visibility** (`state.rs`, `confirm_batch` method):
    - When `local_root != new_tree_root` after confirming a batch, the service logs a warning but still inserts the diverged root into `confirmed_roots`.
    - **Suggestion**: Consider surfacing divergences more visibly (health-check flag, metric, or refusing new traffic).
    - **Priority**: Low (unlikely in practice; would require contract or sync bug).
 
-4. **Extract batch root from preimage** (`sync.rs:651–658`):
-   - Both submission events emit `batchPoseidonRoot` as a field, but the code re-parses it from the preimage header.
+4. **Extract batch root from preimage** (`sync.rs`, `extract_batch_root_from_preimage`):
+   - Both submission events emit `batchPoseidonRoot` as a field, but the code re-parses it from the preimage header (first 32 bytes).
    - **Suggestion**: Store `batchPoseidonRoot` from the event in the submission map to make the code more robust against future header layout changes.
    - **Priority**: Low (header layout is stable).
 
 ## Testing & Validation
 
 - **Compilation**: `cargo check -p tessera-state-sync` — verified clean (no errors/warnings)
-- **Unit tests**: None in this crate (state operations are integration-tested via E2E tests and demo flows)
-- **Integration**: Tested via local demo script (`scripts/local_test_flow.sh`) and full E2E test suite
+- **Integration tests** (13 tests in `tests/integration.rs`, all anvil-based with `forge build` + `anvil` required):
+  - `test_empty_chain_sync` — genesis sync on fresh contract
+  - `test_poll_sync_incremental` — exhaustive two-TX-batch incremental sync test
+  - `test_bridge_batch_scenarios` — bridge batch submission and proof scenarios
+  - `test_randomized_batch_ordering` — random batch submission/proof ordering
+  - `test_subpool_lifecycle` — subpool owner assignment and root updates
+  - `test_deposit_lifecycle` — deposit tracking through all status transitions
+  - `test_deposit_validated_via_bridge_batch` — deposits validated within a bridge batch
+  - `test_api_commitment_queries` — `/commitment/merkle-path` endpoint
+  - `test_api_nullifier_queries` — `/nullifier/status` endpoint
+  - `test_api_batch_status_queries` — `/batch/status` endpoint for TX batches
+  - `test_api_bridge_batch_status` — `/batch/status` endpoint for bridge batches
+  - `test_api_deposits` — `/deposits` endpoint with filtering
+  - `test_api_subpool` — `/subpool/full-proof` endpoint
+- **Test infrastructure** (`tests/common/mod.rs`): Anvil-based contract deployment, transaction signing, and batch submission helpers
+- **Manual validation**: Local demo script (`scripts/local_test_flow.sh`) and full E2E test suite
 
 ## Common Tasks
 
@@ -268,6 +293,7 @@ The codebase has been reviewed and approved. The following suggestions (non-bloc
 ```bash
 export TESSERA_RPC_URL="http://localhost:8545"
 export TESSERA_CONTRACT_ADDRESS="0x..."  # deployed contract address
+export TESSERA_GENESIS_BLOCK="0"  # optional; default 0 (start block for genesis sync)
 export TESSERA_STATE_SYNC_POLL_INTERVAL="12"  # optional; default 12s
 export TESSERA_STATE_SYNC_BIND_ADDR="0.0.0.0:3001"  # optional; default 0.0.0.0:3001
 
