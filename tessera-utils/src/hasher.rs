@@ -370,7 +370,7 @@ pub trait ToHashOut<F: Field> {
 
 pub(crate) const HASH_SIZE: usize = 4;
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Default)]
 pub struct HashOutput(pub [F; HASH_SIZE]);
 
 impl From<[F; HASH_SIZE]> for HashOutput {
