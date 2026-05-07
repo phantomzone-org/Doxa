@@ -1,10 +1,9 @@
 //! Builder for FreshAcc transactions.
 
-use std::{array, sync::Arc};
+use std::array;
 
 use plonky2_field::types::Field;
 use rand::CryptoRng;
-use tessera_trees::MerkleTree;
 use tessera_utils::{F, hasher::HashOutput};
 
 use super::{
@@ -15,7 +14,7 @@ use crate::{
 	ConsumeAuth, NOTE_BATCH, NoteCommitment, NoteNullifier, SpendAuth, StandardAccount, SubpoolId,
 	derive_priv_tx_hash,
 	plonky2_gadgets::priv_tx::{targets::TxKindFlags, utils::double_hash_native},
-	pool_config::MainPoolConfigTree,
+	pool_config::SubpoolFullProof,
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_sign},
 };
 
@@ -56,20 +55,23 @@ pub struct BuiltFreshAccTx {
 
 	/// Subpool ID (from accin)
 	subpool_id: SubpoolId,
+
+	/// State tree root (set via with_state_root)
+	state_root: Option<HashOutput>,
+
+	/// Subpool merkle proof in the main pool config tree (set via with_subpool_proof)
+	subpool_proof: Option<SubpoolFullProof<HashOutput>>,
+
+	/// Approval signature (set via approval_sign)
+	approval_sig: Option<Signature>,
 }
 
 impl FreshAccTxBuilder {
 	/// Create a new FreshAcc transaction builder.
 	///
-	/// # Arguments
-	/// - `accin`: Input account (must have nonce=0)
-	///
-	/// Note: `subpool_id` is automatically extracted from `accin.subpool_id`
-	///
 	/// # Errors
 	/// - `AccountAlreadyInitialized`: Account has nonce != 0
 	pub fn new(accin: StandardAccount) -> Result<Self, FreshAccTxBuilderError> {
-		// Validate that account is not initialized
 		if accin.nonce.0 != F::ZERO {
 			return Err(FreshAccTxBuilderError::AccountAlreadyInitialized);
 		}
@@ -84,40 +86,30 @@ impl FreshAccTxBuilder {
 	}
 
 	/// Set the new spend authorization key.
-	///
-	/// This sets the spend public key that will be used to authorize
-	/// spending from this account after FreshAcc.
 	pub fn with_new_spend_key(mut self, spend_pk: CompressedPublicKey<F>) -> Self {
 		self.new_spend_auth = Some(SpendAuth::new(spend_pk));
 		self
 	}
 
 	/// Set the new consume authorization key (non-delegated mode).
-	///
-	/// This sets the consume public key that will be used to authorize
-	/// consuming notes into this account.
 	pub fn with_new_consume_key(mut self, consume_pk: CompressedPublicKey<F>) -> Self {
 		self.new_consume_auth = Some(ConsumeAuth {
-			config: true, // Non-delegated
+			config: true,
 			pk: Some(consume_pk),
 		});
 		self
 	}
 
 	/// Set consume authorization to delegated mode.
-	///
-	/// In delegated mode, the subpool owner's key is used for consume authorization.
 	pub fn with_delegated_consume(mut self) -> Self {
 		self.new_consume_auth = Some(ConsumeAuth {
-			config: false, // Delegated
+			config: false,
 			pk: None,
 		});
 		self
 	}
 
 	/// Sample random dummy input note seeds for all NOTE_BATCH inactive inote slots.
-	///
-	/// Must be called before `build()` — which will error if dinotes are absent.
 	pub fn fill_dinotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
 		self.dinotes = Some(
 			(0..NOTE_BATCH)
@@ -128,8 +120,6 @@ impl FreshAccTxBuilder {
 	}
 
 	/// Sample random dummy output note seeds for all NOTE_BATCH inactive onote slots.
-	///
-	/// Must be called before `build()` — which will error if donotes are absent.
 	pub fn fill_donotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
 		self.donotes = Some(
 			(0..NOTE_BATCH)
@@ -141,21 +131,11 @@ impl FreshAccTxBuilder {
 
 	/// Validate inputs and compute all derived values.
 	///
-	/// This method:
-	/// 1. Validates that spend and consume keys are set
-	/// 2. Derives accout (output account with nonce=1 and new auth keys)
-	/// 3. Generates dummy notes for padding
-	/// 4. Computes tx_hash
-	///
-	/// # Arguments
-	/// - `approval_key`: Subpool approval key (needed for signature verification)
-	///
 	/// # Errors
 	/// - `SpendKeyNotSet`: Must call with_new_spend_key() first
 	/// - `ConsumeKeyNotSet`: Must call with_new_consume_key() or with_delegated_consume() first
 	/// - `DummyNotesNotFilled`: `fill_dinotes()` or `fill_donotes()` was not called
 	pub fn build(self) -> Result<BuiltFreshAccTx, FreshAccTxBuilderError> {
-		// Validate that required keys are set
 		let new_spend_auth = self
 			.new_spend_auth
 			.ok_or(FreshAccTxBuilderError::SpendKeyNotSet)?;
@@ -163,15 +143,12 @@ impl FreshAccTxBuilder {
 			.new_consume_auth
 			.ok_or(FreshAccTxBuilderError::ConsumeKeyNotSet)?;
 
-		// Extract subpool_id from accin
 		let subpool_id = self.accin.subpool_id;
 
-		// Derive accout (nonce=1, new auth keys)
 		let mut accout = self.accin.clone_with_incremented_nonce();
 		accout.spend_auth = new_spend_auth.clone();
 		accout.consume_auth = new_consume_auth.clone();
 
-		// Require that dummy note seeds have been explicitly sampled via fill_dinotes/fill_donotes
 		let dinotes = self
 			.dinotes
 			.ok_or(FreshAccTxBuilderError::DummyNotesNotFilled {
@@ -183,7 +160,6 @@ impl FreshAccTxBuilder {
 				kind: "output",
 			})?;
 
-		// Compute tx_hash
 		let dinote_nulls: [NoteNullifier; NOTE_BATCH] =
 			array::from_fn(|i| NoteNullifier(HashOutput(double_hash_native(dinotes[i]))));
 		let donote_comms: [NoteCommitment; NOTE_BATCH] =
@@ -200,55 +176,78 @@ impl FreshAccTxBuilder {
 			donotes,
 			tx_hash,
 			subpool_id,
+			state_root: None,
+			subpool_proof: None,
+			approval_sig: None,
 		})
 	}
 }
 
 impl BuiltFreshAccTx {
-	/// Generate approval signature for this transaction.
+	/// Generate and store the approval signature for this transaction.
 	///
-	/// Approval signature is ALWAYS required for all FreshAcc transactions.
-	///
-	/// # Arguments
-	/// - `approval_sk`: Private key for subpool approval key
-	/// - `rng`: Random number generator for signature randomness
+	/// Approval signature is ALWAYS required for FreshAcc transactions.
+	/// Returns `self` to allow chaining.
 	pub fn approval_sign<R: CryptoRng + rand::Rng>(
-		&self,
+		mut self,
 		approval_sk: &PrivateKey,
 		rng: &mut R,
-	) -> Result<Signature, TxSignError> {
-		// Generate signature
+	) -> Result<Self, TxSignError> {
 		let k = Scalar::sample(rng);
 		let sig = schnorr_sign(approval_sk, &self.tx_hash.0, k);
-		Ok(sig)
+		self.approval_sig = Some(sig);
+		Ok(self)
 	}
 
 	/// Get the transaction hash that needs to be signed.
-	///
-	/// Useful for external signing (e.g., hardware wallets, remote signers).
 	pub fn tx_hash(&self) -> &HashOutput {
 		&self.tx_hash
 	}
 
-	/// Convert this built FreshAcc transaction to a unified BuiltPrivTx with signature.
+	/// Set the state tree root.
 	///
-	/// This method populates all fields needed for the circuit, including:
-	/// - Setting tx_kind_flags to FRESH_ACC
-	/// - Copying FreshAcc-specific data (new auth keys are in accout)
-	/// - Filling unused fields (notes, proofs) with empty/dummy values
-	/// - Including the provided approval signature
-	/// - Providing fake/dummy signatures for spend and consume (not used in FreshAcc)
+	/// Because FreshAcc accounts are not yet committed to the state tree, the
+	/// state root must be provided explicitly (no account merkle proof exists).
+	/// Must be called before `into_priv_tx`.
+	pub fn with_state_root(mut self, state_root: HashOutput) -> Self {
+		self.state_root = Some(state_root);
+		self
+	}
+
+	/// Provide the subpool merkle proof in the main pool config tree.
 	///
-	/// This is the bridge between the ergonomic builder API and the unified
-	/// proving interface.
-	pub fn into_priv_tx_with_signature(
-		self,
-		approval_sig: Signature,
-		state_tree: &MerkleTree<HashOutput>,
-		main_pool: Arc<MainPoolConfigTree<HashOutput>>,
-		approval_key: crate::pool_config::CompPubKey,
-	) -> Result<BuiltPrivTx, FreshAccTxBuilderError> {
-		// Create a dummy merkle proof for FreshAcc (not validated by circuit)
+	/// The main pool config root is derived from `subpool_proof.main_pool_proof.root`.
+	/// The approval key is derived from `subpool_proof.subpool_config.approval_key()`.
+	/// Must be called before `into_priv_tx`.
+	pub fn with_subpool_proof(mut self, subpool_proof: SubpoolFullProof<HashOutput>) -> Self {
+		self.subpool_proof = Some(subpool_proof);
+		self
+	}
+
+	/// Convert this built FreshAcc transaction to a unified `BuiltPrivTx`.
+	///
+	/// Requires `approval_sign`, `with_state_root`, and `with_subpool_proof` to
+	/// have been called first.
+	///
+	/// # Errors
+	/// - `ApprovalSigNotSet`: `approval_sign` was not called
+	/// - `StateRootNotSet`: `with_state_root` was not called
+	/// - `SubpoolProofNotSet`: `with_subpool_proof` was not called
+	pub fn into_priv_tx(self) -> Result<BuiltPrivTx, FreshAccTxBuilderError> {
+		let approval_sig = self
+			.approval_sig
+			.ok_or(FreshAccTxBuilderError::ApprovalSigNotSet)?;
+		let state_root = self
+			.state_root
+			.ok_or(FreshAccTxBuilderError::StateRootNotSet)?;
+		let subpool_proof = self
+			.subpool_proof
+			.ok_or(FreshAccTxBuilderError::SubpoolProofNotSet)?;
+
+		let mainpool_config_root = subpool_proof.main_pool_proof.root;
+		let approval_key = subpool_proof.subpool_config.approval_key();
+
+		// Dummy account merkle proof — FreshAcc accounts are not yet in the state tree
 		let dummy_merkle_proof = tessera_trees::MerkleProof {
 			leaf: HashOutput([F::ZERO; 4]),
 			siblings: vec![HashOutput([F::ZERO; 4]); crate::STATE_TREE_DEPTH],
@@ -258,48 +257,27 @@ impl BuiltFreshAccTx {
 			root: HashOutput([F::ZERO; 4]),
 		};
 
-		// Get state root
-		let state_root = state_tree.root();
-
-		// Get main pool root and compute subpool proof
-		let main_pool_root = main_pool.root();
-
-		// Create a temporary SubpoolConfig to get the subpool proof
-		let subpool_config = crate::pool_config::SubpoolConfig::new(approval_key);
-		let subpool_proof = main_pool
-			.full_subpool_proof(&subpool_config, self.subpool_id)
-			.map_err(|e| anyhow::anyhow!("Failed to get subpool proof: {}", e))?;
-
-		// Generate fake signatures for spend and consume (use public keys from accout)
-		let spend_pk = self.accout.spend_pk_or_default();
-		let consume_pk = self.accout.consume_pk_or_default();
-
 		Ok(BuiltPrivTx {
 			tx_kind_flags: TxKindFlags::FRESH_ACC,
 
-			// Account data
 			accin: self.accin,
 			accout: self.accout,
 			accin_merkle_proof: dummy_merkle_proof,
 
-			// No reject pairs or regular notes for FreshAcc
 			rejected_inotes: Vec::new(),
 			rejected_inotes_nct_proofs: Vec::new(),
 			inotes: Vec::new(),
 			inotes_nct_proofs: Vec::new(),
 			onotes: Vec::new(),
 
-			// Dummy notes (Vec already, no conversion needed)
 			dinotes: self.dinotes,
 			donotes: self.donotes,
 
-			// Computed values
 			tx_hash: self.tx_hash,
 			state_root,
 
-			// Pool config
 			subpool_id: self.subpool_id,
-			mainpool_config_root: main_pool_root,
+			mainpool_config_root,
 			subpool_proof,
 			approval_key,
 

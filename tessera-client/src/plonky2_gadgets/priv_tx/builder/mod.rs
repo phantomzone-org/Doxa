@@ -114,4 +114,4 @@ pub use errors::{
 };
 pub use fake_builder::{BuiltFakeTx, FakeSpendTxBuilder};
 pub use freshacc_builder::{BuiltFreshAccTx, FreshAccTxBuilder};
-pub use spend_builder::{BuiltSpendTx, RequiredSignatures, SpendTxBuilder, SpendTxSignatures};
+pub use spend_builder::{BuiltSpendTx, RequiredSignatures, SpendTxBuilder};

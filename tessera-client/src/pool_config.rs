@@ -38,7 +38,7 @@ const APPROVAL_KEY_INDEX: usize = 0;
 const REJECTION_KEY_INDEX: usize = 1;
 const CONSUME_KEY_INDEX: usize = 2;
 
-/// A depth-2 Merkle tree holding the three authority public keys for a subpool.
+/// Public key of the authority key of the subpool
 pub struct SubpoolConfig<H: MerkleHash<Digest = HashOutput>> {
 	approval_key: CompPubKey,
 	_phantom: PhantomData<H>,
@@ -129,11 +129,11 @@ where
 	///
 	/// Subpools must be inserted **sequentially**: 1, 2, 3, … with no gaps.
 	///
-	/// * `subpool_id = 1` — always allowed.  Position 0 is permanently reserved
-	///   (zero leaf); it is seeded automatically on the first call.
-	/// * `subpool_id = N > 1` — only allowed if `subpool_id = N − 1` has already
-	///   been inserted (i.e. the tree has exactly `N` leaves at the time of the
-	///   call, meaning positions 0 … N−1 are all occupied).
+	/// * `subpool_id = 1` — always allowed.  Position 0 is permanently reserved (zero leaf); it is
+	///   seeded automatically on the first call.
+	/// * `subpool_id = N > 1` — only allowed if `subpool_id = N − 1` has already been inserted
+	///   (i.e. the tree has exactly `N` leaves at the time of the call, meaning positions 0 … N−1
+	///   are all occupied).
 	///
 	/// # Errors
 	/// * `subpool_id == 0` — reserved, always rejected.
@@ -208,6 +208,8 @@ where
 		let main_pool_proof = self.subpool_proof(subpool_id, subpool.commitment())?;
 		Ok(SubpoolFullProof {
 			main_pool_proof,
+			subpool_config: SubpoolConfig::new(subpool.approval_key()),
+			subpool_id,
 		})
 	}
 }
@@ -216,12 +218,26 @@ where
 
 /// All three subpool authority-key proofs (relative to the SubpoolConfigRoot)
 /// together with the subpool's proof inside the MainPoolConfigTree.
-pub struct SubpoolFullProof<H: MerkleHash> {
+pub struct SubpoolFullProof<H: MerkleHash<Digest = HashOutput>> {
 	pub main_pool_proof: MerkleProof<H>,
+	pub subpool_config: SubpoolConfig<H>,
+	pub subpool_id: SubpoolId,
 }
 
-impl<H: MerkleHash> Default for SubpoolFullProof<H> {
+impl<H: MerkleHash<Digest = HashOutput>> Default for SubpoolFullProof<H> {
 	fn default() -> Self {
+		// Same key as fake_approval_key() in plonky2_gadgets/priv_tx/utils.rs
+		// Note: should be a valid public key
+		let dummy_key = CompressedPublicKey(
+			[
+				7613690455422068269u64,
+				12930951591626745075,
+				16103143792840800039,
+				4657200339622395349,
+				3857357297380158342,
+			]
+			.into(),
+		);
 		Self {
 			main_pool_proof: MerkleProof {
 				leaf: H::ZERO,
@@ -231,6 +247,8 @@ impl<H: MerkleHash> Default for SubpoolFullProof<H> {
 				num_leaves: 0,
 				root: H::ZERO,
 			},
+			subpool_config: SubpoolConfig::new(dummy_key),
+			subpool_id: SubpoolId(F::ZERO),
 		}
 	}
 }
@@ -276,12 +294,7 @@ mod tests {
 		let mut main_tree = MainPoolConfigTree::<HashOutput>::new();
 
 		// Insert subpool 1 with a non-zero root
-		let non_zero_root = HashOutput([
-			F::from_canonical_u64(42),
-			F::ZERO,
-			F::ZERO,
-			F::ZERO,
-		]);
+		let non_zero_root = HashOutput([F::from_canonical_u64(42), F::ZERO, F::ZERO, F::ZERO]);
 		let subpool_id_1 = SubpoolId(F::from_canonical_u64(1));
 		main_tree
 			.insert_subpool_at_position(subpool_id_1, non_zero_root)
@@ -298,7 +311,14 @@ mod tests {
 			.subpool_proof(subpool_id_2, HashOutput::ZERO)
 			.expect("proof must be Ok for zero-root subpool");
 
-		assert_eq!(proof.leaf, HashOutput::ZERO, "leaf should be H::ZERO for zero-root subpool");
-		assert!(proof.verify(), "Merkle proof for zero-root subpool should be valid");
+		assert_eq!(
+			proof.leaf,
+			HashOutput::ZERO,
+			"leaf should be H::ZERO for zero-root subpool"
+		);
+		assert!(
+			proof.verify(),
+			"Merkle proof for zero-root subpool should be valid"
+		);
 	}
 }

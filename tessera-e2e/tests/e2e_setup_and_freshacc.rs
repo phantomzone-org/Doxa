@@ -450,18 +450,18 @@ async fn test_e2e_setup_operators_and_freshacc_batch() {
 			.build()
 			.expect("FreshAccTxBuilder::build");
 
-		let approval_sig = built
-			.approval_sign(&o.approval_sk, &mut rng)
-			.expect("approval_sign");
+		let subpool_config = SubpoolConfig::new(o.approval_cpk);
+		let subpool_proof = config_tree_arc
+			.full_subpool_proof(&subpool_config, o.subpool_id)
+			.expect("full_subpool_proof");
 
 		let priv_tx = built
-			.into_priv_tx_with_signature(
-				approval_sig,
-				&state_tree,
-				Arc::clone(&config_tree_arc),
-				o.approval_cpk,
-			)
-			.expect("into_priv_tx_with_signature");
+			.approval_sign(&o.approval_sk, &mut rng)
+			.expect("approval_sign")
+			.with_state_root(state_tree.root())
+			.with_subpool_proof(subpool_proof)
+			.into_priv_tx()
+			.expect("into_priv_tx");
 
 		let proven = priv_tx
 			.prove(&circuit.circuit_data, &circuit.targets)

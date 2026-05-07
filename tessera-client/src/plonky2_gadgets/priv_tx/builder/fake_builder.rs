@@ -6,8 +6,8 @@ use tessera_utils::{F, hasher::HashOutput};
 use super::{BuiltPrivTx, errors::FakeTxBuilderError};
 use crate::{
 	NOTE_BATCH, StandardAccount, SubpoolId,
-	plonky2_gadgets::priv_tx::{targets::TxKindFlags, utils::fake_approval_key},
-	pool_config::{SubpoolConfig, SubpoolFullProof},
+	plonky2_gadgets::priv_tx::targets::TxKindFlags,
+	pool_config::SubpoolFullProof,
 };
 
 /// Builder for constructing fake (dummy) transactions.
@@ -61,9 +61,10 @@ impl BuiltFakeTx {
 		let accin = StandardAccount::fake();
 		let accout = accin.clone_with_incremented_nonce();
 
-		// Get a real subpool proof built from the fake authority key.
+		// Derive the approval key from the default subpool proof.
 		// The circuit does not verify this when not_fake_tx = false.
-		let approval_key = fake_approval_key();
+		let subpool_proof = SubpoolFullProof::default();
+		let approval_key = subpool_proof.subpool_config.approval_key();
 
 		// Dummy account merkle proof (not enforced for fake tx)
 		let dummy_merkle_proof = tessera_trees::MerkleProof {
@@ -107,7 +108,7 @@ impl BuiltFakeTx {
 			// Pool config
 			subpool_id: SubpoolId::ZERO,
 			mainpool_config_root: self.mainpool_config_root,
-			subpool_proof: SubpoolFullProof::default(),
+			subpool_proof,
 			approval_key,
 
 			spend_sig: None,

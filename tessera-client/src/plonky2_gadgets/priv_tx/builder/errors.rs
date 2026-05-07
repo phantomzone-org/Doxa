@@ -33,13 +33,15 @@ pub enum SpendTxBuilderError {
 		delta_in: U256,
 		delta_out: U256,
 	},
-	AccountNotInTree,
 	SubpoolNotFound {
 		subpool_id: SubpoolId,
 	},
 	DummyNotesNotFilled {
 		kind: &'static str,
 	},
+	AccountPathNotSet,
+	NotePathsNotSet,
+	SubpoolProofNotSet,
 	TreeError(anyhow::Error),
 }
 
@@ -91,9 +93,6 @@ impl fmt::Display for SpendTxBuilderError {
 				f,
 				"Insufficient balance: old_balance={old_balance}, delta_in={delta_in}, delta_out={delta_out}"
 			),
-			Self::AccountNotInTree => {
-				write!(f, "Account commitment not found in state tree")
-			},
 			Self::SubpoolNotFound {
 				subpool_id,
 			} => {
@@ -107,6 +106,18 @@ impl fmt::Display for SpendTxBuilderError {
 					"Dummy {kind} notes not filled. Call fill_dinotes()/fill_donotes() before build()"
 				)
 			},
+			Self::AccountPathNotSet => write!(
+				f,
+				"Account commitment merkle path not set. Call with_account_path() before into_priv_tx()"
+			),
+			Self::NotePathsNotSet => write!(
+				f,
+				"Note commitment merkle paths not set. Call with_input_notes_path()/with_rejected_notes_path() before into_priv_tx()"
+			),
+			Self::SubpoolProofNotSet => write!(
+				f,
+				"Subpool proof not set. Call with_subpool_proof() before into_priv_tx()"
+			),
 			Self::TreeError(e) => write!(f, "Tree error: {e}"),
 		}
 	}
@@ -134,6 +145,9 @@ pub enum FreshAccTxBuilderError {
 	ConsumeKeyNotSet,
 	DummyNotesNotFilled { kind: &'static str },
 	SubpoolNotFound { subpool_id: SubpoolId },
+	StateRootNotSet,
+	SubpoolProofNotSet,
+	ApprovalSigNotSet,
 	TreeError(anyhow::Error),
 }
 
@@ -169,6 +183,18 @@ impl fmt::Display for FreshAccTxBuilderError {
 			} => {
 				write!(f, "Subpool {subpool_id:?} not found in main pool config")
 			},
+			Self::StateRootNotSet => write!(
+				f,
+				"State root not set. Call with_state_root() before into_priv_tx()"
+			),
+			Self::SubpoolProofNotSet => write!(
+				f,
+				"Subpool proof not set. Call with_subpool_proof() before into_priv_tx()"
+			),
+			Self::ApprovalSigNotSet => write!(
+				f,
+				"Approval signature not set. Call approval_sign() before into_priv_tx()"
+			),
 			Self::TreeError(e) => write!(f, "Tree error: {e}"),
 		}
 	}

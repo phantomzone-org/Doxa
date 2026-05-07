@@ -66,12 +66,21 @@ fn test_prove_withdraw_tx() {
 		.add_withdrawal(AssetId(F::from_canonical_u64(3)), U256::from(60u64))
 		.unwrap();
 
-	let mut built = builder.build().unwrap();
-	built.approval_sign(&approval_sk, &mut rng);
-	built.spend_sign(&spend_sk, &mut rng);
+	let built = builder
+		.build()
+		.unwrap()
+		.approval_sign(&approval_sk, &mut rng)
+		.spend_sign(&spend_sk, &mut rng);
+
+	let subpool = SubpoolConfig::new(approval_cpk);
+	let subpool_proof = main_pool.full_subpool_proof(&subpool, subpool_id).unwrap();
 
 	let accout = built.accout().clone();
-	let withdraw_tx = built.into_withdraw_tx(&act, &main_pool).unwrap();
+	let withdraw_tx = built
+		.with_account_path(accin_act_proof)
+		.with_subpool_proof(subpool_proof)
+		.into_withdraw_tx()
+		.unwrap();
 
 	let wp = withdraw_tx.prove(&circuit).expect("prove failed");
 	circuit.circuit_data.verify(wp.proof.clone()).unwrap();
@@ -135,12 +144,10 @@ fn test_prove_withdraw_tx() {
 fn test_fake_withdraw_tx() {
 	let circuit = build_withdraw_tx_circuit();
 
-	let withdraw_tx = FakeWithdrawTxBuilder::new(
-		HashOutput([F::ZERO; 4]),
-		HashOutput([F::ZERO; 4]),
-	)
-	.build()
-	.into_withdraw_tx();
+	let withdraw_tx =
+		FakeWithdrawTxBuilder::new(HashOutput([F::ZERO; 4]), HashOutput([F::ZERO; 4]))
+			.build()
+			.into_withdraw_tx();
 
 	let wp = withdraw_tx.prove(&circuit).expect("prove failed");
 	circuit.circuit_data.verify(wp.proof).unwrap();

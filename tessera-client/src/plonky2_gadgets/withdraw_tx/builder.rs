@@ -6,22 +6,20 @@ use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2_field::types::Field;
 use primitive_types::{H160, U256};
 use rand::CryptoRng;
-use tessera_trees::MerkleTree;
-use tessera_utils::{F, hasher::{HashOutput, ToHashOut}};
+use tessera_trees::MerkleProof;
+use tessera_utils::{
+	F,
+	hasher::{HashOutput, ToHashOut},
+};
 
-use super::circuit::WithdrawTxCircuit;
+use super::{WithdrawProof, circuit::WithdrawTxCircuit};
 use crate::{
 	AssetId, NOTE_BATCH, STATE_TREE_DEPTH, StandardAccount, derive_withdraw_tx_hash,
-	plonky2_gadgets::{
-		priv_tx::utils::fake_approval_key,
-		withdraw_tx::targets::compute_withdrawal_slots,
-	},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig, SubpoolFullProof},
+	plonky2_gadgets::withdraw_tx::targets::compute_withdrawal_slots,
+	pool_config::{CompPubKey, SubpoolFullProof},
 	schnorr::{PrivateKey, Scalar, Signature, schnorr_sign},
 	utils::map_h160_to_f,
 };
-
-use super::WithdrawProof;
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -37,10 +35,10 @@ pub enum WithdrawTxBuilderError {
 		balance: U256,
 		withdrawal: U256,
 	},
-	AccinNotInStateTree,
 	ApprovalSignRequired,
 	SpendSignRequired,
-	SubpoolNotFound,
+	AccountPathNotSet,
+	SubpoolProofNotSet,
 	TreeError(anyhow::Error),
 }
 
@@ -51,7 +49,9 @@ impl fmt::Display for WithdrawTxBuilderError {
 				f,
 				"Account not initialized (nonce=0). Must perform FreshAcc first"
 			),
-			Self::TooManyWithdrawals { limit } => {
+			Self::TooManyWithdrawals {
+				limit,
+			} => {
 				write!(f, "Too many withdrawals: limit is {limit}")
 			},
 			Self::NoWithdrawals => write!(f, "Must add at least one withdrawal before build()"),
@@ -63,16 +63,20 @@ impl fmt::Display for WithdrawTxBuilderError {
 				f,
 				"Insufficient balance for asset {asset_id:?}: balance={balance}, withdrawal={withdrawal}"
 			),
-			Self::AccinNotInStateTree => {
-				write!(f, "Account commitment not found in state tree")
-			},
 			Self::ApprovalSignRequired => {
 				write!(f, "Must call approval_sign() before into_withdraw_tx()")
 			},
 			Self::SpendSignRequired => {
 				write!(f, "Must call spend_sign() before into_withdraw_tx()")
 			},
-			Self::SubpoolNotFound => write!(f, "Subpool not found in main pool config"),
+			Self::AccountPathNotSet => write!(
+				f,
+				"Account commitment merkle path not set. Call with_account_path() before into_withdraw_tx()"
+			),
+			Self::SubpoolProofNotSet => write!(
+				f,
+				"Subpool proof not set. Call with_subpool_proof() before into_withdraw_tx()"
+			),
 			Self::TreeError(e) => write!(f, "Tree error: {e}"),
 		}
 	}
@@ -94,10 +98,7 @@ impl WithdrawRealTxBuilder {
 	///
 	/// # Errors
 	/// - `AccountNotInitialized`: `accin.nonce == 0` (FreshAcc required first)
-	pub fn new(
-		accin: StandardAccount,
-		w_acc_addr: H160,
-	) -> Result<Self, WithdrawTxBuilderError> {
+	pub fn new(accin: StandardAccount, w_acc_addr: H160) -> Result<Self, WithdrawTxBuilderError> {
 		if accin.nonce.0 == F::ZERO {
 			return Err(WithdrawTxBuilderError::AccountNotInitialized);
 		}
@@ -118,7 +119,9 @@ impl WithdrawRealTxBuilder {
 		amount: U256,
 	) -> Result<(), WithdrawTxBuilderError> {
 		if self.withdrawals.len() == NOTE_BATCH {
-			return Err(WithdrawTxBuilderError::TooManyWithdrawals { limit: NOTE_BATCH });
+			return Err(WithdrawTxBuilderError::TooManyWithdrawals {
+				limit: NOTE_BATCH,
+			});
 		}
 		self.withdrawals.push((asset_id, amount));
 		Ok(())
@@ -170,9 +173,10 @@ impl WithdrawRealTxBuilder {
 			withdrawals: self.withdrawals,
 			w_acc_addr: self.w_acc_addr,
 			tx_hash,
-			approval_key: None,
 			approval_sig: None,
 			spend_sig: None,
+			accin_proof: None,
+			subpool_proof: None,
 		})
 	}
 }
@@ -181,8 +185,10 @@ impl WithdrawRealTxBuilder {
 
 /// Validated, ready-to-sign real withdrawal transaction.
 ///
-/// Call [`approval_sign`](Self::approval_sign), then
-/// [`into_withdraw_tx`](Self::into_withdraw_tx) to attach proofs.
+/// Call [`approval_sign`](Self::approval_sign) and [`spend_sign`](Self::spend_sign), then
+/// [`with_account_path`](Self::with_account_path) and
+/// [`with_subpool_proof`](Self::with_subpool_proof) to attach merkle paths, then
+/// [`into_withdraw_tx`](Self::into_withdraw_tx) to finalise.
 pub struct BuiltWithdrawRealTx {
 	accin: StandardAccount,
 	accout: StandardAccount,
@@ -190,11 +196,13 @@ pub struct BuiltWithdrawRealTx {
 	w_acc_addr: H160,
 	tx_hash: HashOutput,
 	/// Set when `approval_sign` is called.
-	approval_key: Option<CompPubKey>,
-	/// Set when `approval_sign` is called.
 	approval_sig: Option<Signature>,
 	/// Set when `spend_sign` is called.
 	spend_sig: Option<Signature>,
+	/// Set when `with_account_path` is called.
+	accin_proof: Option<MerkleProof<HashOutput>>,
+	/// Set when `with_subpool_proof` is called.
+	subpool_proof: Option<SubpoolFullProof<HashOutput>>,
 }
 
 impl BuiltWithdrawRealTx {
@@ -212,41 +220,59 @@ impl BuiltWithdrawRealTx {
 	///
 	/// Must be called before [`into_withdraw_tx`](Self::into_withdraw_tx).
 	pub fn approval_sign<R: CryptoRng + rand::Rng>(
-		&mut self,
+		mut self,
 		approval_sk: &PrivateKey,
 		rng: &mut R,
-	) {
-		let approval_key: CompPubKey = approval_sk.public_key().into();
+	) -> Self {
 		let k = Scalar::sample(rng);
 		let sig = schnorr_sign(approval_sk, &self.tx_hash.0, k);
-		self.approval_key = Some(approval_key);
 		self.approval_sig = Some(sig);
+		self
 	}
 
 	/// Generate and store a spend signature from the account's spend key.
 	///
 	/// Must be called before [`into_withdraw_tx`](Self::into_withdraw_tx).
-	pub fn spend_sign<R: CryptoRng + rand::Rng>(&mut self, spend_sk: &PrivateKey, rng: &mut R) {
+	pub fn spend_sign<R: CryptoRng + rand::Rng>(
+		mut self,
+		spend_sk: &PrivateKey,
+		rng: &mut R,
+	) -> Self {
 		let k = Scalar::sample(rng);
 		let sig = schnorr_sign(spend_sk, &self.tx_hash.0, k);
 		self.spend_sig = Some(sig);
+		self
 	}
 
-	/// Attach state-tree and main-pool proofs to produce a [`BuiltWithdrawTx`].
+	/// Provide the merkle proof for the account commitment in the state tree.
+	///
+	/// The state root is derived from `accin_proof.root`.
+	/// Must be called before `into_withdraw_tx`.
+	pub fn with_account_path(mut self, accin_proof: MerkleProof<HashOutput>) -> Self {
+		self.accin_proof = Some(accin_proof);
+		self
+	}
+
+	/// Provide the subpool merkle proof in the main pool config tree.
+	///
+	/// The main pool config root is derived from `subpool_proof.main_pool_proof.root`.
+	/// Must be called before `into_withdraw_tx`.
+	pub fn with_subpool_proof(mut self, subpool_proof: SubpoolFullProof<HashOutput>) -> Self {
+		self.subpool_proof = Some(subpool_proof);
+		self
+	}
+
+	/// Finalise and produce a [`BuiltWithdrawTx`].
+	///
+	/// Requires `approval_sign`, `spend_sign`, `with_account_path`, and `with_subpool_proof`
+	/// to have been called first.
 	///
 	/// # Errors
-	/// - `ApprovalSignRequired`: [`approval_sign`](Self::approval_sign) was not called
-	/// - `AccinNotInStateTree`: commitment not present in `state_tree`
-	/// - `SubpoolNotFound`: account's subpool not in `main_pool`
-	/// - `TreeError`: Merkle proof generation failed
-	pub fn into_withdraw_tx(
-		self,
-		state_tree: &MerkleTree<HashOutput>,
-		main_pool: &MainPoolConfigTree<HashOutput>,
-	) -> Result<BuiltWithdrawTx, WithdrawTxBuilderError> {
-		let approval_key = self
-			.approval_key
-			.ok_or(WithdrawTxBuilderError::ApprovalSignRequired)?;
+	/// - `ApprovalSignRequired`: `approval_sign` was not called
+	/// - `SpendSignRequired`: `spend_sign` was not called
+	/// - `AccountPathNotSet`: `with_account_path` was not called
+	/// - `SubpoolProofNotSet`: `with_subpool_proof` was not called
+	pub fn into_withdraw_tx(self) -> Result<BuiltWithdrawTx, WithdrawTxBuilderError> {
 		let approval_sig = self
 			.approval_sig
 			.ok_or(WithdrawTxBuilderError::ApprovalSignRequired)?;
@@ -254,24 +280,16 @@ impl BuiltWithdrawRealTx {
 			.spend_sig
 			.ok_or(WithdrawTxBuilderError::SpendSignRequired)?;
 
-		let accin_comm = self.accin.commitment().0;
-		let pos = state_tree
-			.leaves()
-			.iter()
-			.position(|l| l == &accin_comm)
-			.ok_or(WithdrawTxBuilderError::AccinNotInStateTree)?;
+		let accin_act_merkle_proof = self
+			.accin_proof
+			.ok_or(WithdrawTxBuilderError::AccountPathNotSet)?;
+		let subpool_proof = self
+			.subpool_proof
+			.ok_or(WithdrawTxBuilderError::SubpoolProofNotSet)?;
 
-		let accin_act_merkle_proof = state_tree
-			.merkle_proof(pos)
-			.map_err(|e| WithdrawTxBuilderError::TreeError(anyhow::anyhow!("{}", e)))?;
-
-		let subpool = SubpoolConfig::new(approval_key);
-		let subpool_proof = main_pool
-			.full_subpool_proof(&subpool, self.accin.subpool_id)
-			.map_err(|_| WithdrawTxBuilderError::SubpoolNotFound)?;
-
-		let state_root = state_tree.root();
-		let main_pool_root = main_pool.root();
+		let state_root = accin_act_merkle_proof.root;
+		let main_pool_root = subpool_proof.main_pool_proof.root;
+		let approval_key = subpool_proof.subpool_config.approval_key();
 
 		Ok(BuiltWithdrawTx {
 			not_fake_tx: true,
@@ -332,7 +350,8 @@ impl BuiltFakeWithdrawTx {
 	/// the circuit does not enforce any of these values.
 	pub fn into_withdraw_tx(self) -> BuiltWithdrawTx {
 		let accin = StandardAccount::fake();
-		let approval_key = fake_approval_key();
+		let subpool_proof = SubpoolFullProof::default();
+		let approval_key = subpool_proof.subpool_config.approval_key();
 
 		let dummy_merkle_proof = tessera_trees::MerkleProof {
 			leaf: HashOutput([F::ZERO; 4]),
@@ -352,7 +371,7 @@ impl BuiltFakeWithdrawTx {
 			state_root: self.state_root,
 			main_pool_root: self.mainpool_config_root,
 			accin_act_merkle_proof: dummy_merkle_proof,
-			subpool_proof: SubpoolFullProof::default(),
+			subpool_proof,
 			approval_sig: None,
 			spend_sig: None,
 		}
@@ -459,6 +478,8 @@ impl BuiltWithdrawTx {
 		}
 
 		let proof = circuit.circuit_data.prove(pw)?;
-		Ok(WithdrawProof { proof })
+		Ok(WithdrawProof {
+			proof,
+		})
 	}
 }

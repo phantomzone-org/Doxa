@@ -25,7 +25,7 @@ use crate::{
 	StandardAccount, StandardNote, SubpoolId, derive_priv_tx_hash,
 	plonky2_gadgets::{
 		priv_tx::{
-			builder::{FakeSpendTxBuilder, FreshAccTxBuilder, SpendTxBuilder, SpendTxSignatures},
+			builder::{FakeSpendTxBuilder, FreshAccTxBuilder, SpendTxBuilder, TxSignError},
 			targets::TxKindFlags,
 		},
 		tests::print_common_data,
@@ -96,11 +96,11 @@ fn test_spend_tx_consume_delegated() {
 	);
 
 	let mut state_tree = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
-	let _acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
+	let acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
 	let n0_pos = state_tree.insert(n0.commitment().0).unwrap();
 
 	// Build: consume n0, no output notes
-	let built = SpendTxBuilder::new(acc0, asset_id, approval_cpk)
+	let built = SpendTxBuilder::new(acc0, asset_id)
 		.unwrap()
 		.add_input_note(n0, n0_pos)
 		.unwrap()
@@ -109,13 +109,21 @@ fn test_spend_tx_consume_delegated() {
 		.build()
 		.unwrap();
 
-	// Approval only — consume is delegated so no separate consume signature
-	let approval_sig = built.approval_sign(&approval_sk, &mut rng).unwrap();
-	let sigs = SpendTxSignatures::new(None, None, approval_sig);
+	let accin_proof = state_tree.merkle_proof(acc0_pos).unwrap();
+	let n0_proof = state_tree.merkle_proof(n0_pos).unwrap();
+	let subpool = SubpoolConfig::new(approval_cpk);
+	let subpool_proof = main_pool.full_subpool_proof(&subpool, subpool_id).unwrap();
 
 	let circuit = build_priv_tx_circuit();
+	// Approval only — consume is delegated so no separate consume signature
 	let priv_tx = built
-		.into_priv_tx_with_signatures(sigs, &state_tree, main_pool)
+		.approval_sign(&approval_sk, &mut rng)
+		.unwrap()
+		.with_account_path(accin_proof)
+		.with_input_notes_path(vec![n0_proof])
+		.with_rejected_notes_path(vec![])
+		.with_subpool_proof(subpool_proof)
+		.into_priv_tx()
 		.unwrap();
 	let proven = priv_tx
 		.prove(&circuit.circuit_data, &circuit.targets)
@@ -157,11 +165,11 @@ fn test_spend_tx_reject_input_note() {
 	);
 
 	let mut state_tree = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
-	let _acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
+	let acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
 	let n0_pos = state_tree.insert(n0.commitment().0).unwrap();
 
 	// Build: reject n0 (mirror output note is derived automatically)
-	let built = SpendTxBuilder::new(acc0, asset_id, approval_cpk)
+	let built = SpendTxBuilder::new(acc0, asset_id)
 		.unwrap()
 		.add_rejected_note(n0, n0_pos)
 		.unwrap()
@@ -170,12 +178,20 @@ fn test_spend_tx_reject_input_note() {
 		.build()
 		.unwrap();
 
-	let approval_sig = built.approval_sign(&approval_sk, &mut rng).unwrap();
-	let sigs = SpendTxSignatures::new(None, None, approval_sig);
+	let accin_proof = state_tree.merkle_proof(acc0_pos).unwrap();
+	let n0_proof = state_tree.merkle_proof(n0_pos).unwrap();
+	let subpool = SubpoolConfig::new(approval_cpk);
+	let subpool_proof = main_pool.full_subpool_proof(&subpool, subpool_id).unwrap();
 
 	let circuit = build_priv_tx_circuit();
 	let priv_tx = built
-		.into_priv_tx_with_signatures(sigs, &state_tree, main_pool)
+		.approval_sign(&approval_sk, &mut rng)
+		.unwrap()
+		.with_account_path(accin_proof)
+		.with_input_notes_path(vec![])
+		.with_rejected_notes_path(vec![n0_proof])
+		.with_subpool_proof(subpool_proof)
+		.into_priv_tx()
 		.unwrap();
 	let proven = priv_tx
 		.prove(&circuit.circuit_data, &circuit.targets)
@@ -196,7 +212,7 @@ fn test_spend_tx_reject_input_note() {
 /// No input notes; acc0 has a pre-existing AST balance and authorises the
 /// spend with its spend key.
 #[test]
-fn test_spend_tx_spend_from_balance() {
+fn test_spend_tx_spend_from_balance() -> Result<(), TxSignError> {
 	let mut rng = ChaCha8Rng::seed_from_u64(202);
 	let (approval_sk, approval_cpk, subpool_id, main_pool) = spend_test_subpool(&mut rng);
 	let (mut acc0, spend_sk) = spend_test_acc0(&mut rng, subpool_id);
@@ -209,10 +225,10 @@ fn test_spend_tx_spend_from_balance() {
 	let acc1 = StandardAccount::sample(&mut rng, SubpoolId(F::from_canonical_u64(2)));
 
 	let mut state_tree = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
-	let _acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
+	let acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
 
 	// Build: create output note to acc1 for 50, spending from existing balance
-	let built = SpendTxBuilder::new(acc0, asset_id, approval_cpk)
+	let built = SpendTxBuilder::new(acc0, asset_id)
 		.unwrap()
 		.add_output_note(
 			AccountAddress::from_acc(&acc1),
@@ -226,14 +242,20 @@ fn test_spend_tx_spend_from_balance() {
 		.build()
 		.unwrap();
 
-	// Spend sig required (has output notes)
-	let spend_sig = built.spend_sign(&spend_sk, &mut rng).unwrap();
-	let approval_sig = built.approval_sign(&approval_sk, &mut rng).unwrap();
-	let sigs = SpendTxSignatures::new(spend_sig, None, approval_sig);
+	let accin_proof = state_tree.merkle_proof(acc0_pos).unwrap();
+	let subpool = SubpoolConfig::new(approval_cpk);
+	let subpool_proof = main_pool.full_subpool_proof(&subpool, subpool_id).unwrap();
 
 	let circuit = build_priv_tx_circuit();
+	// Spend sig required (has output notes)
 	let priv_tx = built
-		.into_priv_tx_with_signatures(sigs, &state_tree, main_pool)
+		.spend_sign(&spend_sk, &mut rng)?
+		.approval_sign(&approval_sk, &mut rng)?
+		.with_account_path(accin_proof)
+		.with_input_notes_path(vec![])
+		.with_rejected_notes_path(vec![])
+		.with_subpool_proof(subpool_proof)
+		.into_priv_tx()
 		.unwrap();
 	let proven = priv_tx
 		.prove(&circuit.circuit_data, &circuit.targets)
@@ -247,6 +269,8 @@ fn test_spend_tx_spend_from_balance() {
 		.circuit_data
 		.verify(proven.0)
 		.expect("verify failed");
+
+	Ok(())
 }
 
 /// Consume an input note with non-delegated consume auth (own consume key).
@@ -281,11 +305,11 @@ fn test_spend_tx_consume_non_delegated() {
 	);
 
 	let mut state_tree = MerkleTree::<HashOutput>::new(STATE_TREE_DEPTH);
-	let _acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
+	let acc0_pos = state_tree.insert(acc0.commitment().0).unwrap();
 	let n0_pos = state_tree.insert(n0.commitment().0).unwrap();
 
 	// Build: consume n0, no output notes
-	let built = SpendTxBuilder::new(acc0, asset_id, approval_cpk)
+	let built = SpendTxBuilder::new(acc0, asset_id)
 		.unwrap()
 		.add_input_note(n0, n0_pos)
 		.unwrap()
@@ -294,14 +318,23 @@ fn test_spend_tx_consume_non_delegated() {
 		.build()
 		.unwrap();
 
-	// Consume sig required (non-delegated, has inotes, no onotes)
-	let consume_sig = built.consume_sign(&consume_sk, &mut rng).unwrap();
-	let approval_sig = built.approval_sign(&approval_sk, &mut rng).unwrap();
-	let sigs = SpendTxSignatures::new(None, consume_sig, approval_sig);
+	let accin_proof = state_tree.merkle_proof(acc0_pos).unwrap();
+	let n0_proof = state_tree.merkle_proof(n0_pos).unwrap();
+	let subpool = SubpoolConfig::new(approval_cpk);
+	let subpool_proof = main_pool.full_subpool_proof(&subpool, subpool_id).unwrap();
 
 	let circuit = build_priv_tx_circuit();
+	// Consume sig required (non-delegated, has inotes, no onotes)
 	let priv_tx = built
-		.into_priv_tx_with_signatures(sigs, &state_tree, main_pool)
+		.consume_sign(&consume_sk, &mut rng)
+		.unwrap()
+		.approval_sign(&approval_sk, &mut rng)
+		.unwrap()
+		.with_account_path(accin_proof)
+		.with_input_notes_path(vec![n0_proof])
+		.with_rejected_notes_path(vec![])
+		.with_subpool_proof(subpool_proof)
+		.into_priv_tx()
 		.unwrap();
 	let proven = priv_tx
 		.prove(&circuit.circuit_data, &circuit.targets)
@@ -366,9 +399,13 @@ fn test_prove_fresh_acc_tx() {
 		.build()
 		.unwrap();
 
-	let approval_sig = built.approval_sign(&approval_sk, &mut rng).unwrap();
+	let subpool_proof = main_pool.full_subpool_proof(&subpool, subpool_id).unwrap();
 	let priv_tx = built
-		.into_priv_tx_with_signature(approval_sig, &state_tree, main_pool, approval_cpk)
+		.approval_sign(&approval_sk, &mut rng)
+		.expect("approval_sign")
+		.with_state_root(state_tree.root())
+		.with_subpool_proof(subpool_proof)
+		.into_priv_tx()
 		.unwrap();
 
 	// ── Prove & verify ────────────────────────────────────────────────────

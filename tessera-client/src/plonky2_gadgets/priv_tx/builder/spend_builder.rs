@@ -1,11 +1,11 @@
 //! Builder for Spend transactions.
 
-use std::{array, sync::Arc};
+use std::array;
 
 use plonky2_field::types::Field;
 use primitive_types::U256;
 use rand::CryptoRng;
-use tessera_trees::MerkleTree;
+use tessera_trees::MerkleProof;
 use tessera_utils::{F, hasher::HashOutput};
 
 use super::{
@@ -16,7 +16,7 @@ use crate::{
 	AccountAddress, AssetId, NOTE_BATCH, NoteCommitment, NoteNullifier, StandardAccount,
 	StandardNote, SubpoolId, derive_priv_tx_hash,
 	plonky2_gadgets::priv_tx::{targets::TxKindFlags, utils::double_hash_native},
-	pool_config::{CompPubKey, MainPoolConfigTree, SubpoolConfig},
+	pool_config::SubpoolFullProof,
 	schnorr::{CompressedPublicKey, PrivateKey, Scalar, Signature, schnorr_sign},
 };
 
@@ -27,9 +27,6 @@ pub struct SpendTxBuilder {
 
 	/// Asset being transacted
 	asset_id: AssetId,
-
-	/// Subpool approval key
-	approval_key: CompPubKey,
 
 	/// Accumulated input notes with their positions
 	input_notes: Vec<(StandardNote, usize)>,
@@ -76,16 +73,26 @@ pub struct BuiltSpendTx {
 	/// Subpool ID (from accin)
 	subpool_id: SubpoolId,
 
-	/// Subpool approval key
-	approval_key: CompPubKey,
-}
+	/// Merkle proof of accin commitment in the state tree (set via with_account_path)
+	accin_proof: Option<MerkleProof<HashOutput>>,
 
-/// Spend-specific signature bundle.
-#[derive(Debug, Clone)]
-pub struct SpendTxSignatures {
-	pub spend_sig: Option<Signature>,
-	pub consume_sig: Option<Signature>,
-	pub approval_sig: Signature,
+	/// Merkle proofs for regular input note commitments (set via with_input_notes_path)
+	inotes_nct_proofs: Option<Vec<MerkleProof<HashOutput>>>,
+
+	/// Merkle proofs for rejected input note commitments (set via with_rejected_notes_path)
+	rejected_inotes_nct_proofs: Option<Vec<MerkleProof<HashOutput>>>,
+
+	/// Subpool merkle proof in the main pool config tree (set via with_subpool_proof)
+	subpool_proof: Option<SubpoolFullProof<HashOutput>>,
+
+	/// Spend signature (set via spend_sign)
+	spend_sig: Option<Signature>,
+
+	/// Consume signature (set via consume_sign)
+	consume_sig: Option<Signature>,
+
+	/// Approval signature (set via approval_sign)
+	approval_sig: Option<Signature>,
 }
 
 /// Information about which signatures are required for a transaction.
@@ -99,21 +106,9 @@ pub struct RequiredSignatures {
 impl SpendTxBuilder {
 	/// Create a new spend transaction builder.
 	///
-	/// # Arguments
-	/// - `accin`: Input account (must exist in state tree with nonce > 0)
-	/// - `asset_id`: Asset being transacted
-	/// - `approval_key`: Subpool approval key
-	///
-	/// Note: `subpool_id` is automatically extracted from `accin.subpool_id`
-	///
 	/// # Errors
 	/// - `AccountNotInitialized`: Account has nonce=0 (must perform FreshAcc first)
-	pub fn new(
-		accin: StandardAccount,
-		asset_id: AssetId,
-		approval_key: crate::pool_config::CompPubKey, // TODO: why is approval_key provided here?
-	) -> Result<Self, SpendTxBuilderError> {
-		// Validate preconditions
+	pub fn new(accin: StandardAccount, asset_id: AssetId) -> Result<Self, SpendTxBuilderError> {
 		if accin.nonce.0 == F::ZERO {
 			return Err(SpendTxBuilderError::AccountNotInitialized);
 		}
@@ -121,7 +116,6 @@ impl SpendTxBuilder {
 		Ok(Self {
 			accin,
 			asset_id,
-			approval_key,
 			input_notes: Vec::new(),
 			output_notes: Vec::new(),
 			rejected_notes: Vec::new(),
@@ -132,10 +126,6 @@ impl SpendTxBuilder {
 
 	/// Add an input note to consume.
 	///
-	/// # Arguments
-	/// - `note`: The note to consume
-	/// - `position`: Position of the note in the state tree
-	///
 	/// # Errors
 	/// - `NoteBatchLimitReached`: Already have NOTE_BATCH input notes
 	/// - `AssetMismatch`: Note's asset_id doesn't match builder's asset_id
@@ -145,7 +135,6 @@ impl SpendTxBuilder {
 		note: StandardNote,
 		position: usize,
 	) -> Result<Self, SpendTxBuilderError> {
-		// Validate note batch limit: rejected + input slots must not exceed NOTE_BATCH
 		if self.rejected_notes.len() + self.input_notes.len() + 1 > NOTE_BATCH {
 			return Err(SpendTxBuilderError::NoteBatchLimitReached {
 				kind: "input",
@@ -153,7 +142,6 @@ impl SpendTxBuilder {
 			});
 		}
 
-		// Validate asset_id matches
 		if note.asset_id != self.asset_id {
 			return Err(SpendTxBuilderError::AssetMismatch {
 				expected: self.asset_id,
@@ -161,7 +149,6 @@ impl SpendTxBuilder {
 			});
 		}
 
-		// Validate recipient matches account
 		let expected_recipient = AccountAddress::from_acc(&self.accin);
 		if note.recipient != expected_recipient {
 			return Err(SpendTxBuilderError::RecipientMismatch);
@@ -173,8 +160,6 @@ impl SpendTxBuilder {
 
 	/// Add an output note to create.
 	///
-	/// The note identifier will be randomly generated.
-	///
 	/// # Errors
 	/// - `NoteBatchLimitReached`: Already have NOTE_BATCH output notes
 	pub fn add_output_note<R: rand::CryptoRng + rand::Rng>(
@@ -184,7 +169,6 @@ impl SpendTxBuilder {
 		memo: [u8; 512],
 		rng: &mut R,
 	) -> Result<Self, SpendTxBuilderError> {
-		// Validate note batch limit: rejected + output slots must not exceed NOTE_BATCH
 		if self.rejected_notes.len() + self.output_notes.len() + 1 > NOTE_BATCH {
 			return Err(SpendTxBuilderError::NoteBatchLimitReached {
 				kind: "output",
@@ -201,9 +185,6 @@ impl SpendTxBuilder {
 
 	/// Add a rejected input note (will be returned to its original sender).
 	///
-	/// The note is consumed from the input side and a mirror output note
-	/// (recipient = sender) is generated automatically by the proving layer.
-	///
 	/// # Errors
 	/// - `NoteBatchLimitReached`: Adding this note would exceed NOTE_BATCH slots
 	/// - `AssetMismatch`: Note asset_id doesn't match transaction asset_id
@@ -213,8 +194,6 @@ impl SpendTxBuilder {
 		note: StandardNote,
 		position: usize,
 	) -> Result<Self, SpendTxBuilderError> {
-		// Validate note batch limit: each reject pair occupies one inote and one onote slot,
-		// so both rejected+input and rejected+output must stay within NOTE_BATCH.
 		if self.rejected_notes.len() + 1 + self.input_notes.len().max(self.output_notes.len())
 			> NOTE_BATCH
 		{
@@ -237,10 +216,6 @@ impl SpendTxBuilder {
 	}
 
 	/// Sample random dummy input note seeds for the inactive inote slots.
-	///
-	/// Must be called after all input notes and rejected notes have been added
-	/// (seed count = `NOTE_BATCH - input_notes.len() - rejected_notes.len()`),
-	/// and before `build()` — which will error if dinotes are absent.
 	pub fn fill_dinotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
 		let count = NOTE_BATCH - self.input_notes.len() - self.rejected_notes.len();
 		self.dinotes = Some(
@@ -252,10 +227,6 @@ impl SpendTxBuilder {
 	}
 
 	/// Sample random dummy output note seeds for the inactive onote slots.
-	///
-	/// Must be called after all output notes and rejected notes have been added
-	/// (seed count = `NOTE_BATCH - output_notes.len() - rejected_notes.len()`),
-	/// and before `build()` — which will error if donotes are absent.
 	pub fn fill_donotes<R: rand::Rng>(mut self, rng: &mut R) -> Self {
 		let count = NOTE_BATCH - self.output_notes.len() - self.rejected_notes.len();
 		self.donotes = Some(
@@ -268,21 +239,11 @@ impl SpendTxBuilder {
 
 	/// Validate inputs and compute all derived values.
 	///
-	/// This method:
-	/// 1. Validates transaction consistency (balances, etc.)
-	/// 2. Derives accout (output account state)
-	/// 3. Generates dummy notes for padding
-	/// 4. Computes tx_hash (with placeholder nullifiers)
-	///
-	/// Note: Merkle proofs are NOT generated here. They will be generated later
-	/// in `into_priv_tx_with_signatures()` when the state tree is available.
-	///
 	/// # Errors
 	/// - `NoActiveNotes`: Must have at least one input, output, or rejected note
 	/// - `InsufficientBalance`: Outputs exceed inputs + existing balance
 	/// - `DummyNotesNotFilled`: `fill_dinotes()` or `fill_donotes()` was not called
 	pub fn build(self) -> Result<BuiltSpendTx, SpendTxBuilderError> {
-		// Validation
 		if self.input_notes.is_empty()
 			&& self.output_notes.is_empty()
 			&& self.rejected_notes.is_empty()
@@ -294,10 +255,8 @@ impl SpendTxBuilder {
 		let n_in = self.input_notes.len();
 		let n_out = self.output_notes.len();
 
-		// Extract subpool_id from accin
 		let subpool_id = self.accin.subpool_id;
 
-		// Compute balance changes (rejected notes cancel out: consumed then re-emitted)
 		let delta_in: U256 = self
 			.input_notes
 			.iter()
@@ -315,7 +274,6 @@ impl SpendTxBuilder {
 			.amount_for(self.asset_id)
 			.unwrap_or_else(|| (self.accin.ast.next_index(), U256::zero()));
 
-		// Validate balance (old_bal + delta_in >= delta_out)
 		let new_bal = old_bal
 			.checked_add(delta_in)
 			.and_then(|b| b.checked_sub(delta_out))
@@ -325,13 +283,9 @@ impl SpendTxBuilder {
 				delta_out,
 			})?;
 
-		// Derive accout
 		let mut accout = self.accin.clone_with_incremented_nonce();
 		accout.ast.insert_or_update_asset(self.asset_id, new_bal);
 
-		// Require that dummy note seeds have been explicitly sampled via fill_dinotes/fill_donotes
-		// TODO: I find it better to store dinotes, donotes as Vec::new() and throw error when
-		// vector length is 0, instead of setting them to an option
 		let dinotes = self
 			.dinotes
 			.ok_or(SpendTxBuilderError::DummyNotesNotFilled {
@@ -343,8 +297,6 @@ impl SpendTxBuilder {
 				kind: "output",
 			})?;
 
-		// Compute tx_hash: reject pairs occupy slots 0..n_rjct,
-		// regular notes follow, then dummy seeds.
 		let nk = self.accin.nk();
 		let tx_inote_nulls: [NoteNullifier; NOTE_BATCH] = array::from_fn(|i| {
 			if i < n_rjct {
@@ -395,38 +347,33 @@ impl SpendTxBuilder {
 			donotes,
 			tx_hash,
 			subpool_id,
-			approval_key: self.approval_key,
+			accin_proof: None,
+			inotes_nct_proofs: None,
+			rejected_inotes_nct_proofs: None,
+			subpool_proof: None,
+			spend_sig: None,
+			consume_sig: None,
+			approval_sig: None,
 		})
 	}
 }
 
 impl BuiltSpendTx {
-	/// Generate consume signature for this transaction.
+	/// Generate and store a consume signature for this transaction.
 	///
-	/// This signature is required when:
-	/// - There are active input notes (consuming assets), AND
-	/// - There are no active output notes, AND
-	/// - Consume auth is NOT delegated to subpool owner
-	///
-	/// # Arguments
-	/// - `consume_sk`: Private key corresponding to `accin.consume_auth.pk`
-	/// - `rng`: Random number generator for signature randomness
-	///
-	/// # Returns
-	/// `Some(Signature)` if consume signature is required, `None` otherwise
+	/// Required only when there are active input notes, no output notes, and
+	/// consume auth is non-delegated (`consume_auth.config == true`).
 	///
 	/// # Errors
-	/// - `ConsumeDelegated`: Called when consume is delegated (config = false)
-	/// - `ConsumeNotRequired`: Called when no input notes or has output notes
+	/// - `ConsumeDelegated`: consume auth is delegated (config = false)
+	/// - `ConsumeNotRequired`: no input notes or has output notes
 	/// - `ConsumeKeyNotSet`: accin.consume_auth.pk is None
-	/// - `KeyMismatch`: Provided key doesn't match accin.consume_auth.pk
+	/// - `KeyMismatch`: provided key doesn't match accin.consume_auth.pk
 	pub fn consume_sign<R: CryptoRng + rand::Rng>(
-		&self,
+		mut self,
 		consume_sk: &PrivateKey,
 		rng: &mut R,
-	) -> Result<Option<Signature>, TxSignError> {
-		// Check if consume signature is needed.
-		// Rejected notes count as active input notes for this check.
+	) -> Result<Self, TxSignError> {
 		let no_input_notes = self.inotes.is_empty() && self.rejected_inotes.is_empty();
 		let has_output_notes = !self.onotes.is_empty();
 
@@ -441,16 +388,13 @@ impl BuiltSpendTx {
 			return Err(TxSignError::ConsumeDelegated);
 		}
 
-		// Verify key is set
 		let expected_pk = self
 			.accin
 			.consume_auth
 			.pk
 			.ok_or(TxSignError::ConsumeKeyNotSet)?;
 
-		// Verify key matches
 		let provided_pk: CompressedPublicKey<F> = consume_sk.public_key().into();
-
 		if expected_pk != provided_pk {
 			return Err(TxSignError::KeyMismatch {
 				key_type: "consume",
@@ -459,47 +403,36 @@ impl BuiltSpendTx {
 			});
 		}
 
-		// Generate signature
 		let k = Scalar::sample(rng);
 		let sig = schnorr_sign(consume_sk, &self.tx_hash.0, k);
-		Ok(Some(sig))
+		self.consume_sig = Some(sig);
+		Ok(self)
 	}
 
-	/// Generate spend signature for this transaction.
+	/// Generate and store a spend signature for this transaction.
 	///
-	/// This signature is required when there are active output notes.
-	///
-	/// # Arguments
-	/// - `spend_sk`: Private key corresponding to `accin.spend_auth.spend_pk`
-	/// - `rng`: Random number generator for signature randomness
-	///
-	/// # Returns
-	/// `Some(Signature)` if spend signature is required, `None` otherwise
+	/// Required when there are active output notes.
 	///
 	/// # Errors
-	/// - `SpendNotRequired`: Called when no output notes exist
+	/// - `SpendNotRequired`: no output notes exist
 	/// - `SpendKeyNotSet`: accin.spend_auth.spend_pk is None
-	/// - `KeyMismatch`: Provided key doesn't match accin.spend_auth.spend_pk
+	/// - `KeyMismatch`: provided key doesn't match accin.spend_auth.spend_pk
 	pub fn spend_sign<R: CryptoRng + rand::Rng>(
-		&self,
+		mut self,
 		spend_sk: &PrivateKey,
 		rng: &mut R,
-	) -> Result<Option<Signature>, TxSignError> {
-		// Check if spend signature is needed
+	) -> Result<Self, TxSignError> {
 		if self.onotes.is_empty() {
 			return Err(TxSignError::SpendNotRequired);
 		}
 
-		// Verify key is set
 		let expected_pk = self
 			.accin
 			.spend_auth
 			.spend_pk
 			.ok_or(TxSignError::SpendKeyNotSet)?;
 
-		// Verify key matches
 		let provided_pk: CompressedPublicKey<F> = spend_sk.public_key().into();
-
 		if expected_pk != provided_pk {
 			return Err(TxSignError::KeyMismatch {
 				key_type: "spend",
@@ -508,49 +441,69 @@ impl BuiltSpendTx {
 			});
 		}
 
-		// Generate signature
 		let k = Scalar::sample(rng);
 		let sig = schnorr_sign(spend_sk, &self.tx_hash.0, k);
-		Ok(Some(sig))
+		self.spend_sig = Some(sig);
+		Ok(self)
 	}
 
-	/// Generate approval signature for this transaction.
+	/// Generate and store an approval signature for this transaction.
 	///
 	/// Approval signature is ALWAYS required for all spend transactions.
-	///
-	/// # Arguments
-	/// - `approval_sk`: Private key for subpool approval key
-	/// - `rng`: Random number generator for signature randomness
-	///
-	/// # Errors
-	/// - `KeyMismatch`: Provided key doesn't match subpool's approval key
 	pub fn approval_sign<R: CryptoRng + rand::Rng>(
-		&self,
+		mut self,
 		approval_sk: &PrivateKey,
 		rng: &mut R,
-	) -> Result<Signature, TxSignError> {
-		// Verify key matches
-		let provided_pk: CompressedPublicKey<F> = approval_sk.public_key().into();
-
-		if self.approval_key != provided_pk {
-			return Err(TxSignError::KeyMismatch {
-				key_type: "approval",
-				expected: self.approval_key,
-				provided: provided_pk,
-			});
-		}
-
-		// Generate signature
+	) -> Result<Self, TxSignError> {
 		let k = Scalar::sample(rng);
 		let sig = schnorr_sign(approval_sk, &self.tx_hash.0, k);
-		Ok(sig)
+		self.approval_sig = Some(sig);
+		Ok(self)
 	}
 
 	/// Get the transaction hash that needs to be signed.
-	///
-	/// Useful for external signing (e.g., hardware wallets, remote signers).
 	pub fn tx_hash(&self) -> &HashOutput {
 		&self.tx_hash
+	}
+
+	/// Provide the merkle proof for the account commitment in the state tree.
+	///
+	/// The state tree root is derived from `accin_proof.root`.
+	/// Must be called before `into_priv_tx`.
+	pub fn with_account_path(mut self, accin_proof: MerkleProof<HashOutput>) -> Self {
+		self.accin_proof = Some(accin_proof);
+		self
+	}
+
+	/// Provide merkle proofs for the regular input note commitments.
+	///
+	/// Proofs must be in the same order as notes were added via `add_input_note`.
+	/// Must be called before `into_priv_tx`.
+	pub fn with_input_notes_path(mut self, inotes_proofs: Vec<MerkleProof<HashOutput>>) -> Self {
+		self.inotes_nct_proofs = Some(inotes_proofs);
+		self
+	}
+
+	/// Provide merkle proofs for the rejected input note commitments.
+	///
+	/// Proofs must be in the same order as notes were added via `add_rejected_note`.
+	/// Must be called before `into_priv_tx`.
+	pub fn with_rejected_notes_path(
+		mut self,
+		rejected_proofs: Vec<MerkleProof<HashOutput>>,
+	) -> Self {
+		self.rejected_inotes_nct_proofs = Some(rejected_proofs);
+		self
+	}
+
+	/// Provide the subpool merkle proof in the main pool config tree.
+	///
+	/// The main pool config root is derived from `subpool_proof.main_pool_proof.root`.
+	/// The approval key is derived from `subpool_proof.subpool_config.approval_key()`.
+	/// Must be called before `into_priv_tx`.
+	pub fn with_subpool_proof(mut self, subpool_proof: SubpoolFullProof<HashOutput>) -> Self {
+		self.subpool_proof = Some(subpool_proof);
+		self
 	}
 
 	/// Check which signatures are required for this transaction.
@@ -560,127 +513,66 @@ impl BuiltSpendTx {
 			consume: !self.inotes.is_empty()
 				&& self.onotes.is_empty()
 				&& self.accin.consume_auth.config,
-			approval: true, // Always required
+			approval: true,
 		}
 	}
 
-	/// Convert this built spend transaction to a unified BuiltPrivTx with signatures.
+	/// Convert this built spend transaction to a unified `BuiltPrivTx`.
 	///
-	/// This method populates all fields needed for the circuit, including:
-	/// - Setting tx_kind_flags to SPEND
-	/// - Generating merkle proofs from the provided trees
-	/// - Copying relevant spend-specific data
-	/// - Including the provided signatures (or fake signatures if not provided)
-	///
-	/// # Arguments
-	/// - `signatures`: Signature bundle for this transaction
-	/// - `state_tree`: State tree to generate merkle proofs from
-	/// - `main_pool`: Main pool config tree
-	///
-	/// This is the bridge between the ergonomic builder API and the unified
-	/// proving interface.
+	/// Requires `with_account_path`, `with_input_notes_path`, `with_rejected_notes_path`,
+	/// and `with_subpool_proof` to have been called first, plus all required signatures
+	/// set via `spend_sign`, `consume_sign`, and `approval_sign`.
 	///
 	/// # Errors
-	/// - `AccountNotInTree`: Account commitment not found in state tree
-	/// - `NoteNotInTree`: Input note commitment not found in state tree
-	pub fn into_priv_tx_with_signatures(
-		self,
-		signatures: SpendTxSignatures,
-		state_tree: &MerkleTree<HashOutput>,
-		main_pool: Arc<MainPoolConfigTree<HashOutput>>,
-	) -> Result<BuiltPrivTx, SpendTxBuilderError> {
-		// TODO return an error if necessary signatures are not set
+	/// - `AccountPathNotSet`: `with_account_path` was not called
+	/// - `NotePathsNotSet`: note paths were not set
+	/// - `SubpoolProofNotSet`: `with_subpool_proof` was not called
+	pub fn into_priv_tx(self) -> Result<BuiltPrivTx, SpendTxBuilderError> {
+		let accin_merkle_proof = self
+			.accin_proof
+			.ok_or(SpendTxBuilderError::AccountPathNotSet)?;
+		let inotes_nct_proofs = self
+			.inotes_nct_proofs
+			.ok_or(SpendTxBuilderError::NotePathsNotSet)?;
+		let rejected_inotes_nct_proofs = self
+			.rejected_inotes_nct_proofs
+			.ok_or(SpendTxBuilderError::NotePathsNotSet)?;
+		let subpool_full_proof = self
+			.subpool_proof
+			.ok_or(SpendTxBuilderError::SubpoolProofNotSet)?;
 
-		// Get state root
-		let state_root = state_tree.root();
-
-		// Get main pool root and compute subpool proof
-		let main_pool_root = main_pool.root();
-
-		// Create a temporary SubpoolConfig to get the subpool proof
-		let subpool_config = SubpoolConfig::new(self.approval_key);
-		let subpool_full_proof = main_pool.full_subpool_proof(&subpool_config, self.subpool_id)?;
-
-		// Generate merkle proof for accin
-		let accin_comm = self.accin.commitment();
-
-		// Search for account commitment in state tree leaves
-		// TODO: add a `find` method to MerkleTree
-		let accin_pos = state_tree
-			.leaves()
-			.iter()
-			.position(|&leaf| leaf == accin_comm.0)
-			.ok_or(SpendTxBuilderError::AccountNotInTree)?;
-		let accin_merkle_proof = state_tree.merkle_proof(accin_pos)?;
-
-		// Generate merkle proofs for rejected input notes
-		let mut rejected_inotes_nct_proofs = Vec::with_capacity(self.rejected_inotes.len());
-		for (_note, pos) in &self.rejected_inotes {
-			rejected_inotes_nct_proofs.push(state_tree.merkle_proof(*pos)?);
-		}
-
-		// Generate merkle proofs for regular input notes using stored positions
-		let mut inotes_nct_proofs = Vec::with_capacity(self.inotes.len());
-		for (_note, pos) in &self.inotes {
-			// TODO: verify that position of the input note is indeed correct
-			inotes_nct_proofs.push(state_tree.merkle_proof(*pos)?);
-		}
-
-		// Extract public keys before moving self.accin
-		let spend_pk = self.accin.spend_pk_or_default();
-		let consume_pk = self.accin.consume_pk_or_default();
-
-		// dinotes/donotes are already correctly sized from build() — no slicing needed.
+		let state_root = accin_merkle_proof.root;
+		let mainpool_config_root = subpool_full_proof.main_pool_proof.root;
+		let approval_key = subpool_full_proof.subpool_config.approval_key();
 
 		Ok(BuiltPrivTx {
 			tx_kind_flags: TxKindFlags::SPEND,
 
-			// Accounts
 			accin: self.accin,
 			accout: self.accout,
 			accin_merkle_proof,
 
-			// Reject pairs
 			rejected_inotes: self.rejected_inotes.into_iter().map(|(n, _)| n).collect(),
 			rejected_inotes_nct_proofs,
 
-			// Notes (extract just the notes, positions already used for proofs)
 			inotes: self.inotes.into_iter().map(|(n, _)| n).collect(),
 			inotes_nct_proofs,
 			onotes: self.onotes,
 
-			// Dummy notes (already correctly sized from build())
 			dinotes: self.dinotes,
 			donotes: self.donotes,
 
-			// Computed values
 			tx_hash: self.tx_hash,
 			state_root,
 
-			// Pool config
 			subpool_id: self.subpool_id,
-			mainpool_config_root: main_pool_root,
+			mainpool_config_root,
 			subpool_proof: subpool_full_proof,
-			approval_key: self.approval_key,
+			approval_key,
 
-			spend_sig: signatures.spend_sig,
-			consume_sig: signatures.consume_sig,
-			approval_sig: Some(signatures.approval_sig),
+			spend_sig: self.spend_sig,
+			consume_sig: self.consume_sig,
+			approval_sig: self.approval_sig,
 		})
-	}
-}
-
-impl SpendTxSignatures {
-	/// Create a new signature bundle.
-	pub fn new(
-		spend_sig: Option<Signature>,
-		consume_sig: Option<Signature>,
-		approval_sig: Signature,
-	) -> Self {
-		Self {
-			spend_sig,
-			consume_sig,
-			approval_sig,
-		}
 	}
 }
