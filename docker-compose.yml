@@ -1,0 +1,157 @@
+services:
+  # ── Shared infrastructure ──────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: doxa
+      POSTGRES_PASSWORD: doxa
+      POSTGRES_DB: doxa
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/init-schemas.sql:/docker-entrypoint-initdb.d/01-init-schemas.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doxa -d doxa"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--block-base-fee-per-gas", "0", "--gas-limit", "300000000"]
+    ports:
+      - "8545:8545"
+    healthcheck:
+      test: ["CMD-SHELL", "cast chain-id --rpc-url http://localhost:8545 || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # ── Subpool DB API instances ───────────────────────────────────────────────
+  # Each connects to the same postgres but with a different search_path schema.
+
+  subpool-db-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.subpool-db
+    environment:
+      DATABASE_URL: postgres://doxa:doxa@postgres:5432/doxa?options=-c search_path=subpool_1
+      DOXA_SUBPOOL_API_ADDR: "0.0.0.0:8080"
+      SUBPOOL_ID: "1"
+      FAUCET_PRIVATE_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      SEPOLIA_RPC_URL: http://anvil:8545
+      USDX_CONTRACT_ADDR: "0x0000000000000000000000000000000000000000"
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  subpool-db-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.subpool-db
+    environment:
+      DATABASE_URL: postgres://doxa:doxa@postgres:5432/doxa?options=-c search_path=subpool_2
+      DOXA_SUBPOOL_API_ADDR: "0.0.0.0:8080"
+      SUBPOOL_ID: "2"
+      FAUCET_PRIVATE_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      SEPOLIA_RPC_URL: http://anvil:8545
+      USDX_CONTRACT_ADDR: "0x0000000000000000000000000000000000000000"
+    ports:
+      - "8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  subpool-db-3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.subpool-db
+    environment:
+      DATABASE_URL: postgres://doxa:doxa@postgres:5432/doxa?options=-c search_path=subpool_3
+      DOXA_SUBPOOL_API_ADDR: "0.0.0.0:8080"
+      SUBPOOL_ID: "3"
+      FAUCET_PRIVATE_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+      SEPOLIA_RPC_URL: http://anvil:8545
+      USDX_CONTRACT_ADDR: "0x0000000000000000000000000000000000000000"
+    ports:
+      - "8083:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Sequencer ──────────────────────────────────────────────────────────────
+
+  sequencer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sequencer
+    environment:
+      DEMO_RPC_URL: http://anvil:8545
+      DEMO_OPERATOR_KEY: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      DEMO_BRIDGE_ADDRESS: "0x0000000000000000000000000000000000000000"
+      DEMO_TOKEN_ADDRESS: "0x0000000000000000000000000000000000000000"
+      DEMO_BIND_ADDR: "0.0.0.0:3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      anvil:
+        condition: service_healthy
+
+  # ── Operators ──────────────────────────────────────────────────────────────
+
+  operator-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.operator
+    environment:
+      DATABASE_URL: postgres://doxa:doxa@postgres:5432/doxa?options=-c search_path=subpool_1
+      SEQUENCER_URL: http://sequencer:3000
+      APPROVAL_PRIVATE_KEY: deadbeef
+      RPC_URL: http://anvil:8545
+      ROLLUP_ADDRESS: "0x0000000000000000000000000000000000000000"
+      POLL_INTERVAL_SECS: "5"
+      SUBPOOL_ID: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sequencer:
+        condition: service_started
+
+  operator-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.operator
+    environment:
+      DATABASE_URL: postgres://doxa:doxa@postgres:5432/doxa?options=-c search_path=subpool_2
+      SEQUENCER_URL: http://sequencer:3000
+      APPROVAL_PRIVATE_KEY: deadbeef
+      RPC_URL: http://anvil:8545
+      ROLLUP_ADDRESS: "0x0000000000000000000000000000000000000000"
+      POLL_INTERVAL_SECS: "5"
+      SUBPOOL_ID: "2"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sequencer:
+        condition: service_started
+
+  operator-3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.operator
+    environment:
+      DATABASE_URL: postgres://doxa:doxa@postgres:5432/doxa?options=-c search_path=subpool_3
+      SEQUENCER_URL: http://sequencer:3000
+      APPROVAL_PRIVATE_KEY: deadbeef
+      RPC_URL: http://anvil:8545
+      ROLLUP_ADDRESS: "0x0000000000000000000000000000000000000000"
+      POLL_INTERVAL_SECS: "5"
+      SUBPOOL_ID: "3"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sequencer:
+        condition: service_started

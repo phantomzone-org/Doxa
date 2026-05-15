@@ -8,26 +8,34 @@
 Cargo.lock
 scripts/logs/
 *.claude
+.privkey
 
 #submodule
-tessera-solidity/lib/forge-std
+doxa-solidity/lib/forge-std
 
 # Compiler files
-tessera-solidity/cache/
-tessera-solidity/out/
+doxa-solidity/cache/
+doxa-solidity/out/
 
 # Ignores development broadcast logs
 !/broadcast
-tessera-solidity/broadcast/*/31337/
-tessera-solidity/broadcast/**/dry-run/
-tessera-solidity/.foundry-cache/
+doxa-solidity/broadcast/*/31337/
+doxa-solidity/broadcast/**/dry-run/
+doxa-solidity/.foundry-cache/
 
 # Docs
-tessera-solidity/docs/
+doxa-solidity/docs/
 
-# Dotenv file
-tessera-solidity/.env
+# Dotenv files (all crates)
+.env
+**/.env
 
 # Sequencer persistent tree state (WAL + snapshots)
-tessera-server/data/trees/
-tessera-server/data/trees_*/
+doxa-server/data/trees/
+doxa-server/data/trees_*/
+
+
+
+*.env
+
+.codex

@@ -1,0 +1,27 @@
+[package]
+name = "doxa-e2e"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+autotests = false
+
+[[test]]
+name = "e2e_setup_and_freshacc"
+path = "tests/e2e_setup_and_freshacc.rs"
+
+[dependencies]
+doxa-trees = {workspace = true}
+doxa-client = {workspace = true}
+doxa-server = { package = "doxa-server", path = "../doxa-server"}
+doxa-utils = {workspace = true}
+anyhow = {workspace = true}
+rand = {workspace = true}
+rand_chacha = {workspace = true}
+plonky2 = {workspace = true}
+tokio = {workspace = true}
+alloy = {workspace = true}
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
+hex = {workspace = true}
+primitive-types = {workspace = true}
+serde_json = {workspace = true}

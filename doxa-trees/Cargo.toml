@@ -1,0 +1,28 @@
+[package]
+name = "doxa-trees"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+doxa-utils = {workspace = true}
+rand_chacha = {workspace = true}
+rand = {workspace = true}
+serde = {workspace = true}
+serde_json = {workspace = true}
+anyhow = {workspace = true}
+itertools = "0.14.0"
+num = "0.4.3"
+hex = {workspace = true}
+plonky2 = {workspace = true}
+starky = {workspace = true}
+rayon = "1.11.0"
+num_cpus = "1.17.0"
+log = "0.4"
+hashbrown = { version = "0.14.5" }
+tiny-keccak = { version = "2.0.2" }
+env_logger = "0.11.9"
+
+[dev-dependencies]
+criterion = "0.8.2"
+proptest = "1.10.0"

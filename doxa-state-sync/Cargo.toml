@@ -1,0 +1,38 @@
+[package]
+name = "doxa-state-sync"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "doxa-state-sync"
+path = "src/main.rs"
+
+[lib]
+name = "doxa_state_sync"
+path = "src/lib.rs"
+
+[dependencies]
+doxa-trees = {workspace = true}
+doxa-utils = {workspace = true}
+doxa-client = {workspace = true}
+anyhow = {workspace = true}
+serde = {workspace = true}
+serde_json = {workspace = true}
+hex = {workspace = true}
+tokio = {workspace = true}
+alloy = {workspace = true}
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
+dotenvy = {workspace = true}
+axum = {workspace = true}
+tower-http = {workspace = true}
+hashbrown = {workspace = true}
+itertools = {workspace = true}
+primitive-types = {workspace = true}
+plonky2 = {workspace = true}
+plonky2_field = {workspace = true}
+
+[dev-dependencies]
+doxa-server = { workspace = true }
+rand = {workspace = true}

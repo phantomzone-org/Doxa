@@ -1,0 +1,26 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+cache_path = ".foundry-cache"
+via_ir = true
+optimizer = true
+optimizer_runs = 100000
+
+fs_permissions = [
+  { access = "read", path = "./test/fixtures/" }
+]
+
+[lint]
+exclude_lints = [
+  "mixed-case-function",
+  "mixed-case-variable",
+  "screaming-snake-case-immutable",
+  "screaming-snake-case-const",
+  "unsafe-cheatcode",
+  "asm-keccak256"
+]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

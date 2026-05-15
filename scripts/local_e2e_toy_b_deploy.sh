@@ -1,129 +1,92 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Console B: deploy ToyUSDT + Bridge/Verifier + ToyUser.
-# Writes deployment outputs to: scripts/logs/tessera_e2e_latest.env
+# Console B: deploy the full V2 stack (PoseidonGoldilocks, Verifier, DoxaContract, ToyUSDT, ToyUser).
+# Writes deployment outputs to: scripts/logs/doxa_e2e_latest.env
+#
+# Prerequisites:
+#   - Anvil running (scripts/local_e2e_toy_a_anvil.sh)
+#   - Groth16 verifier artifacts in place (only needed for production; ignored by
+#     the AcceptAllVerifier placeholder used in testing mode).
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
 LOG_DIR="$ROOT_DIR/scripts/logs"
 mkdir -p "$LOG_DIR"
-OUT_ENV="$LOG_DIR/tessera_e2e_latest.env"
+OUT_ENV="$LOG_DIR/doxa_e2e_latest.env"
+BROADCAST_JSON="$ROOT_DIR/doxa-solidity/broadcast/Deploy.s.sol/$DOXA_CHAIN_ID/run-latest.json"
 
 echo "Checking RPC connectivity: $RPC"
 cast block-number --rpc-url "$RPC" >/dev/null
 
-pushd "$ROOT_DIR/tessera-solidity" >/dev/null
+pushd "$ROOT_DIR/doxa-solidity" >/dev/null
 
-echo "Deploying ToyUSDT..."
-TOKEN=$(forge create src/ToyUSDT.sol:ToyUSDT \
+echo "Deploying V2 stack (PoseidonGoldilocks + Verifier + DoxaContract + ToyUSDT + ToyUser)..."
+DEPLOY_OUT=$(forge script script/Deploy.s.sol \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" \
-  --broadcast | sed -n 's/Deployed to: //p' | tail -n1)
-
-if [[ -z "${TOKEN:-}" ]]; then
-  echo "forge create failed to return token address, falling back to cast --create..."
-  BYTECODE_TOKEN=$(forge inspect src/ToyUSDT.sol:ToyUSDT bytecode)
-  DEPLOY_TOKEN_OUT=$(cast send \
-    --rpc-url "$RPC" \
-    --private-key "$OPERATOR_KEY" \
-    --create "$BYTECODE_TOKEN")
-  TOKEN=$(echo "$DEPLOY_TOKEN_OUT" | sed -n 's/^contractAddress[[:space:]]*//p' | head -n1)
-fi
-
-if [[ -z "${TOKEN:-}" ]]; then
-  echo "ERROR: failed to deploy ToyUSDT." >&2
-  exit 1
-fi
-
-echo "TOKEN=$TOKEN"
-
-echo "Syncing Solidity verifier contracts from prover artifacts..."
-"$ROOT_DIR/scripts/sync_verifiers_from_artifacts.sh"
-
-echo "Deploying Verifier + Bridge..."
-export TESSERA_MONITORED_TOKEN="$TOKEN"
-export TESSERA_NOTES_NULLIFIER_ROOT="$TESSERA_NOTES_NULLIFIER_ROOT"
-export TESSERA_NOTES_COMMITMENT_ROOT="$TESSERA_NOTES_COMMITMENT_ROOT"
-export TESSERA_NOTE_BATCH_SIZE="$TESSERA_NOTE_BATCH_SIZE"
-export TESSERA_ACCOUNT_BATCH_SIZE="$TESSERA_ACCOUNT_BATCH_SIZE"
-DEPLOY_OUT=$(forge script script/pending-deposit/Deploy.s.sol \
-  --rpc-url "$RPC" \
-  --private-key "$OPERATOR_KEY" \
-  --broadcast)
+  --broadcast 2>&1)
 
 echo "$DEPLOY_OUT"
-BRIDGE=$(echo "$DEPLOY_OUT" | sed -n 's/.*Bridge deployed at:[[:space:]]*//p' | tail -n1 | tr -d '\r')
-
-if [[ -z "${BRIDGE:-}" ]]; then
-  echo "ERROR: failed to parse bridge address from deploy output." >&2
-  exit 1
-fi
-
-echo "BRIDGE=$BRIDGE"
-
-echo "Deploying ToyUser adapter..."
-TOY_USER=$(
-  forge create src/ToyUser.sol:ToyUser \
-    --rpc-url "$RPC" \
-    --private-key "$OPERATOR_KEY" \
-    --broadcast \
-    --constructor-args "$BRIDGE" "$TOKEN" | sed -n 's/Deployed to: //p' | tail -n1
-)
-
-if [[ -z "${TOY_USER:-}" ]]; then
-  echo "forge create failed to return ToyUser address, falling back to cast --create..."
-  # Note: Foundry project src path is set to src/pending-deposit in foundry.toml,
-  # so `forge inspect src/ToyUser.sol:ToyUser ...` can fail. Inspect by contract name instead.
-  BYTECODE_TS=$(forge inspect ToyUser bytecode)
-  DEPLOY_TS_OUT=$(cast send \
-    --rpc-url "$RPC" \
-    --private-key "$OPERATOR_KEY" \
-    --create "$BYTECODE_TS" \
-    "constructor(address,address)" "$BRIDGE" "$TOKEN")
-  TOY_USER=$(echo "$DEPLOY_TS_OUT" | sed -n 's/^contractAddress[[:space:]]*//p' | head -n1)
-fi
-
-if [[ -z "${TOY_USER:-}" ]]; then
-  echo "ERROR: failed to parse ToyUser address from cast output." >&2
-  echo "${DEPLOY_TS_OUT:-}"
-  exit 1
-fi
-
-echo "TOY_USER=$TOY_USER"
 
 popd >/dev/null
 
-# Persist bridge and token into tessera-server/.env for sequencer and client convenience.
-SERVER_ENV="$ROOT_DIR/tessera-server/.env"
-if [[ -f "$SERVER_ENV" ]]; then
-  if grep -q '^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=' "$SERVER_ENV"; then
-    sed -i "s/^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=.*/TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$BRIDGE/" "$SERVER_ENV"
-  else
-    echo "TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$BRIDGE" >> "$SERVER_ENV"
-  fi
-  if grep -q '^TESSERA_MONITORED_TOKEN=' "$SERVER_ENV"; then
-    sed -i "s/^TESSERA_MONITORED_TOKEN=.*/TESSERA_MONITORED_TOKEN=$TOKEN/" "$SERVER_ENV"
-  else
-    echo "TESSERA_MONITORED_TOKEN=$TOKEN" >> "$SERVER_ENV"
-  fi
+# Parse deployed addresses from the forge broadcast JSON (more reliable than log scraping).
+if [[ ! -f "$BROADCAST_JSON" ]]; then
+  echo "ERROR: broadcast file not found: $BROADCAST_JSON" >&2
+  exit 1
+fi
+
+ROLLUP=$(jq -r '.transactions[] | select(.contractName == "DoxaContract") | .contractAddress' "$BROADCAST_JSON" | head -n1)
+TOKEN=$(jq -r '.transactions[] | select(.contractName == "ToyUSDT") | .contractAddress' "$BROADCAST_JSON" | head -n1)
+TOY_USER=$(jq -r '.transactions[] | select(.contractName == "ToyUser") | .contractAddress' "$BROADCAST_JSON" | head -n1)
+
+if [[ -z "${ROLLUP:-}" ]]; then
+  echo "ERROR: failed to parse DoxaContract address from broadcast JSON." >&2
+  exit 1
+fi
+if [[ -z "${TOKEN:-}" ]]; then
+  # TOKEN may be a pre-deployed address — try to extract MonitoredToken from env
+  TOKEN="${DOXA_MONITORED_TOKEN:-}"
+fi
+if [[ -z "${TOKEN:-}" ]]; then
+  echo "ERROR: failed to determine token address." >&2
+  exit 1
+fi
+
+echo ""
+echo "ROLLUP (DoxaContract) = $ROLLUP"
+echo "TOKEN  (ToyUSDT)         = $TOKEN"
+echo "TOY_USER                 = ${TOY_USER:-n/a}"
+
+# Persist contract addresses into doxa-server/.env for sequencer convenience.
+SERVER_ENV="$ROOT_DIR/doxa-server/.env"
+touch "$SERVER_ENV"
+if grep -q '^DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS=' "$SERVER_ENV"; then
+  sed -i "s|^DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS=.*|DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$ROLLUP|" "$SERVER_ENV"
+else
+  echo "DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$ROLLUP" >> "$SERVER_ENV"
+fi
+if grep -q '^DOXA_MONITORED_TOKEN=' "$SERVER_ENV"; then
+  sed -i "s|^DOXA_MONITORED_TOKEN=.*|DOXA_MONITORED_TOKEN=$TOKEN|" "$SERVER_ENV"
+else
+  echo "DOXA_MONITORED_TOKEN=$TOKEN" >> "$SERVER_ENV"
 fi
 
 cat > "$OUT_ENV" <<EOV
 # Auto-generated by scripts/local_e2e_toy_b_deploy.sh
 export RPC="$RPC"
-export BRIDGE="$BRIDGE"
+export ROLLUP="$ROLLUP"
 export TOKEN="$TOKEN"
-export TOY_USER="$TOY_USER"
+export TOY_USER="${TOY_USER:-}"
 EOV
 
 echo ""
 echo "Deployment complete."
 echo "State file: $OUT_ENV"
-echo "Next:"
-echo "  Console C (prover)    -> scripts/local_run_prover.sh"
-echo "    Prover API          -> $TESSERA_PROVER_API_URL"
-echo "  Console D (sequencer) -> scripts/local_e2e_toy_c_sequencer.sh"
-echo "    Sequencer API       -> $TESSERA_SEQUENCER_API_URL"
-echo "  Console E (flow)      -> scripts/local_e2e_toy_d_flow.sh 256 128"
+echo ""
+echo "Next steps:"
+echo "  Console C (sequencer) -> scripts/local_run_sequencer.sh"
+echo "    Test API             -> $DOXA_TEST_API_URL"
+echo "  Console D (flow)      -> scripts/local_test_flow.sh"
