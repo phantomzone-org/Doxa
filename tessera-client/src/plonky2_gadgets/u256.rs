@@ -12,7 +12,7 @@ use plonky2::{
 	util::serialization::{Buffer, IoResult, Read, Write},
 };
 use plonky2_field::{extension::Extendable, types::Field};
-use tessera_trees::plonky2_gadgets::u32::{CircuitBuilderU32, U32Target};
+use tessera_utils::plonky2_gadgets::u32::{CircuitBuilderU32, U32Target};
 
 /// A 256-bit unsigned integer in a Plonky2 circuit, stored as 8 × [`U32Target`].
 ///
@@ -25,11 +25,7 @@ impl U256Target {
 	/// Sets the witness for this target from a `primitive_types::U256`.
 	///
 	/// `value.0` is `[u64; 4]` little-endian; each u64 is split into two u32 limbs.
-	pub(crate) fn set_witness<F: Field>(
-		&self,
-		pw: &mut PartialWitness<F>,
-		value: primitive_types::U256,
-	) {
+	pub(crate) fn set<F: Field>(&self, pw: &mut PartialWitness<F>, value: primitive_types::U256) {
 		for (i, &word) in value.0.iter().enumerate() {
 			pw.set_target(self.0[2 * i].0, F::from_canonical_u32(word as u32))
 				.unwrap();
@@ -227,10 +223,10 @@ mod tests {
 			config::{GenericConfig, PoseidonGoldilocksConfig},
 		},
 	};
-	use tessera_trees::plonky2_gadgets::u32::add_u8_range_check_lookup_table;
+	use primitive_types::U256;
+	use tessera_utils::plonky2_gadgets::u32::gadgets::add_u8_range_check_lookup_table;
 
 	use super::*;
-	use crate::plonky2_gadgets::set_u256;
 
 	const D: usize = 2;
 	type C = PoseidonGoldilocksConfig;
@@ -266,11 +262,11 @@ mod tests {
 		// Expected   = [0, 0, 0, 0, 0, 0, 0, 9]  (value = 9)
 		let (data, input, chain, expected) = build_u256_sum_circuit();
 		let mut pw = PartialWitness::new();
-		set_u256(&mut pw, &input, [0, 0, 0, 0, 0, 0, 0, 1]);
+		input.set(&mut pw, U256::from(1));
 		for v in &chain {
-			set_u256(&mut pw, v, [0, 0, 0, 0, 0, 0, 0, 1]);
+			v.set(&mut pw, U256::from(1));
 		}
-		set_u256(&mut pw, &expected, [0, 0, 0, 0, 0, 0, 0, 10]);
+		expected.set(&mut pw, U256::from(10));
 		let proof = data.prove(pw).expect("prove failed");
 		data.verify(proof).expect("verify failed");
 	}

@@ -24,7 +24,6 @@ use plonky2_field::{
 
 use crate::{
 	ecgfp5::{CompressedPoint, GENERATOR, Legendre, PointEw},
-	plonky2_gadgets::set_gfp5,
 	schnorr::Scalar,
 };
 
@@ -1275,7 +1274,7 @@ impl PubkeyTarget {
 	pub(crate) fn set_witness<F: Field + Extendable<5>>(
 		&self,
 		pw: &mut PartialWitness<F>,
-		cpk: &crate::schnorr::CompressedPublicKey<F>,
+		cpk: crate::schnorr::CompressedPublicKey<F>,
 	) {
 		for (t, v) in self.0.0.iter().zip(cpk.0.w.0.iter()) {
 			pw.set_target(*t, *v).unwrap();
@@ -1540,6 +1539,12 @@ fn compute_gate_witness<F: RichField + Extendable<5>>(
 	}
 }
 
+fn set_gfp5<F: Field>(pw: &mut PartialWitness<F>, targets: [Target; 5], v: [F; 5]) {
+	for (t, x) in targets.iter().zip(v.iter()) {
+		pw.set_target(*t, *x).unwrap();
+	}
+}
+
 pub(crate) fn set_schnorr_witness<F: RichField + Legendre + Extendable<5>>(
 	pw: &mut PartialWitness<F>,
 	targets: &SchnorrTargets,
@@ -1672,6 +1677,10 @@ mod tests {
 
 	#[test]
 	fn test_compression_gate() {
+		use rand::SeedableRng;
+		use rand_chacha::ChaCha8Rng;
+		let mut rng = ChaCha8Rng::seed_from_u64(42);
+
 		let config = CircuitConfig::standard_recursion_config();
 		let mut builder = CircuitBuilder::<F, D>::new(config);
 
@@ -1691,13 +1700,7 @@ mod tests {
 		let data = builder.build::<C>();
 
 		// k*G
-		let k = Scalar::from_raw([
-			12539254003028696409,
-			15524144070600887654,
-			15092036948424041984,
-			11398871370327264211,
-			958391180505708567,
-		]);
+		let k = Scalar::sample(&mut rng);
 		let p = PointEw::generator().scalar_mul(&k);
 		assert!(p.is_on_curve());
 
@@ -1852,14 +1855,12 @@ mod tests {
 
 	#[test]
 	fn test_schnorr_verify_gadget() {
+		use rand::SeedableRng;
+		use rand_chacha::ChaCha8Rng;
+		let mut rng = ChaCha8Rng::seed_from_u64(43);
+
 		// Generate keys and sign
-		let d = Scalar::from_raw([
-			5400142491657709732,
-			15846706413025839610,
-			1661266468596303141,
-			17577886881415715269,
-			7270009582106593884,
-		]);
+		let d = Scalar::sample(&mut rng);
 		let privkey = PrivateKey::new(d);
 		let pubkey = privkey.public_key::<F>();
 		let q = pubkey.as_point();
@@ -1871,13 +1872,7 @@ mod tests {
 			F::from_canonical_u64(4),
 		];
 
-		let k = Scalar::from_raw([
-			12539254003028696409,
-			15524144070600887654,
-			15092036948424041984,
-			11398871370327264211,
-			958391180505708567,
-		]);
+		let k = Scalar::sample(&mut rng);
 		let sig = schnorr_sign(&privkey, &message, k);
 		let r = sig.r;
 		let s = sig.s;
@@ -1993,27 +1988,24 @@ mod tests {
 	#[test]
 	fn test_conditional_schnorr_verify_apply_check_false() {
 		use plonky2_field::types::Field;
+		use rand::SeedableRng;
+		use rand_chacha::ChaCha8Rng;
 
 		const D: usize = 2;
 		type C = PoseidonGoldilocksConfig;
 		type F = <C as GenericConfig<D>>::F;
 
+		let mut rng = ChaCha8Rng::seed_from_u64(44);
+
 		// Use a known private key to get a valid curve point Q.
-		let d = Scalar::from_raw([
-			5400142491657709732,
-			15846706413025839610,
-			1661266468596303141,
-			17577886881415715269,
-			7270009582106593884,
-		]);
-		let privkey = PrivateKey::new(d);
+		let privkey = PrivateKey::sample(&mut rng);
 		let pubkey = privkey.public_key::<F>();
 		let q = pubkey.as_point();
 		let cq = q.encode();
 
 		// Arbitrary scalars — NOT derived from hashing any message.
-		let e = Scalar::from_raw([42, 0, 0, 0, 0]);
-		let s = Scalar::from_raw([7, 0, 0, 0, 0]);
+		let e = Scalar::sample(&mut rng);
+		let s = Scalar::sample(&mut rng);
 
 		// Compute R = s·G + e·Q natively.  This is exactly what the 80 DoubleAdd4x
 		// gates evaluate, so the EC-arithmetic witness will be consistent.

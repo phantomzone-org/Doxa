@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {TesseraRollupV2} from "./TesseraRollupV2.sol";
+import {TesseraContract} from "./TesseraContract.sol";
 
 interface IERC20Allowance {
     function allowance(address owner, address spender) external view returns (uint256);
@@ -22,7 +22,7 @@ interface IERC20Permit {
 /// @notice Toy user that atomically transfers tokens and records deposit.
 contract ToyUser {
     /// @notice Bridge that owns deposit state and escrow.
-    TesseraRollupV2 public immutable BRIDGE;
+    TesseraContract public immutable BRIDGE;
     /// @notice Monitored token used by the bridge.
     IERC20Allowance public immutable TOKEN;
 
@@ -31,7 +31,7 @@ contract ToyUser {
     /// @param _bridge Deployed bridge address.
     /// @param _token Monitored token address.
     constructor(address _bridge, address _token) {
-        BRIDGE = TesseraRollupV2(_bridge);
+        BRIDGE = TesseraContract(_bridge);
         TOKEN = IERC20Allowance(_token);
     }
 
@@ -47,19 +47,21 @@ contract ToyUser {
 
     /// @notice Delegates deposit creation to bridge for the calling user.
     /// @param noteCommitment Unique note commitment key.
-    /// @param amount Max amount requested by user for bridge `transferFrom`.
+    /// @param assetId        Registered asset ID of the token being deposited.
+    /// @param amount         Max amount requested by user for bridge `transferFrom`.
     /// @return The created note commitment.
     /// @dev User must approve the bridge token allowance before calling.
-    function depositAndRecord(bytes32 noteCommitment, uint256 amount) external returns (bytes32) {
+    function depositAndRecord(bytes32 noteCommitment, uint256 assetId, uint256 amount) external returns (bytes32) {
         uint256 currentAllowance = TOKEN.allowance(msg.sender, address(BRIDGE));
         if (currentAllowance < amount) revert InsufficientBridgeAllowance(currentAllowance, amount);
-        return BRIDGE.depositAndRegisterFor(noteCommitment, msg.sender, amount);
+        return BRIDGE.depositAndRegisterFor(noteCommitment, msg.sender, assetId, amount);
     }
 
     /// @notice One-transaction "permit + deposit" flow for tokens that support EIP-2612.
     /// @dev Calls `permit(owner=msg.sender, spender=bridge, value=amount, ...)` then deposits.
     function depositAndRecordWithPermit(
         bytes32 noteCommitment,
+        uint256 assetId,
         uint256 amount,
         uint256 deadline,
         uint8 v,
@@ -67,6 +69,6 @@ contract ToyUser {
         bytes32 s
     ) external returns (bytes32) {
         IERC20Permit(address(TOKEN)).permit(msg.sender, address(BRIDGE), amount, deadline, v, r, s);
-        return BRIDGE.depositAndRegisterFor(noteCommitment, msg.sender, amount);
+        return BRIDGE.depositAndRegisterFor(noteCommitment, msg.sender, assetId, amount);
     }
 }

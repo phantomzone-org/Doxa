@@ -1,11 +1,12 @@
-use tessera_trees::{F, tree::hasher::HashOutput};
+use tessera_trees::MerkleProof;
+use tessera_utils::{F, hasher::HashOutput};
 
+use super::targets::TxKindFlags;
 use crate::{
-	ACT_DEPTH, ConsumeAuth, NCT_DEPTH, NOTE_BATCH, SpendAuth, StandardAccount, SubpoolId,
+	ConsumeAuth, NOTE_BATCH, SpendAuth, StandardAccount, SubpoolId,
 	note::StandardNote,
 	pool_config::{CompPubKey, MainPoolConfigTree},
 	schnorr::Signature,
-	tree::CommitmentTreeMerkleProof,
 };
 
 /// Inputs for a FreshAcc transaction.
@@ -16,15 +17,13 @@ pub struct FreshAccInputs {
 	pub accin: StandardAccount,
 	pub new_spend_auth: SpendAuth,
 	pub new_consume_auth: ConsumeAuth,
-	/// On-chain Poseidon IMT root at proof time. Registered as both PI[77-80]
-	/// and PI[81-84] (V2 uses a single IMT for accounts and notes). Not
-	/// checked by the circuit for FreshAcc, but bound in the super-aggregator.
-	pub root: HashOutput,
+	/// On-chain Poseidon IMT state tree root at proof time. Registered as both PI[77-80]
+	/// and PI[81-84] (V2 uses a single IMT for accounts and notes). Although required in the
+	/// circuit, not constrained for tx kind FreshAcc. But bound in the super-aggregator.
+	pub state_root: HashOutput,
 	pub approval_key: CompPubKey,
-	pub rejection_key: CompPubKey,
-	pub consume_key: CompPubKey,
 	pub subpool_id: SubpoolId,
-	pub main_pool: MainPoolConfigTree,
+	pub main_pool: MainPoolConfigTree<HashOutput>,
 	pub approval_sig: Signature,
 	pub dinotes: [[F; 4]; NOTE_BATCH],
 	pub donotes: [[F; 4]; NOTE_BATCH],
@@ -36,26 +35,25 @@ pub struct FreshAccInputs {
 /// `root`, and each active input note must also exist in the same IMT.
 pub struct SpendTxInputs {
 	pub accin: StandardAccount,
-	/// On-chain Poseidon IMT root. Used for both the account commitment (ACT)
-	/// and input-note commitment (NCT) Merkle proofs. In V2 both PI slots
-	/// (PI[77-80] and PI[81-84]) carry this same value.
-	pub root: HashOutput,
-	pub accin_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
+	/// On-chain Poseidon IMT state tree root at proof time. Registered as both PI[77-80]
+	/// and PI[81-84] (V2 uses a single IMT for accounts and notes). Although required in the
+	/// circuit, not constrained for tx kind FreshAcc. But bound in the super-aggregator.
+	pub state_root: HashOutput,
+	pub accin_merkle_proof: MerkleProof<HashOutput>,
 	pub inotes: Vec<StandardNote>,
-	pub inotes_nct_proofs: Vec<CommitmentTreeMerkleProof<NCT_DEPTH>>,
+	pub inotes_nct_proofs: Vec<MerkleProof<HashOutput>>,
 	pub onotes: Vec<StandardNote>,
 	pub dinotes: [[F; 4]; NOTE_BATCH],
 	pub donotes: [[F; 4]; NOTE_BATCH],
 	pub approval_key: CompPubKey,
-	pub rejection_key: CompPubKey,
-	pub consume_key: CompPubKey,
 	pub subpool_id: SubpoolId,
-	pub main_pool: MainPoolConfigTree,
+	pub main_pool: MainPoolConfigTree<HashOutput>,
 	/// Spend-auth signature. `Some` when there are active output notes; `None`
 	/// lets the circuit use a fake signature (not enforced for inactive slots).
 	pub spend_sig: Option<Signature>,
-	/// Consume-auth signature. `Some` when consuming active input notes without
-	/// active output notes; `None` for a fake signature.
+	/// Consume-auth signature. `Some` when consuming active input notes, without
+	/// a single active output notes, and consumption is not delegated; `None` for a fake
+	/// signature.
 	pub consume_sig: Option<Signature>,
 	pub approval_sig: Signature,
 }
@@ -66,22 +64,20 @@ pub struct SpendTxInputs {
 /// `accin` must exist in the on-chain IMT and the input notes must also exist there.
 pub struct RejectTxInputs {
 	pub accin: StandardAccount,
-	pub accin_act_merkle_proof: CommitmentTreeMerkleProof<ACT_DEPTH>,
+	pub accin_act_merkle_proof: MerkleProof<HashOutput>,
 	/// On-chain Poseidon IMT root. Used for both the account commitment (ACT)
 	/// and input-note commitment (NCT) Merkle proofs. In V2 both PI slots
 	/// (PI[77-80] and PI[81-84]) carry this same value.
 	pub root: HashOutput,
-	pub inotes: Vec<StandardNote>,
-	pub inotes_nct_proofs: Vec<CommitmentTreeMerkleProof<NCT_DEPTH>>,
+	pub state_root: Vec<StandardNote>,
+	pub inotes_nct_proofs: Vec<MerkleProof<HashOutput>>,
 	pub onotes: Vec<StandardNote>,
 	pub dinotes: [[F; 4]; NOTE_BATCH],
 	pub donotes: [[F; 4]; NOTE_BATCH],
 	pub approval_key: CompPubKey,
-	pub rejection_key: CompPubKey,
-	pub consume_key: CompPubKey,
 	pub subpool_id: SubpoolId,
-	pub main_pool: MainPoolConfigTree,
-	pub consume_sig: Signature,
+	pub main_pool: MainPoolConfigTree<HashOutput>,
+	pub consume_sig: Option<Signature>,
 	pub approval_sig: Signature,
 }
 
@@ -92,7 +88,7 @@ pub struct RejectTxInputs {
 /// proof's public inputs for AN/AC/NN/NC, allowing alignment with tree padding
 /// leaves chosen by the sequencer.
 pub struct FakeTxInputs {
-	pub root: HashOutput,
+	pub state_root: HashOutput,
 	pub mainpool_config_root: HashOutput,
 	pub override_an: [F; 4],
 	pub override_ac: [F; 4],
@@ -102,7 +98,7 @@ pub struct FakeTxInputs {
 
 /// Discriminated union of all possible PrivTx witness inputs.
 ///
-/// Pass to [`prove_real_priv_tx`] to generate a proof. The `Fake` variant
+/// Pass to [`prove_priv_tx`] to generate a proof. The `Fake` variant
 /// produces a dummy proof (`not_fake_tx = 0`); all other variants produce real
 /// proofs (`not_fake_tx = 1`) with fully enforced circuit constraints.
 pub enum PrivTxInputs {
@@ -110,4 +106,19 @@ pub enum PrivTxInputs {
 	Spend(SpendTxInputs),
 	Reject(RejectTxInputs),
 	Fake(FakeTxInputs),
+}
+
+impl PrivTxInputs {
+	/// Return the [`TxKindFlags`] implied by this variant.
+	///
+	/// Each variant maps to exactly one set of flags; callers must not construct
+	/// flags independently to avoid mismatches with the inputs type.
+	pub(crate) fn tx_kind_flags(&self) -> TxKindFlags {
+		match self {
+			Self::FreshAcc(_) => TxKindFlags::FRESH_ACC,
+			Self::Spend(_) => TxKindFlags::SPEND,
+			Self::Reject(_) => TxKindFlags::REJECT,
+			Self::Fake(_) => TxKindFlags::FAKE,
+		}
+	}
 }

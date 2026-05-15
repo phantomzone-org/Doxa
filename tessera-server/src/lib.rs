@@ -1,16 +1,7 @@
-mod data_types;
-
-pub mod aggregation_pipeline;
-pub mod config;
+// pub mod aggregation_pipeline;
+pub mod aggregator_service;
+pub mod batch_helper;
 pub mod contract;
-pub mod dummy;
-pub mod prover_client;
-pub mod prover_v2;
-pub mod sequencer;
-pub mod states;
-pub mod tree_store;
+pub mod prover_service;
+pub mod state_service;
 pub mod types;
-
-pub use data_types::*;
-
-pub const TREE_DEPTH: usize = 32;

@@ -10,7 +10,7 @@ use plonky2_field::{
 	types::{Field, PrimeField, PrimeField64},
 };
 
-use crate::schnorr::Scalar;
+use crate::{DEFAULT_SPEND_AUTH_PK, schnorr::Scalar};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompressedPoint<F: Extendable<5>> {
@@ -735,7 +735,7 @@ mod tests {
 		let p1 = PointEw::decode(w1).unwrap();
 
 		// e = 841809598287430541331763924924406256080383779033370172527955679319982746101779529382447999363236
-		let e = Scalar::from_raw([
+		let e = Scalar([
 			5400142491657709732,
 			15846706413025839610,
 			1661266468596303141,
@@ -802,7 +802,7 @@ mod tests {
 
 		// 2 * P1 = P4 (doubling)
 		assert_eq!(
-			p1.scalar_mul(&Scalar::from_raw([2, 0, 0, 0, 0])).encode(),
+			p1.scalar_mul(&Scalar([2, 0, 0, 0, 0])).encode(),
 			w4,
 			"2 * P1 != P4"
 		);
@@ -812,7 +812,7 @@ mod tests {
 	fn test_scalar_mul_neutral() {
 		// e * O = O for any scalar
 		let neutral = PointEw::<F>::NEUTRAL;
-		let e = Scalar::from_raw([
+		let e = Scalar([
 			5400142491657709732,
 			15846706413025839610,
 			1661266468596303141,
@@ -831,7 +831,7 @@ mod tests {
 		// Random valid points: k*G is always on the curve.
 		for _ in 0..20 {
 			let limbs: [u64; 5] = rng.random();
-			let scalar = Scalar::from_raw(limbs);
+			let scalar = Scalar(limbs);
 			let p = g.scalar_mul(&scalar);
 			if !p.at_inf {
 				assert!(p.is_on_curve(), "k*G must be on the curve");

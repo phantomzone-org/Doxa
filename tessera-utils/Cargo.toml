@@ -1,0 +1,33 @@
+[package]
+name = "tessera-utils"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Enables the Groth16 Go FFI wrapper (requires Go toolchain and bindgen at build time).
+# Enabled by default so that existing dependents that do not opt out continue to work.
+# Disable with `default-features = false` to skip the heavy Go/CGo build.
+default = ["groth"]
+groth = ["dep:bindgen"]
+
+[build-dependencies]
+bindgen = { version = "0.72.1", optional = true }
+
+[dependencies]
+plonky2 = {workspace = true}
+starky = {workspace = true}
+anyhow = {workspace = true}
+rand = {workspace = true}
+tiny-keccak = {workspace = true}
+hashbrown = {workspace = true}
+itertools = {workspace = true}
+log = "0.4"
+ff = { package = "ff", version = "0.13", features = ["derive"] }
+num-bigint = { version = "0.4", features = ["rand"] }
+num = "0.4.3"
+lazy_static = "1.4.0"
+serde = {workspace = true}
+serde_json = {workspace = true}
+
+[dev-dependencies]
+env_logger = "0.11"
