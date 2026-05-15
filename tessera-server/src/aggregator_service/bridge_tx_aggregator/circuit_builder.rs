@@ -3,18 +3,16 @@ use plonky2::{
 	plonk::{circuit_builder::CircuitBuilder, circuit_data::CircuitConfig},
 };
 use tessera_client::{
-	BRIDGE_TX_BATCH_SIZE, SUBTREE_BATCHSIZE,
 	plonky2_gadgets::{
-		deposit_tx::targets::DepositTxPublicTargets,
-		withdraw_tx::targets::WithdrawTxPublicTargets,
+		deposit_tx::targets::DepositTxPublicTargets, withdraw_tx::targets::WithdrawTxPublicTargets,
 	},
+	BRIDGE_TX_BATCH_SIZE, SUBTREE_BATCHSIZE,
 };
 use tessera_utils::{
-	ConfigNative, D, F,
 	plonky2_gadgets::{
-		keccak256::builder::BuilderKeccak256,
-		u32::gadgets::add_u8_range_check_lookup_table,
+		keccak256::builder::BuilderKeccak256, u32::gadgets::add_u8_range_check_lookup_table,
 	},
+	ConfigNative, D, F,
 };
 
 use super::targets::{BridgeTxPairLeafData, BridgeTxSuperCircuitData, BridgeTxSuperTargets};
@@ -67,7 +65,7 @@ pub(super) fn build_pair_leaf(
 	let d = DepositTxPublicTargets::from_pis(&d_proof.public_inputs);
 
 	// 4. Connect common PIs (act_root and mainpool must be equal across the pair).
-	builder.connect_hashes(w.root.0, d.comm_root.0);
+	builder.connect_hashes(w.root.0, d.state_root.0);
 	builder.connect_hashes(w.mainpool_config_root.0, d.mainpool_config_root.0);
 
 	// 5. Register combined pair public inputs.
@@ -124,19 +122,15 @@ pub(super) fn setup_super_builder(
 
 	let pair_pis = &pair_proof.public_inputs;
 	let sr_pis = &sr_proof.public_inputs;
-	let sr_leaf = |idx: usize| -> [Target; 4] {
-		sr_pis[4 + idx * 4..4 + idx * 4 + 4].try_into().unwrap()
-	};
+	let sr_leaf =
+		|idx: usize| -> [Target; 4] { sr_pis[4 + idx * 4..4 + idx * 4 + 4].try_into().unwrap() };
 
-	// 4. Cross-check SR leaves against TX output commitments (unconditional —
-	//    SR is built from all proofs including padding).
-	//    SR[s]        = pair[s].w.accout_comm
-	//    SR[HALF + s] = pair[s].d.accout_comm
+	// 4. Cross-check SR leaves against TX output commitments (unconditional — SR is built from all
+	//    proofs including padding). SR[s]        = pair[s].w.accout_comm SR[HALF + s] =
+	//    pair[s].d.accout_comm
 	for s in 0..HALF {
-		let w_accout_start =
-			s * pair_pi_size + 8 + ACCOUT_COMM_UNIQUE_OFF;
-		let d_accout_start =
-			s * pair_pi_size + 8 + inner.w_unique_size + ACCOUT_COMM_UNIQUE_OFF;
+		let w_accout_start = s * pair_pi_size + 8 + ACCOUT_COMM_UNIQUE_OFF;
+		let d_accout_start = s * pair_pi_size + 8 + inner.w_unique_size + ACCOUT_COMM_UNIQUE_OFF;
 
 		let w_leaf = sr_leaf(s);
 		let d_leaf = sr_leaf(HALF + s);
@@ -147,8 +141,8 @@ pub(super) fn setup_super_builder(
 		}
 	}
 
-	// 5. Assert uniform common PIs (act_root + mainpool) across all pair slots.
-	//    pair[0] common = pair_pis[0..8]; pair[s] common = pair_pis[s*pair_pi_size..+8].
+	// 5. Assert uniform common PIs (act_root + mainpool) across all pair slots. pair[0] common =
+	//    pair_pis[0..8]; pair[s] common = pair_pis[s*pair_pi_size..+8].
 	for s in 1..HALF {
 		let base = s * pair_pi_size;
 		for k in 0..8 {

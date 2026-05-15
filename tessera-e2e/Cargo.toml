@@ -2,6 +2,11 @@
 name = "tessera-e2e"
 version = "0.1.0"
 edition = "2021"
+autotests = false
+
+[[test]]
+name = "e2e_setup_and_freshacc"
+path = "tests/e2e_setup_and_freshacc.rs"
 
 [dependencies]
 tessera-trees = {workspace = true}

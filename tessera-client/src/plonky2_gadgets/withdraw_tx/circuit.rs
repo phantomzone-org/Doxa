@@ -16,13 +16,13 @@ use tessera_utils::{
 };
 
 use crate::{
-	AssetId, COM_TREE_DEPTH, NOTE_BATCH,
+	AssetId, NOTE_BATCH, STATE_TREE_DEPTH,
 	plonky2_gadgets::{
 		merkle::conditional_merkle_verify_gadget,
 		priv_tx::{
 			circuit_builder::PrivTxCircuitBuilder,
 			targets::{
-				AccountNullifierTarget, AssetIdTarget, MainPoolConfigRootTarget, RootTarget,
+				AccountNullifierTarget, AssetIdTarget, MainPoolConfigRootTarget, StateRootTarget,
 				SubpoolIdTarget,
 			},
 		},
@@ -71,16 +71,15 @@ where
 	let not_fake_tx = builder.add_virtual_bool_target_safe();
 
 	// ── Authority keys ────────────────────────────────────────────────────────
-	let (approval_key, rejection_key, subpool_consume_key) = builder.add_virtual_authority_keys();
+	let approval_key = builder.add_virtual_public_key_target();
 
 	// ── Tree roots ────────────────────────────────────────────────────────────
-	let act_root = RootTarget(builder.add_virtual_hash());
+	let act_root = StateRootTarget(builder.add_virtual_hash());
 	let mainpool_config_root = MainPoolConfigRootTarget(builder.add_virtual_hash());
 
 	// ── Accounts ──────────────────────────────────────────────────────────────
 	let accin = builder.add_virtual_account_target();
 	let accout = builder.add_virtual_account_target();
-	let accin_pos = builder.add_virtual_target();
 
 	// ── Per-asset withdrawal fields ───────────────────────────────────────────
 	let asset_ids: [AssetIdTarget; NOTE_BATCH] =
@@ -88,6 +87,8 @@ where
 	let withdrawal_amts = core::array::from_fn(|_| builder.add_virtual_u256_target());
 	let accin_amts = core::array::from_fn(|_| builder.add_virtual_u256_target());
 	let accout_amts = core::array::from_fn(|_| builder.add_virtual_u256_target());
+	// TODO: it's reasonable to assume that the assets will always exist. Hence, no need for does
+	// exist kind of variables.
 	let asset_exists_in_accin: [BoolTarget; NOTE_BATCH] =
 		core::array::from_fn(|_| builder.add_virtual_bool_target_safe());
 	let asset_exists_in_accout: [BoolTarget; NOTE_BATCH] =
@@ -109,7 +110,7 @@ where
 		accin_comm.0,
 		act_root.0,
 		not_fake_tx,
-		COM_TREE_DEPTH,
+		STATE_TREE_DEPTH,
 	);
 
 	// ── Account invariants ───────────────────────────────────────────────────
@@ -179,8 +180,6 @@ where
 	let subpool_proof_targets = builder.assert_subpool_full_proof(
 		SubpoolIdTarget(accin.subpool_id.0),
 		approval_key,
-		rejection_key,
-		subpool_consume_key,
 		mainpool_config_root,
 		not_fake_tx,
 	);
@@ -188,6 +187,10 @@ where
 	// ── Approval signature ────────────────────────────────────────────────────
 	let approval_sig =
 		conditional_schnorr_verify_gadget(builder, tx_hash.0, approval_key, not_fake_tx);
+
+	// ── Spend signature ───────────────────────────────────────────────────────
+	let spend_sig =
+		conditional_schnorr_verify_gadget(builder, tx_hash.0, accin.spend_auth, not_fake_tx);
 
 	// ── Public inputs ─────────────────────────────────────────────────────────
 	let public = WithdrawTxPublicTargets {
@@ -206,11 +209,8 @@ where
 		public,
 		private: WithdrawTxPrivateTargets {
 			approval_key,
-			rejection_key,
-			subpool_consume_key,
 			accin,
 			accout,
-			accin_pos,
 			accin_amts,
 			accout_amts,
 			asset_exists_in_accin,
@@ -219,6 +219,7 @@ where
 			ast_merkles,
 			subpool_proof_targets,
 			approval_sig,
+			spend_sig,
 			acc_in_subpool_id: accin.subpool_id,
 			acc_out_subpool_id: accout.subpool_id,
 		},
@@ -234,35 +235,35 @@ pub struct WithdrawTxCircuit {
 	/// Compiled circuit data — exposes `common` and `verifier_only` to external
 	/// callers (e.g. for constructing a `GenericAggregator`).
 	pub circuit_data: tessera_utils::CircuitDataNative,
-	targets: WithdrawTxTargets,
+	pub(crate) targets: WithdrawTxTargets,
 }
 
-impl WithdrawTxCircuit {
-	/// Generate a dummy withdrawal proof (`not_fake_tx=0`) with zero roots.
-	pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
-		let mut pw = PartialWitness::new();
-		self.targets.set_fake(&mut pw);
-		self.circuit_data
-			.prove(pw)
-			.expect("dummy withdraw_tx proof generation failed")
-	}
+// impl WithdrawTxCircuit {
+// 	/// Generate a dummy withdrawal proof (`not_fake_tx=0`) with zero roots.
+// 	pub fn prove_dummy(&self) -> tessera_utils::ProofNative {
+// 		let mut pw = PartialWitness::new();
+// 		self.targets.set_dummy(&mut pw);
+// 		self.circuit_data
+// 			.prove(pw)
+// 			.expect("dummy withdraw_tx proof generation failed")
+// 	}
 
-	/// Generate a padding withdrawal proof (`not_fake_tx=0`) with the specified
-	/// `act_root` and `mainpool_config_root`, so that padding proofs share the
-	/// same common PIs as the real proofs in their batch.
-	pub fn prove_padding(
-		&self,
-		act_root: HashOutput,
-		mainpool_config_root: HashOutput,
-	) -> tessera_utils::ProofNative {
-		let mut pw = PartialWitness::new();
-		self.targets
-			.set_fake_with_roots(&mut pw, act_root, mainpool_config_root);
-		self.circuit_data
-			.prove(pw)
-			.expect("padding withdraw_tx proof generation failed")
-	}
-}
+// 	/// Generate a padding withdrawal proof (`not_fake_tx=0`) with the specified
+// 	/// `act_root` and `mainpool_config_root`, so that padding proofs share the
+// 	/// same common PIs as the real proofs in their batch.
+// 	pub fn prove_padding(
+// 		&self,
+// 		act_root: HashOutput,
+// 		mainpool_config_root: HashOutput,
+// 	) -> tessera_utils::ProofNative {
+// 		let mut pw = PartialWitness::new();
+// 		self.targets
+// 			.set_dummy_with_roots(&mut pw, act_root, mainpool_config_root);
+// 		self.circuit_data
+// 			.prove(pw)
+// 			.expect("padding withdraw_tx proof generation failed")
+// 	}
+// }
 
 /// Build the withdraw_tx circuit using `HashOutput` as the Merkle hasher.
 pub fn build_withdraw_tx_circuit() -> WithdrawTxCircuit {

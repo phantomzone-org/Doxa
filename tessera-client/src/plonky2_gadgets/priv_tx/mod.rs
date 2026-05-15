@@ -1,19 +1,19 @@
+pub mod builder;
 mod circuit;
 pub(crate) mod circuit_builder;
-mod fake_tx;
-mod freshacc_tx;
 pub mod inputs;
-mod prove;
-mod reject_tx;
-mod spend_tx;
+// mod prove;
 pub mod targets;
 pub(crate) mod utils;
 
 pub use circuit::*;
-pub use inputs::{FakeTxInputs, FreshAccInputs, PrivTxInputs, RejectTxInputs, SpendTxInputs};
+// TODO: remove input.rs after confirming that tessera-server uses it unecessarily. Likewise
+// for prove.rs
+//
+// pub use inputs::{FakeTxInputs, FreshAccInputs, PrivTxInputs, RejectTxInputs, SpendTxInputs};
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use plonky2_field::types::PrimeField64;
-pub use prove::*;
+// pub use prove::*;
 use tessera_utils::{ConfigNative, D, F, hasher::HashOutput};
 
 use crate::{NOTE_BATCH, PIHelper};
@@ -34,9 +34,15 @@ mod tests;
 /// [45..73] onote commitments (7×4)
 /// ```
 #[derive(Clone)]
-pub struct PrivateTransactionProof(pub ProofWithPublicInputs<F, ConfigNative, D>);
+pub struct PrivTxProof(pub ProofWithPublicInputs<F, ConfigNative, D>);
 
-impl PIHelper for PrivateTransactionProof {
+impl PrivTxProof {
+	pub fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
+		&self.0
+	}
+}
+
+impl PIHelper for PrivTxProof {
 	fn proof(&self) -> &ProofWithPublicInputs<F, ConfigNative, D> {
 		&self.0
 	}
@@ -48,7 +54,7 @@ impl PIHelper for PrivateTransactionProof {
 	}
 }
 
-impl PrivateTransactionProof {
+impl PrivTxProof {
 	/// PI[17..45]: Input note nullifiers (one per NOTE_BATCH slot).
 	pub fn input_note_nullifiers(&self) -> [HashOutput; NOTE_BATCH] {
 		core::array::from_fn(|i| {

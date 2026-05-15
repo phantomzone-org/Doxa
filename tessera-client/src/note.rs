@@ -9,11 +9,10 @@ use tessera_utils::{
 	hasher::{HashOutput, MerkleHash},
 };
 
-use crate::{AccountAddress, AssetId, account::NullifierKey, double_hash_native};
+use crate::{AccountAddress, AssetId, account::NullifierKey};
 
 #[derive(Debug, Clone, Copy)]
-/// Commitment to a [`DepositNote`], inserted into the Note Commitment Tree
-/// by the deposit transaction circuit.
+/// Commitment to a [`DepositNote`]
 pub struct DepositNoteCommitment(pub HashOutput);
 
 #[derive(Debug, Clone, Copy)]
@@ -34,13 +33,24 @@ pub struct DepositNote {
 	pub asset_id: AssetId,
 }
 
+impl Default for DepositNote {
+	fn default() -> Self {
+		Self {
+			identifier: NoteIdentifier::ZERO,
+			recipient: AccountAddress::default(),
+			amount: U256::zero(),
+			asset_id: AssetId::ZERO,
+		}
+	}
+}
+
 impl DepositNote {
-	pub(crate) const ZERO: Self = Self {
-		identifier: NoteIdentifier::ZERO,
-		recipient: AccountAddress::ZERO,
-		amount: U256::zero(),
-		asset_id: AssetId::ZERO,
-	};
+	pub fn default_for_recipient(recipient: AccountAddress) -> Self {
+		Self {
+			recipient,
+			..Default::default()
+		}
+	}
 
 	/// Compute the Poseidon commitment to this deposit note.
 	///
@@ -68,7 +78,7 @@ impl DepositNote {
 	}
 }
 
-/// Commitment to a [`StandardNote`], inserted into the Note Commitment Tree (NCT).
+/// Commitment to a [`StandardNote`]
 ///
 /// Computed as a Poseidon hash over all note fields (see [`StandardNote::commitment`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,22 +226,18 @@ impl StandardNote {
 		))
 	}
 
-	pub fn nullifier(
-		commitment: &NoteCommitment,
-		position: usize,
-		nk: &NullifierKey,
-	) -> NoteNullifier {
+	pub fn nullifier(&self, position: usize, nk: &NullifierKey) -> anyhow::Result<NoteNullifier> {
+		anyhow::ensure!(
+			(position as u64) < F::ORDER,
+			"position {position} exceeds field order"
+		);
 		let mut input = [F::ZERO; 9];
-		input[..4].copy_from_slice(&commitment.0.0);
+		input[..4].copy_from_slice(&self.commitment().0.0);
 		input[4] = F::from_canonical_u64(position as u64);
 		input[5..9].copy_from_slice(nk.0.as_slice());
-		NoteNullifier(HashOutput(
+		Ok(NoteNullifier(HashOutput(
 			<PoseidonHash as Hasher<F>>::hash_no_pad(input.as_ref()).elements,
-		))
-	}
-
-	pub fn dummy_nullifier(commitment: &NoteCommitment) -> NoteNullifier {
-		NoteNullifier(HashOutput::new(double_hash_native(commitment.0.0)))
+		)))
 	}
 }
 

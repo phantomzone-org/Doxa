@@ -1,3 +1,4 @@
+pub mod builder;
 pub(crate) mod cb;
 pub(crate) mod circuit;
 pub mod targets;

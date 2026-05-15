@@ -14,8 +14,8 @@ use tessera_utils::{
 use crate::{
 	ACC_AST_DEPTH, AST_DEFAULT_LEAF, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
 	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER,
-	DepositNoteCommitment, NOTE_BATCH, NoteCommitment, NoteNullifier, schnorr::CompressedPublicKey,
-	utils::map_h160_to_f,
+	DepositNoteCommitment, NOTE_BATCH, NoteCommitment, NoteNullifier, ecgfp5::CompressedPoint,
+	schnorr::CompressedPublicKey, utils::map_h160_to_f,
 };
 
 /// Pedersen-like commitment to an account state.
@@ -105,6 +105,21 @@ pub struct SpendAuth {
 	pub spend_pk: Option<CompressedPublicKey<F>>,
 }
 
+impl SpendAuth {
+	/// Create a new `SpendAuth` with the given spend public key.
+	pub fn new(spend_pk: CompressedPublicKey<F>) -> Self {
+		Self {
+			spend_pk: Some(spend_pk),
+		}
+	}
+
+	/// Return the spend public key, falling back to the default placeholder if unset.
+	pub fn pk_or_default(&self) -> CompressedPublicKey<F> {
+		self.spend_pk
+			.unwrap_or_else(|| CompressedPublicKey(CompressedPoint::from(DEFAULT_SPEND_AUTH_PK)))
+	}
+}
+
 /// Authorization data for *consuming* (depositing into) an account.
 #[derive(Debug, Clone, Default)]
 pub struct ConsumeAuth {
@@ -116,6 +131,17 @@ pub struct ConsumeAuth {
 	pub pk: Option<CompressedPublicKey<F>>,
 }
 
+impl ConsumeAuth {
+	/// Return the consume public key, falling back to the default placeholder if unset.
+	pub fn pk_or_default(&self) -> CompressedPublicKey<F> {
+		self.pk.unwrap_or_else(|| {
+			CompressedPublicKey(CompressedPoint::from(
+				DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+			))
+		})
+	}
+}
+
 /// A field-element identifier for a fungible asset type.
 ///
 /// Must satisfy `0 <= value < F::ORDER` (Goldilocks field order).
@@ -123,8 +149,14 @@ pub struct ConsumeAuth {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct AssetId(pub F);
 
+impl Default for AssetId {
+	fn default() -> Self {
+		Self(F::ZERO)
+	}
+}
+
 impl AssetId {
-	pub(crate) const ZERO: Self = Self(F::ZERO);
+	pub const ZERO: Self = Self(F::ZERO);
 
 	/// Construct an `AssetId` from a `u64`, returning an error if the value
 	/// exceeds the Goldilocks field order.
@@ -209,10 +241,12 @@ where
 {
 	/// Create an empty AST.  All leaves are initialised to [`AST_DEFAULT_LEAF`].
 	pub fn new() -> Self {
-		Self {
+		let mut s = Self {
 			tree: MerkleTree::new(ACC_AST_DEPTH),
 			assets: HashMap::new(),
-		}
+		};
+		s._insert_asset(AssetId::default(), U256::zero()).unwrap();
+		s
 	}
 
 	/// Reconstruct an AST from a saved asset map.
@@ -251,11 +285,8 @@ where
 		self.tree.num_leaves()
 	}
 
-	/// Insert a new asset. Returns `Err` if `asset_id` is already tracked.
-	pub fn insert_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<(), String> {
-		if self.assets.contains_key(&asset_id) {
-			return Err(format!("asset {:?} already exists", asset_id));
-		}
+	/// Private insert asset method
+	fn _insert_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<(), String> {
 		let index = self.tree.num_leaves();
 		let leaf = AccountStateTreeLeaf {
 			asset_id,
@@ -268,8 +299,23 @@ where
 		Ok(())
 	}
 
-	/// Update an existing asset's amount. Returns `Ok(previous_amount)` or `Err` if not found.
+	/// Insert a new asset. Returns `Err` if `asset_id` is already tracked or is the default.
+	pub fn insert_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<(), String> {
+		if asset_id == AssetId::default() {
+			return Err("inserting the default asset id (0) is not allowed".to_string());
+		}
+		if self.assets.contains_key(&asset_id) {
+			return Err(format!("asset {:?} already exists", asset_id));
+		}
+		self._insert_asset(asset_id, amount)
+	}
+
+	/// Update an existing asset's amount. Returns `Ok(previous_amount)` or `Err` if not found or
+	/// default.
 	pub fn update_asset(&mut self, asset_id: AssetId, amount: U256) -> Result<U256, String> {
+		if asset_id == AssetId::default() {
+			return Err("updating the default asset id (0) is not allowed".to_string());
+		}
 		let &(index, prev_amount) = self
 			.assets
 			.get(&asset_id)
@@ -342,9 +388,10 @@ pub struct StandardAccount {
 }
 
 impl StandardAccount {
+	// TODO: why is this here?
 	pub fn fake() -> Self {
 		Self::new_with(
-			crate::PrivateIdentifier([F::from_canonical_u64(1), F::from_noncanonical_u64(2)]),
+			crate::PrivateIdentifier([F::from_canonical_u64(2), F::from_noncanonical_u64(2)]),
 			SubpoolId(F::ZERO),
 		)
 	}
@@ -383,6 +430,16 @@ impl StandardAccount {
 		let mut next = self.clone();
 		next.nonce = self.nonce.incremented();
 		next
+	}
+
+	/// Return the spend public key, falling back to the default placeholder if unset.
+	pub fn spend_pk_or_default(&self) -> CompressedPublicKey<F> {
+		self.spend_auth.pk_or_default()
+	}
+
+	/// Return the consume public key, falling back to the default placeholder if unset.
+	pub fn consume_pk_or_default(&self) -> CompressedPublicKey<F> {
+		self.consume_auth.pk_or_default()
 	}
 
 	/// Return the shareable [`AccountAddress`] (subpool_id + public_id).
@@ -488,18 +545,22 @@ impl StandardAccount {
 /// Contains only public fields (`subpool_id` + `public_id`); the private
 /// identifier is never included.  Encoded as an 80-character hex string for
 /// transport.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountAddress {
 	pub subpool_id: SubpoolId,
 	pub(crate) public_id: PublicIdentifier,
 }
 
-impl AccountAddress {
-	pub(crate) const ZERO: Self = Self {
-		subpool_id: SubpoolId::ZERO,
-		public_id: PublicIdentifier::ZERO,
-	};
+impl Default for AccountAddress {
+	fn default() -> Self {
+		Self {
+			subpool_id: SubpoolId::ZERO,
+			public_id: PublicIdentifier::ZERO,
+		}
+	}
+}
 
+impl AccountAddress {
 	/// Construct an address from its components.
 	pub fn new(subpool_id: SubpoolId, public_id: PublicIdentifier) -> Self {
 		Self {
@@ -516,14 +577,23 @@ impl AccountAddress {
 		}
 	}
 
-	/// Decode from the 80-hex-char encoding produced by [`Self::to_hex`].
+	/// Serialize to a 40-byte little-endian representation.
 	///
-	/// Layout (little-endian bytes):
-	/// - bytes `[0..8]`  → `subpool_id` (u64 LE) → 16 hex chars
-	/// - bytes `[8..40]` → `public_id`  (4 × u64 LE) → 64 hex chars
-	pub fn from_hex(s: &str) -> anyhow::Result<Self> {
-		anyhow::ensure!(s.len() == 80, "expected 80 hex chars, got {}", s.len());
-		let bytes = hex::decode(s)?;
+	/// Layout:
+	/// - bytes `[0..8]`  → `subpool_id` (u64 LE)
+	/// - bytes `[8..40]` → `public_id`  (4 × u64 LE)
+	pub fn to_bytes(&self) -> [u8; 40] {
+		let mut bytes = [0u8; 40];
+		bytes[..8].copy_from_slice(&self.subpool_id.0.to_canonical_u64().to_le_bytes());
+		for (i, f) in self.public_id.0.0.iter().enumerate() {
+			bytes[8 + i * 8..8 + (i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
+		}
+		bytes
+	}
+
+	/// Deserialize from the 40-byte representation produced by [`Self::to_bytes`].
+	pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+		anyhow::ensure!(bytes.len() == 40, "expected 40 bytes, got {}", bytes.len());
 		let subpool_raw = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
 		let mut pub_id = [F::ZERO; 4];
 		for i in 0..4 {
@@ -541,12 +611,13 @@ impl AccountAddress {
 	///
 	/// Layout: `subpool_id (16 hex) || public_id (64 hex)`.
 	pub fn to_hex(&self) -> String {
-		let mut bytes = [0u8; 40];
-		bytes[..8].copy_from_slice(&self.subpool_id.0.to_canonical_u64().to_le_bytes());
-		for (i, f) in self.public_id.0.0.iter().enumerate() {
-			bytes[8 + i * 8..8 + (i + 1) * 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
-		}
-		bytes.iter().map(|b| format!("{b:02x}")).collect()
+		hex::encode(self.to_bytes())
+	}
+
+	/// Decode from the 80-hex-char encoding produced by [`Self::to_hex`].
+	pub fn from_hex(s: &str) -> anyhow::Result<Self> {
+		anyhow::ensure!(s.len() == 80, "expected 80 hex chars, got {}", s.len());
+		Self::from_bytes(&hex::decode(s)?)
 	}
 }
 
@@ -633,29 +704,13 @@ pub fn derive_withdraw_tx_hash(
 	HashOutput(<PoseidonHash as Hasher<F>>::hash_no_pad(&inp).elements)
 }
 
-/// Compute the actual root of the default empty Account State Tree (depth `ACC_AST_DEPTH`,
-/// all leaves = `AST_DEFAULT_LEAF`)
-pub(crate) fn ast_default_root() -> [u64; HASH_SIZE] {
-	use plonky2::{
-		hash::{hash_types::HashOut, poseidon::PoseidonHash},
-		plonk::config::Hasher,
-	};
-	use plonky2_field::types::Field;
-
-	let mut cur: [F; HASH_SIZE] = AST_DEFAULT_LEAF.map(F::from_canonical_u64);
-	for _ in 0..ACC_AST_DEPTH {
-		let r = <PoseidonHash as Hasher<F>>::two_to_one(
-			HashOut {
-				elements: cur,
-			},
-			HashOut {
-				elements: cur,
-			},
-		);
-		cur = r.elements;
-	}
-	cur.map(|f| f.to_canonical_u64())
-}
-
 #[cfg(test)]
-mod tests {}
+mod tests {
+	use super::*;
+
+	// #[test]
+	// fn trial() {
+	// 	let ast = AccountStateTree::<HashOutput>::new();
+	// 	dbg!(ast.root());
+	// }
+}

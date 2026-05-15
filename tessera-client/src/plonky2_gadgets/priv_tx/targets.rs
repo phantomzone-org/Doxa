@@ -1,5 +1,5 @@
 use plonky2::{
-	hash::hash_types::{HashOutTarget, RichField},
+	hash::hash_types::{HashOut, HashOutTarget, RichField},
 	iop::{
 		target::{BoolTarget, Target},
 		witness::{PartialWitness, WitnessWrite},
@@ -7,21 +7,21 @@ use plonky2::{
 	plonk::circuit_builder::CircuitBuilder,
 };
 use plonky2_field::{extension::Extendable, types::Field};
+use primitive_types::U256;
 use tessera_utils::{
 	F,
 	hasher::{HashOutput, ToHashOut},
 };
 
 use crate::{
-	COM_TREE_DEPTH, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, NOTE_BATCH,
-	StandardAccount,
+	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, NOTE_BATCH, STATE_TREE_DEPTH,
+	StandardAccount, SubpoolId,
 	plonky2_gadgets::{
 		merkle::MerkleRootTarget,
 		signature::{PubkeyTarget, SchnorrTargets},
 		u256::U256Target,
-		witness::set_authority_keys,
 	},
-	pool_config::CompPubKey,
+	pool_config::{CompPubKey, SubpoolFullProof},
 };
 
 // ----- Account related targets -----
@@ -36,7 +36,7 @@ pub(crate) struct PrivateIdentifierTarget(pub(crate) [Target; 2]);
 ///
 /// Derived from `PrivateIdentifierTarget` via `derive_public_identifier`.
 #[derive(Clone, Copy)]
-pub(crate) struct PublicIdentifierTaregt(pub(crate) HashOutTarget);
+pub(crate) struct PublicIdentifierTarget(pub(crate) HashOutTarget);
 
 /// In-circuit representation of [`NullifierKey`](crate::account::NullifierKey).
 ///
@@ -60,6 +60,15 @@ pub(crate) struct ConsumeAuthTarget {
 	pub(crate) config: BoolTarget,
 	/// The account's own consume public key (or a placeholder when `config=0`).
 	pub(crate) pk: PubkeyTarget,
+}
+
+impl ConsumeAuthTarget {
+	pub(crate) fn set(&self, pw: &mut PartialWitness<F>, auth: &crate::account::ConsumeAuth) {
+		pw.set_bool_target(self.config, auth.config).unwrap();
+		for (t, v) in self.pk.0.0.iter().zip(auth.pk_or_default().0.w.0.iter()) {
+			pw.set_target(*t, *v).unwrap();
+		}
+	}
 }
 
 /// In-circuit representation of a [`StandardAccount`](crate::account::StandardAccount).
@@ -95,22 +104,17 @@ impl AccountTarget {
 		for (i, &x) in acc.ast.root().0.iter().enumerate() {
 			pw.set_target(self.acc_ast_root.elements[i], x).unwrap();
 		}
-		let spend_cpk: [F; 5] = acc.spend_auth.spend_pk.map_or_else(
-			|| DEFAULT_SPEND_AUTH_PK.map(F::from_canonical_u64),
-			|pk| pk.0.w.0,
-		);
-		for (t, v) in self.spend_auth.0.0.iter().zip(spend_cpk.iter()) {
+
+		for (t, v) in self
+			.spend_auth
+			.0
+			.0
+			.iter()
+			.zip(acc.spend_pk_or_default().0.w.0.iter())
+		{
 			pw.set_target(*t, *v).unwrap();
 		}
-		pw.set_bool_target(self.consume_auth.config, acc.consume_auth.config)
-			.unwrap();
-		let consume_cpk: [F; 5] = acc.consume_auth.pk.map_or_else(
-			|| DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER.map(F::from_canonical_u64),
-			|pk| pk.0.w.0,
-		);
-		for (t, v) in self.consume_auth.pk.0.0.iter().zip(consume_cpk.iter()) {
-			pw.set_target(*t, *v).unwrap();
-		}
+		self.consume_auth.set(pw, &acc.consume_auth);
 	}
 }
 
@@ -124,6 +128,8 @@ pub struct AccountCommitmentTarget(pub HashOutTarget);
 /// In-circuit type for an account nullifier (`H(commitment || nk)`).
 #[derive(Clone, Copy)]
 pub struct AccountNullifierTarget(pub HashOutTarget);
+
+// TODO: would we ever need DummyAccountTarget,Commitment,Nullifier?
 
 /// Opaque hash target used as a padding account in dummy proofs.
 #[derive(Clone, Copy)]
@@ -144,59 +150,80 @@ pub(crate) struct DummyAccountNullifier(pub(crate) HashOutTarget);
 /// `spend_cond` encodes the recipient (who can spend),
 /// `reject_cond` encodes the sender (who can reclaim via reject).
 #[derive(Clone, Copy)]
-pub(crate) struct NoteTarget {
+pub(crate) struct StandardNoteTarget {
 	/// Random 2-element note identifier (uniquifies commitments).
 	pub(crate) identifier: [Target; 2],
 	pub(crate) amount: U256Target,
 	pub(crate) asset_id: AssetIdTarget,
 	// TODO: change the naming to match of StandardNote
 	/// Spend condition: `(subpool_id, public_id)` of the recipient.
-	pub(crate) spend_cond: ConsumeCondTarget,
+	pub(crate) recipient: AccountAddressTarget,
 	/// Reject condition: `(subpool_id, public_id)` of the sender.
-	pub(crate) reject_cond: RejectCondTarget,
+	pub(crate) sender: AccountAddressTarget,
 }
 
-impl NoteTarget {
+impl StandardNoteTarget {
 	/// Fill all note targets from a concrete [`StandardNote`].
 	pub(crate) fn set_witness(&self, pw: &mut PartialWitness<F>, note: &crate::note::StandardNote) {
 		pw.set_target(self.identifier[0], note.identifier.0[0])
 			.unwrap();
 		pw.set_target(self.identifier[1], note.identifier.0[1])
 			.unwrap();
-		self.amount.set_witness(pw, note.amt);
+		self.amount.set(pw, note.amt);
 		pw.set_target(self.asset_id.0, note.asset_id.0).unwrap();
-		pw.set_target(self.spend_cond.subpool_id.0, note.recipient.subpool_id.0)
-			.unwrap();
-		for (j, &x) in note.recipient.public_id.0.0.iter().enumerate() {
-			pw.set_target(self.spend_cond.public_identifier.0.elements[j], x)
-				.unwrap();
-		}
-		pw.set_target(self.reject_cond.subpool_id.0, note.sender.subpool_id.0)
-			.unwrap();
-		for (j, &x) in note.sender.public_id.0.0.iter().enumerate() {
-			pw.set_target(self.reject_cond.public_identifier.0.elements[j], x)
-				.unwrap();
-		}
+		self.recipient.set(pw, &note.recipient);
+		self.sender.set(pw, &note.sender);
+	}
+
+	/// Zero-fill the free targets for an inactive **input** note slot.
+	///
+	/// Skips targets that are wired to other partitions by the circuit:
+	/// - `asset_id` is connected to the global `asset_id` target (set in
+	///   `set_transaction_witnesses`)
+	/// - `spend_cond.subpool_id` is connected to `accin.subpool_id` (set via account witness)
+	/// - `spend_cond.public_identifier` is connected to the derived `public_identifier` (computed
+	///   by the circuit generator from `private_identifier` — must not be set by the prover)
+	pub(crate) fn set_dummy_inote(&self, pw: &mut PartialWitness<F>) {
+		pw.set_target(self.identifier[0], F::ZERO).unwrap();
+		pw.set_target(self.identifier[1], F::ZERO).unwrap();
+		self.amount.set(pw, U256::zero());
+		self.sender.set(pw, &Default::default());
+	}
+
+	/// Zero-fill the free targets for an inactive **output** note slot.
+	///
+	/// Output note spend conditions are free targets (not wired to the account's identity),
+	/// so they must be explicitly zeroed. `asset_id` is still skipped (connected to global
+	/// `asset_id` which is already set).
+	pub(crate) fn set_dummy_onote(&self, pw: &mut PartialWitness<F>) {
+		pw.set_target(self.identifier[0], F::ZERO).unwrap();
+		pw.set_target(self.identifier[1], F::ZERO).unwrap();
+		self.amount.set(pw, U256::zero());
+		self.recipient.set(pw, &Default::default());
+		self.sender.set(pw, &Default::default());
 	}
 }
 
-/// Note spend condition: `(subpool_id, public_identifier)` of the recipient.
-///
-/// The circuit verifies that the `public_identifier` of the spender (derived
-/// from their `private_identifier`) matches this target.
+/// In-circuit representation of [`AccountAddress`](crate::account::AccountAddress).
 #[derive(Clone, Copy)]
-pub(crate) struct ConsumeCondTarget {
+pub(crate) struct AccountAddressTarget {
 	pub(crate) subpool_id: SubpoolIdTarget,
-	pub(crate) public_identifier: PublicIdentifierTaregt,
+	pub(crate) public_identifier: PublicIdentifierTarget,
 }
 
-/// Note reject condition: `(subpool_id, public_identifier)` of the original sender.
-///
-/// The circuit uses this for reject transactions — the sender reclaims the note.
-#[derive(Clone, Copy)]
-pub(crate) struct RejectCondTarget {
-	pub(crate) subpool_id: SubpoolIdTarget,
-	pub(crate) public_identifier: PublicIdentifierTaregt,
+impl AccountAddressTarget {
+	pub(crate) fn set(&self, pw: &mut PartialWitness<F>, addr: &crate::account::AccountAddress) {
+		pw.set_target(self.subpool_id.0, addr.subpool_id.0).unwrap();
+		for (t, &v) in self
+			.public_identifier
+			.0
+			.elements
+			.iter()
+			.zip(addr.public_id.0.0.iter())
+		{
+			pw.set_target(*t, v).unwrap();
+		}
+	}
 }
 
 /// In-circuit type for a note commitment (`H(note_fields)`).
@@ -214,6 +241,18 @@ pub struct NoteNullifierTarget(pub HashOutTarget);
 #[derive(Clone, Copy)]
 pub(crate) struct DummyNoteTarget(pub(crate) HashOutTarget);
 
+impl DummyNoteTarget {
+	pub(crate) fn set(&self, pw: &mut PartialWitness<F>, seed: [F; 4]) {
+		pw.set_hash_target(
+			self.0,
+			HashOut {
+				elements: seed,
+			},
+		)
+		.unwrap();
+	}
+}
+
 // ---- Other tx related targets ----
 
 /// The transaction hash signed by spend / consume / approval keys.
@@ -225,7 +264,8 @@ pub(crate) struct TxHashTarget(pub(crate) HashOutTarget);
 /// The three Schnorr signature targets required for a private transaction.
 ///
 /// - `spend`: signed by the account's spend key (required for spend-kind tx).
-/// - `consume`: signed by own or subpool consume key (required for all real tx).
+/// - `consume`: signed by own (required if consume.auth=1 and tx has >=1 input notes but 0 output
+///   notes).
 /// - `approval`: signed by the subpool approval key (always required).
 #[derive(Clone)]
 pub(crate) struct TxSignatureTargets {
@@ -236,15 +276,11 @@ pub(crate) struct TxSignatureTargets {
 
 /// The Note/Account Commitment Tree root (shared ACT + NCT root in V2).
 #[derive(Clone, Copy)]
-pub struct RootTarget(pub HashOutTarget);
+pub struct StateRootTarget(pub HashOutTarget);
 
 /// Root of the main pool configuration tree (depth [`MAIN_POOL_CONFIG_DEPTH`]).
 #[derive(Clone, Copy)]
 pub struct MainPoolConfigRootTarget(pub HashOutTarget);
-
-/// Root of a single subpool's authority-key tree (depth [`SUBPOOL_CONFIG_DEPTH`]).
-#[derive(Clone, Copy)]
-pub(crate) struct SubpoolConfigRootTarget(pub(crate) HashOutTarget);
 
 /// In-circuit representation of an [`AssetId`](crate::account::AssetId).
 #[derive(Clone, Copy)]
@@ -257,16 +293,23 @@ pub struct AssetIdTarget(pub Target);
 /// a leaf in the main pool depth-20 tree.
 #[derive(Clone)]
 pub(crate) struct SubpoolFullProofTargets {
-	/// Depth-2 Merkle proof that `approval_key` is in the subpool config tree.
-	pub(crate) approval_proof: MerkleRootTarget,
-	/// Depth-2 Merkle proof that `rejection_key` is in the subpool config tree.
-	pub(crate) rejection_proof: MerkleRootTarget,
-	/// Depth-2 Merkle proof that `consume_key` is in the subpool config tree.
-	pub(crate) consume_proof: MerkleRootTarget,
 	/// Depth-20 Merkle proof that the subpool config root is in the main pool tree.
 	pub(crate) main_pool_proof: MerkleRootTarget,
-	/// The subpool configuration root (derived from the three key proofs).
-	pub(crate) subpool_config_root: SubpoolConfigRootTarget,
+}
+
+impl SubpoolFullProofTargets {
+	pub fn set_witness(
+		&self,
+		pw: &mut PartialWitness<F>,
+		subpool_proof: &SubpoolFullProof<HashOutput>,
+	) {
+		self.main_pool_proof
+			.set_witness(pw, &subpool_proof.main_pool_proof);
+	}
+
+	pub fn set_fake(&self, pw: &mut PartialWitness<F>) {
+		self.main_pool_proof.set_dummy_witness(pw);
+	}
 }
 
 /// All targets allocated by
@@ -292,9 +335,8 @@ pub struct TxCircuitTargets {
 	pub(crate) private: TxCircuitPrivateTargets,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct TxKindFlags {
-	pub(crate) is_rjct: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TxKindFlags {
 	pub(crate) is_fresh_acc: bool,
 	pub(crate) is_update_auth: bool,
 	pub(crate) is_priv_tx: bool,
@@ -304,7 +346,6 @@ pub(crate) struct TxKindFlags {
 impl TxKindFlags {
 	/// Flags for a Fake (dummy) transaction.
 	pub(crate) const FAKE: Self = Self {
-		is_rjct: false,
 		is_fresh_acc: false,
 		is_update_auth: false,
 		is_priv_tx: false,
@@ -312,15 +353,15 @@ impl TxKindFlags {
 	};
 	/// Flags for a FreshAcc real transaction.
 	pub(crate) const FRESH_ACC: Self = Self {
-		is_rjct: false,
 		is_fresh_acc: true,
 		is_update_auth: false,
 		is_priv_tx: false,
 		not_fake_tx: true,
 	};
 	/// Flags for a Reject real transaction.
+	/// Reject behavior is now per-note-pair via `is_note_pair_rjct`; this constant
+	/// exists for backward compatibility until callers are updated.
 	pub(crate) const REJECT: Self = Self {
-		is_rjct: true,
 		is_fresh_acc: false,
 		is_update_auth: false,
 		is_priv_tx: false,
@@ -328,7 +369,6 @@ impl TxKindFlags {
 	};
 	/// Flags for a Spend (private) real transaction.
 	pub(crate) const SPEND: Self = Self {
-		is_rjct: false,
 		is_fresh_acc: false,
 		is_update_auth: false,
 		is_priv_tx: true,
@@ -338,8 +378,6 @@ impl TxKindFlags {
 
 impl TxCircuitTargets {
 	pub(crate) fn set_tx_kind_flags(&self, pw: &mut PartialWitness<F>, flags: TxKindFlags) {
-		pw.set_bool_target(self.private.is_rjct, flags.is_rjct)
-			.unwrap();
 		pw.set_bool_target(self.private.is_fresh_acc, flags.is_fresh_acc)
 			.unwrap();
 		pw.set_bool_target(self.private.is_update_auth, flags.is_update_auth)
@@ -354,38 +392,19 @@ impl TxCircuitTargets {
 		&self,
 		pw: &mut PartialWitness<F>,
 		mainpool_config_root: HashOutput,
-		root: HashOutput,
+		state_root: HashOutput,
 		approval_key: CompPubKey,
-		rejection_key: CompPubKey,
-		consume_key: CompPubKey,
+		subpool_proof: &crate::pool_config::SubpoolFullProof<HashOutput>,
 		accin: &StandardAccount,
 		accout: &StandardAccount,
 	) {
-		pw.set_hash_target(
-			self.public.mainpool_config_root.0,
-			mainpool_config_root.to_hash_out(),
-		)
-		.unwrap();
-		pw.set_hash_target(self.public.root.0, root.to_hash_out())
-			.unwrap();
-
-		set_authority_keys(
-			pw,
-			self.private.approval_key,
-			self.private.rejection_key,
-			self.private.subpool_consume_key,
-			approval_key,
-			rejection_key,
-			consume_key,
-		);
-		self.private.accin.set_witness(pw, accin);
-		self.private.accout.set_witness(pw, accout);
+	
 	}
 }
 
 pub struct TxCircuitPublicTargets {
 	/// [0..4]: Combined ACT / NCT Merkle root.
-	pub root: RootTarget,
+	pub state_root: StateRootTarget,
 	/// [4..8]: Main pool configuration tree root.
 	pub mainpool_config_root: MainPoolConfigRootTarget,
 	/// [8]: 1 for a real transaction, 0 for a dummy/padding proof.
@@ -405,7 +424,7 @@ impl TxCircuitPublicTargets {
 	where
 		F: RichField + Extendable<D>,
 	{
-		builder.register_public_inputs(&self.root.0.elements);
+		builder.register_public_inputs(&self.state_root.0.elements);
 		builder.register_public_inputs(&self.mainpool_config_root.0.elements);
 		builder.register_public_input(self.not_fake_tx.target);
 		builder.register_public_inputs(&self.accin_null.0.elements);
@@ -438,7 +457,7 @@ impl TxCircuitPublicTargets {
 		let (inull_s, rest) = rest.split_at(NOTE_BATCH * 4);
 		let (ocomm_s, _) = rest.split_at(NOTE_BATCH * 4);
 		Self {
-			root: RootTarget(HashOutTarget {
+			state_root: StateRootTarget(HashOutTarget {
 				elements: root_s.try_into().unwrap(),
 			}),
 			mainpool_config_root: MainPoolConfigRootTarget(HashOutTarget {
@@ -493,8 +512,6 @@ impl TxCircuitPublicTargets {
 
 pub struct TxCircuitPrivateTargets {
 	// ── Tx kind flags ─────────────────────────────────────────────────────────
-	/// Reject transaction: operator reclaims notes on behalf of the sender.
-	pub(crate) is_rjct: BoolTarget,
 	/// FreshAcc transaction: account creation, sets initial auth keys.
 	pub(crate) is_fresh_acc: BoolTarget,
 	/// UpdateAuth transaction: rotates spend or consume keys.
@@ -505,8 +522,6 @@ pub struct TxCircuitPrivateTargets {
 
 	// ── Authority public keys ──────────────────────────────────────────────────
 	pub(crate) approval_key: PubkeyTarget,
-	pub(crate) rejection_key: PubkeyTarget,
-	pub(crate) subpool_consume_key: PubkeyTarget,
 	// ── Accounts ──────────────────────────────────────────────────────────────
 	pub(crate) accin: AccountTarget,
 	pub(crate) accout: AccountTarget,
@@ -517,8 +532,6 @@ pub struct TxCircuitPrivateTargets {
 
 	pub(crate) asset_exists_in_accin: BoolTarget,
 	pub(crate) asset_exists_in_accout: BoolTarget,
-	/// AccIn leaf index in the ACT (prover-supplied for non-FreshAcc tx).
-	pub(crate) accin_pos: Target,
 	// ── Merkle targets ────────────────────────────────────────────────────────
 	/// ACT membership proof for AccIn (conditional on `!is_fresh_acc && not_fake_tx`).
 	pub(crate) accin_act_merkle: MerkleRootTarget,
@@ -529,15 +542,19 @@ pub struct TxCircuitPrivateTargets {
 
 	// ── Notes ────────────────────────────────────────────────────────────────
 	/// Input notes (NOTE_BATCH slots; inactive slots are zero-padded).
-	pub(crate) inotes: [NoteTarget; NOTE_BATCH],
+	pub(crate) inotes: [StandardNoteTarget; NOTE_BATCH],
 	/// NCT leaf positions of the input notes.
 	pub(crate) inotes_pos: [Target; NOTE_BATCH],
 	/// Whether each input note slot is active (being spent).
 	pub(crate) inotes_isactive: [BoolTarget; NOTE_BATCH],
 	/// Output notes (NOTE_BATCH slots; inactive slots are zero-padded).
-	pub(crate) onotes: [NoteTarget; NOTE_BATCH],
+	pub(crate) onotes: [StandardNoteTarget; NOTE_BATCH],
 	/// Whether each output note slot is active (being created).
 	pub(crate) onotes_isactive: [BoolTarget; NOTE_BATCH],
+	/// Whether each (inote[i], onote[i]) pair is a reject pair.
+	/// When true for pair i, the circuit enforces the note-return conditions for that pair
+	/// and excludes it from the spend-signature requirement.
+	pub(crate) is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 	/// Dummy input note hashes (used for nullifiers in inactive inote slots).
 	pub(crate) dinotes: [DummyNoteTarget; NOTE_BATCH],
 	/// Dummy output note hashes (used for commitments in inactive onote slots).
@@ -545,10 +562,6 @@ pub struct TxCircuitPrivateTargets {
 	/// Authority key membership proofs.
 	pub(crate) subpool_proof_targets: SubpoolFullProofTargets,
 	pub(crate) sig_targets: TxSignatureTargets,
-	/// Input account subpool ID
-	pub(crate) accin_subpool_id: SubpoolIdTarget,
-	/// Output account subpool ID
-	pub(crate) accout_subpool_id: SubpoolIdTarget,
 	/// Asset ID
 	pub(crate) asset_id: AssetIdTarget,
 }

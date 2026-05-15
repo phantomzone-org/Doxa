@@ -1,6 +1,6 @@
 use plonky2::{
 	hash::{
-		hash_types::{HashOut, HashOutTarget, RichField},
+		hash_types::{HashOut, HashOutTarget, NUM_HASH_OUT_ELTS, RichField},
 		poseidon::PoseidonHash,
 	},
 	iop::target::{BoolTarget, Target},
@@ -14,21 +14,20 @@ use tessera_utils::{
 };
 
 use crate::{
-	ACC_AST_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT, COM_TREE_DEPTH,
-	DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER, DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF,
-	DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER, MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH,
-	SUBPOOL_CONFIG_DEPTH,
+	ACC_AST_DEPTH, AST_DEFAULT_LEAF, AST_DEFAULT_ROOT, DEFAULT_ACC_COMM_CONSUME_PK_PLACEHOLDER,
+	DEFAULT_SPEND_AUTH_PK, DS_ACC_AST_LEAF, DS_NULLIFIER_KEY, DS_PUBLIC_IDENTIFIER,
+	MAIN_POOL_CONFIG_DEPTH, NOTE_BATCH, STATE_TREE_DEPTH, SUBPOOL_CONFIG_DEPTH,
 	plonky2_gadgets::{
 		merkle::{MerkleRootTarget, compute_merkle_root_gadget, conditional_merkle_verify_gadget},
 		priv_tx::{
 			targets::{
-				AccountCommitmentTarget, AccountNullifierTarget, AccountTarget, AssetIdTarget,
-				ConsumeAuthTarget, ConsumeCondTarget, DummyAccountCommitment,
+				AccountAddressTarget, AccountCommitmentTarget, AccountNullifierTarget,
+				AccountTarget, AssetIdTarget, ConsumeAuthTarget, DummyAccountCommitment,
 				DummyAccountNullifier, DummyAccountTarget, DummyNoteTarget,
-				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget, NoteTarget,
-				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTaregt,
-				RejectCondTarget, RootTarget, SubpoolConfigRootTarget, SubpoolFullProofTargets,
-				SubpoolIdTarget, TxHashTarget, TxSignatureTargets,
+				MainPoolConfigRootTarget, NoteCommitmentTarget, NoteNullifierTarget,
+				NullifierKeyTarget, PrivateIdentifierTarget, PublicIdentifierTarget,
+				StandardNoteTarget, StateRootTarget, SubpoolFullProofTargets, SubpoolIdTarget,
+				TxHashTarget, TxSignatureTargets,
 			},
 			utils::double_hash,
 		},
@@ -50,10 +49,6 @@ use crate::{
 pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	// ---- Add virtual methods ----
 
-	/// Allocate the three subpool authority key targets (approval, rejection, consume)
-	/// that appear in every transaction circuit.
-	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget);
-
 	/// Allocate a single dummy note target (an opaque 4-element hash).
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget;
 	/// Allocate a single dummy account target (an opaque 4-element hash).
@@ -61,12 +56,12 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	/// Allocate all targets for a full account. `subpool_id` is a plain target;
 	/// callers must register it as a public input explicitly via their circuit's PI block.
 	fn add_virtual_account_target(&mut self) -> AccountTarget;
-	/// Allocate a note spend-condition target (recipient address).
-	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget;
-	/// Allocate a note reject-condition target (sender address).
-	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget;
+	/// Allocate an account address target.
+	fn add_virtual_account_address_target(&mut self) -> AccountAddressTarget;
 	/// Allocate all targets for a full note.
-	fn add_virtual_note_target(&mut self) -> NoteTarget;
+	fn add_virtual_note_target(&mut self) -> StandardNoteTarget;
+	/// Allocate a pubkey target
+	fn add_virtual_public_key_target(&mut self) -> PubkeyTarget;
 
 	// ---- Account related methods ----
 
@@ -99,7 +94,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
-		root: RootTarget,
+		root: StateRootTarget,
 		condition: BoolTarget,
 	) -> MerkleRootTarget;
 
@@ -117,7 +112,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	fn derive_public_identifier(
 		&mut self,
 		priv_id: PrivateIdentifierTarget,
-	) -> PublicIdentifierTaregt;
+	) -> PublicIdentifierTarget;
 
 	/// When `condition=1`, assert that `acc` is in a fresh (pre-activation) state:
 	/// `nonce=0`, default spend/consume keys, and empty AST root.
@@ -141,7 +136,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		&mut self,
 		accin: AccountTarget,
 		accout: AccountTarget,
-		is_rjct: BoolTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
 		is_priv_tx: BoolTarget,
@@ -181,7 +175,7 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	/// Derive the note commitment in-circuit.
 	///
 	/// Matches [`StandardNote::commitment`](crate::note::StandardNote::commitment) natively.
-	fn derive_note_commitment(&mut self, note: NoteTarget) -> NoteCommitmentTarget;
+	fn derive_note_commitment(&mut self, note: StandardNoteTarget) -> NoteCommitmentTarget;
 
 	/// Derive the note nullifier: `H(note_commitment || pos || nk)`.
 	fn derive_note_nullifier(
@@ -202,12 +196,12 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 	#[allow(clippy::too_many_arguments)]
 	fn assert_inotes_valid<H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>>(
 		&mut self,
-		inotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
-		public_identifier: PublicIdentifierTaregt,
+		public_identifier: PublicIdentifierTarget,
 		subpool_id: SubpoolIdTarget,
-		root: RootTarget,
+		root: StateRootTarget,
 	) -> [MerkleRootTarget; NOTE_BATCH];
 
 	// ---- Other priv tx methods ----
@@ -218,8 +212,6 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		&mut self,
 		subpool_id: SubpoolIdTarget,
 		approval_key: PubkeyTarget,
-		rejection_key: PubkeyTarget,
-		consume_key: PubkeyTarget,
 		mainpoolconfig_root: MainPoolConfigRootTarget,
 		not_fake_tx: BoolTarget,
 	) -> SubpoolFullProofTargets;
@@ -237,16 +229,15 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		accout_comm: AccountCommitmentTarget,
 	) -> TxHashTarget;
 
-	/// When `is_rjct=1`, enforce that each active output note is a mirror of the
-	/// corresponding input note with the spend/reject conditions swapped (i.e. the
-	/// note is returned to the sender).
-	fn assert_is_reject(
+	/// For each pair `i` where `is_note_pair_rjct[i]=1`, enforce that the output note is a
+	/// mirror of the corresponding input note with the spend/reject conditions swapped (i.e.
+	/// the note is returned to the sender).
+	fn assert_reject_note_pairs(
 		&mut self,
-		is_rjct: BoolTarget,
-		inotes: [NoteTarget; NOTE_BATCH],
-		inotes_isactive: [BoolTarget; NOTE_BATCH],
-		onotes: [NoteTarget; NOTE_BATCH],
-		onotes_isactive: [BoolTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
+		onotes: [StandardNoteTarget; NOTE_BATCH],
+		inote_isactive: [BoolTarget; NOTE_BATCH],
+		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 	);
 
 	/// Enforce the asset conservation law:
@@ -257,15 +248,15 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		&mut self,
 		accin_amt: U256Target,
 		accout_amt: U256Target,
-		inotes: [NoteTarget; NOTE_BATCH],
-		onotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
+		onotes: [StandardNoteTarget; NOTE_BATCH],
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 	);
 
 	/// Verify the three Schnorr signatures required for a private transaction.
 	///
-	/// - **Spend** — required when any output note is active and tx is not a reject. Signed by
+	/// - **Spend** — required when any output note is active and not a reject pair. Signed by
 	///   `accin.spend_auth`.
 	/// - **Consume** — required when any input note is active and no output note is active (pure
 	///   consume).  Key selected by `accin.consume_auth.config`.
@@ -278,9 +269,8 @@ pub trait PrivTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 		accin: AccountTarget,
-		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
-		not_is_rjct: BoolTarget,
+		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets;
 }
@@ -291,11 +281,9 @@ impl<F: RichField + Extendable<D>, const D: usize> PrivTxCircuitBuilder<F, D>
 where
 	HashOutput: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>,
 {
-	fn add_virtual_authority_keys(&mut self) -> (PubkeyTarget, PubkeyTarget, PubkeyTarget) {
-		let approval = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
-		let rejection = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
-		let consume = PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()));
-		(approval, rejection, consume)
+	// TODO: change this to only return pubkey target
+	fn add_virtual_public_key_target(&mut self) -> PubkeyTarget {
+		PubkeyTarget(LocalQuinticExtension(self.add_virtual_target_arr()))
 	}
 
 	fn add_virtual_dummy_note_target(&mut self) -> DummyNoteTarget {
@@ -320,32 +308,20 @@ where
 		}
 	}
 
-	fn add_virtual_consume_cond_target(&mut self) -> ConsumeCondTarget {
-		ConsumeCondTarget {
+	fn add_virtual_account_address_target(&mut self) -> AccountAddressTarget {
+		AccountAddressTarget {
 			subpool_id: SubpoolIdTarget(self.add_virtual_target()),
-			public_identifier: PublicIdentifierTaregt(self.add_virtual_hash()),
+			public_identifier: PublicIdentifierTarget(self.add_virtual_hash()),
 		}
 	}
 
-	fn add_virtual_reject_cond_target(&mut self) -> RejectCondTarget {
-		RejectCondTarget {
-			subpool_id: SubpoolIdTarget(self.add_virtual_target()),
-			public_identifier: PublicIdentifierTaregt(self.add_virtual_hash()),
-		}
-	}
-
-	fn add_virtual_note_target(&mut self) -> NoteTarget {
-		let identifier = self.add_virtual_target_arr();
-		let amount = self.add_virtual_u256_target();
-		let asset_id = AssetIdTarget(self.add_virtual_target());
-		let spend_cond = self.add_virtual_consume_cond_target();
-		let reject_cond = self.add_virtual_reject_cond_target();
-		NoteTarget {
-			identifier,
-			amount,
-			asset_id,
-			spend_cond,
-			reject_cond,
+	fn add_virtual_note_target(&mut self) -> StandardNoteTarget {
+		StandardNoteTarget {
+			identifier: self.add_virtual_target_arr(),
+			amount: self.add_virtual_u256_target(),
+			asset_id: AssetIdTarget(self.add_virtual_target()),
+			recipient: self.add_virtual_account_address_target(),
+			sender: self.add_virtual_account_address_target(),
 		}
 	}
 
@@ -369,7 +345,7 @@ where
 	>(
 		&mut self,
 		acc_comm: AccountCommitmentTarget,
-		root: RootTarget,
+		root: StateRootTarget,
 		condition: BoolTarget,
 	) -> MerkleRootTarget {
 		conditional_merkle_verify_gadget::<F, D>(
@@ -377,7 +353,7 @@ where
 			acc_comm.0,
 			root.0,
 			condition,
-			COM_TREE_DEPTH,
+			STATE_TREE_DEPTH,
 		)
 	}
 
@@ -417,7 +393,7 @@ where
 		DummyAccountNullifier(double_hash(self, dacc.0))
 	}
 
-	fn derive_note_commitment(&mut self, note: NoteTarget) -> NoteCommitmentTarget {
+	fn derive_note_commitment(&mut self, note: StandardNoteTarget) -> NoteCommitmentTarget {
 		// Matches StandardNote::commitment(): 21-element flat hash
 		// identifier[2] || amount[8]  || asset_id || spend_cond.subpool_id[1] ||
 		// spend_cond.pub_id[4]              || reject_cond.subpool_id[1] || reject_cond.pub_id[4]
@@ -425,10 +401,10 @@ where
 		input.extend_from_slice(&note.identifier);
 		input.extend(note.amount.0.map(|u| u.0));
 		input.push(note.asset_id.0);
-		input.push(note.spend_cond.subpool_id.0);
-		input.extend_from_slice(&note.spend_cond.public_identifier.0.elements);
-		input.push(note.reject_cond.subpool_id.0);
-		input.extend_from_slice(&note.reject_cond.public_identifier.0.elements);
+		input.push(note.recipient.subpool_id.0);
+		input.extend_from_slice(&note.recipient.public_identifier.0.elements);
+		input.push(note.sender.subpool_id.0);
+		input.extend_from_slice(&note.sender.public_identifier.0.elements);
 		NoteCommitmentTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
 	}
 
@@ -454,11 +430,11 @@ where
 	fn derive_public_identifier(
 		&mut self,
 		priv_id: PrivateIdentifierTarget,
-	) -> PublicIdentifierTaregt {
+	) -> PublicIdentifierTarget {
 		let ds = self.constant(F::from_canonical_u64(DS_PUBLIC_IDENTIFIER));
 		let mut input = vec![ds];
 		input.extend(priv_id.0);
-		PublicIdentifierTaregt(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
+		PublicIdentifierTarget(self.hash_n_to_hash_no_pad::<PoseidonHash>(input))
 	}
 
 	fn derive_dummy_note_nullifier(&mut self, dnote: DummyNoteTarget) -> NoteNullifierTarget {
@@ -533,40 +509,22 @@ where
 		&mut self,
 		subpool_id: SubpoolIdTarget,
 		approval_key: PubkeyTarget,
-		rejection_key: PubkeyTarget,
-		consume_key: PubkeyTarget,
 		mainpool_config_root: MainPoolConfigRootTarget,
 		not_fake_tx: BoolTarget,
 	) -> SubpoolFullProofTargets {
-		// Step A: Allocate the shared subpool config root target.
-		// All three per-key proofs verify against this same root.
-		let subpool_config_root = self.add_virtual_hash();
+		// Step A: SubpoolConfig Commitment = H(approval_key)
+		let subpool_config_comm =
+			self.hash_n_to_hash_no_pad::<PoseidonHash>(approval_key.0.0.to_vec());
 
-		// Step B: Verify each authority key is a leaf in the depth-2 subpool config tree.
-		// Leaf = H(key_as_5_targets).  The root is the shared subpool_config_root.
-		let mut verify_key_proof = |key: PubkeyTarget| -> MerkleRootTarget {
-			let leaf_hash = self.hash_n_to_hash_no_pad::<PoseidonHash>(key.0.0.to_vec());
-			// TODO: change this from conditional to compute
-			conditional_merkle_verify_gadget::<F, D>(
-				self,
-				leaf_hash,
-				subpool_config_root,
-				not_fake_tx,
-				SUBPOOL_CONFIG_DEPTH,
-			)
-		};
-
-		let approval_proof = verify_key_proof(approval_key);
-		let rejection_proof = verify_key_proof(rejection_key);
-		let consume_proof = verify_key_proof(consume_key);
-
-		// Step C: Verify the subpool config root is a leaf in the depth-20 main pool tree.
-		// Main pool leaf = H(subpool_config_root[4] || subpool_id[1]).
+		// Step B: Verify the subpool config commitment is a leaf in the depth-20 main pool tree.
+		// Main pool leaf = H([subpool_id, 0, 0, 0] || subpool_config_comm).
 		// TODO: add a DS in the derivation of the leaf?
+		let zero = self.zero();
 		let main_pool_leaf_hash = {
-			let mut inputs = subpool_config_root.elements.to_vec();
-			inputs.push(subpool_id.0);
-			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs)
+			let mut inputs: [Target; NUM_HASH_OUT_ELTS * 2] = core::array::from_fn(|_| zero);
+			inputs[0] = subpool_id.0;
+			inputs[4..].copy_from_slice(subpool_config_comm.elements.as_slice());
+			self.hash_n_to_hash_no_pad::<PoseidonHash>(inputs.to_vec())
 		};
 		let main_pool_proof = conditional_merkle_verify_gadget::<F, D>(
 			self,
@@ -577,11 +535,7 @@ where
 		);
 
 		SubpoolFullProofTargets {
-			approval_proof,
-			rejection_proof,
-			consume_proof,
 			main_pool_proof,
-			subpool_config_root: SubpoolConfigRootTarget(subpool_config_root),
 		}
 	}
 
@@ -626,12 +580,12 @@ where
 
 	fn assert_inotes_valid<H: MerkleHashCircuit<F, D, HashTarget = MerkleHashTarget<4>>>(
 		&mut self,
-		inotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
 		inote_isactive: [BoolTarget; NOTE_BATCH],
 		inotes_comm: [NoteCommitmentTarget; NOTE_BATCH],
-		public_identifier: PublicIdentifierTaregt,
+		public_identifier: PublicIdentifierTarget,
 		subpool_id: SubpoolIdTarget,
-		root: RootTarget,
+		root: StateRootTarget,
 	) -> [MerkleRootTarget; NOTE_BATCH] {
 		let merkle_proofs: [MerkleRootTarget; NOTE_BATCH] = core::array::from_fn(|i| {
 			conditional_merkle_verify_gadget::<F, D>(
@@ -639,17 +593,17 @@ where
 				inotes_comm[i].0,
 				root.0,
 				inote_isactive[i],
-				COM_TREE_DEPTH,
+				STATE_TREE_DEPTH,
 			)
 		});
 
 		// each note must be spendable by the account
 		for note in inotes.iter() {
 			self.connect_array(
-				note.spend_cond.public_identifier.0.elements,
+				note.recipient.public_identifier.0.elements,
 				public_identifier.0.elements,
 			);
-			self.connect(note.spend_cond.subpool_id.0, subpool_id.0);
+			self.connect(note.recipient.subpool_id.0, subpool_id.0);
 		}
 
 		merkle_proofs
@@ -673,7 +627,6 @@ where
 		&mut self,
 		accin: AccountTarget,
 		accout: AccountTarget,
-		is_rjct: BoolTarget,
 		is_fresh_acc: BoolTarget,
 		is_update_auth: BoolTarget,
 		is_priv_tx: BoolTarget,
@@ -689,8 +642,8 @@ where
 
 		// acc_ast_root is immutable for FreshAccTx and UpdateAuthTx; PrivTx may update it
 		//
-		// not_spend = !is_priv_tx = is_rjct | is_fresh_acc | is_update_auth, because we constrain
-		// elsewhere that only 1 flag of the set is set to true at any time
+		// not_spend = !is_priv_tx = is_fresh_acc | is_update_auth | (reject pairs), because we
+		// constrain elsewhere that only 1 flag of the set is set to true at any time
 		let not_spend = self.not(is_priv_tx);
 		for i in 0..HASH_SIZE {
 			// TODO: use is_fresh_acc | is_update_auth here instead of not_spend
@@ -726,25 +679,34 @@ where
 		);
 	}
 
-	fn assert_is_reject(
+	fn assert_reject_note_pairs(
 		&mut self,
-		is_rjct: BoolTarget,
-		inotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
+		onotes: [StandardNoteTarget; NOTE_BATCH],
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
-		onotes: [NoteTarget; NOTE_BATCH],
-		onotes_isactive: [BoolTarget; NOTE_BATCH],
+		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 	) {
 		for i in 0..NOTE_BATCH {
+			// if pair is rjct kind, the input note must be asserted to be active, otherwise in
+			// situations where user has delegated consumption to the subpool owner, owner can
+			// perform arbitrary spends without user's approval with configuration: inotes_acitve[i]
+			// = false, is_note_pair_rjct[i] = true, onotes_active[i] = true. This is because
+			// spend signature check is skipped for output notes part of rjct note pairs.
+			//
+			// Same is not required for output notes, however. Because when an output note is
+			// inactive but corresponding input note and rjct flag is active, then the only action
+			// possible is to consume the input note.
+			let tr = self._true();
 			self.conditional_assert_eq(
-				is_rjct.target,
+				is_note_pair_rjct[i].target,
 				inotes_isactive[i].target,
-				onotes_isactive[i].target,
+				tr.target,
 			);
 
 			// identifier
 			for j in 0..2 {
 				self.conditional_assert_eq(
-					is_rjct.target,
+					is_note_pair_rjct[i].target,
 					inotes[i].identifier[j],
 					onotes[i].identifier[j],
 				);
@@ -753,40 +715,44 @@ where
 			// amount (8 u32 limbs)
 			for j in 0..8 {
 				self.conditional_assert_eq(
-					is_rjct.target,
+					is_note_pair_rjct[i].target,
 					inotes[i].amount.0[j].0,
 					onotes[i].amount.0[j].0,
 				);
 			}
 
 			// asset_id
-			self.conditional_assert_eq(is_rjct.target, inotes[i].asset_id.0, onotes[i].asset_id.0);
+			self.conditional_assert_eq(
+				is_note_pair_rjct[i].target,
+				inotes[i].asset_id.0,
+				onotes[i].asset_id.0,
+			);
 
 			// spend_cond of onote == reject_cond of inote (note returns to sender)
 			self.conditional_assert_eq(
-				is_rjct.target,
-				inotes[i].reject_cond.subpool_id.0,
-				onotes[i].spend_cond.subpool_id.0,
+				is_note_pair_rjct[i].target,
+				inotes[i].sender.subpool_id.0,
+				onotes[i].recipient.subpool_id.0,
 			);
 			for j in 0..HASH_SIZE {
 				self.conditional_assert_eq(
-					is_rjct.target,
-					inotes[i].reject_cond.public_identifier.0.elements[j],
-					onotes[i].spend_cond.public_identifier.0.elements[j],
+					is_note_pair_rjct[i].target,
+					inotes[i].sender.public_identifier.0.elements[j],
+					onotes[i].recipient.public_identifier.0.elements[j],
 				);
 			}
 
 			// reject_cond of onote == reject_cond of inote (sender unchanged)
 			self.conditional_assert_eq(
-				is_rjct.target,
-				inotes[i].reject_cond.subpool_id.0,
-				onotes[i].reject_cond.subpool_id.0,
+				is_note_pair_rjct[i].target,
+				inotes[i].sender.subpool_id.0,
+				onotes[i].sender.subpool_id.0,
 			);
 			for j in 0..HASH_SIZE {
 				self.conditional_assert_eq(
-					is_rjct.target,
-					inotes[i].reject_cond.public_identifier.0.elements[j],
-					onotes[i].reject_cond.public_identifier.0.elements[j],
+					is_note_pair_rjct[i].target,
+					inotes[i].sender.public_identifier.0.elements[j],
+					onotes[i].sender.public_identifier.0.elements[j],
 				);
 			}
 		}
@@ -796,8 +762,8 @@ where
 		&mut self,
 		accin_amt: U256Target,
 		accout_amt: U256Target,
-		inotes: [NoteTarget; NOTE_BATCH],
-		onotes: [NoteTarget; NOTE_BATCH],
+		inotes: [StandardNoteTarget; NOTE_BATCH],
+		onotes: [StandardNoteTarget; NOTE_BATCH],
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 	) {
@@ -855,20 +821,20 @@ where
 		inotes_isactive: [BoolTarget; NOTE_BATCH],
 		onotes_isactive: [BoolTarget; NOTE_BATCH],
 		accin: AccountTarget,
-		subpool_consume_key: PubkeyTarget,
 		approval_key: PubkeyTarget,
-		not_is_rjct: BoolTarget,
+		is_note_pair_rjct: [BoolTarget; NOTE_BATCH],
 		not_fake_tx: BoolTarget,
 	) -> TxSignatureTargets {
 		// ── Spend signature ───────────────────────────────────────────────────
-		// Required when ≥1 output note is active (a spend is happening) AND the
-		// tx is not a reject.  Signed by accin.spend_auth.
-		let mut is_spend_req = onotes_isactive[0];
-		for sel in onotes_isactive.iter().skip(1) {
-			is_spend_req = self.or(*sel, is_spend_req);
+		// Required when ≥1 output note is active AND that note is not a reject pair.
+		// Reject pairs do not require a spend signature.
+		let not_pair_rjct_0 = self.not(is_note_pair_rjct[0]);
+		let mut is_spend_req = self.and(onotes_isactive[0], not_pair_rjct_0);
+		for (i, sel) in onotes_isactive.iter().enumerate().skip(1) {
+			let not_pair_rjct_i = self.not(is_note_pair_rjct[i]);
+			let contributes = self.and(*sel, not_pair_rjct_i);
+			is_spend_req = self.or(contributes, is_spend_req);
 		}
-		// Reject does not need a spend signature even though onotes are active.
-		is_spend_req = self.and(is_spend_req, not_is_rjct);
 
 		// Note: the public key used in verification must match the key stored in accin —
 		// even for "fake" signatures the key must be correct or the proof will fail.
@@ -877,24 +843,21 @@ where
 			conditional_schnorr_verify_gadget(self, tx_hash.0, accin.spend_auth, is_spend_req);
 
 		// ── Consume signature ─────────────────────────────────────────────────
-		// Required when ≥1 input note is active AND no output note is active
-		// (pure consume, no outgoing transfer).
-		// Key: accin.consume_auth.config selects own key (1) or subpool key (0).
+		// Required when ≥1 input note is active AND no output note is active AND
+		// consume_auth.config = 1 (pure consume, no outgoing transfer).
 		let mut has_inotes = inotes_isactive[0];
 		for sel in inotes_isactive.iter().skip(1) {
 			has_inotes = self.or(*sel, has_inotes);
 		}
 		let not_is_spend_req = self.not(is_spend_req);
 		let is_consume_req = self.and(has_inotes, not_is_spend_req);
-		let consume_key = PubkeyTarget(LocalQuinticExtension(core::array::from_fn(|i| {
-			self._if(
-				accin.consume_auth.config,
-				accin.consume_auth.pk.0.0[i],
-				subpool_consume_key.0.0[i],
-			)
-		})));
-		let consume =
-			conditional_schnorr_verify_gadget(self, tx_hash.0, consume_key, is_consume_req);
+		let check_consume_sig = self.and(is_consume_req, accin.consume_auth.config);
+		let consume = conditional_schnorr_verify_gadget(
+			self,
+			tx_hash.0,
+			accin.consume_auth.pk,
+			check_consume_sig,
+		);
 
 		// ── Approval signature ────────────────────────────────────────────────
 		// Always required for real transactions; bypassed for dummy proofs.

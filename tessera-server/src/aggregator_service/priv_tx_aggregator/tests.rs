@@ -1,4 +1,4 @@
-use tessera_client::{NOTE_BATCH, PRIV_TX_BATCH_SIZE, SUBTREE_BATCHSIZE};
+use tessera_client::{FakeSpendTxBuilder, NOTE_BATCH, PRIV_TX_BATCH_SIZE, SUBTREE_BATCHSIZE};
 
 // ── E2E test ─────────────────────────────────────────────────────────────────
 //
@@ -11,31 +11,27 @@ use tessera_client::{NOTE_BATCH, PRIV_TX_BATCH_SIZE, SUBTREE_BATCHSIZE};
 #[ignore]
 fn priv_tx_batch_to_groth16_e2e() {
 	use std::path::Path;
-	use plonky2::field::types::{Field, PrimeField64};
-	use tessera_client::{
-		FakeTxInputs, PrivTxInputs, PrivateTransactionProof, TesseraGateSerializer,
-		build_priv_tx_circuit, prove_priv_tx,
-	};
+
+	use plonky2::field::types::PrimeField64;
+	use tessera_client::{build_priv_tx_circuit, TesseraGateSerializer};
 	use tessera_utils::{
-		F,
 		groth::{BN128Wrapper, Groth16Wrapper},
 		hasher::HashOutput,
 	};
 
 	use super::PrivTxAggregator;
 	use crate::{
-		batch_helper::{BatchHelper, SolidityKeccak256, TxProof},
+		batch_helper::{BatchHelper, SolidityKeccak256},
 		prover_service::priv_tx::PrivateTxBatch,
 	};
 
 	// ── Artifact paths ───────────────────────────────────────────────────────
-	let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+	let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
 	let agg_path = workspace.join("artifacts/priv-tx");
 	let plonky2_path = agg_path.join("plonky2-proof");
 	let groth_path = agg_path.join("groth-artifacts");
 
-	const GEN_CMD: &str =
-		"  cargo run -p tessera-e2e --bin priv_tx_artifacts --release";
+	const GEN_CMD: &str = "  cargo run -p tessera-e2e --bin priv_tx_artifacts --release";
 
 	if !PrivTxAggregator::has_full_artifacts(&agg_path).unwrap_or(false) {
 		panic!(
@@ -65,26 +61,18 @@ fn priv_tx_batch_to_groth16_e2e() {
 
 	// ── 2. Populate and finalize a PrivateTxBatch ────────────────────────────
 	// Add 1 dummy proof; finalize() pads the remaining 63 slots automatically.
-	let zero = HashOutput([F::ZERO; 4]);
-	let zero4 = [F::ZERO; 4];
-	let (circuit, targets) = build_priv_tx_circuit();
-	let leaf_proof = prove_priv_tx(
-		&circuit,
-		&targets,
-		PrivTxInputs::Fake(FakeTxInputs {
-			root: zero,
-			mainpool_config_root: zero,
-			override_an: zero4,
-			override_ac: zero4,
-			override_nn: [zero4; NOTE_BATCH],
-			override_nc: [zero4; NOTE_BATCH],
-		}),
-	);
+	let privtx_circ = build_priv_tx_circuit();
+	let fake_privtx_proof = FakeSpendTxBuilder::new(
+		HashOutput(Default::default()),
+		HashOutput(Default::default()),
+	)
+	.build()
+	.into_priv_tx()
+	.prove(&privtx_circ.circuit_data, &privtx_circ.targets)
+	.expect("FakeSpendTxBuilder prove failed");
 
 	let mut batch = PrivateTxBatch::new();
-	batch
-		.add_proof(TxProof::Private(PrivateTransactionProof(leaf_proof)))
-		.expect("add_proof");
+	batch.add_proof(fake_privtx_proof).expect("add_proof");
 	batch.finalize().expect("finalize");
 
 	assert_eq!(batch.proofs().len(), PRIV_TX_BATCH_SIZE);
@@ -97,6 +85,7 @@ fn priv_tx_batch_to_groth16_e2e() {
 	let super_proof = agg.prove(&batch).expect("PrivTxAggregator::prove");
 	assert_eq!(super_proof.public_inputs.len(), 8);
 
+	// TODO: better way to map PI to Vec<u8>
 	let pi_from_proof: [u8; 32] = {
 		let mut out = [0u8; 32];
 		for (i, f) in super_proof.public_inputs.iter().enumerate() {
@@ -119,7 +108,9 @@ fn priv_tx_batch_to_groth16_e2e() {
 	Groth16Wrapper::init_with_label(label, &plonky2_path, &groth_path)
 		.expect("Groth16Wrapper::init_with_label");
 
-	let bn128_proof = bn128.wrap_proof_to_bn128(super_proof).expect("wrap_proof_to_bn128");
+	let bn128_proof = bn128
+		.wrap_proof_to_bn128(super_proof)
+		.expect("wrap_proof_to_bn128");
 	let (g16_proof, g16_pub_inp) =
 		Groth16Wrapper::prove_with_label(label, bn128_proof).expect("Groth16 prove");
 	Groth16Wrapper::verify_with_label(label, g16_proof, g16_pub_inp).expect("Groth16 verify");

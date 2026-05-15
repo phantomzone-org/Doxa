@@ -17,13 +17,11 @@ pub struct FreshAccInputs {
 	pub accin: StandardAccount,
 	pub new_spend_auth: SpendAuth,
 	pub new_consume_auth: ConsumeAuth,
-	/// On-chain Poseidon IMT root at proof time. Registered as both PI[77-80]
-	/// and PI[81-84] (V2 uses a single IMT for accounts and notes). Not
-	/// checked by the circuit for FreshAcc, but bound in the super-aggregator.
-	pub root: HashOutput,
+	/// On-chain Poseidon IMT state tree root at proof time. Registered as both PI[77-80]
+	/// and PI[81-84] (V2 uses a single IMT for accounts and notes). Although required in the
+	/// circuit, not constrained for tx kind FreshAcc. But bound in the super-aggregator.
+	pub state_root: HashOutput,
 	pub approval_key: CompPubKey,
-	pub rejection_key: CompPubKey,
-	pub consume_key: CompPubKey,
 	pub subpool_id: SubpoolId,
 	pub main_pool: MainPoolConfigTree<HashOutput>,
 	pub approval_sig: Signature,
@@ -37,10 +35,10 @@ pub struct FreshAccInputs {
 /// `root`, and each active input note must also exist in the same IMT.
 pub struct SpendTxInputs {
 	pub accin: StandardAccount,
-	/// On-chain Poseidon IMT root. Used for both the account commitment (ACT)
-	/// and input-note commitment (NCT) Merkle proofs. In V2 both PI slots
-	/// (PI[77-80] and PI[81-84]) carry this same value.
-	pub root: HashOutput,
+	/// On-chain Poseidon IMT state tree root at proof time. Registered as both PI[77-80]
+	/// and PI[81-84] (V2 uses a single IMT for accounts and notes). Although required in the
+	/// circuit, not constrained for tx kind FreshAcc. But bound in the super-aggregator.
+	pub state_root: HashOutput,
 	pub accin_merkle_proof: MerkleProof<HashOutput>,
 	pub inotes: Vec<StandardNote>,
 	pub inotes_nct_proofs: Vec<MerkleProof<HashOutput>>,
@@ -48,15 +46,14 @@ pub struct SpendTxInputs {
 	pub dinotes: [[F; 4]; NOTE_BATCH],
 	pub donotes: [[F; 4]; NOTE_BATCH],
 	pub approval_key: CompPubKey,
-	pub rejection_key: CompPubKey,
-	pub consume_key: CompPubKey,
 	pub subpool_id: SubpoolId,
 	pub main_pool: MainPoolConfigTree<HashOutput>,
 	/// Spend-auth signature. `Some` when there are active output notes; `None`
 	/// lets the circuit use a fake signature (not enforced for inactive slots).
 	pub spend_sig: Option<Signature>,
-	/// Consume-auth signature. `Some` when consuming active input notes without
-	/// active output notes; `None` for a fake signature.
+	/// Consume-auth signature. `Some` when consuming active input notes, without
+	/// a single active output notes, and consumption is not delegated; `None` for a fake
+	/// signature.
 	pub consume_sig: Option<Signature>,
 	pub approval_sig: Signature,
 }
@@ -72,17 +69,15 @@ pub struct RejectTxInputs {
 	/// and input-note commitment (NCT) Merkle proofs. In V2 both PI slots
 	/// (PI[77-80] and PI[81-84]) carry this same value.
 	pub root: HashOutput,
-	pub inotes: Vec<StandardNote>,
+	pub state_root: Vec<StandardNote>,
 	pub inotes_nct_proofs: Vec<MerkleProof<HashOutput>>,
 	pub onotes: Vec<StandardNote>,
 	pub dinotes: [[F; 4]; NOTE_BATCH],
 	pub donotes: [[F; 4]; NOTE_BATCH],
 	pub approval_key: CompPubKey,
-	pub rejection_key: CompPubKey,
-	pub consume_key: CompPubKey,
 	pub subpool_id: SubpoolId,
 	pub main_pool: MainPoolConfigTree<HashOutput>,
-	pub consume_sig: Signature,
+	pub consume_sig: Option<Signature>,
 	pub approval_sig: Signature,
 }
 
@@ -93,7 +88,7 @@ pub struct RejectTxInputs {
 /// proof's public inputs for AN/AC/NN/NC, allowing alignment with tree padding
 /// leaves chosen by the sequencer.
 pub struct FakeTxInputs {
-	pub root: HashOutput,
+	pub state_root: HashOutput,
 	pub mainpool_config_root: HashOutput,
 	pub override_an: [F; 4],
 	pub override_ac: [F; 4],

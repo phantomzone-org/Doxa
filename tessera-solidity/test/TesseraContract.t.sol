@@ -13,14 +13,20 @@ import {ToyUSDT} from "../src/ToyUSDT.sol";
 /// @dev Accepts every Groth16-shaped proof. Never deploy to production.
 contract AcceptAllVerifier {
     function verifyProof(
-        uint256[8] calldata, uint256[2] calldata, uint256[2] calldata, uint256[8] calldata
+        uint256[8] calldata,
+        uint256[2] calldata,
+        uint256[2] calldata,
+        uint256[8] calldata
     ) external pure {}
 }
 
 /// @dev Rejects every proof — used to exercise ProofVerificationFailed paths.
 contract RejectAllVerifier {
     function verifyProof(
-        uint256[8] calldata, uint256[2] calldata, uint256[2] calldata, uint256[8] calldata
+        uint256[8] calldata,
+        uint256[2] calldata,
+        uint256[2] calldata,
+        uint256[8] calldata
     ) external pure {
         revert("bad proof");
     }
@@ -37,12 +43,11 @@ contract TesseraRollupV2Test is Test {
     AcceptAllVerifier public acceptVerifier;
     RejectAllVerifier public rejectVerifier;
 
-    address constant OP    = address(0x0001);
+    address constant OP = address(0x0001);
     address constant ALICE = address(0xA11CE);
 
-    /// @dev poolConfigRoot is now a LE-packed Goldilocks uint256, not bytes32.
-    uint256 constant PCR   = 0xC0FFEE;
     uint256 constant DEPTH = 4; // 16 leaf slots
+    uint256 constant ASSET_ID = 1; // registered asset ID for `token` in tests
 
     // Unique-nullifier counter; reset per test by Forge's EVM isolation.
     uint256 private _nc;
@@ -56,12 +61,15 @@ contract TesseraRollupV2Test is Test {
     // -----------------------------------------------------------------------
 
     function setUp() public {
-        poseidon       = new PoseidonGoldilocks();
-        token          = new ToyUSDT();
+        poseidon = new PoseidonGoldilocks();
+        token = new ToyUSDT();
         acceptVerifier = new AcceptAllVerifier();
         rejectVerifier = new RejectAllVerifier();
         rollup = _deploy(DEPTH);
-        _nc    = 0xDEAD_0001;
+        _nc = 0xDEAD_0001;
+        // Register the test token so deposit functions work.
+        vm.prank(OP);
+        rollup.registerAsset(ASSET_ID, address(token));
     }
 
     // -----------------------------------------------------------------------
@@ -69,27 +77,29 @@ contract TesseraRollupV2Test is Test {
     // -----------------------------------------------------------------------
 
     function _deploy(uint256 depth) internal returns (TesseraContract) {
-        return new TesseraContract(
-            address(acceptVerifier),
-            address(acceptVerifier),
-            address(poseidon),
-            OP,
-            address(token),
-            PCR,
-            depth
-        );
+        return
+            new TesseraContract(
+                address(acceptVerifier),
+                address(acceptVerifier),
+                address(poseidon),
+                OP,
+                depth,
+                20,
+                0
+            );
     }
 
     function _deployRejectTx(uint256 depth) internal returns (TesseraContract) {
-        return new TesseraContract(
-            address(rejectVerifier),
-            address(acceptVerifier),
-            address(poseidon),
-            OP,
-            address(token),
-            PCR,
-            depth
-        );
+        return
+            new TesseraContract(
+                address(rejectVerifier),
+                address(acceptVerifier),
+                address(poseidon),
+                OP,
+                depth,
+                20,
+                0
+            );
     }
 
     // -----------------------------------------------------------------------
@@ -97,13 +107,15 @@ contract TesseraRollupV2Test is Test {
     // -----------------------------------------------------------------------
 
     /// @dev Mirrors TesseraContract._glHashToBytes.
-    function _glHashToBytes(uint256 packed) internal pure returns (bytes memory out) {
+    function _glHashToBytes(
+        uint256 packed
+    ) internal pure returns (bytes memory out) {
         out = new bytes(32);
         for (uint256 i = 0; i < 4; i++) {
             uint64 el = uint64(packed >> (i * 64));
             uint32 lo = uint32(el);
             uint32 hi = uint32(el >> 32);
-            out[8 * i]     = bytes1(uint8(lo >> 24));
+            out[8 * i] = bytes1(uint8(lo >> 24));
             out[8 * i + 1] = bytes1(uint8(lo >> 16));
             out[8 * i + 2] = bytes1(uint8(lo >> 8));
             out[8 * i + 3] = bytes1(uint8(lo));
@@ -115,7 +127,9 @@ contract TesseraRollupV2Test is Test {
     }
 
     /// @dev Mirrors TesseraContract._glFieldToBytes.
-    function _glFieldToBytes(uint64 el) internal pure returns (bytes memory out) {
+    function _glFieldToBytes(
+        uint64 el
+    ) internal pure returns (bytes memory out) {
         out = new bytes(8);
         uint32 lo = uint32(el);
         uint32 hi = uint32(el >> 32);
@@ -133,7 +147,11 @@ contract TesseraRollupV2Test is Test {
     // Batch / proof helpers
     // -----------------------------------------------------------------------
 
-    function _dummyProof() internal pure returns (TesseraContract.Proof memory p) {
+    function _dummyProof()
+        internal
+        pure
+        returns (TesseraContract.Proof memory p)
+    {
         // All-zero default — AcceptAllVerifier ignores contents.
     }
 
@@ -145,17 +163,16 @@ contract TesseraRollupV2Test is Test {
     ///         | N × (notFakeTx[8] | accinNull[32] | accoutComm[32]
     ///                | noteInNull[NB×32] | noteOutComm[NB×32])
     /// All slot data is zero (notFakeTx = false).
-    function _minBatch(TesseraContract r, uint256 bpr)
-        internal
-        view
-        returns (bytes memory p)
-    {
-        uint256 N  = r.PRIV_TX_BATCH_SIZE();
+    function _minBatch(
+        TesseraContract r,
+        uint256 bpr
+    ) internal view returns (bytes memory p) {
+        uint256 N = r.PRIV_TX_BATCH_SIZE();
         uint256 NB = r.NOTE_BATCH();
         p = new bytes(96 + N * (8 + 32 + 32 + NB * 64));
-        _wb32(p,  0, _glH(bpr));                    // batchPoseidonRoot
-        _wb32(p, 32, _glH(r.zeros(r.treeDepth()))); // root (confirmed)
-        _wb32(p, 64, _glH(PCR));                    // mainPoolConfigRoot
+        _wb32(p, 0, _glH(bpr)); // batchPoseidonRoot
+        _wb32(p, 32, _glH(r.imtCurrentRoot())); // root (confirmed)
+        _wb32(p, 64, _glH(r.mainPoolConfigRoot())); // mainPoolConfigRoot
         // Remaining bytes stay zero (all notFakeTx = 0).
     }
 
@@ -167,12 +184,12 @@ contract TesseraRollupV2Test is Test {
     function _batchWithRealSlot(
         uint256 bpr,
         uint256 acNull,
-        uint256[] memory noteNulls  // length must be NOTE_BATCH
+        uint256[] memory noteNulls // length must be NOTE_BATCH
     ) internal view returns (bytes memory p) {
         p = _minBatch(bpr);
         uint256 slotOff = 96; // slot 0
-        _wf8(p, slotOff, 1);                       // notFakeTx = 1
-        _wb32(p, slotOff + 8, _glH(acNull));        // accinNullifier
+        _wf8(p, slotOff, 1); // notFakeTx = 1
+        _wb32(p, slotOff + 8, _glH(acNull)); // accinNullifier
         for (uint256 j = 0; j < noteNulls.length; j++) {
             _wb32(p, slotOff + 72 + j * 32, _glH(noteNulls[j])); // noteInNullifiers
         }
@@ -181,41 +198,43 @@ contract TesseraRollupV2Test is Test {
     // ── Bridge TX batch preimage builder helpers ─────────────────────────────
 
     uint256 private constant W_SLOT_SIZE = 8 + 32 + 32 + 7 * 8 + 7 * 64 + 40; // 616
-    uint256 private constant D_SLOT_SIZE = 8 + 32 + 32 + 32 + 40 + 64 + 8;    // 216
+    uint256 private constant D_SLOT_SIZE = 8 + 32 + 32 + 32 + 40 + 64 + 8; // 216
 
     /// @dev Builds a minimal bridge TX batch preimage (all-padding).
-    function _minBridgeBatch(TesseraContract r, uint256 bpr)
-        internal
-        view
-        returns (bytes memory p)
-    {
+    function _minBridgeBatch(
+        TesseraContract r,
+        uint256 bpr
+    ) internal view returns (bytes memory p) {
         uint256 H = r.BRIDGE_TX_HALF_SIZE();
         p = new bytes(96 + H * (W_SLOT_SIZE + D_SLOT_SIZE));
-        _wb32(p,  0, _glH(bpr));                    // batchPoseidonRoot
-        _wb32(p, 32, _glH(r.zeros(r.treeDepth()))); // root
-        _wb32(p, 64, _glH(PCR));                    // mainPoolConfigRoot
+        _wb32(p, 0, _glH(bpr)); // batchPoseidonRoot
+        _wb32(p, 32, _glH(r.imtCurrentRoot())); // root
+        _wb32(p, 64, _glH(r.mainPoolConfigRoot())); // mainPoolConfigRoot
     }
 
     /// @dev Like _minBridgeBatch but marks deposit slot 0 as real.
-    function _bridgeBatchWithDeposit(uint256 bpr, uint256 noteKey, uint256 acNull)
-        internal
-        view
-        returns (bytes memory p)
-    {
+    function _bridgeBatchWithDeposit(
+        uint256 bpr,
+        uint256 noteKey,
+        uint256 acNull
+    ) internal view returns (bytes memory p) {
         p = _minBridgeBatch(rollup, bpr);
         uint256 H = rollup.BRIDGE_TX_HALF_SIZE();
         uint256 dSectionOff = 96 + H * W_SLOT_SIZE;
         uint256 slot0Off = dSectionOff; // deposit slot 0
-        _wf8(p, slot0Off, 1);                           // dNotFakeTx = 1
-        _wb32(p, slot0Off + 8, _glH(acNull));           // dAccinNull
+        _wf8(p, slot0Off, 1); // dNotFakeTx = 1
+        _wb32(p, slot0Off + 8, _glH(acNull)); // dAccinNull
         // dAccoutComm at +40 stays zero
-        _wb32(p, slot0Off + 72, bytes32(noteKey));       // dNoteComm (raw bytes32)
+        _wb32(p, slot0Off + 72, bytes32(noteKey)); // dNoteComm (raw bytes32)
     }
 
     // ── Submission/prove wrappers ─────────────────────────────────────────────
 
     /// @dev Submit + prove a TX batch on rollup `r`; appends bpr as a leaf.
-    function _appendTo(TesseraContract r, uint256 bpr) internal returns (bytes32 pic) {
+    function _appendTo(
+        TesseraContract r,
+        uint256 bpr
+    ) internal returns (bytes32 pic) {
         bytes memory preimage = _minBatch(r, bpr);
         vm.prank(OP);
         r.submitTransactionBatch(preimage);
@@ -233,15 +252,20 @@ contract TesseraRollupV2Test is Test {
     ///      Preimage: [lo0_BE4][hi0_BE4][lo1_BE4][hi1_BE4]...
     function _glH(uint256 p) internal pure returns (bytes32) {
         uint256 e0 = p & 0xFFFFFFFFFFFFFFFF;
-        uint256 e1 = (p >> 64)  & 0xFFFFFFFFFFFFFFFF;
+        uint256 e1 = (p >> 64) & 0xFFFFFFFFFFFFFFFF;
         uint256 e2 = (p >> 128) & 0xFFFFFFFFFFFFFFFF;
-        uint256 e3 =  p >> 192;
-        return bytes32(
-            ((e0 & 0xFFFFFFFF) << 224) | ((e0 >> 32) << 192) |
-            ((e1 & 0xFFFFFFFF) << 160) | ((e1 >> 32) << 128) |
-            ((e2 & 0xFFFFFFFF) << 96)  | ((e2 >> 32) << 64)  |
-            ((e3 & 0xFFFFFFFF) << 32)  |  (e3 >> 32)
-        );
+        uint256 e3 = p >> 192;
+        return
+            bytes32(
+                ((e0 & 0xFFFFFFFF) << 224) |
+                    ((e0 >> 32) << 192) |
+                    ((e1 & 0xFFFFFFFF) << 160) |
+                    ((e1 >> 32) << 128) |
+                    ((e2 & 0xFFFFFFFF) << 96) |
+                    ((e2 >> 32) << 64) |
+                    ((e3 & 0xFFFFFFFF) << 32) |
+                    (e3 >> 32)
+            );
     }
 
     /// @dev Copy a GL-preimage-encoded bytes32 into pre-allocated `buf` at `off`.
@@ -255,31 +279,44 @@ contract TesseraRollupV2Test is Test {
     function _wf8(bytes memory buf, uint256 off, uint64 el) private pure {
         assembly ("memory-safe") {
             let ptr := add(add(buf, 0x20), off)
-            let lo  := and(el, 0xFFFFFFFF)
-            let hi  := and(shr(32, el), 0xFFFFFFFF)
-            mstore8(ptr,          byte(28, lo))
-            mstore8(add(ptr, 1),  byte(29, lo))
-            mstore8(add(ptr, 2),  byte(30, lo))
-            mstore8(add(ptr, 3),  byte(31, lo))
-            mstore8(add(ptr, 4),  byte(28, hi))
-            mstore8(add(ptr, 5),  byte(29, hi))
-            mstore8(add(ptr, 6),  byte(30, hi))
-            mstore8(add(ptr, 7),  byte(31, hi))
+            let lo := and(el, 0xFFFFFFFF)
+            let hi := and(shr(32, el), 0xFFFFFFFF)
+            mstore8(ptr, byte(28, lo))
+            mstore8(add(ptr, 1), byte(29, lo))
+            mstore8(add(ptr, 2), byte(30, lo))
+            mstore8(add(ptr, 3), byte(31, lo))
+            mstore8(add(ptr, 4), byte(28, hi))
+            mstore8(add(ptr, 5), byte(29, hi))
+            mstore8(add(ptr, 6), byte(30, hi))
+            mstore8(add(ptr, 7), byte(31, hi))
         }
     }
 
-// -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
     // Reference IMT simulation
     // -----------------------------------------------------------------------
+
+    /// @dev Compute the zero hash at `level` using the same Poseidon as the contract.
+    ///      zeros[0] = 0, zeros[i] = compress(zeros[i-1], zeros[i-1]).
+    function _zeroHash(uint256 level) internal returns (uint256 z) {
+        z = 0;
+        for (uint256 i = 0; i < level; i++) z = poseidon.compress(z, z);
+    }
 
     /// @dev Simulates one _appendLeaf using the same PoseidonGoldilocks as the contract.
     function _simAppend(uint256 leaf) internal returns (uint256 root) {
         uint256 depth = rollup.treeDepth();
-        uint256 node  = leaf;
+        // Build zero chain locally (no passthrough needed).
+        uint256[] memory zeros = new uint256[](depth);
+        zeros[0] = 0;
+        for (uint256 i = 1; i < depth; i++)
+            zeros[i] = poseidon.compress(zeros[i - 1], zeros[i - 1]);
+
+        uint256 node = leaf;
         for (uint256 i = 0; i < depth; i++) {
             if ((_simLC >> i) & 1 == 0) {
                 _simFS[i] = node;
-                node = poseidon.compress(node, rollup.zeros(i));
+                node = poseidon.compress(node, zeros[i]);
             } else {
                 node = poseidon.compress(_simFS[i], node);
             }
@@ -297,7 +334,7 @@ contract TesseraRollupV2Test is Test {
         vm.prank(user);
         token.approve(address(rollup), amount);
         vm.prank(user);
-        rollup.depositAndRegister(nc, amount);
+        rollup.depositAndRegister(nc, ASSET_ID, amount);
     }
 
     // -----------------------------------------------------------------------
@@ -313,9 +350,12 @@ contract TesseraRollupV2Test is Test {
 
         _append(leaf);
 
-        assertEq(rollup.leafCount(), 1, "leafCount");
-        assertEq(rollup.currentRoot(), expected, "root matches reference");
-        assertTrue(rollup.confirmedRoots(expected), "new root in confirmedRoots");
+        assertEq(rollup.imtLeafCount(), 1, "leafCount");
+        assertEq(rollup.imtCurrentRoot(), expected, "root matches reference");
+        assertTrue(
+            rollup.isConfirmedRoot(expected),
+            "new root in confirmedRoots"
+        );
     }
 
     /// After 2, 4, 8 appends, root matches reference at each milestone.
@@ -323,7 +363,9 @@ contract TesseraRollupV2Test is Test {
         uint256[8] memory leaves;
         for (uint256 i = 0; i < 8; i++) leaves[i] = 0x1000 + i;
 
-        uint256 ref2; uint256 ref4; uint256 ref8;
+        uint256 ref2;
+        uint256 ref4;
+        uint256 ref8;
         for (uint256 i = 0; i < 8; i++) {
             uint256 r = _simAppend(leaves[i]);
             if (i == 1) ref2 = r;
@@ -333,16 +375,18 @@ contract TesseraRollupV2Test is Test {
 
         for (uint256 i = 0; i < 8; i++) _append(leaves[i]);
 
-        assertEq(rollup.leafCount(), 8);
-        assertEq(rollup.currentRoot(), ref8, "root after 8");
-        assertTrue(rollup.confirmedRoots(ref2), "root@2 in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(ref4), "root@4 in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(ref8), "root@8 in confirmedRoots");
+        assertEq(rollup.imtLeafCount(), 8);
+        assertEq(rollup.imtCurrentRoot(), ref8, "root after 8");
+        assertTrue(rollup.isConfirmedRoot(ref2), "root@2 in confirmedRoots");
+        assertTrue(rollup.isConfirmedRoot(ref4), "root@4 in confirmedRoots");
+        assertTrue(rollup.isConfirmedRoot(ref8), "root@8 in confirmedRoots");
     }
 
     /// After 3, 5, 7 appends, root matches reference at each count.
     function test_appendLeaf_arbitrary() public {
-        uint256 ref3; uint256 ref5; uint256 ref7;
+        uint256 ref3;
+        uint256 ref5;
+        uint256 ref7;
         for (uint256 i = 0; i < 7; i++) {
             uint256 r = _simAppend(0x2000 + i);
             if (i == 2) ref3 = r;
@@ -352,22 +396,30 @@ contract TesseraRollupV2Test is Test {
 
         for (uint256 i = 0; i < 7; i++) _append(0x2000 + i);
 
-        assertEq(rollup.leafCount(), 7);
-        assertEq(rollup.currentRoot(), ref7, "root after 7");
-        assertTrue(rollup.confirmedRoots(ref3), "root@3 in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(ref5), "root@5 in confirmedRoots");
+        assertEq(rollup.imtLeafCount(), 7);
+        assertEq(rollup.imtCurrentRoot(), ref7, "root after 7");
+        assertTrue(rollup.isConfirmedRoot(ref3), "root@3 in confirmedRoots");
+        assertTrue(rollup.isConfirmedRoot(ref5), "root@5 in confirmedRoots");
     }
 
     /// Each append records the new root; genesis root stays confirmed forever.
     function test_appendLeaf_adds_to_confirmedRoots() public {
-        assertTrue(rollup.confirmedRoots(rollup.zeros(rollup.treeDepth())), "genesis confirmed at deploy");
+        // Genesis root = zeros[treeDepth]; computed locally as the initial imt.currentRoot.
+        uint256 genesisRoot = rollup.imtCurrentRoot();
+        assertTrue(
+            rollup.isConfirmedRoot(genesisRoot),
+            "genesis confirmed at deploy"
+        );
 
-        uint256 prevRoot = rollup.currentRoot();
+        uint256 prevRoot = genesisRoot;
         for (uint256 i = 1; i <= 4; i++) {
             _append(0x3000 + i);
-            uint256 newRoot = rollup.currentRoot();
-            assertTrue(rollup.confirmedRoots(newRoot),  "new root confirmed");
-            assertTrue(rollup.confirmedRoots(prevRoot), "old root still confirmed");
+            uint256 newRoot = rollup.imtCurrentRoot();
+            assertTrue(rollup.isConfirmedRoot(newRoot), "new root confirmed");
+            assertTrue(
+                rollup.isConfirmedRoot(prevRoot),
+                "old root still confirmed"
+            );
             prevRoot = newRoot;
         }
     }
@@ -405,7 +457,7 @@ contract TesseraRollupV2Test is Test {
         rollup.submitTransactionBatch(preimage);
 
         rollup.proveTransactionBatch(preimage, _dummyProof());
-        assertEq(rollup.leafCount(), 1);
+        assertEq(rollup.imtLeafCount(), 1);
     }
 
     /// Unknown root reverts RootNotConfirmed.
@@ -415,7 +467,12 @@ contract TesseraRollupV2Test is Test {
         _wb32(preimage, 32, unknown); // overwrite root at offset 32
 
         vm.prank(OP);
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.RootNotConfirmed.selector, unknown));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TesseraContract.RootNotConfirmed.selector,
+                unknown
+            )
+        );
         rollup.submitTransactionBatch(preimage);
     }
 
@@ -436,8 +493,13 @@ contract TesseraRollupV2Test is Test {
 
         // Prove a batch that spends knownNullifier as the account nullifier.
         {
-            bytes memory p = _batchWithRealSlot(0x1111, knownNullifier, noteNulls);
-            vm.prank(OP); rollup.submitTransactionBatch(p);
+            bytes memory p = _batchWithRealSlot(
+                0x1111,
+                knownNullifier,
+                noteNulls
+            );
+            vm.prank(OP);
+            rollup.submitTransactionBatch(p);
             rollup.proveTransactionBatch(p, _dummyProof());
         }
         assertTrue(rollup.nullifiers(knownNullifier));
@@ -448,9 +510,12 @@ contract TesseraRollupV2Test is Test {
         rollup.submitTransactionBatch(p2);
 
         // Prove phase must revert with NullifierAlreadyUsed.
-        vm.expectRevert(abi.encodeWithSelector(
-            TesseraContract.NullifierAlreadyUsed.selector, _glH(knownNullifier)
-        ));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TesseraContract.NullifierAlreadyUsed.selector,
+                _glH(knownNullifier)
+            )
+        );
         rollup.proveTransactionBatch(p2, _dummyProof());
     }
 
@@ -463,7 +528,12 @@ contract TesseraRollupV2Test is Test {
         rollup.submitTransactionBatch(preimage);
 
         vm.prank(OP);
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.BatchAlreadySubmitted.selector, pic));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TesseraContract.BatchAlreadySubmitted.selector,
+                pic
+            )
+        );
         rollup.submitTransactionBatch(preimage);
     }
 
@@ -494,27 +564,35 @@ contract TesseraRollupV2Test is Test {
 
     /// Happy path: proof accepted, leaf appended, event emitted.
     function test_prove_happy() public {
-        uint256 bpr        = 0xABCD;
-        uint256 lcBefore   = rollup.leafCount();
-        uint256 rootBefore = rollup.currentRoot();
+        uint256 bpr = 0xABCD;
+        uint256 lcBefore = rollup.imtLeafCount();
+        uint256 rootBefore = rollup.imtCurrentRoot();
 
         bytes memory preimage = _minBatch(bpr);
         vm.prank(OP);
         rollup.submitTransactionBatch(preimage);
         rollup.proveTransactionBatch(preimage, _dummyProof());
 
-        uint256 newRoot = rollup.currentRoot();
-        assertEq(rollup.leafCount(), lcBefore + 1,    "leafCount incremented");
-        assertTrue(newRoot != rootBefore,             "root changed");
-        assertTrue(rollup.confirmedRoots(newRoot),    "new root in confirmedRoots");
-        assertTrue(rollup.confirmedRoots(rootBefore), "old root still confirmed");
+        uint256 newRoot = rollup.imtCurrentRoot();
+        assertEq(rollup.imtLeafCount(), lcBefore + 1, "leafCount incremented");
+        assertTrue(newRoot != rootBefore, "root changed");
+        assertTrue(
+            rollup.isConfirmedRoot(newRoot),
+            "new root in confirmedRoots"
+        );
+        assertTrue(
+            rollup.isConfirmedRoot(rootBefore),
+            "old root still confirmed"
+        );
     }
 
     /// Unknown piCommitment reverts BatchNotFound.
     function test_prove_unknownPiCommitment() public {
         bytes memory fake = hex"DEADBEEF";
         bytes32 pic = keccak256(fake);
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.BatchNotFound.selector, pic));
+        vm.expectRevert(
+            abi.encodeWithSelector(TesseraContract.BatchNotFound.selector, pic)
+        );
         rollup.proveTransactionBatch(fake, _dummyProof());
     }
 
@@ -526,7 +604,12 @@ contract TesseraRollupV2Test is Test {
         rollup.submitTransactionBatch(preimage);
         rollup.proveTransactionBatch(preimage, _dummyProof());
 
-        vm.expectRevert(abi.encodeWithSelector(TesseraContract.BatchAlreadyConfirmed.selector, pic));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TesseraContract.BatchAlreadyConfirmed.selector,
+                pic
+            )
+        );
         rollup.proveTransactionBatch(preimage, _dummyProof());
     }
 
@@ -539,9 +622,13 @@ contract TesseraRollupV2Test is Test {
         bad.submitTransactionBatch(preimage);
 
         uint256[8] memory inputs = bad.keccakToPublicInputs(pic);
-        vm.expectRevert(abi.encodeWithSelector(
-            TesseraContract.ProofVerificationFailed.selector, pic, inputs
-        ));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TesseraContract.ProofVerificationFailed.selector,
+                pic,
+                inputs
+            )
+        );
         bad.proveTransactionBatch(preimage, _dummyProof());
     }
 
@@ -564,34 +651,39 @@ contract TesseraRollupV2Test is Test {
         uint256 acNull = 0xF003;
 
         bytes memory preimage = _batchWithRealSlot(0xEEEE, acNull, noteNulls);
-        vm.prank(OP); rollup.submitTransactionBatch(preimage);
+        vm.prank(OP);
+        rollup.submitTransactionBatch(preimage);
         rollup.proveTransactionBatch(preimage, _dummyProof());
 
         assertTrue(rollup.nullifiers(noteNulls[0]), "note nullifier 0");
         assertTrue(rollup.nullifiers(noteNulls[1]), "note nullifier 1");
-        assertTrue(rollup.nullifiers(acNull),       "account nullifier");
+        assertTrue(rollup.nullifiers(acNull), "account nullifier");
     }
 
     /// Padding slots (notFakeTx = false) do not insert their zero nullifiers.
     function test_prove_paddingNullifiersNotInserted() public {
         bytes memory preimage = _minBatch(0x1234);
-        vm.prank(OP); rollup.submitTransactionBatch(preimage);
+        vm.prank(OP);
+        rollup.submitTransactionBatch(preimage);
         rollup.proveTransactionBatch(preimage, _dummyProof());
 
-        assertFalse(rollup.nullifiers(0), "zero nullifier must not be inserted");
+        assertFalse(
+            rollup.nullifiers(0),
+            "zero nullifier must not be inserted"
+        );
     }
 
     /// Previous currentRoot stays in confirmedRoots after a new leaf is appended.
     function test_prove_rootHistoryPreserved() public {
-        uint256 r0 = rollup.currentRoot();
+        uint256 r0 = rollup.imtCurrentRoot();
         _append(0x1111);
-        uint256 r1 = rollup.currentRoot();
+        uint256 r1 = rollup.imtCurrentRoot();
         _append(0x2222);
-        uint256 r2 = rollup.currentRoot();
+        uint256 r2 = rollup.imtCurrentRoot();
 
-        assertTrue(rollup.confirmedRoots(r0), "genesis root preserved");
-        assertTrue(rollup.confirmedRoots(r1), "root@1 preserved");
-        assertTrue(rollup.confirmedRoots(r2), "root@2 present");
+        assertTrue(rollup.isConfirmedRoot(r0), "genesis root preserved");
+        assertTrue(rollup.isConfirmedRoot(r1), "root@1 preserved");
+        assertTrue(rollup.isConfirmedRoot(r2), "root@2 present");
     }
 
     // -----------------------------------------------------------------------
@@ -610,9 +702,9 @@ contract TesseraRollupV2Test is Test {
         token.approve(address(rollup), amount);
 
         vm.expectEmit(true, false, false, true, address(rollup));
-        emit TesseraContract.DepositAvailable(nc, amount, ALICE);
+        emit TesseraContract.DepositAvailable(nc, amount, ALICE, ASSET_ID);
         vm.prank(ALICE);
-        rollup.depositAndRegister(nc, amount);
+        rollup.depositAndRegister(nc, ASSET_ID, amount);
 
         TesseraContract.Deposit memory d = rollup.getDeposit(nc);
         assertEq(d.value, amount);
@@ -630,7 +722,10 @@ contract TesseraRollupV2Test is Test {
         vm.prank(ALICE);
         rollup.withdrawPendingDeposit(nc);
 
-        assertEq(uint8(rollup.getDeposit(nc).status), uint8(TesseraContract.DepositStatus.Withdrawn));
+        assertEq(
+            uint8(rollup.getDeposit(nc).status),
+            uint8(TesseraContract.DepositStatus.Withdrawn)
+        );
         assertEq(token.balanceOf(ALICE), amount);
         assertEq(token.balanceOf(address(rollup)), 0);
     }
@@ -663,7 +758,10 @@ contract TesseraRollupV2Test is Test {
         rollup.submitBridgeTxBatch(preimage); // must not revert
 
         // Note still Pending (not yet proven).
-        assertEq(uint8(rollup.getDeposit(nc).status), uint8(TesseraContract.DepositStatus.Pending));
+        assertEq(
+            uint8(rollup.getDeposit(nc).status),
+            uint8(TesseraContract.DepositStatus.Pending)
+        );
     }
 
     /// submitBridgeTxBatch with a non-existent deposit note reverts NoteNotFound.
@@ -672,9 +770,12 @@ contract TesseraRollupV2Test is Test {
         bytes memory preimage = _bridgeBatchWithDeposit(1, noteKey, _nc++);
 
         vm.prank(OP);
-        vm.expectRevert(abi.encodeWithSelector(
-            TesseraContract.NoteNotFound.selector, bytes32(noteKey)
-        ));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TesseraContract.NoteNotFound.selector,
+                bytes32(noteKey)
+            )
+        );
         rollup.submitBridgeTxBatch(preimage);
     }
 
@@ -691,9 +792,12 @@ contract TesseraRollupV2Test is Test {
 
         rollup.proveBridgeTxBatch(preimage, _dummyProof());
 
-        assertEq(uint8(rollup.getDeposit(nc).status),
-            uint8(TesseraContract.DepositStatus.Validated), "deposit not validated");
-        assertEq(rollup.leafCount(), 1, "leaf not appended");
+        assertEq(
+            uint8(rollup.getDeposit(nc).status),
+            uint8(TesseraContract.DepositStatus.Validated),
+            "deposit not validated"
+        );
+        assertEq(rollup.imtLeafCount(), 1, "leaf not appended");
     }
 
     /// All-padding batch appends a leaf after prove.
@@ -701,9 +805,9 @@ contract TesseraRollupV2Test is Test {
         bytes memory preimage = _minBridgeBatch(rollup, 0xABCD);
         vm.prank(OP);
         rollup.submitBridgeTxBatch(preimage);
-        assertEq(rollup.leafCount(), 0, "no leaf yet before prove");
+        assertEq(rollup.imtLeafCount(), 0, "no leaf yet before prove");
         rollup.proveBridgeTxBatch(preimage, _dummyProof());
-        assertEq(rollup.leafCount(), 1, "leaf appended after prove");
+        assertEq(rollup.imtLeafCount(), 1, "leaf appended after prove");
     }
 
     /// Cannot withdraw a deposit after it has been Validated.
@@ -763,7 +867,7 @@ contract TesseraRollupV2Test is Test {
 
         vm.prank(ALICE);
         vm.expectRevert(TesseraContract.PausedErr.selector);
-        rollup.depositAndRegister(bytes32(uint256(1)), 100);
+        rollup.depositAndRegister(bytes32(uint256(1)), ASSET_ID, 100);
 
         vm.prank(ALICE);
         vm.expectRevert(TesseraContract.PausedErr.selector);
@@ -794,8 +898,14 @@ contract TesseraRollupV2Test is Test {
         words[7] = 0x00FF00FF;
 
         bytes32 packed = bytes32(
-            (words[0] << 224) | (words[1] << 192) | (words[2] << 160) | (words[3] << 128) |
-            (words[4] << 96)  | (words[5] << 64)  | (words[6] << 32)  | words[7]
+            (words[0] << 224) |
+                (words[1] << 192) |
+                (words[2] << 160) |
+                (words[3] << 128) |
+                (words[4] << 96) |
+                (words[5] << 64) |
+                (words[6] << 32) |
+                words[7]
         );
 
         uint256[8] memory unpacked = rollup.keccakToPublicInputs(packed);
@@ -848,11 +958,11 @@ contract TesseraRollupV2Test is Test {
         assertEq(uint8(b[0]), 0);
         assertEq(uint8(b[1]), 0);
         assertEq(uint8(b[2]), 0);
-        assertEq(uint8(b[3]), 1);   // lo = 1 in BE
+        assertEq(uint8(b[3]), 1); // lo = 1 in BE
         assertEq(uint8(b[4]), 0);
         assertEq(uint8(b[5]), 0);
         assertEq(uint8(b[6]), 0);
-        assertEq(uint8(b[7]), 0);   // hi = 0
+        assertEq(uint8(b[7]), 0); // hi = 0
     }
 
     /// _glFieldToBytes: el = 0x0000_0001_0000_0002 → lo=2, hi=1.
@@ -896,7 +1006,10 @@ contract TesseraRollupV2Test is Test {
 
         vm.prank(OP);
         vm.expectEmit(true, false, false, false, address(rollup));
-        emit TesseraContract.TransactionBatchSubmitted(expected, _glH(0x1234567890));
+        emit TesseraContract.TransactionBatchSubmitted(
+            expected,
+            _glH(0x1234567890)
+        );
         rollup.submitTransactionBatch(preimage);
     }
 
@@ -904,7 +1017,11 @@ contract TesseraRollupV2Test is Test {
     function test_txPiCommitment_bprMatters() public view {
         bytes memory p1 = _minBatch(0x111);
         bytes memory p2 = _minBatch(0x222);
-        assertNotEq(keccak256(p1), keccak256(p2), "distinct BPRs must yield distinct commitments");
+        assertNotEq(
+            keccak256(p1),
+            keccak256(p2),
+            "distinct BPRs must yield distinct commitments"
+        );
     }
 
     /// TX piCommitment: different act_roots produce different commitments.
@@ -913,26 +1030,79 @@ contract TesseraRollupV2Test is Test {
         bytes memory p2 = _minBatch(0x999);
         // Flip one bit in the root field at offset 32.
         p2[32] ^= 0x01;
-        assertNotEq(keccak256(p1), keccak256(p2), "distinct roots must yield distinct commitments");
+        assertNotEq(
+            keccak256(p1),
+            keccak256(p2),
+            "distinct roots must yield distinct commitments"
+        );
     }
 
-    /// Operator can update poolConfigRoot; old value rejected by new batches.
-    function test_setPoolConfigRoot() public {
-        uint256 newPCR = 0xABCDEF;
-        vm.prank(OP);
-        vm.expectEmit(true, true, false, false, address(rollup));
-        emit TesseraContract.PoolConfigRootUpdated(PCR, newPCR);
-        rollup.setPoolConfigRoot(newPCR);
-        assertEq(rollup.poolConfigRoot(), newPCR);
+    /// Genesis mainPoolConfigRoot matches zeros[configTreeDepth] computed locally.
+    function test_genesisConfigRoot() public {
+        uint256 expected = _zeroHash(rollup.configTreeDepth());
+        assertEq(
+            rollup.mainPoolConfigRoot(),
+            expected,
+            "genesis config root mismatch"
+        );
+    }
 
-        // Old PCR is rejected — preimage still encodes PCR at mainPoolConfigRoot.
-        bytes memory b = _minBatch(1);
+    /// withdrawalDelay blocks early withdrawal; passes after delay elapses.
+    function test_withdrawalDelay() public {
+        // Deploy a rollup with a 10-block delay.
+        TesseraContract delayed = new TesseraContract(
+            address(acceptVerifier),
+            address(acceptVerifier),
+            address(poseidon),
+            OP,
+            DEPTH,
+            20,
+            10
+        );
+        // Register the test token on the delayed contract.
         vm.prank(OP);
-        vm.expectRevert(TesseraContract.PoolConfigMismatch.selector);
-        rollup.submitTransactionBatch(b);
+        delayed.registerAsset(ASSET_ID, address(token));
+
+        bytes32 nc = bytes32(uint256(55));
+        uint256 amount = 1e6;
+        token.mint(ALICE, amount);
+        vm.prank(ALICE);
+        token.approve(address(delayed), amount);
+        vm.prank(ALICE);
+        delayed.depositAndRegister(nc, ASSET_ID, amount);
+
+        // Attempt withdrawal immediately — should revert.
+        vm.prank(ALICE);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TesseraContract.WithdrawalTooEarly.selector,
+                nc,
+                block.number + 10
+            )
+        );
+        delayed.withdrawPendingDeposit(nc);
+
+        // Roll forward 10 blocks — withdrawal should succeed.
+        vm.roll(block.number + 10);
+        vm.prank(ALICE);
+        delayed.withdrawPendingDeposit(nc);
+        assertEq(token.balanceOf(ALICE), amount);
+    }
+
+    /// assignSubpoolOwner rejects subpoolId 0.
+    function test_assignSubpoolOwner_rejectsZero() public {
+        vm.prank(OP);
+        vm.expectRevert(TesseraContract.SubpoolIdZero.selector);
+        rollup.assignSubpoolOwner(0, ALICE);
+    }
+
+    /// assignSubpoolOwner only callable by operator.
+    function test_assignSubpoolOwner_onlyOperator() public {
+        vm.prank(ALICE);
+        vm.expectRevert(TesseraContract.NotOperator.selector);
+        rollup.assignSubpoolOwner(1, ALICE);
     }
 }
-
 
 contract GasMeasureTest is TesseraRollupV2Test {
     // 1. Build preimage bytes (no contract call, no storage)

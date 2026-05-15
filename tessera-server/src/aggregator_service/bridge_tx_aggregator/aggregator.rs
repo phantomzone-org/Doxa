@@ -10,7 +10,10 @@ use plonky2::{
 	util::serialization::{DefaultGateSerializer, GateSerializer},
 };
 use tessera_client::{PIHelper, BRIDGE_TX_BATCH_SIZE, SUBTREE_BATCHSIZE};
-use tessera_utils::{groth::TesseraGeneratorSerializer, hasher::HashOutput, CircuitDataNative, ConfigNative, ProofNative, D, F};
+use tessera_utils::{
+	groth::TesseraGeneratorSerializer, hasher::HashOutput, CircuitDataNative, ConfigNative,
+	ProofNative, D, F,
+};
 
 use super::{
 	circuit::BridgeTxSuperCircuit,
@@ -44,20 +47,25 @@ const PAIR_LEAF_D_VERIFIER_PATH: &str = "d_verifier.bin";
 
 /// The pair leaf circuit: verifies one (Withdraw, Deposit) proof pair and emits
 /// combined public inputs `[act_root(4) | mainpool(4) | w_unique | d_unique]`.
-struct PairLeaf {
+struct PairLeafCircuit {
 	circuit_data: CircuitDataNative,
 	w_proof: ProofWithPublicInputsTarget<D>,
 	d_proof: ProofWithPublicInputsTarget<D>,
 	/// Inner W/D circuit data retained for artifact storage and size derivation.
-	inner: BridgeTxPairLeafData,
+	inner: BridgeTxPairLeafData, // TODO: why isn't this Arced?
 }
 
-impl PairLeaf {
+impl PairLeafCircuit {
 	/// Build the pair leaf circuit from the two inner leaf circuit descriptors.
 	fn build(inner: BridgeTxPairLeafData) -> Result<Self> {
 		let (builder, w_proof, d_proof) = build_pair_leaf(&inner);
 		let circuit_data = builder.build::<ConfigNative>();
-		Ok(Self { circuit_data, w_proof, d_proof, inner })
+		Ok(Self {
+			circuit_data,
+			w_proof,
+			d_proof,
+			inner,
+		})
 	}
 
 	/// Prove a single (Withdraw, Deposit) pair → pair proof.
@@ -102,10 +110,24 @@ impl PairLeaf {
 			.map_err(|_| anyhow!("serialize PairLeaf circuit_data failed"))?;
 		fs::write(path.join(PAIR_LEAF_CD_PATH), cd_bytes)?;
 
-		write_common(path.join(PAIR_LEAF_W_COMMON_PATH), &self.inner.withdraw_common, w_gate_ser)?;
-		write_verifier(path.join(PAIR_LEAF_W_VERIFIER_PATH), &self.inner.withdraw_verifier)?;
-		write_common(path.join(PAIR_LEAF_D_COMMON_PATH), &self.inner.deposit_common, d_gate_ser)?;
-		write_verifier(path.join(PAIR_LEAF_D_VERIFIER_PATH), &self.inner.deposit_verifier)?;
+		write_common(
+			path.join(PAIR_LEAF_W_COMMON_PATH),
+			&self.inner.withdraw_common,
+			w_gate_ser,
+		)?;
+		write_verifier(
+			path.join(PAIR_LEAF_W_VERIFIER_PATH),
+			&self.inner.withdraw_verifier,
+		)?;
+		write_common(
+			path.join(PAIR_LEAF_D_COMMON_PATH),
+			&self.inner.deposit_common,
+			d_gate_ser,
+		)?;
+		write_verifier(
+			path.join(PAIR_LEAF_D_VERIFIER_PATH),
+			&self.inner.deposit_verifier,
+		)?;
 		Ok(())
 	}
 
@@ -118,12 +140,18 @@ impl PairLeaf {
 		let gate_ser = DefaultGateSerializer;
 		let gen_ser = TesseraGeneratorSerializer;
 
-		let w_common =
-			read_common(path.join(PAIR_LEAF_W_COMMON_PATH), w_gate_ser, "pair_leaf/w_common")?;
+		let w_common = read_common(
+			path.join(PAIR_LEAF_W_COMMON_PATH),
+			w_gate_ser,
+			"pair_leaf/w_common",
+		)?;
 		let w_verifier =
 			read_verifier(path.join(PAIR_LEAF_W_VERIFIER_PATH), "pair_leaf/w_verifier")?;
-		let d_common =
-			read_common(path.join(PAIR_LEAF_D_COMMON_PATH), d_gate_ser, "pair_leaf/d_common")?;
+		let d_common = read_common(
+			path.join(PAIR_LEAF_D_COMMON_PATH),
+			d_gate_ser,
+			"pair_leaf/d_common",
+		)?;
 		let d_verifier =
 			read_verifier(path.join(PAIR_LEAF_D_VERIFIER_PATH), "pair_leaf/d_verifier")?;
 
@@ -145,7 +173,12 @@ impl PairLeaf {
 				)
 			})?;
 
-		Ok(Self { circuit_data, w_proof, d_proof, inner })
+		Ok(Self {
+			circuit_data,
+			w_proof,
+			d_proof,
+			inner,
+		})
 	}
 
 	/// Returns `true` if all pair-leaf artifact files are present under `path`.
@@ -195,7 +228,7 @@ impl PairLeaf {
 /// └── super-circuit/          ← BridgeTxSuperCircuit
 /// ```
 pub struct BridgeTxAggregator {
-	pair_leaf: PairLeaf,
+	pair_leaf: PairLeafCircuit,
 	pair_aggregator: GenericAggregator<F, ConfigNative, D>,
 	subtree_root: SubtreeRootCircuit,
 	super_circuit: BridgeTxSuperCircuit,
@@ -212,7 +245,7 @@ impl BridgeTxAggregator {
 		deposit_leaf_common: CommonCircuitData<F, D>,
 		deposit_leaf_verifier: VerifierOnlyCircuitData<ConfigNative, D>,
 	) -> Result<Self> {
-		let pair_leaf = PairLeaf::build(BridgeTxPairLeafData {
+		let pair_leaf = PairLeafCircuit::build(BridgeTxPairLeafData {
 			withdraw_common: withdraw_leaf_common,
 			withdraw_verifier: withdraw_leaf_verifier,
 			deposit_common: deposit_leaf_common,
@@ -221,7 +254,10 @@ impl BridgeTxAggregator {
 
 		// arity=4, depth=4 → 4^4 = 256 pair slots.
 		let pair_aggregator = GenericAggregator::new(
-			GenericAggregatorConfig { arity: 4, depth: 4 },
+			GenericAggregatorConfig {
+				arity: 4,
+				depth: 4,
+			},
 			pair_leaf.circuit_data.common.clone(),
 			pair_leaf.circuit_data.verifier_only.clone(),
 		)?;
@@ -243,7 +279,12 @@ impl BridgeTxAggregator {
 		};
 		let super_circuit = BridgeTxSuperCircuit::build(inner)?;
 
-		Ok(Self { pair_leaf, pair_aggregator, subtree_root, super_circuit })
+		Ok(Self {
+			pair_leaf,
+			pair_aggregator,
+			subtree_root,
+			super_circuit,
+		})
 	}
 
 	/// Prove a finalized batch, returning the super-aggregated proof.
@@ -253,10 +294,8 @@ impl BridgeTxAggregator {
 	/// - `batch.proofs()[HALF..2*HALF)`  → Deposit proofs
 	pub fn prove<B: BatchHelper>(&self, batch: &B) -> Result<ProofNative> {
 		let proofs = batch.proofs();
-		let w_proofs: Vec<ProofNative> =
-			proofs[..HALF].iter().map(|p| p.proof().clone()).collect();
-		let d_proofs: Vec<ProofNative> =
-			proofs[HALF..].iter().map(|p| p.proof().clone()).collect();
+		let w_proofs: Vec<ProofNative> = proofs[..HALF].iter().map(|p| p.proof().clone()).collect();
+		let d_proofs: Vec<ProofNative> = proofs[HALF..].iter().map(|p| p.proof().clone()).collect();
 
 		// Prove all 256 (W, D) pairs in slot order.
 		let pair_proofs: Vec<ProofNative> = w_proofs
@@ -268,8 +307,7 @@ impl BridgeTxAggregator {
 		let pair_agg = self.pair_aggregator.aggregate(pair_proofs)?;
 
 		// SR leaves: all output_commitments in slot order (W half first, D half second).
-		let leaves: Vec<HashOutput> =
-			proofs.iter().flat_map(|p| p.output_commitments()).collect();
+		let leaves: Vec<HashOutput> = proofs.iter().flat_map(|p| p.output_commitments()).collect();
 		assert_eq!(
 			leaves.len(),
 			SUBTREE_BATCHSIZE,
@@ -309,23 +347,24 @@ impl BridgeTxAggregator {
 		w_gate_ser: &dyn GateSerializer<F, D>,
 		d_gate_ser: &dyn GateSerializer<F, D>,
 	) -> Result<Self> {
-		let pair_aggregator = GenericAggregator::from_artifacts(
-			&path.join(PAIR_AGG_DIR),
-			&DefaultGateSerializer,
-		)?;
+		let pair_aggregator =
+			GenericAggregator::from_artifacts(&path.join(PAIR_AGG_DIR), &DefaultGateSerializer)?;
 		let pair_leaf =
-			PairLeaf::from_artifacts(&path.join(PAIR_LEAF_DIR), w_gate_ser, d_gate_ser)?;
-		let subtree_root = SubtreeRootCircuit::from_artifacts(
-			&path.join(SUBTREE_ROOT_DIR),
-			SUBTREE_BATCHSIZE,
-		)?;
+			PairLeafCircuit::from_artifacts(&path.join(PAIR_LEAF_DIR), w_gate_ser, d_gate_ser)?;
+		let subtree_root =
+			SubtreeRootCircuit::from_artifacts(&path.join(SUBTREE_ROOT_DIR), SUBTREE_BATCHSIZE)?;
 		let super_circuit = BridgeTxSuperCircuit::from_artifacts(
 			&path.join(SUPER_CIRCUIT_DIR),
 			pair_leaf.w_unique_size(),
 			pair_leaf.d_unique_size(),
 		)?;
 
-		Ok(Self { pair_leaf, pair_aggregator, subtree_root, super_circuit })
+		Ok(Self {
+			pair_leaf,
+			pair_aggregator,
+			subtree_root,
+			super_circuit,
+		})
 	}
 
 	/// Returns the super circuit's compiled [`CircuitDataNative`], needed by
@@ -343,19 +382,25 @@ impl BridgeTxAggregator {
 	pub fn prove_dummy(&self) -> Result<ProofNative> {
 		use plonky2::field::types::Field;
 		use tessera_client::{
-			DepositProof, PIHelper, WithdrawProof, build_deposit_tx_circuit,
-			build_withdraw_tx_circuit,
+			build_deposit_tx_circuit, build_withdraw_tx_circuit, FakeDepositTxBuilder,
+			FakeWithdrawTxBuilder, PIHelper,
 		};
 
 		let zero = HashOutput([F::ZERO; 4]);
 		let w_circuit = build_withdraw_tx_circuit();
 		let d_circuit = build_deposit_tx_circuit();
-		let w_leaf = w_circuit.prove_padding(zero, zero);
-		let d_leaf = d_circuit.prove_padding(zero, zero);
+		let w_proof = FakeWithdrawTxBuilder::new(zero, zero)
+			.build()
+			.into_withdraw_tx()
+			.prove(&w_circuit)?;
+		let d_proof = FakeDepositTxBuilder::new(zero, zero)
+			.build()
+			.into_deposit_tx()
+			.prove(&d_circuit)?;
 
 		// Derive SR leaves from a single pair before consuming the proofs.
-		let w_single = WithdrawProof { proof: w_leaf.clone() }.output_commitments();
-		let d_single = DepositProof { proof: d_leaf.clone() }.output_commitments();
+		let w_single = w_proof.output_commitments();
+		let d_single = d_proof.output_commitments();
 		let sr_leaves: Vec<HashOutput> = w_single
 			.iter()
 			.cloned()
@@ -364,7 +409,7 @@ impl BridgeTxAggregator {
 			.chain(d_single.iter().cloned().cycle().take(HALF))
 			.collect();
 
-		let pair_proof = self.pair_leaf.prove(w_leaf, d_leaf)?;
+		let pair_proof = self.pair_leaf.prove(w_proof.proof, d_proof.proof)?;
 		let pair_agg = self.pair_aggregator.aggregate_dummy(pair_proof)?;
 		let sr_proof = self.subtree_root.prove(&sr_leaves)?;
 
@@ -376,7 +421,7 @@ impl BridgeTxAggregator {
 		if !GenericAggregator::<F, ConfigNative, D>::has_full_artifacts(&path.join(PAIR_AGG_DIR))? {
 			return Ok(false);
 		}
-		if !PairLeaf::has_artifacts(&path.join(PAIR_LEAF_DIR)) {
+		if !PairLeafCircuit::has_artifacts(&path.join(PAIR_LEAF_DIR)) {
 			return Ok(false);
 		}
 		if !SubtreeRootCircuit::has_artifacts(&path.join(SUBTREE_ROOT_DIR)) {
@@ -437,6 +482,5 @@ fn read_verifier(
 	label: &str,
 ) -> Result<VerifierOnlyCircuitData<ConfigNative, D>> {
 	let bytes = fs::read(&path).map_err(|e| anyhow!("failed to read {label}: {e}"))?;
-	VerifierOnlyCircuitData::from_bytes(&bytes)
-		.map_err(|_| anyhow!("deserialize {label} failed"))
+	VerifierOnlyCircuitData::from_bytes(&bytes).map_err(|_| anyhow!("deserialize {label} failed"))
 }

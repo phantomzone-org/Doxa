@@ -19,26 +19,13 @@ plonky2 = {workspace = true}
 anyhow = {workspace = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
-sha2 = {workspace = true}
-sha3 = {workspace = true}
 hex = {workspace = true}
-digest = {workspace = true}
 tokio = {workspace = true}
 alloy = {workspace = true}
 tracing = {workspace = true}
-rand_chacha = {workspace = true}
-axum = {workspace = true}
-bincode = "1.0.0"
-crc32fast = "1"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
-async-trait = "0.1"
-num = "0.4.3"
-log = "0.4"
-clap = { version = "4", features = ["derive"] }
 
 [dependencies.tracing-subscriber]
 workspace = true
 
-[dependencies.dotenvy]
-workspace = true
-
+[dev-dependencies]
+num = "0.4.3"

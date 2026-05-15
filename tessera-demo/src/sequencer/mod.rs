@@ -26,7 +26,7 @@ use handlers::{
 	handle_pending_notes, handle_status, handle_transaction,
 };
 use state::{AppState, SequencerState, SharedState};
-use tessera_client::COM_TREE_DEPTH;
+use tessera_client::STATE_TREE_DEPTH;
 use tessera_server::contract::ITesseraRollupV2;
 use tessera_trees::MerkleTree;
 use tokio::sync::Mutex;
@@ -130,7 +130,7 @@ impl DemoSequencer {
 			deposit_queue: Vec::new(),
 			deposit_batch_pending_since: None,
 			prove_delay: config.prove_delay,
-			local_tree: MerkleTree::new(COM_TREE_DEPTH),
+			local_tree: MerkleTree::new(STATE_TREE_DEPTH),
 			note_pool: HashMap::new(),
 			note_positions: HashMap::new(),
 		}));
