@@ -4,7 +4,7 @@
 
 We need to implement two aggregators that each reduce an entire finalized batch of TX proofs to a **single Plonky2 proof** ready for BN128 wrapping and on-chain submission.
 
-**Goal:** Replace the legacy `SuperAggregatorV2` / `DepositSuperAggregatorV2` pattern with clean, modular, `BatchHelper`-aligned implementations. The design principle is to mirror the tessera-client circuit crate pattern: named target structs allocated/consumed sequentially, with no raw numerical offset constants anywhere in circuit constraint code.
+**Goal:** Replace the legacy `SuperAggregatorV2` / `DepositSuperAggregatorV2` pattern with clean, modular, `BatchHelper`-aligned implementations. The design principle is to mirror the doxa-client circuit crate pattern: named target structs allocated/consumed sequentially, with no raw numerical offset constants anywhere in circuit constraint code.
 
 Both aggregators produce a proof whose **only public output** is the `super_pi_commitment`: a Keccak-256 digest of the batch PI preimage as defined by `BatchHelper::pi_commitment`.
 
@@ -44,7 +44,7 @@ Both aggregators produce a proof whose **only public output** is the `super_pi_c
 
 ---
 
-## Key Constants (from tessera-client)
+## Key Constants (from doxa-client)
 
 ```rust
 NOTE_BATCH:           usize = 7
@@ -81,17 +81,17 @@ Each GL field → `[lo_u32, hi_u32]` (matching `BatchHelper::push_fields`).
 
 ---
 
-## Step 1 — Expose tessera-client PI target types and add `from_pis()` constructors
+## Step 1 — Expose doxa-client PI target types and add `from_pis()` constructors
 
-**Design principle:** Use the existing tessera-client target types (`TxCircuitPublicTargets`, `WithdrawTxPublicTargets`, `DepositTxPublicTargets`) DIRECTLY in the aggregator files. This requires:
-1. Making the types and their fields `pub` in tessera-client
+**Design principle:** Use the existing doxa-client target types (`TxCircuitPublicTargets`, `WithdrawTxPublicTargets`, `DepositTxPublicTargets`) DIRECTLY in the aggregator files. This requires:
+1. Making the types and their fields `pub` in doxa-client
 2. Adding a `from_pis()` constructor to each type that reads fields sequentially via `split_at` (same order as `register()` — no named offset constants)
 
 All circuit constraint code in the aggregator then uses ONLY the named fields of these types.
 
-### 1a — Visibility changes in tessera-client
+### 1a — Visibility changes in doxa-client
 
-In `tessera-client/src/plonky2_gadgets/priv_tx/targets.rs`:
+In `doxa-client/src/plonky2_gadgets/priv_tx/targets.rs`:
 - `pub(crate) struct RootTarget` → `pub struct RootTarget`
 - `pub(crate) struct MainPoolConfigRootTarget` → `pub struct MainPoolConfigRootTarget`
 - `pub(crate) struct AccountCommitmentTarget` → `pub struct AccountCommitmentTarget`
@@ -100,14 +100,14 @@ In `tessera-client/src/plonky2_gadgets/priv_tx/targets.rs`:
 - `pub(crate) struct NoteNullifierTarget` → `pub struct NoteNullifierTarget`
 - `pub struct TxCircuitPublicTargets` fields: all `pub(crate)` → `pub`
 
-In `tessera-client/src/plonky2_gadgets/withdraw_tx/targets.rs`:
+In `doxa-client/src/plonky2_gadgets/withdraw_tx/targets.rs`:
 - `pub(crate) struct WithdrawTxPublicTargets` → `pub struct WithdrawTxPublicTargets`; fields `pub(crate)` → `pub`
 
-In `tessera-client/src/plonky2_gadgets/deposit_tx/targets.rs`:
+In `doxa-client/src/plonky2_gadgets/deposit_tx/targets.rs`:
 - `pub struct DepositTxPublicTargets` fields: `pub(crate)` → `pub`
 - `pub(crate) struct DepositNoteCommitmentTarget` → `pub struct DepositNoteCommitmentTarget`
 
-### 1b — Add `from_pis()` to tessera-client target types
+### 1b — Add `from_pis()` to doxa-client target types
 
 Add to `TxCircuitPublicTargets` in `priv_tx/targets.rs` (sequential cursor — no named offsets):
 
@@ -135,7 +135,7 @@ pub fn from_pis(pis: &[Target]) -> Self {
 
 Add analogous `from_pis()` to `WithdrawTxPublicTargets` and `DepositTxPublicTargets` following their respective `register()` order.
 
-### 1c — Circuit helper methods on tessera-client types
+### 1c — Circuit helper methods on doxa-client types
 
 Add to `TxCircuitPublicTargets`:
 ```rust
@@ -317,7 +317,7 @@ pub fn has_artifacts(path: &Path) -> bool
 ```
 
 **Artifact files** (under `path/super-circuit/`):
-- `circuit_data.bin` (with `TesseraGeneratorSerializer`)
+- `circuit_data.bin` (with `DoxaGeneratorSerializer`)
 - `tx_common.bin`, `tx_verifier.bin`, `sr_common.bin`, `sr_verifier.bin`
 
 ---
@@ -568,10 +568,10 @@ pub fn compute_pi_commitment_native(batch: &BridgeTxBatch) -> Result<[u8; 32]> {
 
 ```bash
 # Cheap tests only:
-cargo test -p tessera-server aggregator_service
+cargo test -p doxa-server aggregator_service
 
 # All tests including slow ZK (release recommended):
-cargo test -p tessera-server --release aggregator_service -- --include-ignored
+cargo test -p doxa-server --release aggregator_service -- --include-ignored
 ```
 
 ---
@@ -589,8 +589,8 @@ cargo test -p tessera-server --release aggregator_service -- --include-ignored
 
 ## Verification Checklist
 
-- [ ] `cargo build -p tessera-server` compiles with no warnings
-- [ ] `cargo test -p tessera-server aggregator_service` all cheap tests pass
+- [ ] `cargo build -p doxa-server` compiles with no warnings
+- [ ] `cargo test -p doxa-server aggregator_service` all cheap tests pass
 - [ ] `PrivTxAggregator::prove` final proof has exactly 8 public inputs
 - [ ] `BridgeTxAggregator::prove` final proof has exactly 8 public inputs
 - [ ] `final_proof.public_inputs` (8 u32) == `batch.pi_commitment::<SolidityKeccak256>()` (32 bytes)
@@ -603,16 +603,16 @@ cargo test -p tessera-server --release aggregator_service -- --include-ignored
 
 | File | Role |
 |------|------|
-| `tessera-server/src/aggregator_service/priv_tx_aggregator.rs` | **Primary** — PrivTxSuperCircuit + PrivTxAggregator |
-| `tessera-server/src/aggregator_service/bridge_tx_aggregator.rs` | **Primary** — BridgeTxSuperCircuit + BridgeTxAggregator |
-| `tessera-server/src/aggregator_service/generic_aggregator/aggregator.rs` | Reference — GenericAggregator::new, aggregate |
-| `tessera-server/src/aggregator_service/generic_aggregator/artifacts.rs` | Reference — store_artifacts, from_artifacts |
-| `tessera-server/src/prover_service/subtree_root.rs` | Reuse — SubtreeRootCircuit |
-| `tessera-server/src/batch_helper.rs` | Reuse — BatchHelper, SolidityKeccak256 |
-| `tessera-server/src/prover_service/priv_tx/batch_helper.rs` | Reuse — PrivateTxBatch |
-| `tessera-server/src/prover_service/bridge_tx/batch_helper.rs` | Reuse — BridgeTxBatch |
-| `tessera-server/src/proof_aggregation/tx_super_aggregator_v2.rs` | Reference — batch_assert_zero, field_to_u32 helpers |
-| `tessera-client/src/plonky2_gadgets/priv_tx/targets.rs` | **Modify** — make types/fields pub, add `from_pis()` + helpers to `TxCircuitPublicTargets` |
-| `tessera-client/src/plonky2_gadgets/withdraw_tx/targets.rs` | **Modify** — make types/fields pub, add `from_pis()` + helpers to `WithdrawTxPublicTargets` |
-| `tessera-client/src/plonky2_gadgets/deposit_tx/targets.rs` | **Modify** — make types/fields pub, add `from_pis()` + helpers to `DepositTxPublicTargets` |
-| `tessera-client/src/lib.rs` | Constants: NOTE_BATCH, PRIV_TX_BATCH_SIZE, etc. |
+| `doxa-server/src/aggregator_service/priv_tx_aggregator.rs` | **Primary** — PrivTxSuperCircuit + PrivTxAggregator |
+| `doxa-server/src/aggregator_service/bridge_tx_aggregator.rs` | **Primary** — BridgeTxSuperCircuit + BridgeTxAggregator |
+| `doxa-server/src/aggregator_service/generic_aggregator/aggregator.rs` | Reference — GenericAggregator::new, aggregate |
+| `doxa-server/src/aggregator_service/generic_aggregator/artifacts.rs` | Reference — store_artifacts, from_artifacts |
+| `doxa-server/src/prover_service/subtree_root.rs` | Reuse — SubtreeRootCircuit |
+| `doxa-server/src/batch_helper.rs` | Reuse — BatchHelper, SolidityKeccak256 |
+| `doxa-server/src/prover_service/priv_tx/batch_helper.rs` | Reuse — PrivateTxBatch |
+| `doxa-server/src/prover_service/bridge_tx/batch_helper.rs` | Reuse — BridgeTxBatch |
+| `doxa-server/src/proof_aggregation/tx_super_aggregator_v2.rs` | Reference — batch_assert_zero, field_to_u32 helpers |
+| `doxa-client/src/plonky2_gadgets/priv_tx/targets.rs` | **Modify** — make types/fields pub, add `from_pis()` + helpers to `TxCircuitPublicTargets` |
+| `doxa-client/src/plonky2_gadgets/withdraw_tx/targets.rs` | **Modify** — make types/fields pub, add `from_pis()` + helpers to `WithdrawTxPublicTargets` |
+| `doxa-client/src/plonky2_gadgets/deposit_tx/targets.rs` | **Modify** — make types/fields pub, add `from_pis()` + helpers to `DepositTxPublicTargets` |
+| `doxa-client/src/lib.rs` | Constants: NOTE_BATCH, PRIV_TX_BATCH_SIZE, etc. |

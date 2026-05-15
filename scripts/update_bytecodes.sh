@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuilds Solidity contracts and regenerates tessera-e2e/src/contract_bytecodes.rs
+# Rebuilds Solidity contracts and regenerates doxa-e2e/src/contract_bytecodes.rs
 # from the Foundry JSON artifacts.
 #
 # Usage: ./scripts/update_bytecodes.sh
@@ -7,14 +7,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOLIDITY_DIR="$REPO_ROOT/tessera-solidity"
-OUT="$REPO_ROOT/tessera-e2e/src/contract_bytecodes.rs"
+SOLIDITY_DIR="$REPO_ROOT/doxa-solidity"
+OUT="$REPO_ROOT/doxa-e2e/src/contract_bytecodes.rs"
 
-# Artifact paths (relative to tessera-solidity/)
+# Artifact paths (relative to doxa-solidity/)
 declare -A ARTIFACTS=(
-    [REJECT_BYTECODE]="out/TesseraContract.t.sol/RejectAllVerifier.json"
+    [REJECT_BYTECODE]="out/DoxaContract.t.sol/RejectAllVerifier.json"
     [POSEIDON_BYTECODE]="out/PoseidonGoldilocks.sol/PoseidonGoldilocks.json"
-    [ROLLUP_BYTECODE]="out/TesseraContract.sol/TesseraContract.json"
+    [ROLLUP_BYTECODE]="out/DoxaContract.sol/DoxaContract.json"
     [TOKEN_BYTECODE]="out/ToyUSDT.sol/ToyUSDT.json"
 )
 

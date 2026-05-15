@@ -1,6 +1,6 @@
-# Tessera Architecture Documentation
+# Doxa Architecture Documentation
 
-This folder contains auto-generated architecture diagrams and analysis for the Tessera ZK-rollup system.
+This folder contains auto-generated architecture diagrams and analysis for the Doxa ZK-rollup system.
 
 ## Contents
 

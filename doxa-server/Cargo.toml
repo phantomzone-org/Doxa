@@ -1,0 +1,32 @@
+[package]
+name = "doxa-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[features]
+# WARNING: enables a trivially-bypassable proof-verification stub.
+# Never enable in production builds.
+insecure-stub-proof-verify = []
+# Enables heavy end-to-end integration tests that orchestrate local devnet scripts.
+integration-tests = []
+
+[dependencies]
+doxa-trees = {workspace = true}
+doxa-utils = {workspace = true}
+doxa-client = {workspace = true}
+rand = {workspace = true}
+plonky2 = {workspace = true}
+anyhow = {workspace = true}
+serde = {workspace = true}
+serde_json = {workspace = true}
+hex = {workspace = true}
+tokio = {workspace = true}
+alloy = {workspace = true}
+tracing = {workspace = true}
+
+[dependencies.tracing-subscriber]
+workspace = true
+
+[dev-dependencies]
+num = "0.4.3"

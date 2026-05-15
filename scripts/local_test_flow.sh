@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Test flow against a running sequencer (TESSERA_TESTING=1).
+# Test flow against a running sequencer (DOXA_TESTING=1).
 #
 # Drives the full pipeline using the /test/* HTTP endpoints — no real prover or
 # on-chain Pending deposits required.
@@ -16,13 +16,13 @@ set -euo pipefail
 #
 # Args:
 #   $1  number of deposits   (default 3)
-#   $2  optional env file    (default scripts/logs/tessera_e2e_latest.env)
+#   $2  optional env file    (default scripts/logs/doxa_e2e_latest.env)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/local_env.sh"
 
 DEPOSIT_COUNT="${1:-3}"
-E2E_ENV="${2:-$ROOT_DIR/scripts/logs/tessera_e2e_latest.env}"
+E2E_ENV="${2:-$ROOT_DIR/scripts/logs/doxa_e2e_latest.env}"
 
 if [[ ! -f "$E2E_ENV" ]]; then
   echo "ERROR: missing env file: $E2E_ENV" >&2
@@ -33,13 +33,13 @@ fi
 # shellcheck disable=SC1090
 source "$E2E_ENV"
 
-ROLLUP="${ROLLUP:-${TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS:-}}"
+ROLLUP="${ROLLUP:-${DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS:-}}"
 if [[ -z "${ROLLUP:-}" ]]; then
-  echo "ERROR: ROLLUP address not set (check E2E_ENV or tessera-server/.env)." >&2
+  echo "ERROR: ROLLUP address not set (check E2E_ENV or doxa-server/.env)." >&2
   exit 1
 fi
 
-API="$TESSERA_TEST_API_URL"
+API="$DOXA_TEST_API_URL"
 
 # ---------------------------------------------------------------------------
 # 1. Wait for sequencer test API to be ready.

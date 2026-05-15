@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Step B: deploy the demo contract stack.
 #
-# Deploys: AcceptAllVerifier, PoseidonGoldilocks, ToyUSDT, TesseraContract.
+# Deploys: AcceptAllVerifier, PoseidonGoldilocks, ToyUSDT, DoxaContract.
 # Uses AcceptAllVerifier for BOTH tx and deposit verifiers (zero proofs accepted).
 #
 # Prerequisites:
@@ -19,7 +19,7 @@ echo ""
 echo "Checking RPC connectivity: $RPC"
 cast block-number --rpc-url "$RPC" >/dev/null
 
-SOLIDITY_DIR="$ROOT_DIR/tessera-solidity"
+SOLIDITY_DIR="$ROOT_DIR/doxa-solidity"
 
 pushd "$SOLIDITY_DIR" >/dev/null
 
@@ -36,12 +36,12 @@ echo "  AcceptAllVerifier = $ACCEPT_ADDR"
 
 # 2. Deploy using the existing Deploy.s.sol with AcceptAllVerifier as tx/deposit verifier.
 echo ""
-echo "Deploying full stack (PoseidonGoldilocks + ToyUSDT + TesseraContract + ToyUser)..."
+echo "Deploying full stack (PoseidonGoldilocks + ToyUSDT + DoxaContract + ToyUser)..."
 
-TESSERA_TX_VERIFIER="$ACCEPT_ADDR" \
-TESSERA_DEPOSIT_VERIFIER="$ACCEPT_ADDR" \
-TESSERA_POOL_CONFIG_ROOT="$POOL_CONFIG_ROOT" \
-TESSERA_TREE_DEPTH="$TREE_DEPTH" \
+DOXA_TX_VERIFIER="$ACCEPT_ADDR" \
+DOXA_DEPOSIT_VERIFIER="$ACCEPT_ADDR" \
+DOXA_POOL_CONFIG_ROOT="$POOL_CONFIG_ROOT" \
+DOXA_TREE_DEPTH="$TREE_DEPTH" \
 forge script script/Deploy.s.sol \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" \
@@ -56,11 +56,11 @@ if [[ ! -f "$BROADCAST_JSON" ]]; then
   exit 1
 fi
 
-ROLLUP=$(jq -r '.transactions[] | select(.contractName == "TesseraContract") | .contractAddress' "$BROADCAST_JSON" | head -n1)
+ROLLUP=$(jq -r '.transactions[] | select(.contractName == "DoxaContract") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 TOKEN=$(jq -r '.transactions[] | select(.contractName == "ToyUSDT") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 
 if [[ -z "${ROLLUP:-}" ]]; then
-  echo "ERROR: failed to parse TesseraContract address." >&2
+  echo "ERROR: failed to parse DoxaContract address." >&2
   exit 1
 fi
 if [[ -z "${TOKEN:-}" ]]; then
@@ -77,7 +77,7 @@ OPERATOR_ADDR=$(cast wallet address --private-key "$OPERATOR_KEY")
 echo ""
 echo "=== Deployment summary ==="
 echo "  AcceptAllVerifier  = $ACCEPT_ADDR"
-echo "  TesseraContract    = $ROLLUP"
+echo "  DoxaContract    = $ROLLUP"
 echo "  ToyUSDT            = $TOKEN"
 echo "  Operator            = $OPERATOR_ADDR"
 echo "  Genesis root        = $GENESIS_ROOT"

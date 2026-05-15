@@ -1,12 +1,13 @@
 [workspace]
-members = ["tessera-client","tessera-server", "tessera-trees", "tessera-e2e", "tessera-demo", "tessera-client-wasm", "tessera-subpool-database", "tessera-subpool-operator", "tessera-state-sync"]
+members = ["doxa-client","doxa-server", "doxa-trees", "doxa-e2e", "doxa-subpool-database", "doxa-subpool-operator", "doxa-state-sync"]
 resolver = "2"
 
 [workspace.dependencies]
-tessera-trees = {path = "tessera-trees"}
-tessera-client = {path = "tessera-client"}
-tessera-server = {path = "tessera-server"}
-tessera-utils = {path = "tessera-utils"}
+doxa-trees = { path = "doxa-trees" }
+doxa-client = { path = "doxa-client" }
+doxa-server = { path = "doxa-server" }
+doxa-utils = { path = "doxa-utils" }
+doxa-subpool-database = { path = "doxa-subpool-database" }
 anyhow = "1.0.102"
 rand_chacha = "0.10.0"
 rand = "0.10.0"

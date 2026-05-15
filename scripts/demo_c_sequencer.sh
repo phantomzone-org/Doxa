@@ -4,7 +4,7 @@ set -euo pipefail
 # Step C: start the demo sequencer.
 #
 # Reads deployed addresses from demo_latest.env and launches the
-# tessera-demo sequencer binary.
+# doxa-demo sequencer binary.
 #
 # Prerequisites:
 #   - Anvil running (demo_a_anvil.sh)
@@ -36,4 +36,4 @@ export DEMO_BIND_ADDR="$DEMO_BIND_ADDR"
 export DEMO_BATCH_TIMEOUT_SECS="$DEMO_BATCH_TIMEOUT_SECS"
 export DEMO_PROVE_DELAY_SECS="$DEMO_PROVE_DELAY_SECS"
 
-cargo run -p tessera-demo --bin demo-sequencer --release 2>&1
+cargo run -p doxa-demo --bin demo-sequencer --release 2>&1

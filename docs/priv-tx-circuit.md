@@ -1,6 +1,6 @@
 # Private Transaction Circuit
 
-Source: `tessera-client/src/plonky2_gadgets/priv_tx/`
+Source: `doxa-client/src/plonky2_gadgets/priv_tx/`
 
 ---
 
@@ -77,7 +77,7 @@ where AN/AC/NN/NC are the four free override targets (see below).
 
 **Total: 85 field elements.**
 Constants `IS_REAL_OFFSET = 4` and `TX_DATA_OFFSET = 5` are defined in
-`tessera-trees/src/proof_aggregation/super_aggregator_v2.rs`.
+`doxa-trees/src/proof_aggregation/super_aggregator_v2.rs`.
 
 | Index | Field | Notes |
 |-------|-------|-------|
@@ -236,9 +236,9 @@ These are `pub(crate)` low-level setters invoked by `prove_real_priv_tx`. All fo
 
 | Constant | Value | Location |
 |----------|-------|----------|
-| `NOTE_BATCH` | `8` | `tessera-client/src/lib.rs` |
-| `IS_REAL_OFFSET` | `4` | `tessera-trees/src/proof_aggregation/super_aggregator_v2.rs` |
+| `NOTE_BATCH` | `8` | `doxa-client/src/lib.rs` |
+| `IS_REAL_OFFSET` | `4` | `doxa-trees/src/proof_aggregation/super_aggregator_v2.rs` |
 | `TX_DATA_OFFSET` | `5` | same |
 | `TX_LEAF_PI_SIZE` | `77` | same |
-| `ACT_DEPTH` | see lib | `tessera-client/src/lib.rs` |
+| `ACT_DEPTH` | see lib | `doxa-client/src/lib.rs` |
 | `NCT_DEPTH` | see lib | same |

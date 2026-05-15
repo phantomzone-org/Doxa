@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Console B: deploy the full V2 stack (PoseidonGoldilocks, Verifier, TesseraContract, ToyUSDT, ToyUser).
-# Writes deployment outputs to: scripts/logs/tessera_e2e_latest.env
+# Console B: deploy the full V2 stack (PoseidonGoldilocks, Verifier, DoxaContract, ToyUSDT, ToyUser).
+# Writes deployment outputs to: scripts/logs/doxa_e2e_latest.env
 #
 # Prerequisites:
 #   - Anvil running (scripts/local_e2e_toy_a_anvil.sh)
@@ -14,15 +14,15 @@ source "$ROOT_DIR/scripts/local_env.sh"
 
 LOG_DIR="$ROOT_DIR/scripts/logs"
 mkdir -p "$LOG_DIR"
-OUT_ENV="$LOG_DIR/tessera_e2e_latest.env"
-BROADCAST_JSON="$ROOT_DIR/tessera-solidity/broadcast/Deploy.s.sol/$TESSERA_CHAIN_ID/run-latest.json"
+OUT_ENV="$LOG_DIR/doxa_e2e_latest.env"
+BROADCAST_JSON="$ROOT_DIR/doxa-solidity/broadcast/Deploy.s.sol/$DOXA_CHAIN_ID/run-latest.json"
 
 echo "Checking RPC connectivity: $RPC"
 cast block-number --rpc-url "$RPC" >/dev/null
 
-pushd "$ROOT_DIR/tessera-solidity" >/dev/null
+pushd "$ROOT_DIR/doxa-solidity" >/dev/null
 
-echo "Deploying V2 stack (PoseidonGoldilocks + Verifier + TesseraContract + ToyUSDT + ToyUser)..."
+echo "Deploying V2 stack (PoseidonGoldilocks + Verifier + DoxaContract + ToyUSDT + ToyUser)..."
 DEPLOY_OUT=$(forge script script/Deploy.s.sol \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" \
@@ -38,17 +38,17 @@ if [[ ! -f "$BROADCAST_JSON" ]]; then
   exit 1
 fi
 
-ROLLUP=$(jq -r '.transactions[] | select(.contractName == "TesseraContract") | .contractAddress' "$BROADCAST_JSON" | head -n1)
+ROLLUP=$(jq -r '.transactions[] | select(.contractName == "DoxaContract") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 TOKEN=$(jq -r '.transactions[] | select(.contractName == "ToyUSDT") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 TOY_USER=$(jq -r '.transactions[] | select(.contractName == "ToyUser") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 
 if [[ -z "${ROLLUP:-}" ]]; then
-  echo "ERROR: failed to parse TesseraContract address from broadcast JSON." >&2
+  echo "ERROR: failed to parse DoxaContract address from broadcast JSON." >&2
   exit 1
 fi
 if [[ -z "${TOKEN:-}" ]]; then
   # TOKEN may be a pre-deployed address — try to extract MonitoredToken from env
-  TOKEN="${TESSERA_MONITORED_TOKEN:-}"
+  TOKEN="${DOXA_MONITORED_TOKEN:-}"
 fi
 if [[ -z "${TOKEN:-}" ]]; then
   echo "ERROR: failed to determine token address." >&2
@@ -56,22 +56,22 @@ if [[ -z "${TOKEN:-}" ]]; then
 fi
 
 echo ""
-echo "ROLLUP (TesseraContract) = $ROLLUP"
+echo "ROLLUP (DoxaContract) = $ROLLUP"
 echo "TOKEN  (ToyUSDT)         = $TOKEN"
 echo "TOY_USER                 = ${TOY_USER:-n/a}"
 
-# Persist contract addresses into tessera-server/.env for sequencer convenience.
-SERVER_ENV="$ROOT_DIR/tessera-server/.env"
+# Persist contract addresses into doxa-server/.env for sequencer convenience.
+SERVER_ENV="$ROOT_DIR/doxa-server/.env"
 touch "$SERVER_ENV"
-if grep -q '^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=' "$SERVER_ENV"; then
-  sed -i "s|^TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=.*|TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$ROLLUP|" "$SERVER_ENV"
+if grep -q '^DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS=' "$SERVER_ENV"; then
+  sed -i "s|^DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS=.*|DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$ROLLUP|" "$SERVER_ENV"
 else
-  echo "TESSERA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$ROLLUP" >> "$SERVER_ENV"
+  echo "DOXA_PENDING_DEPOSIT_BRIDGE_ADDRESS=$ROLLUP" >> "$SERVER_ENV"
 fi
-if grep -q '^TESSERA_MONITORED_TOKEN=' "$SERVER_ENV"; then
-  sed -i "s|^TESSERA_MONITORED_TOKEN=.*|TESSERA_MONITORED_TOKEN=$TOKEN|" "$SERVER_ENV"
+if grep -q '^DOXA_MONITORED_TOKEN=' "$SERVER_ENV"; then
+  sed -i "s|^DOXA_MONITORED_TOKEN=.*|DOXA_MONITORED_TOKEN=$TOKEN|" "$SERVER_ENV"
 else
-  echo "TESSERA_MONITORED_TOKEN=$TOKEN" >> "$SERVER_ENV"
+  echo "DOXA_MONITORED_TOKEN=$TOKEN" >> "$SERVER_ENV"
 fi
 
 cat > "$OUT_ENV" <<EOV
@@ -88,5 +88,5 @@ echo "State file: $OUT_ENV"
 echo ""
 echo "Next steps:"
 echo "  Console C (sequencer) -> scripts/local_run_sequencer.sh"
-echo "    Test API             -> $TESSERA_TEST_API_URL"
+echo "    Test API             -> $DOXA_TEST_API_URL"
 echo "  Console D (flow)      -> scripts/local_test_flow.sh"

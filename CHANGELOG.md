@@ -1,4 +1,4 @@
-# Changelog — tessera-client (dev_rollup_v2 → jay/dev)
+# Changelog — doxa-client (dev_rollup_v2 → jay/dev)
 
 ---
 

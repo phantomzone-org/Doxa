@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end smoke test for tessera-subpool-database.
+# End-to-end smoke test for doxa-subpool-database.
 #
 # Steps:
 #   1. Start a throwaway PostgreSQL container.
@@ -17,14 +17,14 @@ set -euo pipefail
 #   bash scripts/test_subpool_database.sh
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CRATE_DIR="$ROOT_DIR/tessera-subpool-database"
+CRATE_DIR="$ROOT_DIR/doxa-subpool-database"
 
 # ── Config ────────────────────────────────────────────────────────────────────
-PG_CONTAINER="tessera-subpool-test-pg"
+PG_CONTAINER="doxa-subpool-test-pg"
 PG_PORT="15432"   # use non-default port to avoid conflicts
-PG_USER="tessera"
-PG_PASS="tessera"
-PG_DB="tessera_subpool"
+PG_USER="doxa"
+PG_PASS="doxa"
+PG_DB="doxa_subpool"
 DATABASE_URL="postgres://${PG_USER}:${PG_PASS}@localhost:${PG_PORT}/${PG_DB}"
 API_ADDR="127.0.0.1:18080"
 API_URL="http://${API_ADDR}"
@@ -151,18 +151,18 @@ done
 
 # ── 2. Build ──────────────────────────────────────────────────────────────────
 echo ""
-echo "── Step 2: Building tessera-subpool-database ────────────────────────────────"
-cargo build -p tessera-subpool-database --quiet 2>&1
+echo "── Step 2: Building doxa-subpool-database ────────────────────────────────"
+cargo build -p doxa-subpool-database --quiet 2>&1
 ok "build succeeded"
 
 # ── 3. Start server ───────────────────────────────────────────────────────────
 echo ""
 echo "── Step 3: Starting server ──────────────────────────────────────────────────"
-LOG_FILE="$(mktemp /tmp/tessera-subpool-server.XXXXXX.log)"
+LOG_FILE="$(mktemp /tmp/doxa-subpool-server.XXXXXX.log)"
 
 DATABASE_URL="$DATABASE_URL" \
-TESSERA_SUBPOOL_API_ADDR="$API_ADDR" \
-  cargo run -p tessera-subpool-database --quiet 2>&1 >"$LOG_FILE" &
+DOXA_SUBPOOL_API_ADDR="$API_ADDR" \
+  cargo run -p doxa-subpool-database --quiet 2>&1 >"$LOG_FILE" &
 SERVER_PID=$!
 
 echo -n "  Waiting for server to start"
