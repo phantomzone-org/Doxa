@@ -10,7 +10,7 @@ which confirms batches on-chain with zero proofs.
 |---|---|
 | `local_env.sh` | Shared env defaults — **source this before anything else** |
 | `local_e2e_toy_a_anvil.sh` | Start a local Anvil chain |
-| `local_e2e_toy_b_deploy.sh` | Deploy the V2 contract stack (PoseidonGoldilocks, Verifier, TesseraContract, ToyUSDT, ToyUser) |
+| `local_e2e_toy_b_deploy.sh` | Deploy the V2 contract stack (PoseidonGoldilocks, Verifier, TesseraRollupV2, ToyUSDT, ToyUser) |
 | `local_run_sequencer.sh` | Build and start the sequencer in test mode |
 | `local_test_flow.sh` | Drive the full test pipeline via HTTP |
 
@@ -70,6 +70,7 @@ All endpoints return `{"accepted":true}` on success or `{"accepted":false,"error
 | `RPC` | `http://localhost:8545` | Anvil RPC URL |
 | `OPERATOR_KEY` | Anvil key #0 | Private key for deployer / sequencer |
 | `TESSERA_CHAIN_ID` | `31337` | EVM chain ID |
+| `TESSERA_ACCOUNT_BATCH_SIZE` | `2` | Account slots per TX batch |
 | `TESSERA_TREE_DEPTH` | `20` | Depth of on-chain Poseidon tree |
 | `TESSERA_POOL_CONFIG_ROOT` | `0x000...0` | Initial pool config root (zero for tests) |
 | `TESSERA_TESTING` | `1` | Enable test HTTP endpoints |

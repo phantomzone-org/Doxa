@@ -1,7 +1,4 @@
-use std::{
-	mem::zeroed,
-	ops::{Add, Mul, Neg},
-};
+use std::ops::{Add, Mul, Neg};
 
 use plonky2::hash::hashing::hash_n_to_m_no_pad;
 use plonky2_field::{
@@ -9,14 +6,13 @@ use plonky2_field::{
 	goldilocks_field::GoldilocksField,
 	types::{Field, PrimeField64},
 };
-use rand::RngExt;
-use tessera_utils::F;
+use tessera_trees::F;
 
 use crate::ecgfp5::{CompressedPoint, Legendre, PointEw};
 
 /// A scalar (integer modulo the prime group order n).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Scalar(pub [u64; 5]);
+pub(crate) struct Scalar([u64; 5]);
 
 // TODO: ack Thomas Pornin
 
@@ -43,17 +39,15 @@ impl Scalar {
 		0xAADFFF5D1574C1D8,
 		0x4ACA13B28CA251F5,
 	]);
-	// 2^632 mod n.
-	const T632: Self = Self([
-		0x2B0266F317CA91B3,
-		0xEC1D26528E984773,
-		0x8651D7865E12DB94,
-		0xDA2ADFF5941574D0,
-		0x53CACA12110CA256,
-	]);
 	// Group order n is slightly below 2^319. We store values over five
 	// 64-bit limbs.
 	pub const ZERO: Self = Self([0, 0, 0, 0, 0]);
+
+	/// Create a scalar from raw limbs (for testing purposes).
+	/// The caller must ensure the value is less than n.
+	pub const fn from_raw(limbs: [u64; 5]) -> Self {
+		Self(limbs)
+	}
 
 	pub(crate) fn to_bit_arr(self) -> [bool; Self::BITS] {
 		let mut bits = [false; Self::BITS];
@@ -143,72 +137,17 @@ impl Scalar {
 		self.montymul(Self::R2).montymul(rhs)
 	}
 
-	/// Sample a uniformly random scalar in `[0, N)`.
-	pub fn sample<R: rand::Rng>(rng: &mut R) -> Self {
-		let mut bytes = [0u8; 40];
-		rng.fill(&mut bytes);
-		Self::decode_reduce(&bytes)
-	}
-
-	/// Decode the provided byte slice into a scalar. The bytes are
-	/// interpreted into an integer in little-endian unsigned convention.
-	/// All slice bytes are read. Returns `Some(scalar)` if the decoded
-	/// integer is lower than the group order, `None` otherwise.
-	pub fn decode(buf: &[u8]) -> Option<Self> {
-		let n = buf.len();
-		let mut r = Self::ZERO;
-		let mut extra: u8 = 0;
-		for (i, b) in buf.iter().enumerate().take(n) {
-			if i < 40 {
-				r.0[i >> 3] |= (*b as u64).wrapping_shl(((i as u32) & 7) << 3);
-			} else {
-				extra |= b;
+	/// Sample a uniformly random scalar in `[0, N)` using rejection sampling.
+	// TODO: I don't know whether this is secure.
+	pub(crate) fn sample<R: rand::Rng>(rng: &mut R) -> Self {
+		loop {
+			let mut limbs: [u64; 5] = std::array::from_fn(|_| rng.next_u64());
+			limbs[4] &= 0x7FFFFFFFFFFFFFFF; // N < 2^319; clear bit 63
+			let candidate = Self(limbs);
+			if candidate.sub_inner(Self::N).1 == 1 {
+				return candidate;
 			}
 		}
-
-		// If input buffer is at most 39 bytes then the result is
-		// necessarily in range; we can skip the reduction tests.
-		if n <= 39 {
-			return Some(r);
-		}
-
-		// Output is valid iff extra == 0 and the value is lower than n
-		// (checked via overflow flag from sub_inner).
-		let (_, c) = r.sub_inner(Self::N);
-		let valid = c & ((extra as u64).wrapping_add(0xFF) >> 8).wrapping_sub(1);
-		if valid != 0 { Some(r) } else { None }
-	}
-
-	/// Decode the provided byte slice into a scalar. The bytes are
-	/// interpreted into an integer in little-endian unsigned convention.
-	/// All slice bytes are read, and the value is REDUCED modulo n. This
-	/// function never fails; it accepts arbitrary input values.
-	pub fn decode_reduce(buf: &[u8]) -> Self {
-		// We inject the value by chunks of 312 bits, in high-to-low
-		// order. We multiply by 2^312 the intermediate result, which
-		// is equivalent to performing a Montgomery multiplication
-		// by 2^632 mod n.
-
-		// If buffer length is at most 39 bytes, then the plain decode()
-		// function works.
-		let n = buf.len();
-		if n <= 39 {
-			return Self::decode(buf).unwrap();
-		}
-
-		// We can now assume that we have at least 40 bytes of input.
-
-		// Compute k as a multiple of 39 such that n-39 <= k < n. Since
-		// n >= 40, this implies that k >= 1. We decode the top chunk
-		// (which has length _at most_ 39 bytes) into acc.
-		let mut k = ((n - 1) / 39) * 39;
-		let mut acc = Self::decode(&buf[k..n]).unwrap();
-		while k > 0 {
-			k -= 39;
-			let b = Self::decode(&buf[k..k + 39]).unwrap();
-			acc = acc.montymul(Self::T632).add(b);
-		}
-		acc
 	}
 
 	/// Reduce 5 Goldilocks field elements (320 bits) to scalar < N.
@@ -258,19 +197,14 @@ impl PrivateKey {
 		Self(scalar)
 	}
 
+	/// Create a private key from raw limbs.
+	pub const fn from_raw(limbs: [u64; 5]) -> Self {
+		Self(Scalar::from_raw(limbs))
+	}
+
 	/// Get the underlying scalar value.
 	pub fn as_scalar(&self) -> Scalar {
 		self.0
-	}
-
-	/// Decode a byte slice into a private key, reducing modulo N.
-	pub fn decode_reduce(buf: &[u8]) -> Self {
-		Self(Scalar::decode_reduce(buf))
-	}
-
-	/// Sample a uniformly random private key.
-	pub fn sample<R: rand::Rng>(rng: &mut R) -> Self {
-		Self(Scalar::sample(rng))
 	}
 
 	/// Derive the corresponding public key.
@@ -286,7 +220,12 @@ impl PrivateKey {
 	// Decode a private key from 40 bytes.
 	// Returns `None` if the encoding is invalid or represents zero.
 	// pub fn from_bytes(bytes: &[u8; 40]) -> Option<Self> {
-	//     Scalar::decode(bytes).filter(|s| s.iszero() == 0).map(Self)
+	//     let (scalar, valid) = Scalar::decode_buf(bytes);
+	//     if valid != 0 && scalar.iszero() == 0 {
+	//         Some(Self(scalar))
+	//     } else {
+	//         None
+	//     }
 	// }
 }
 
@@ -296,27 +235,6 @@ pub struct CompressedPublicKey<F: Extendable<5>>(pub(crate) CompressedPoint<F>);
 impl<F: PrimeField64 + Legendre + Extendable<5>> From<PublicKey<F>> for CompressedPublicKey<F> {
 	fn from(value: PublicKey<F>) -> Self {
 		CompressedPublicKey(value.0.encode())
-	}
-}
-
-impl<F: PrimeField64 + Extendable<5>> CompressedPublicKey<F> {
-	/// Serialize to 40 bytes: 5 × u64 little-endian.
-	/// Mirrors the r-half encoding in `Signature::encode`.
-	pub fn encode(&self) -> [u8; 40] {
-		let mut out = [0u8; 40];
-		for (i, f) in self.0.w.0.iter().enumerate() {
-			out[i * 8..i * 8 + 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
-		}
-		out
-	}
-
-	/// Deserialize from 40 bytes (inverse of `encode`).
-	pub fn decode(bytes: &[u8; 40]) -> Self {
-		let mut v = [0u64; 5];
-		for i in 0..5 {
-			v[i] = u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap());
-		}
-		CompressedPublicKey(CompressedPoint::from(v))
 	}
 }
 
@@ -338,29 +256,9 @@ impl<F: Extendable<5>> PublicKey<F> {
 	}
 }
 
-#[derive(Clone, Debug)]
 pub struct Signature {
 	pub(crate) r: PointEw<GoldilocksField>,
 	pub(crate) s: Scalar,
-}
-
-impl Signature {
-	pub const ZERO: Self = Self {
-		r: PointEw::NEUTRAL,
-		s: Scalar::ZERO,
-	};
-
-	/// Serialize to 80 bytes: 40 bytes for `r` (5 × u64 LE) + 40 bytes for `s` (5 × u64 LE).
-	pub fn encode(&self) -> [u8; 80] {
-		let mut out = [0u8; 80];
-		for (i, f) in self.r.encode().w.0.iter().enumerate() {
-			out[i * 8..i * 8 + 8].copy_from_slice(&f.to_canonical_u64().to_le_bytes());
-		}
-		for (i, limb) in self.s.0.iter().enumerate() {
-			out[40 + i * 8..40 + i * 8 + 8].copy_from_slice(&limb.to_le_bytes());
-		}
-		out
-	}
 }
 
 fn poseidon_hash_to_scalar(hash_input: &[GoldilocksField]) -> Scalar {
@@ -387,7 +285,11 @@ pub(crate) fn schnorr_challenge(
 }
 
 /// Sign: R = k*G, e = H(R || Q || m), s = k + d*-e
-pub fn schnorr_sign(privkey: &PrivateKey, message: &[GoldilocksField], k: Scalar) -> Signature {
+pub(crate) fn schnorr_sign(
+	privkey: &PrivateKey,
+	message: &[GoldilocksField],
+	k: Scalar,
+) -> Signature {
 	let g = PointEw::generator();
 	let r = g.scalar_mul(&k);
 
@@ -425,9 +327,6 @@ pub(crate) fn schnorr_verify(
 
 #[cfg(test)]
 mod tests {
-	use rand::SeedableRng;
-	use rand_chacha::ChaCha8Rng;
-
 	use super::*;
 
 	type F = GoldilocksField;
@@ -435,8 +334,13 @@ mod tests {
 	#[test]
 	fn test_schnorr_sign_verify() {
 		// Private key d (a random scalar < N)
-		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let d = Scalar::sample(&mut rng);
+		let d = Scalar::from_raw([
+			5400142491657709732,
+			15846706413025839610,
+			1661266468596303141,
+			17577886881415715269,
+			7270009582106593884,
+		]);
 
 		// Public key Q = d*G
 		let privkey = PrivateKey::new(d);
@@ -449,7 +353,13 @@ mod tests {
 			.collect();
 
 		// Nonce k
-		let k = Scalar::sample(&mut rng);
+		let k = Scalar::from_raw([
+			12539254003028696409,
+			15524144070600887654,
+			15092036948424041984,
+			11398871370327264211,
+			958391180505708567,
+		]);
 
 		// Sign
 		let sig = schnorr_sign(&privkey, &message, k);

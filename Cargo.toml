@@ -1,12 +1,10 @@
 [workspace]
-members = ["tessera-client","tessera-server", "tessera-trees", "tessera-e2e", "tessera-demo", "tessera-client-wasm", "tessera-subpool-database", "tessera-subpool-operator", "tessera-state-sync"]
+members = ["tessera-client","tessera-server", "tessera-trees"]
 resolver = "2"
 
 [workspace.dependencies]
 tessera-trees = {path = "tessera-trees"}
 tessera-client = {path = "tessera-client"}
-tessera-server = {path = "tessera-server"}
-tessera-utils = {path = "tessera-utils"}
 anyhow = "1.0.102"
 rand_chacha = "0.10.0"
 rand = "0.10.0"
@@ -27,11 +25,6 @@ dotenvy = "0.15"
 axum = "0.8.8"
 itertools = "0.14.0"
 primitive-types = "0.14.0"
-tiny-keccak = { version = "2.0", features = ["keccak"] }
-hashbrown = "0.14"
-sqlx   = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "json", "chrono"] }
-chrono     = { version = "0.4", features = ["serde"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Uncomment to use local plonky2 checkout instead of git (for debugging).
 # [patch."https://github.com/phantomzone-org/plonky2.git"]

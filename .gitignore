@@ -8,7 +8,6 @@
 Cargo.lock
 scripts/logs/
 *.claude
-.privkey
 
 #submodule
 tessera-solidity/lib/forge-std
@@ -26,16 +25,9 @@ tessera-solidity/.foundry-cache/
 # Docs
 tessera-solidity/docs/
 
-# Dotenv files (all crates)
-.env
-**/.env
+# Dotenv file
+tessera-solidity/.env
 
 # Sequencer persistent tree state (WAL + snapshots)
 tessera-server/data/trees/
 tessera-server/data/trees_*/
-
-
-
-*.env
-
-.codex

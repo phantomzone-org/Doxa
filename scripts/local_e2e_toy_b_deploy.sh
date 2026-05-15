@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Console B: deploy the full V2 stack (PoseidonGoldilocks, Verifier, TesseraContract, ToyUSDT, ToyUser).
+# Console B: deploy the full V2 stack (PoseidonGoldilocks, Verifier, TesseraRollupV2, ToyUSDT, ToyUser).
 # Writes deployment outputs to: scripts/logs/tessera_e2e_latest.env
 #
 # Prerequisites:
@@ -22,7 +22,7 @@ cast block-number --rpc-url "$RPC" >/dev/null
 
 pushd "$ROOT_DIR/tessera-solidity" >/dev/null
 
-echo "Deploying V2 stack (PoseidonGoldilocks + Verifier + TesseraContract + ToyUSDT + ToyUser)..."
+echo "Deploying V2 stack (PoseidonGoldilocks + Verifier + TesseraRollupV2 + ToyUSDT + ToyUser)..."
 DEPLOY_OUT=$(forge script script/Deploy.s.sol \
   --rpc-url "$RPC" \
   --private-key "$OPERATOR_KEY" \
@@ -38,12 +38,12 @@ if [[ ! -f "$BROADCAST_JSON" ]]; then
   exit 1
 fi
 
-ROLLUP=$(jq -r '.transactions[] | select(.contractName == "TesseraContract") | .contractAddress' "$BROADCAST_JSON" | head -n1)
+ROLLUP=$(jq -r '.transactions[] | select(.contractName == "TesseraRollupV2") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 TOKEN=$(jq -r '.transactions[] | select(.contractName == "ToyUSDT") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 TOY_USER=$(jq -r '.transactions[] | select(.contractName == "ToyUser") | .contractAddress' "$BROADCAST_JSON" | head -n1)
 
 if [[ -z "${ROLLUP:-}" ]]; then
-  echo "ERROR: failed to parse TesseraContract address from broadcast JSON." >&2
+  echo "ERROR: failed to parse TesseraRollupV2 address from broadcast JSON." >&2
   exit 1
 fi
 if [[ -z "${TOKEN:-}" ]]; then
@@ -56,7 +56,7 @@ if [[ -z "${TOKEN:-}" ]]; then
 fi
 
 echo ""
-echo "ROLLUP (TesseraContract) = $ROLLUP"
+echo "ROLLUP (TesseraRollupV2) = $ROLLUP"
 echo "TOKEN  (ToyUSDT)         = $TOKEN"
 echo "TOY_USER                 = ${TOY_USER:-n/a}"
 

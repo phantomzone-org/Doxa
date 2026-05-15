@@ -129,7 +129,7 @@ Required:
 
 Optional:
 - `TESSERA_NOTE_BATCH_SIZE` (default `128`)
-- `TESSERA_PRIV_TX_BATCH_SIZE` (default `16`; must equal `NOTE_BATCH_SIZE / 8`)
+- `TESSERA_ACCOUNT_BATCH_SIZE` (default `16`; must equal `NOTE_BATCH_SIZE / 8`)
 - `TESSERA_PROVER_API_ADDR` (default `127.0.0.1:8091`)
 - `TESSERA_AGGREGATOR_ARTIFACTS_PATH` (unset = disabled): path to `GenericAggregator` artifacts; required for real proof aggregation on the private-tx path
 - `TESSERA_AGGREGATION_PROVER_URLS` (default empty): comma-separated list of remote `aggregation_prover` base URLs (e.g. `http://worker1:8092,http://worker2:8092`); when empty, aggregation uses a single local prover thread

@@ -3,8 +3,8 @@ pragma solidity ^0.8.20;
 
 /// @notice Toy ERC20 used for local testing.
 contract ToyUSDT {
-    string public constant name = "USDX";
-    string public constant symbol = "USDX";
+    string public constant name = "Toy USDT";
+    string public constant symbol = "tUSDT";
     uint8 public constant decimals = 6;
 
     // --- EIP-2612 permit (toy implementation) ---
@@ -19,11 +19,7 @@ contract ToyUSDT {
     mapping(address => mapping(address => uint256)) public allowance;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(
-        address indexed owner,
-        address indexed spender,
-        uint256 value
-    );
+    event Approval(address indexed owner, address indexed spender, uint256 value);
 
     error InsufficientBalance();
     error InsufficientAllowance();
@@ -35,9 +31,7 @@ contract ToyUSDT {
         uint256 chainId = block.chainid;
         DOMAIN_SEPARATOR = keccak256(
             abi.encode(
-                keccak256(
-                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-                ),
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
                 keccak256(bytes(name)),
                 keccak256(bytes("1")),
                 chainId,
@@ -72,36 +66,11 @@ contract ToyUSDT {
         if (block.timestamp > deadline) revert PermitExpired();
 
         uint256 nonce = nonces[owner]++;
-        bytes32 domainSep = DOMAIN_SEPARATOR;
-        bytes32 structHash;
-        assembly {
-            let ptr := mload(0x40)
-            mstore(
-                ptr,
-                0x6e71edae12b1b97f4d1f60370fef10105fa2faae0126114a169c64845d6126c9
-            )
-            mstore(add(ptr, 0x20), owner)
-            mstore(add(ptr, 0x40), spender)
-            mstore(add(ptr, 0x60), value)
-            mstore(add(ptr, 0x80), nonce)
-            mstore(add(ptr, 0xa0), deadline)
-            structHash := keccak256(ptr, 0xc0)
-        }
-        bytes32 digest;
-        assembly {
-            let ptr := mload(0x40)
-            mstore(
-                ptr,
-                0x1901000000000000000000000000000000000000000000000000000000000000
-            )
-            mstore(add(ptr, 0x02), domainSep)
-            mstore(add(ptr, 0x22), structHash)
-            digest := keccak256(ptr, 0x42)
-        }
+        bytes32 structHash = keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonce, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
 
         address recovered = ecrecover(digest, v, r, s);
-        if (recovered == address(0) || recovered != owner)
-            revert InvalidPermitSignature();
+        if (recovered == address(0) || recovered != owner) revert InvalidPermitSignature();
 
         allowance[owner][spender] = value;
         emit Approval(owner, spender, value);
@@ -112,11 +81,7 @@ contract ToyUSDT {
         return true;
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 value
-    ) external returns (bool) {
+    function transferFrom(address from, address to, uint256 value) external returns (bool) {
         uint256 allowed = allowance[from][msg.sender];
         if (allowed < value) revert InsufficientAllowance();
         allowance[from][msg.sender] = allowed - value;

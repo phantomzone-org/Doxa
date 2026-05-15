@@ -15,21 +15,13 @@ use crate::{
 	},
 };
 
-/// Circuit-builder extension for withdrawal-transaction-specific hash derivation.
-///
-/// Implemented for [`CircuitBuilder`] so that the withdraw-tx circuit can call
-/// `builder.derive_withdraw_tx_hash(...)` cleanly.
 pub trait WithdrawTxCircuitBuilder<F: RichField + Extendable<D>, const D: usize> {
-	/// Derive the withdrawal transaction hash in-circuit.
+	/// Derive the withdrawal transaction hash:
+	/// H(accin_null[4] || accout_comm[4] || asset_ids[NOTE_BATCH]
+	///   || amounts_f[8*NOTE_BATCH] || w_acc_addr[5])
 	///
-	/// Mirrors [`derive_withdraw_tx_hash`](crate::derive_withdraw_tx_hash) natively.
-	///
-	/// Hash input:
-	/// ```text
-	/// accin_null[4] || accout_comm[4] || asset_ids[NOTE_BATCH]
-	/// || amounts_f[8×NOTE_BATCH]   (each U256 as 8 u32 targets, LE)
-	/// || w_acc_addr[5]
-	/// ```
+	/// amounts_f flattens each U256Target as 8 u32 targets (little-endian limb order,
+	/// matching U256Target's internal layout).
 	fn derive_withdraw_tx_hash(
 		&mut self,
 		accin_null: AccountNullifierTarget,

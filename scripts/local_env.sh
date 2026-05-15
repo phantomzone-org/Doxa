@@ -15,6 +15,7 @@ export CLIENT_KEY="0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cda
 
 # V2 rollup parameters.
 export TESSERA_CHAIN_ID="31337"
+export TESSERA_ACCOUNT_BATCH_SIZE="2"   # account slots per TX batch (small for fast tests)
 
 # On-chain Poseidon tree depth and initial pool config root used at deploy time.
 # TESSERA_POOL_CONFIG_ROOT: bytes32 initial value — zero is fine for local testing.
@@ -50,6 +51,7 @@ fi
 echo "Loaded local env:"
 echo "  RPC=$RPC"
 echo "  TESSERA_CHAIN_ID=$TESSERA_CHAIN_ID"
+echo "  TESSERA_ACCOUNT_BATCH_SIZE=$TESSERA_ACCOUNT_BATCH_SIZE"
 echo "  TESSERA_TREE_DEPTH=$TESSERA_TREE_DEPTH"
 echo "  TESSERA_POOL_CONFIG_ROOT=$TESSERA_POOL_CONFIG_ROOT"
 echo "  TESSERA_TREE_STORE_PATH=$TESSERA_TREE_STORE_PATH"
